@@ -23,16 +23,17 @@ const STATE_DEFAULT = {
   tipo: "Todos",
   base: "Todos",
   motorista: "Todos",
-  period: "active",
+  period: "month",
   sortKey: "valor_numerico",
   sortDir: "desc",
   page: 1,
-  pageSize: 50,
+  pageSize: 15,
   fileName: "PRE FATURA 2 Q MARÇO 26.xlsx",
   activeDatasetId: "seed",
   theme: "dark",
   apiBaseUrl: "",
   pnrGoalLimit: DEFAULT_PNR_GOAL_LIMIT,
+  accountPanelOpen: false,
 };
 
 const currency = new Intl.NumberFormat("pt-BR", {
@@ -49,13 +50,17 @@ const compactCurrency = new Intl.NumberFormat("pt-BR", {
 });
 
 const integer = new Intl.NumberFormat("pt-BR");
+const liveClockFormatter = new Intl.DateTimeFormat("pt-BR", {
+  dateStyle: "short",
+  timeStyle: "short",
+});
 
 const seedRows = Array.isArray(window.__PRE_FATURA_ROWS) ? window.__PRE_FATURA_ROWS.slice() : [];
 const state = loadState();
 const forcedTheme = new URLSearchParams(window.location.search).get("theme");
 state.theme = forcedTheme === "light" || forcedTheme === "dark" ? forcedTheme : state.theme === "light" ? "light" : "dark";
 state.apiBaseUrl = String(state.apiBaseUrl || window.__PRE_FATURA_BACKEND?.baseUrl || "").trim();
-state.period = state.period || "active";
+state.period = normalizePeriodMode(state.period);
 let library = loadLibrary();
 let activeDataset = getActiveDataset();
 let allRows = activeDataset.rows.slice();
@@ -68,11 +73,13 @@ let authToken = loadAuthToken();
 let currentUser = null;
 let knownUsers = [];
 let sidebarAnimationTimer = null;
+let liveClockTimer = null;
 
 const el = {};
 
 async function bootstrapDashboard() {
   cacheDom();
+  startLiveClock();
   bindEvents();
   hydrateThemeControls();
   hydrateControls();
@@ -107,11 +114,17 @@ function cacheDom() {
   el.refreshButton = document.getElementById("refresh-button");
   el.deleteActiveButton = document.getElementById("delete-active-button");
   el.themeToggle = document.getElementById("theme-toggle");
+  el.accountToggle = document.getElementById("account-toggle");
   el.fileInput = document.getElementById("file-input");
+  el.reportButton = document.getElementById("report-button");
   el.datasetSelect = document.getElementById("dataset-select");
   el.datasetCount = document.getElementById("dataset-count");
   el.datasetNote = document.getElementById("dataset-note");
   el.backendStatus = document.getElementById("backend-status");
+  el.settingsCard = document.getElementById("settings-card");
+  el.accountCard = document.getElementById("account-card");
+  el.settingsPageSize = document.getElementById("settings-page-size");
+  el.settingsPnrGoal = document.getElementById("settings-pnr-goal");
   el.backendInput = document.getElementById("backend-input");
   el.backendSave = document.getElementById("backend-save");
   el.backendSync = document.getElementById("backend-sync");
@@ -160,6 +173,17 @@ function cacheDom() {
   el.sortLow = document.getElementById("sort-low");
 }
 
+function startLiveClock() {
+  updateLiveClock();
+  window.clearInterval(liveClockTimer);
+  liveClockTimer = window.setInterval(updateLiveClock, 30000);
+}
+
+function updateLiveClock() {
+  if (!el.lastUpdate) return;
+  el.lastUpdate.textContent = `Última atualização: ${liveClockFormatter.format(new Date())}`;
+}
+
 function bindEvents() {
   el.sidebarToggle.addEventListener("click", () => {
     setSidebarCollapsed(!el.sidebar.classList.contains("is-collapsed"));
@@ -179,6 +203,19 @@ function bindEvents() {
       hydrateThemeControls();
     });
   }
+  if (el.accountToggle) {
+    el.accountToggle.addEventListener("click", () => {
+      state.accountPanelOpen = !state.accountPanelOpen;
+      persistState();
+      updateAccessControls();
+    });
+  }
+  if (el.reportButton) {
+    el.reportButton.addEventListener("click", () => {
+      downloadMonthlyReport();
+    });
+  }
+  document.addEventListener("keydown", handleEscapeFilter);
   if (el.backendSave) {
     el.backendSave.addEventListener("click", async () => {
       state.apiBaseUrl = normalizeBaseUrl(el.backendInput ? el.backendInput.value : "");
@@ -191,6 +228,23 @@ function bindEvents() {
   if (el.backendSync) {
     el.backendSync.addEventListener("click", async () => {
       await hydrateRemoteLibrary(true);
+    });
+  }
+  if (el.settingsPageSize) {
+    el.settingsPageSize.addEventListener("change", (event) => {
+      state.pageSize = Number(event.target.value) || 15;
+      state.page = 1;
+      if (el.pageSize) el.pageSize.value = String(state.pageSize);
+      persistState();
+      renderAll();
+    });
+  }
+  if (el.settingsPnrGoal) {
+    el.settingsPnrGoal.addEventListener("change", (event) => {
+      const value = parseCurrencyInput(event.target.value);
+      state.pnrGoalLimit = value > 0 ? value : DEFAULT_PNR_GOAL_LIMIT;
+      persistState();
+      renderAll();
     });
   }
   if (el.authLogin) {
@@ -239,11 +293,11 @@ function bindEvents() {
       tipo: "Todos",
       base: "Todos",
       motorista: "Todos",
-      period: "active",
+      period: "month",
       sortKey: "valor_numerico",
       sortDir: "desc",
       page: 1,
-      pageSize: Number(el.pageSize.value || 50),
+      pageSize: Number(el.pageSize.value || 15),
     });
     hydrateControls();
     persistState();
@@ -269,11 +323,7 @@ function bindEvents() {
 
   if (el.periodSelect) {
     el.periodSelect.addEventListener("change", (event) => {
-      state.period = event.target.value || "active";
-      if (state.period !== "active") {
-        state.activeDatasetId = state.period;
-        syncActiveDataset();
-      }
+      state.period = normalizePeriodMode(event.target.value);
       state.page = 1;
       hydrateControls();
       persistState();
@@ -289,8 +339,9 @@ function bindEvents() {
   }
 
   el.pageSize.addEventListener("change", (event) => {
-    state.pageSize = Number(event.target.value) || 50;
+    state.pageSize = Number(event.target.value) || 15;
     state.page = 1;
+    if (el.settingsPageSize) el.settingsPageSize.value = String(state.pageSize);
     persistState();
     renderAll();
   });
@@ -409,6 +460,53 @@ function bindEvents() {
   });
 }
 
+function handleEscapeFilter(event) {
+  if (event.key !== "Escape") return;
+  const target = event.target;
+  if (!(target instanceof HTMLElement)) return;
+  const resetById = {
+    "search-input": () => {
+      if (!state.query) return false;
+      state.query = "";
+      return true;
+    },
+    "period-select": () => {
+      if (state.period === "month") return false;
+      state.period = "month";
+      return true;
+    },
+    "sheet-select": () => {
+      if (state.sheet === "Todos") return false;
+      state.sheet = "Todos";
+      return true;
+    },
+    "type-select": () => {
+      if (state.tipo === "Todos") return false;
+      state.tipo = "Todos";
+      return true;
+    },
+    "base-select": () => {
+      if (state.base === "Todos") return false;
+      state.base = "Todos";
+      return true;
+    },
+    "driver-select": () => {
+      if (state.motorista === "Todos") return false;
+      state.motorista = "Todos";
+      return true;
+    },
+  };
+  const reset = resetById[target.id];
+  if (!reset || !reset()) return;
+  event.preventDefault();
+  state.page = 1;
+  hydrateControls();
+  persistState();
+  renderAll();
+  target.blur();
+  showToast("Filtro removido.", "info");
+}
+
 function setValueSort(direction) {
   state.sortKey = "valor_numerico";
   state.sortDir = direction === "asc" ? "asc" : "desc";
@@ -484,7 +582,9 @@ function hydrateControls() {
   populateSelect(el.driverSelect, options.motoristas, state.motorista);
 
   el.searchInput.value = state.query;
-  el.pageSize.value = String(state.pageSize || 50);
+  el.pageSize.value = String(state.pageSize || 15);
+  if (el.settingsPageSize) el.settingsPageSize.value = String(state.pageSize || 15);
+  if (el.settingsPnrGoal) el.settingsPnrGoal.value = String(state.pnrGoalLimit || DEFAULT_PNR_GOAL_LIMIT);
   hydrateValueSortControls();
 
   updateDatasetMeta();
@@ -495,19 +595,15 @@ function hydrateControls() {
 
 function renderPeriodSelect() {
   if (!el.periodSelect) return;
-  const datasets = library.datasets.filter((dataset) => dataset && dataset.id !== EMPTY_DATASET_ID && Array.isArray(dataset.rows) && dataset.rows.length);
-  const activeId = state.period === "active" ? state.activeDatasetId : state.period;
-  el.periodSelect.innerHTML = datasets.length
-    ? datasets
-        .map((dataset) => {
-          const selected = dataset.id === activeId ? "selected" : "";
-          return `<option value="${escapeAttribute(dataset.id)}" ${selected}>${escapeHtml(getDatasetPeriodLabel(dataset))}</option>`;
-        })
-        .join("")
-    : `<option value="active">Sem quinzena</option>`;
-  if (state.period !== "active" && !datasets.some((dataset) => dataset.id === state.period)) {
-    state.period = "active";
-  }
+  state.period = normalizePeriodMode(state.period);
+  const options = [
+    ["month", "Mês completo"],
+    ["q1", "1ª quinzena"],
+    ["q2", "2ª quinzena"],
+  ];
+  el.periodSelect.innerHTML = options
+    .map(([value, label]) => `<option value="${value}" ${state.period === value ? "selected" : ""}>${escapeHtml(label)}</option>`)
+    .join("");
 }
 
 function hydrateValueSortControls() {
@@ -532,13 +628,15 @@ function updateDatasetMeta() {
   const active = getActiveDataset();
   el.datasetCount.textContent = `${integer.format(totalFiles)} arquivo${totalFiles === 1 ? "" : "s"}`;
   el.datasetNote.textContent = active
-    ? `${integer.format(active.rows.length)} registros neste arquivo. Você pode importar meses anteriores e alternar sem perder os dados já carregados.`
+    ? `${integer.format(allRows.length)} registros no recorte atual. O mês completo é consolidado automaticamente.`
     : "Carregue meses anteriores e troque sem reimportar o workbook.";
   if (el.deleteActiveButton) {
     const deletable = Boolean(active && active.id !== EMPTY_DATASET_ID && canEdit());
     el.deleteActiveButton.hidden = !deletable;
     el.deleteActiveButton.disabled = !deletable;
-    el.deleteActiveButton.textContent = active?.id === "seed" ? "Zerar base fixa" : "Excluir arquivo";
+    const label = active?.id === "seed" ? "Zerar base fixa" : "Excluir arquivo";
+    el.deleteActiveButton.setAttribute("aria-label", label);
+    el.deleteActiveButton.setAttribute("title", label);
   }
 }
 
@@ -600,38 +698,38 @@ function renderKpis(summary) {
     {
       label: "Total de descontos",
       value: currency.format(summary.totalValue),
-      tone: "kpi-card--accent",
+      tone: "kpi-card--finance",
       delta: monthlyStatus,
     },
     {
       label: "Registros válidos",
       value: integer.format(summary.count),
-      tone: "kpi-card--teal",
+      tone: "kpi-card--volume",
       delta: `${integer.format(summary.baseCount)} bases e ${integer.format(summary.routeCount)} rotas`,
-    },
-    {
-      label: "Bases",
-      value: integer.format(summary.baseCount),
-      tone: "kpi-card--blue",
-      delta: `${summary.topBase ? summary.topBase.label : "Sem base"} com maior desconto`,
-    },
-    {
-      label: "Drivers",
-      value: integer.format(summary.driverCount),
-      tone: "kpi-card--blue",
-      delta: `${summary.topDriver ? summary.topDriver.label : "Sem driver"} com maior desconto`,
     },
     {
       label: "Pacotes perdidos",
       value: integer.format(summary.packageCount),
-      tone: "kpi-card--critical",
+      tone: "kpi-card--problem",
       delta: `${summary.packageShare}% do total filtrado`,
     },
     {
       label: "PNR",
       value: integer.format(summary.pnrCount),
-      tone: "kpi-card--critical",
+      tone: "kpi-card--problem",
       delta: `${summary.pnrShare}% do total filtrado`,
+    },
+    {
+      label: "Drivers",
+      value: integer.format(summary.driverCount),
+      tone: "kpi-card--volume",
+      delta: `${summary.topDriver ? summary.topDriver.label : "Sem driver"} com maior desconto`,
+    },
+    {
+      label: "Bases",
+      value: integer.format(summary.baseCount),
+      tone: "kpi-card--neutral",
+      delta: `${summary.topBase ? summary.topBase.label : "Sem base"} com maior desconto`,
     },
   ];
 
@@ -765,31 +863,42 @@ function renderMonthlyComparison() {
     return;
   }
 
-  const maxValue = Math.max(...rows.map((row) => row.totalValue), 1);
-  el.monthlyComparison.innerHTML = rows
+  const maxCount = Math.max(...rows.map((row) => row.pnrCount + row.packageCount), 1);
+  el.monthlyComparison.innerHTML = `
+    <div class="month-columns">
+      ${rows
     .map((row, index) => {
-      const pct = (row.totalValue / maxValue) * 100;
-      const trendClass = row.deltaValue > 0 ? "is-up" : row.deltaValue < 0 ? "is-down" : "is-flat";
-      const deltaLabel = row.previous
-        ? `${row.deltaValue > 0 ? "+" : ""}${row.deltaPct.toFixed(1)}% em descontos vs. mês anterior`
-        : "primeira competência";
+      const offenseTotal = row.pnrCount + row.packageCount;
+      const pct = (offenseTotal / maxCount) * 100;
+      const previousOffense = row.previous ? row.previous.pnrCount + row.previous.packageCount : 0;
+      const deltaOffense = row.previous ? offenseTotal - previousOffense : 0;
+      const deltaOffensePct = row.previous && previousOffense ? (deltaOffense / previousOffense) * 100 : 0;
+      const trendClass = deltaOffense > 0 ? "is-up" : deltaOffense < 0 ? "is-down" : "is-flat";
+      const trendLabel = row.previous
+        ? `${deltaOffense > 0 ? "+" : ""}${deltaOffensePct.toFixed(1)}% ${deltaOffense > 0 ? "mais ofensivo" : deltaOffense < 0 ? "menos ofensivo" : "estável"}`
+        : "Base";
+      const monthTone = getOffenseColor(offenseTotal, maxCount);
       return `
-        <button class="month-row ${row.datasetId === state.activeDatasetId ? "is-active" : ""}" type="button" data-dataset-id="${escapeAttribute(row.datasetId)}" style="--reveal-index:${index}">
-          <div class="month-row__main">
-            <strong>${escapeHtml(row.label)}</strong>
-            <span>${integer.format(row.count)} registros · ${integer.format(row.pnrCount)} PNR · ${integer.format(row.packageCount)} perdidos</span>
+        <button class="month-column ${row.datasetId === state.activeDatasetId ? "is-active" : ""}" type="button" data-dataset-id="${escapeAttribute(row.datasetId)}" style="--reveal-index:${index}">
+          <div class="month-column__plot">
+            <span class="month-column__fill" style="height:${Math.max(12, pct).toFixed(1)}%; background:${monthTone}">
+              <span class="month-column__stats">
+              <strong>${integer.format(row.count)}</strong>
+              <span>PNR ${integer.format(row.pnrCount)}</span>
+              <span>Perd. ${integer.format(row.packageCount)}</span>
+              </span>
+            </span>
           </div>
-          <div class="month-row__bar">
-            <span style="width:${pct.toFixed(1)}%"></span>
-          </div>
-          <div class="month-row__value">
+          <div class="month-column__meta">
+            <strong>${escapeHtml(shortMonthYear(row.label))}</strong>
             <strong>${currency.format(row.totalValue)}</strong>
-            <span class="${trendClass}">${deltaLabel}</span>
+            <span class="${trendClass}">${escapeHtml(trendLabel)}</span>
           </div>
         </button>
       `;
     })
-    .join("");
+    .join("")}
+    </div>`;
 }
 
 function renderMonthlyBaseEvolution() {
@@ -843,7 +952,9 @@ function renderSheetEvolutionCard(sheet, datasets, index) {
   const max = Math.max(...totals, 1);
   const sheetTotal = rowsByDataset.reduce((acc, period) => acc + period.rows.reduce((sum, row) => sum + Number(row.valor_numerico || 0), 0), 0);
   const sheetCount = rowsByDataset.reduce((acc, period) => acc + period.rows.length, 0);
-  const pnrGoal = sheet === "PNR" ? getPnrGoalStatus(sheetTotal) : null;
+  const currentPnrRows = sheet === "PNR" ? getFilteredRows().filter((row) => row.aba_origem === "PNR") : [];
+  const currentPnrValue = currentPnrRows.reduce((acc, row) => acc + Number(row.valor_numerico || 0), 0);
+  const pnrGoal = sheet === "PNR" ? getPnrGoalStatus(currentPnrValue) : null;
 
   return `
     <article class="panel tower-card" style="--reveal-index:${index}">
@@ -859,8 +970,8 @@ function renderSheetEvolutionCard(sheet, datasets, index) {
       </div>
       ${
         bases.length
-          ? `<div class="tower-chart clustered-chart">
-              ${bases.map((base) => renderBaseTower(base, rowsByDataset, max, metricLabel)).join("")}
+          ? `<div class="tower-chart tower-chart--horizontal">
+              ${bases.map((base) => renderBaseHorizontalGroup(base, rowsByDataset, max, metricLabel)).join("")}
             </div>
             <div class="tower-legend">
               <span><i style="background:#58d68d"></i>Menos ofensiva</span>
@@ -874,6 +985,80 @@ function renderSheetEvolutionCard(sheet, datasets, index) {
   `;
 }
 
+function renderBaseHorizontalGroup(base, rowsByDataset, max, metricLabel) {
+  const values = rowsByDataset.map((period) => {
+    const rows = period.rows.filter((row) => row.base === base);
+    const total = rows.length;
+    const value = rows.reduce((acc, row) => acc + Number(row.valor_numerico || 0), 0);
+    return { label: period.label, total, value };
+  });
+  const evolution = getBaseEvolution(values);
+  const bars = values.map((period) => {
+    const width = period.total ? Math.max(0.8, (period.total / max) * 100) : 0;
+    const color = getOffenseColor(period.total, max);
+    const canShowValue = period.total && width >= 7;
+    return `
+      <span class="timeline-period timeline-period--horizontal">
+        <span class="timeline-period__label">${escapeHtml(shortPeriodLabel(period.label))}</span>
+        <span class="tower-bar-rail">
+          <span
+            class="tower-bar tower-bar--horizontal${canShowValue ? "" : " is-tiny"}"
+            style="width:${width.toFixed(1)}%; background:${color}"
+            title="${escapeAttribute(`${formatBaseCode(base)} · ${period.label}: ${integer.format(period.total)} ${metricLabel} · ${currency.format(period.value)}`)}"
+          ><em>${canShowValue ? integer.format(period.total) : ""}</em></span>
+        </span>
+      </span>
+    `;
+  }).join("");
+  return `
+    <div class="tower-base tower-base--horizontal">
+      <strong>${escapeHtml(formatBaseCode(base))}</strong>
+      <div class="tower-bars tower-bars--horizontal">${bars}</div>
+      <span class="tower-status ${evolution.tone}">${escapeHtml(`${evolution.arrow} ${evolution.label} ${evolution.status}`)}</span>
+    </div>
+  `;
+}
+
+function renderBaseColumnGroup(base, rowsByDataset, max, metricLabel) {
+  const values = rowsByDataset.map((period) => {
+    const rows = period.rows.filter((row) => row.base === base);
+    const total = rows.length;
+    const value = rows.reduce((acc, row) => acc + Number(row.valor_numerico || 0), 0);
+    return { label: period.label, total, value };
+  });
+  const evolution = getBaseEvolution(values);
+  const bars = values.map((period) => {
+    const total = period.total;
+    const value = period.value;
+    const height = total ? Math.max(5, (total / max) * 100) : 0;
+    const color = getOffenseColor(total, max);
+    return `
+      <span class="timeline-period">
+        <span class="tower-bar-rail">
+        <span
+          class="tower-bar"
+          style="height:${height.toFixed(1)}%; background:${color}"
+            title="${escapeAttribute(`${formatBaseCode(base)} · ${period.label}: ${integer.format(total)} ${metricLabel} · ${currency.format(value)}`)}"
+        ><em>${total ? integer.format(total) : ""}</em></span>
+        </span>
+        <span class="timeline-period__label">${escapeHtml(shortPeriodLabel(period.label))}</span>
+      </span>
+    `;
+  }).join("");
+  const code = formatBaseCode(base);
+  return `
+    <div class="tower-base-group">
+      <div class="tower-bars">
+        ${bars}
+      </div>
+      <div class="tower-base-footer">
+        <strong class="tower-base-code">${escapeHtml(code)}</strong>
+        <span class="tower-status ${evolution.tone}">${escapeHtml(evolution.status)}</span>
+      </div>
+    </div>
+  `;
+}
+
 function renderBaseTower(base, rowsByDataset, max, metricLabel) {
   const values = rowsByDataset.map((period, index) => {
     const rows = period.rows.filter((row) => row.base === base);
@@ -882,23 +1067,22 @@ function renderBaseTower(base, rowsByDataset, max, metricLabel) {
     return { index, label: period.label, total, value };
   });
   const evolution = getBaseEvolution(values);
-  const bars = values.map((period, index) => {
-    const width = period.total ? Math.max(3, (period.total / max) * 100) : 0;
-    const comparison = index ? getPairEvolution(values[index - 1].total, period.total) : null;
+  const bars = values.map((period) => {
+    const height = period.total ? Math.max(5, (period.total / max) * 100) : 0;
     const color = getOffenseColor(period.total, max);
     return `
       <span class="timeline-period">
-        <span class="timeline-period__label">${escapeHtml(shortPeriodLabel(period.label))}</span>
+        <span class="tower-bar-rail">
         <span
         class="tower-bar"
-          style="width:${width.toFixed(1)}%; background:${color}"
+            style="height:${height.toFixed(1)}%; background:${color}"
           title="${escapeAttribute(`${formatBaseCode(base)} · ${period.label}: ${integer.format(period.total)} ${metricLabel} · ${currency.format(period.value)}`)}"
-        ></span>
-        ${comparison ? `<span class="tower-evolution ${comparison.tone}" title="${escapeAttribute(`${formatBaseCode(base)}: ${comparison.label} vs. ${values[index - 1].label}`)}"><strong>${escapeHtml(comparison.arrow)}</strong> ${escapeHtml(comparison.label)}</span>` : ""}
+        ><em>${period.total ? integer.format(period.total) : ""}</em></span>
+        </span>
+        <span class="timeline-period__label">${escapeHtml(shortPeriodLabel(period.label))}</span>
       </span>
     `;
   }).join("");
-  const total = values.reduce((acc, period) => acc + period.total, 0);
   const code = formatBaseCode(base);
   return `
     <div class="tower-base">
@@ -915,21 +1099,21 @@ function getBaseEvolution(values) {
   if (!values.length || values.length < 2) {
     return { arrow: "→", label: "sem histórico", tone: "is-flat", status: "Histórico curto" };
   }
-  if (!first && !last) return { arrow: "→", label: "0.0%", tone: "is-flat", status: "Estável" };
+  if (!first && !last) return { arrow: "→", label: "0.0%", tone: "is-flat", status: "estável" };
   const delta = first ? ((last - first) / first) * 100 : 100;
   const label = `${delta > 0 ? "+" : ""}${delta.toFixed(1)}%`;
-  if (delta < 0) return { arrow: "↓", label, tone: "is-good", status: "Menos ofensiva" };
-  if (delta > 0) return { arrow: "↑", label, tone: "is-bad", status: "Mais ofensiva" };
-  return { arrow: "→", label, tone: "is-flat", status: "Estável" };
+  if (delta < 0) return { arrow: "↓", label, tone: "is-good", status: "menos ofensiva" };
+  if (delta > 0) return { arrow: "↑", label, tone: "is-bad", status: "mais ofensiva" };
+  return { arrow: "→", label, tone: "is-flat", status: "estável" };
 }
 
 function getPairEvolution(previous, current) {
-  if (!previous && !current) return { arrow: "→", label: "0.0%", tone: "is-flat" };
+  if (!previous && !current) return { arrow: "→", label: "0.0%", tone: "is-flat", status: "estável" };
   const delta = previous ? ((current - previous) / previous) * 100 : 100;
   const label = `${delta > 0 ? "+" : ""}${delta.toFixed(1)}%`;
-  if (delta < 0) return { arrow: "↓", label, tone: "is-good" };
-  if (delta > 0) return { arrow: "↑", label, tone: "is-bad" };
-  return { arrow: "→", label, tone: "is-flat" };
+  if (delta < 0) return { arrow: "↓", label, tone: "is-good", status: "menos ofensiva" };
+  if (delta > 0) return { arrow: "↑", label, tone: "is-bad", status: "mais ofensiva" };
+  return { arrow: "→", label, tone: "is-flat", status: "estável" };
 }
 
 function getPnrGoalStatus(totalValue) {
@@ -952,7 +1136,7 @@ function renderPnrGoalGauge(goal) {
     <div
       class="pnr-gauge ${goal.tone}"
       style="--needle-angle:${goal.angle}deg"
-      title="${escapeAttribute(`Meta PNR: abaixo de ${goal.limitLabel} está OK. Atual: ${goal.valueLabel}`)}"
+      title="${escapeAttribute(`Meta PNR do mês vigente: abaixo de ${goal.limitLabel} está OK. Atual: ${goal.valueLabel}`)}"
     >
       <span class="pnr-gauge__label">Meta PNR</span>
       <span class="pnr-gauge__dial"><i></i></span>
@@ -990,6 +1174,12 @@ function shortPeriodLabel(label) {
   return `${q} ${m}`.trim();
 }
 
+function shortMonthYear(label) {
+  const match = String(label || "").match(/([A-Za-zÀ-ÿ]+)\s*\/\s*(\d{4})/);
+  if (!match) return String(label || "");
+  return `${match[1].slice(0, 3)}/${String(match[2]).slice(2)}`.replace(/^mar/i, "Mar");
+}
+
 function parseCurrencyInput(value) {
   const normalized = String(value || "")
     .replace(/[^\d,.-]/g, "")
@@ -999,9 +1189,232 @@ function parseCurrencyInput(value) {
   return Number.isFinite(parsed) ? parsed : 0;
 }
 
+function downloadMonthlyReport() {
+  const rows = buildMonthlyComparison();
+  const filteredRows = getFilteredRows();
+  const summary = buildSummary(getFilteredRows());
+  const activeKey = getDatasetPeriod(getActiveDataset()).key;
+  const active = rows.find((row) => row.key === activeKey) || rows[rows.length - 1] || null;
+  const snapshot = readDashboardSnapshot();
+  const reportWindow = window.open("", "_blank", "width=1100,height=800");
+  if (!reportWindow) {
+    showToast("Permita pop-ups para gerar o PDF do relatório.", "warn", 5200);
+    return;
+  }
+  reportWindow.document.write(buildReportHtml({ rows, filteredRows, summary, active, snapshot }));
+  reportWindow.document.close();
+  reportWindow.focus();
+  reportWindow.setTimeout(() => {
+    reportWindow.print();
+  }, 450);
+}
+
+function readDashboardSnapshot() {
+  const readText = (selector) =>
+    Array.from(document.querySelectorAll(selector))
+      .filter((node) => node && !node.closest("[hidden]"))
+      .map((node) => node.textContent.replace(/\s+/g, " ").trim())
+      .filter(Boolean);
+  return {
+    source: el.sourceLine?.textContent?.trim() || "",
+    updatedAt: el.lastUpdate?.textContent?.trim() || "",
+    tabs: readText(".sheet-tab"),
+    kpis: readText(".kpi-card"),
+    tableRows: readText("#table-body tr").slice(0, 15),
+  };
+}
+
+function buildReportHtml({ rows, filteredRows, summary, active, snapshot }) {
+  const topBases = topBy(filteredRows, "base", "valor_numerico", 8);
+  const topDrivers = topBy(filteredRows, "motorista", "valor_numerico", 8);
+  const maxMonth = Math.max(...rows.map((row) => row.pnrCount + row.packageCount), 1);
+  const maxBase = Math.max(...topBases.map((item) => item.total), 1);
+  const criticalBase = topBases[0]?.label || "Sem base crítica";
+  const criticalDriver = topDrivers[0]?.label || "Sem driver crítico";
+  const activeTrend = active?.previous ? `${active.deltaPct > 0 ? "+" : ""}${active.deltaPct.toFixed(1)}% vs. mês anterior` : "Sem mês anterior";
+  const css = `
+    @page { size: A4; margin: 10mm; }
+    * { box-sizing: border-box; }
+    body { margin: 0; background: #eef3f8; color: #132235; font-family: Arial, sans-serif; }
+    h1, h2, h3, p { margin: 0; }
+    .page { display: grid; gap: 14px; }
+    .hero, .card { break-inside: avoid; page-break-inside: avoid; }
+    .hero { position: relative; overflow: hidden; display: grid; grid-template-columns: 1fr auto; gap: 18px; padding: 24px; border-radius: 20px; color: #fff; background: linear-gradient(135deg, #10243a 0%, #145b7a 58%, #0f8b78 100%); box-shadow: 0 18px 38px rgba(16,36,58,.22); }
+    .hero::after { content: ""; position: absolute; inset: auto -60px -90px auto; width: 230px; height: 230px; border-radius: 50%; background: rgba(255,159,67,.24); }
+    .hero h1 { font-size: 27px; letter-spacing: -.02em; }
+    .hero p { margin-top: 7px; color: rgba(255,255,255,.78); font-size: 12px; }
+    .hero-badge { align-self: start; padding: 9px 12px; border-radius: 999px; background: rgba(255,255,255,.12); border: 1px solid rgba(255,255,255,.22); font-size: 12px; font-weight: 700; }
+    .section-title { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 10px; }
+    .section-title h2 { font-size: 16px; }
+    .muted { color: #66768d; }
+    .card { border: 1px solid #d9e2ec; border-radius: 16px; padding: 14px; background: #fff; box-shadow: 0 10px 24px rgba(19,34,53,.07); }
+    .kpi-grid { display: grid; grid-template-columns: 1.25fr 1fr 1fr; gap: 12px; }
+    .metric { position: relative; overflow: hidden; min-height: 104px; border: 0; color: #fff; }
+    .metric::after { content: ""; position: absolute; right: -28px; top: -28px; width: 96px; height: 96px; border-radius: 50%; background: rgba(255,255,255,.16); }
+    .metric span { display: block; font-size: 12px; color: rgba(255,255,255,.82); }
+    .metric strong { display: block; margin-top: 10px; font-size: 28px; letter-spacing: -.04em; }
+    .metric small { display: block; margin-top: 7px; color: rgba(255,255,255,.8); font-weight: 700; }
+    .metric--money { background: linear-gradient(135deg, #b35d00, #ff9f43); }
+    .metric--loss { background: linear-gradient(135deg, #b8232f, #ff6b6b); }
+    .metric--pnr { background: linear-gradient(135deg, #8f2430, #bf3030); }
+    .metric--volume { background: linear-gradient(135deg, #0b67ad, #3ba6ff); }
+    .insight-grid { display: grid; grid-template-columns: 1.15fr .85fr; gap: 12px; }
+    .narrative { line-height: 1.5; font-size: 12.5px; }
+    .callouts { display: grid; gap: 8px; }
+    .callout { padding: 11px; border-radius: 12px; background: linear-gradient(135deg, rgba(20,120,200,.12), #fff); border-left: 5px solid #1478c8; }
+    .callout.is-bad { background: linear-gradient(135deg, rgba(191,48,48,.13), #fff); border-left-color: #bf3030; }
+    .callout.is-warm { background: linear-gradient(135deg, rgba(255,159,67,.18), #fff); border-left-color: #b35d00; }
+    .callout strong { display: block; font-size: 12px; }
+    .callout span { display: block; margin-top: 3px; color: #66768d; font-size: 11px; }
+    .chart { display: flex; align-items: end; gap: 22px; min-height: 205px; padding: 12px 8px 0; border-bottom: 1px solid #cfd9e4; border-radius: 14px; background: linear-gradient(to top, rgba(20,120,200,.09) 1px, transparent 1px) 0 0/100% 25%, linear-gradient(180deg, #f8fbff, #fff); }
+    .month { display: grid; justify-items: center; gap: 7px; min-width: 82px; text-align: center; }
+    .bar { display: flex; align-items: flex-start; justify-content: center; width: 38px; min-height: 28px; border-radius: 11px 11px 0 0; color: #fff; font-size: 11px; font-weight: 800; padding-top: 6px; box-shadow: 0 10px 18px rgba(19,34,53,.16); }
+    .bar.is-good { background: #168447; } .bar.is-low { background: #1478c8; } .bar.is-warn { background: #ff9f43; } .bar.is-bad { background: #bf3030; }
+    .month strong { font-size: 12px; }
+    .month span { font-size: 10.5px; }
+    .two-col { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+    .bars-list { display: grid; gap: 9px; }
+    .row { display: grid; grid-template-columns: 22px 165px minmax(0,1fr) 78px; gap: 10px; align-items: center; font-size: 11.5px; }
+    .rank { display: grid; place-items: center; width: 20px; height: 20px; border-radius: 999px; background: #e7eef6; color: #66768d; font-weight: 800; font-size: 10px; }
+    .row.is-top .rank { background: #bf3030; color: #fff; }
+    .track { height: 11px; background: #e7eef6; border-radius: 999px; overflow: hidden; }
+    .fill { height: 100%; border-radius: 999px; background: linear-gradient(90deg, #ff9f43, #bf3030); }
+    table { width: 100%; border-collapse: collapse; font-size: 11px; }
+    th, td { border-bottom: 1px solid #edf1f5; padding: 7px 5px; text-align: left; }
+    tbody tr:nth-child(even) { background: #f8fbff; }
+    td:last-child { color: #b35d00; font-weight: 800; }
+    .conclusion { border-color: rgba(15,139,120,.28); background: linear-gradient(135deg, rgba(15,139,120,.12), #fff 58%); }
+    .conclusion p { line-height: 1.55; font-size: 12.5px; }
+    th { color: #66768d; font-size: 10px; text-transform: uppercase; }
+    .footer-note { color: #66768d; font-size: 10.5px; text-align: right; }
+    .no-print { border: 0; border-radius: 999px; padding: 10px 14px; background: #fff; color: #10243a; font-weight: 800; cursor: pointer; }
+    @media print { body { background: #fff; } .no-print { display: none; } .card, .hero { box-shadow: none; } }
+  `;
+  const monthBars = rows
+    .map((row) => {
+      const total = row.pnrCount + row.packageCount;
+      const ratio = total / maxMonth;
+      const tone = ratio >= 0.72 ? "is-bad" : ratio >= 0.45 ? "is-warn" : ratio >= 0.22 ? "is-low" : "is-good";
+      return `
+        <div class="month">
+          <div class="bar ${tone}" style="height:${Math.max(32, ratio * 160).toFixed(0)}px">${integer.format(total)}</div>
+          <strong>${escapeHtml(shortMonthYear(row.label))}</strong>
+          <span class="muted">${currency.format(row.totalValue)}</span>
+        </div>
+      `;
+    })
+    .join("");
+  const baseRows = topBases
+    .map((item, index) => `
+      <div class="row${index < 3 ? " is-top" : ""}">
+        <span class="rank">${index + 1}</span>
+        <strong>${escapeHtml(item.label)}</strong>
+        <span class="track"><span class="fill" style="width:${((item.total / maxBase) * 100).toFixed(1)}%"></span></span>
+        <strong>${compactCurrency.format(item.total)}</strong>
+      </div>
+    `)
+    .join("");
+  const driverRows = topDrivers
+    .map((item) => `
+      <tr>
+        <td>${escapeHtml(item.label)}</td>
+        <td>${integer.format(item.count)}</td>
+        <td>${currency.format(item.total)}</td>
+      </tr>
+    `)
+    .join("");
+  return `<!doctype html>
+    <html lang="pt-BR">
+      <head><meta charset="utf-8"><title>Relatório</title><style>${css}</style></head>
+      <body>
+        <main class="page">
+          <section class="hero">
+            <div>
+              <h1>Relatório Executivo</h1>
+              <p class="muted">${escapeHtml(snapshot.source)} · ${escapeHtml(snapshot.updatedAt)}</p>
+            </div>
+            <div>
+              <div class="hero-badge">${escapeHtml(activeTrend)}</div>
+              <button class="no-print" onclick="window.print()">Baixar PDF</button>
+            </div>
+          </section>
+          <section class="kpi-grid">
+            <div class="card metric metric--money"><span>Total de descontos</span><strong>${currency.format(summary.totalValue)}</strong><small>Impacto financeiro do recorte</small></div>
+            <div class="card metric metric--loss"><span>Pacotes perdidos</span><strong>${integer.format(summary.packageCount)}</strong><small>${summary.packageShare}% do total</small></div>
+            <div class="card metric metric--pnr"><span>PNR</span><strong>${integer.format(summary.pnrCount)}</strong><small>${summary.pnrShare}% do total</small></div>
+          </section>
+          <section class="insight-grid">
+            <div class="card narrative">
+              <div class="section-title"><h2>Visão geral</h2><span class="muted">${integer.format(summary.count)} registros</span></div>
+              <p>${escapeHtml(buildMonthlyNarrative(rows, summary))}</p>
+              <p class="muted" style="margin-top:8px">Leitura real do dashboard, tratamento dos dados filtrados, análise operacional e geração do PDF.</p>
+            </div>
+            <div class="card callouts">
+              <div class="section-title"><h2>Destaques</h2></div>
+              <div class="callout is-bad"><strong>Base mais ofensiva</strong><span>${escapeHtml(criticalBase)}</span></div>
+              <div class="callout is-warm"><strong>Driver com maior impacto</strong><span>${escapeHtml(criticalDriver)}</span></div>
+              <div class="callout"><strong>Pressão operacional</strong><span>${summary.pnrCount >= summary.packageCount ? "PNR concentra a maior parte das ocorrências." : "Pacotes perdidos concentram a maior parte das ocorrências."}</span></div>
+            </div>
+          </section>
+          <section class="card">
+            <div class="section-title"><h2>Gráfico comparativo mensal</h2><span class="muted">PNR + perdidos por mês</span></div>
+            <div class="chart">${monthBars}</div>
+          </section>
+          <section class="two-col">
+            <div class="card">
+              <div class="section-title"><h2>Análise por base</h2><span class="muted">mais ofensivas</span></div>
+              <div class="bars-list">${baseRows}</div>
+            </div>
+            <div class="card">
+              <div class="section-title"><h2>Análise por driver</h2><span class="muted">maior impacto</span></div>
+              <table><thead><tr><th>Driver</th><th>Registros</th><th>Desconto</th></tr></thead><tbody>${driverRows}</tbody></table>
+            </div>
+          </section>
+          <section class="card conclusion">
+            <div class="section-title"><h2>Conclusão e próximos passos</h2><span class="muted">insights finais</span></div>
+            <p>${escapeHtml(buildReportConclusion(rows, summary, criticalBase, criticalDriver))}</p>
+          </section>
+          <p class="footer-note">Relatório gerado a partir dos dados exibidos no dashboard.</p>
+        </main>
+      </body>
+    </html>`;
+}
+
+function buildMonthlyNarrative(rows, summary) {
+  if (!rows.length) return "Sem histórico suficiente para gerar leitura mensal.";
+  const latest = rows[rows.length - 1];
+  const previous = rows[rows.length - 2] || null;
+  const trend = previous
+    ? latest.totalValue < previous.totalValue
+      ? "O mês ativo reduziu o impacto financeiro frente ao mês anterior."
+      : latest.totalValue > previous.totalValue
+        ? "O mês ativo ampliou o impacto financeiro frente ao mês anterior."
+        : "O mês ativo manteve o mesmo patamar financeiro do mês anterior."
+    : "Há apenas uma competência consolidada até o momento.";
+  const pressure = summary.pnrCount >= summary.packageCount ? "PNR segue como principal vetor de pressão." : "Pacotes perdidos seguem como principal vetor de pressão.";
+  return `${trend} ${pressure}`;
+}
+
+function buildReportConclusion(rows, summary, criticalBase, criticalDriver) {
+  const latest = rows[rows.length - 1] || null;
+  const previous = rows[rows.length - 2] || null;
+  const trend = latest && previous
+    ? latest.totalValue <= previous.totalValue
+      ? "houve melhora no impacto financeiro frente ao mês anterior"
+      : "houve aumento de ofensividade frente ao mês anterior"
+    : "o histórico ainda é curto para concluir tendência";
+  const dominant = summary.pnrCount >= summary.packageCount ? "PNR" : "pacotes perdidos";
+  return `A principal pressão do recorte está em ${dominant}, com atenção prioritária para ${criticalBase}. O driver de maior impacto é ${criticalDriver}. No comparativo mensal, ${trend}; a recomendação é revisar as bases mais ofensivas, separar causa por tipo de desconto e acompanhar a próxima competência contra a meta vigente.`;
+}
+
+function slugify(value) {
+  return normalize(value).replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "") || "relatorio";
+}
+
 function getActiveMonthlyStatus() {
   const rows = buildMonthlyComparison();
-  const active = rows.find((row) => row.datasetId === state.activeDatasetId) || rows[rows.length - 1] || null;
+  const activeKey = getDatasetPeriod(getActiveDataset()).key;
+  const active = rows.find((row) => row.key === activeKey) || rows[rows.length - 1] || null;
   if (!active) return "Sem histórico mensal";
   if (!active.previous) return "Sem mês anterior carregado";
   const prefix = active.deltaValue > 0 ? "+" : "";
@@ -1065,7 +1478,7 @@ function renderTable(rows, summary) {
 
   el.resultCount.textContent = integer.format(totalRows);
   el.tableRange.textContent = `${integer.format(start)}-${integer.format(end)} de ${integer.format(totalRows)}`;
-  el.pageIndicator.textContent = `Página ${integer.format(state.page)} de ${integer.format(pageCount)}`;
+  el.pageIndicator.textContent = `${integer.format(state.page)}/${integer.format(pageCount)}`;
   el.prevPage.disabled = state.page <= 1;
   el.nextPage.disabled = state.page >= pageCount;
 
@@ -1119,7 +1532,7 @@ function renderFilterSummary() {
   push("Tipo", state.tipo);
   push("Base", state.base);
   push("Driver", state.motorista);
-  if (state.period !== "active") push("Quinzena", getDatasetPeriodLabel(getDatasetById(state.period)));
+  if (normalizePeriodMode(state.period) !== "month") push("Período", getPeriodModeLabel(state.period));
   if (state.query) applied.push({ label: "Busca", value: state.query });
 
   el.activeFiltersCount.textContent = `${applied.length} filtro${applied.length === 1 ? "" : "s"} ativo${applied.length === 1 ? "" : "s"}`;
@@ -1143,13 +1556,14 @@ function updateTopbar(summary = buildSummary(getFilteredRows())) {
     : fileMeta.fileName
       ? `Arquivo ativo: ${humanizeWorkbookName(fileMeta.fileName)}`
       : "Arquivo ativo: pré-fatura";
-  el.statusText.textContent = summary.count
-    ? `${integer.format(summary.count)} registros filtrados em tempo real`
-    : "Nenhum registro no recorte atual";
   if (el.syncStatus) {
-    el.syncStatus.textContent = backendMessage || (getBackendBaseUrl() ? "Backend configurado" : "Modo local");
+    const label = backendStatus === "online" ? "Online" : backendStatus === "connecting" ? "Sync" : backendStatus === "offline" ? "Offline" : "Local";
+    const textNode = el.syncStatus.querySelector(".connection-indicator__label");
+    if (textNode) textNode.textContent = label;
+    el.syncStatus.setAttribute("title", `Status da conexão: ${label}`);
+    el.syncStatus.setAttribute("aria-label", `Status da conexão: ${label}`);
   }
-  el.lastUpdate.textContent = `Última atualização: ${summary.lastUpdate || "--"}`;
+  updateLiveClock();
 }
 
 function buildSummary(rows) {
@@ -1688,8 +2102,14 @@ function updateBackendStatus(kind, message) {
     el.backendStatus.dataset.state = kind;
   }
   if (el.syncStatus) {
-    el.syncStatus.textContent = message;
     el.syncStatus.dataset.state = kind;
+    const textNode = el.syncStatus.querySelector(".connection-indicator__label");
+    const label = kind === "online" ? "Online" : kind === "connecting" ? "Sync" : kind === "offline" ? "Offline" : "Local";
+    if (textNode) {
+      textNode.textContent = label;
+    }
+    el.syncStatus.setAttribute("title", `Status da conexão: ${label}`);
+    el.syncStatus.setAttribute("aria-label", `Status da conexão: ${label}`);
   }
 }
 
@@ -1700,7 +2120,7 @@ function hydrateThemeControls() {
   if (el.themeToggle) {
     const label = state.theme === "dark" ? "Modo claro" : "Modo escuro";
     el.themeToggle.setAttribute("aria-label", label);
-    el.themeToggle.textContent = state.theme === "dark" ? "◐" : "◑";
+    el.themeToggle.dataset.theme = state.theme;
   }
   updateBackendStatus(
     getBackendBaseUrl() ? backendStatus : "local",
@@ -1724,6 +2144,7 @@ function canEdit() {
 function updateAccessControls() {
   const backendConfigured = Boolean(getBackendBaseUrl());
   const isAdmin = canEdit();
+  const showAccount = Boolean(state.accountPanelOpen || currentUser);
   if (el.authStatus) {
     el.authStatus.textContent = currentUser ? (currentUser.role === "admin" ? "Admin" : "Visualização") : backendConfigured ? "Login necessário" : "Modo local";
     el.authStatus.dataset.state = currentUser?.role || (backendConfigured ? "required" : "local");
@@ -1742,6 +2163,12 @@ function updateAccessControls() {
   if (el.backendSync) el.backendSync.disabled = backendConfigured && !isAdmin;
   if (el.deleteActiveButton) el.deleteActiveButton.disabled = el.deleteActiveButton.disabled || (backendConfigured && !isAdmin);
   if (el.usersCard) el.usersCard.hidden = currentUser?.role !== "admin";
+  if (el.settingsCard) el.settingsCard.hidden = !(currentUser?.role === "admin" && showAccount);
+  if (el.accountCard) el.accountCard.hidden = !showAccount;
+  if (el.accountToggle) {
+    el.accountToggle.dataset.state = currentUser?.role || (backendConfigured ? "required" : "local");
+    el.accountToggle.classList.toggle("is-active", showAccount);
+  }
   renderUsers();
 }
 
@@ -2278,12 +2705,81 @@ function getDatasetById(id) {
 
 function syncActiveDataset() {
   activeDataset = getActiveDataset();
-  allRows = activeDataset.rows.slice();
-  fileMeta = activeDataset;
+  state.period = normalizePeriodMode(state.period);
+  const scope = buildActiveDatasetScope(activeDataset);
+  allRows = scope.rows;
+  fileMeta = {
+    ...activeDataset,
+    rows: allRows,
+    label: scope.label,
+    scopedDatasets: scope.datasets,
+  };
   library.activeDatasetId = activeDataset.id;
   if (state.activeDatasetId !== activeDataset.id) {
     state.activeDatasetId = activeDataset.id;
   }
+}
+
+function normalizePeriodMode(value) {
+  return value === "q1" || value === "q2" ? value : "month";
+}
+
+function buildActiveDatasetScope(referenceDataset) {
+  const reference = referenceDataset || buildEmptyDataset();
+  if (!reference.rows?.length || reference.id === EMPTY_DATASET_ID) {
+    return { rows: reference.rows ? reference.rows.slice() : [], datasets: [reference], label: reference.label || "Sem dados" };
+  }
+  const referencePeriod = getDatasetPeriod(reference);
+  const monthDatasets = getDatasetsForMonth(referencePeriod.key);
+  const periodMode = normalizePeriodMode(state.period);
+  const filteredDatasets =
+    periodMode === "month" ? monthDatasets : monthDatasets.filter((dataset) => getDatasetQuarterMode(dataset) === periodMode);
+  const selectedDatasets = filteredDatasets.length || periodMode !== "month" ? filteredDatasets : [reference];
+  const rows = selectedDatasets.flatMap((dataset) => (Array.isArray(dataset.rows) ? dataset.rows : []));
+  return {
+    rows,
+    datasets: selectedDatasets,
+    label: `${referencePeriod.monthLabel}${periodMode === "month" ? " · mês completo" : ` · ${getPeriodModeLabel(periodMode)}`}`,
+  };
+}
+
+function getDatasetsForMonth(monthKey) {
+  return library.datasets
+    .filter((dataset) => dataset && dataset.id !== EMPTY_DATASET_ID && Array.isArray(dataset.rows) && dataset.rows.length)
+    .filter((dataset) => getDatasetPeriod(dataset).key === monthKey)
+    .sort((a, b) => {
+      const qa = getDatasetQuarterOrder(a);
+      const qb = getDatasetQuarterOrder(b);
+      return qa - qb || String(a.label || "").localeCompare(String(b.label || ""), "pt-BR");
+    });
+}
+
+function getDatasetQuarterMode(dataset) {
+  const text = `${dataset?.label || ""} ${dataset?.fileName || ""}`;
+  const labelQuarter = detectQuinzena(text);
+  if (labelQuarter.includes("1")) return "q1";
+  if (labelQuarter.includes("2")) return "q2";
+  const rows = Array.isArray(dataset?.rows) ? dataset.rows : [];
+  const days = rows
+    .map((row) => {
+      const date = row.data_normalizada ? new Date(`${row.data_normalizada}T00:00:00Z`) : row.data_sort ? new Date(row.data_sort) : null;
+      return date && !Number.isNaN(date.getTime()) ? date.getUTCDate() : null;
+    })
+    .filter((day) => day != null);
+  if (!days.length) return "month";
+  const averageDay = days.reduce((acc, day) => acc + day, 0) / days.length;
+  return averageDay <= 15 ? "q1" : "q2";
+}
+
+function getDatasetQuarterOrder(dataset) {
+  const mode = getDatasetQuarterMode(dataset);
+  return mode === "q1" ? 1 : mode === "q2" ? 2 : 3;
+}
+
+function getPeriodModeLabel(mode) {
+  if (mode === "q1") return "1ª quinzena";
+  if (mode === "q2") return "2ª quinzena";
+  return "Mês completo";
 }
 
 function makeDatasetId(fileName) {
