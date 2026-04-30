@@ -1,0 +1,9 @@
+.edge-qa-profile*/
+dashboard-shot*.png
+qa-*.png
+node_modules/
+backend/node_modules/
+backend/data-qa/
+backend/data-qa-final/
+.DS_Store
+Thumbs.db

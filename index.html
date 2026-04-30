@@ -1,0 +1,280 @@
+<!doctype html>
+<html lang="pt-BR">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Dashboard Pré-Fatura | ALC Admin Center</title>
+    <meta
+      name="description"
+      content="Dashboard web real para analisar a pré-fatura a partir de planilhas Excel com filtros, gráficos, exclusão, usuários e sincronização online."
+    />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&family=Space+Grotesk:wght@500;700&display=swap"
+      rel="stylesheet"
+    />
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body data-theme="dark">
+    <div class="app-shell">
+      <header class="topbar">
+        <div class="topbar__left">
+          <button class="icon-button" id="sidebar-toggle" type="button" aria-label="Alternar filtros">
+            <span></span>
+            <span></span>
+            <span></span>
+          </button>
+          <div>
+            <h1>Dashboard Pré-Fatura</h1>
+            <p id="source-line">Carregando workbook real...</p>
+          </div>
+        </div>
+        <div class="topbar__center" id="status-line">
+          <span class="status-dot status-dot--good"></span>
+          <span id="status-text">Dados do workbook carregados com sucesso</span>
+          <span class="divider"></span>
+          <span id="sync-status">Modo local</span>
+          <span class="divider"></span>
+          <span id="last-update">Última atualização: --</span>
+        </div>
+        <div class="topbar__actions">
+          <button class="ghost-button ghost-button--compact" id="refresh-button" type="button">Sincronizar</button>
+          <button class="ghost-button ghost-button--icon" id="theme-toggle" type="button" aria-label="Alternar tema">◐</button>
+          <button class="danger-button danger-button--compact" id="delete-active-button" type="button">Excluir arquivo</button>
+          <button class="ghost-button" id="upload-button" type="button">
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M12 3v10m0-10 4 4m-4-4-4 4M4 14v4a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-4" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8"></path>
+            </svg>
+            Importar Excel
+          </button>
+          <input id="file-input" type="file" accept=".xlsx,.xls" multiple hidden />
+        </div>
+      </header>
+
+      <main class="layout">
+        <aside class="sidebar" id="sidebar">
+          <section class="sidebar-card sidebar-card--library">
+            <div class="sidebar-card__title">
+              <h2>Arquivos</h2>
+              <span id="dataset-count">1 arquivo</span>
+            </div>
+            <label>
+              <span>Arquivo ativo</span>
+              <select id="dataset-select"></select>
+            </label>
+            <p class="sidebar-note" id="dataset-note">Carregue meses anteriores e troque sem reimportar o workbook.</p>
+          </section>
+
+          <section class="sidebar-card sidebar-card--backend">
+            <div class="sidebar-card__title">
+              <h2>Sincronização</h2>
+              <span id="backend-status">Modo local</span>
+            </div>
+            <label>
+              <span>API Base URL</span>
+              <input id="backend-input" type="url" placeholder="https://api.seudominio.com" />
+            </label>
+            <div class="sidebar-actions sidebar-actions--stack">
+              <button class="secondary-button" id="backend-save" type="button">Salvar conexão</button>
+              <button class="secondary-button" id="backend-sync" type="button">Sincronizar agora</button>
+            </div>
+            <p class="sidebar-note">Os arquivos carregados podem ser salvos no backend e acessados no GitHub Pages.</p>
+          </section>
+
+          <section class="sidebar-card sidebar-card--auth">
+            <div class="sidebar-card__title">
+              <h2>Acesso</h2>
+              <span id="auth-status">Sem login</span>
+            </div>
+            <label>
+              <span>Email</span>
+              <input id="auth-email" type="email" autocomplete="email" placeholder="admin@empresa.com" />
+            </label>
+            <label>
+              <span>Senha</span>
+              <input id="auth-password" type="password" autocomplete="current-password" placeholder="mínimo 6 caracteres" />
+            </label>
+            <div class="sidebar-actions sidebar-actions--stack">
+              <button class="secondary-button" id="auth-login" type="button">Entrar</button>
+              <button class="secondary-button" id="auth-signup" type="button">Criar acesso</button>
+              <button class="secondary-button" id="auth-logout" type="button" hidden>Sair</button>
+            </div>
+            <p class="sidebar-note" id="auth-note">O primeiro usuário criado vira Admin. Os próximos entram como Visualização.</p>
+          </section>
+
+          <section class="sidebar-card sidebar-card--users" id="users-card" hidden>
+            <div class="sidebar-card__title">
+              <h2>Usuários</h2>
+              <span id="users-count">0</span>
+            </div>
+            <div class="user-list" id="users-list"></div>
+          </section>
+
+          <section class="sidebar-card sidebar-card--search">
+            <label for="search-input">Pesquisar</label>
+            <div class="search-box">
+              <svg viewBox="0 0 24 24" aria-hidden="true">
+                <path d="M10.5 4a6.5 6.5 0 1 0 4.13 11.52L20 21l1-1-5.38-5.38A6.5 6.5 0 0 0 10.5 4Z" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8"></path>
+              </svg>
+              <input id="search-input" type="search" placeholder="Base, driver, placa, rota..." />
+            </div>
+          </section>
+
+          <section class="sidebar-card">
+            <div class="sidebar-card__title">
+              <h2>Filtros</h2>
+              <div class="sidebar-card__title-actions">
+                <span id="active-filters-count">0 filtros ativos</span>
+                <button class="secondary-button secondary-button--mini" id="clear-filters" type="button">Limpar</button>
+              </div>
+            </div>
+
+            <div class="filter-list">
+              <label>
+                <span>Quinzena</span>
+                <select id="period-select"></select>
+              </label>
+              <label>
+                <span>Aba de origem</span>
+                <select id="sheet-select"></select>
+              </label>
+              <label>
+                <span>Tipo</span>
+                <select id="type-select"></select>
+              </label>
+              <label>
+                <span>Base</span>
+                <select id="base-select"></select>
+              </label>
+              <label>
+                <span>Driver</span>
+                <select id="driver-select"></select>
+              </label>
+            </div>
+          </section>
+
+          <section class="sidebar-card sidebar-card--status">
+            <div class="sidebar-card__title">
+              <h2>Filtragem atual</h2>
+            </div>
+            <div class="status-stack" id="filter-summary"></div>
+          </section>
+        </aside>
+
+        <section class="content">
+          <nav class="sheet-tabs" id="sheet-tabs" aria-label="Selecionar aba de origem"></nav>
+
+          <section class="monthly-base-view" id="monthly-base-view" hidden></section>
+
+          <section class="kpi-grid" id="kpi-grid"></section>
+
+          <section class="insight-grid">
+            <article class="panel panel--bars">
+              <div class="panel__header">
+                <div>
+                  <h2>Bases: menos ofensivas x mais ofensivas</h2>
+                </div>
+                <span class="panel__meta">ranking</span>
+              </div>
+              <div class="bar-list" id="base-bars"></div>
+            </article>
+
+            <article class="panel panel--table">
+              <div class="panel__header">
+                <div>
+                  <h2>Drivers: menos ofensivos x mais ofensivos</h2>
+                </div>
+                <span class="panel__meta">ranking</span>
+              </div>
+              <div class="mini-table" id="driver-rank"></div>
+            </article>
+
+            <article class="panel panel--donut">
+              <div class="panel__header">
+                <div>
+                  <h2>Mix por aba</h2>
+                </div>
+                <span class="panel__meta">share de descontos</span>
+              </div>
+              <div class="donut-wrap">
+                <div class="donut" id="donut-chart">
+                  <div class="donut__center">
+                    <strong id="donut-total">R$ 0,00</strong>
+                    <span>Total de descontos</span>
+                  </div>
+                </div>
+                <div class="legend" id="donut-legend"></div>
+              </div>
+            </article>
+          </section>
+
+          <section class="panel comparison-panel">
+            <div class="panel__header">
+              <div>
+                <h2>Comparação mensal</h2>
+              </div>
+              <span class="panel__meta" id="comparison-meta">histórico</span>
+            </div>
+            <div class="comparison-list" id="monthly-comparison"></div>
+          </section>
+
+          <section class="panel table-panel">
+            <div class="panel__header table-panel__header">
+              <div>
+                <h2>Detalhamento dos registros</h2>
+                <p><span id="result-count">0</span> registros visíveis após os filtros</p>
+              </div>
+              <div class="table-actions">
+                <div class="value-sort" aria-label="Ordenar por desconto">
+                  <button class="value-sort__button is-active" id="sort-high" type="button">Maior desconto</button>
+                  <button class="value-sort__button" id="sort-low" type="button">Menor desconto</button>
+                </div>
+                <label class="page-size">
+                  <span>Linhas por página</span>
+                  <select id="page-size">
+                    <option value="25">25</option>
+                    <option value="50" selected>50</option>
+                    <option value="100">100</option>
+                  </select>
+                </label>
+              </div>
+            </div>
+
+            <div class="table-wrap">
+              <table>
+                <thead>
+                  <tr>
+                    <th data-sort="base">Base</th>
+                    <th data-sort="motorista">Driver</th>
+                    <th data-sort="placa">Placa</th>
+                    <th data-sort="tipo_desconto">Tipo</th>
+                    <th data-sort="aba_origem">Aba</th>
+                    <th data-sort="data_sort">Data</th>
+                    <th data-sort="id_pacote">ID do pacote</th>
+                    <th data-sort="n_rota">Nº rota</th>
+                    <th data-sort="valor_numerico" class="is-right">Desconto</th>
+                  </tr>
+                </thead>
+                <tbody id="table-body"></tbody>
+              </table>
+            </div>
+
+            <div class="table-footer">
+              <div id="table-range">0-0 de 0</div>
+              <div class="pagination">
+                <button class="secondary-button" id="prev-page" type="button">Anterior</button>
+                <span id="page-indicator">Página 1 de 1</span>
+                <button class="secondary-button" id="next-page" type="button">Próxima</button>
+              </div>
+            </div>
+          </section>
+        </section>
+      </main>
+    </div>
+
+    <div class="toast" id="toast" aria-live="polite" aria-atomic="true"></div>
+    <script src="./seed-data.js" defer></script>
+    <script src="./app.js" defer></script>
+  </body>
+</html>
