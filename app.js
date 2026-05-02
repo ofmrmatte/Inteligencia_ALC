@@ -150,6 +150,7 @@ function cacheDom() {
   el.donutChart = document.getElementById("donut-chart");
   el.donutLegend = document.getElementById("donut-legend");
   el.donutTotal = document.getElementById("donut-total");
+  el.pnrGoalSummary = document.getElementById("pnr-goal-summary");
   el.monthlyComparison = document.getElementById("monthly-comparison");
   el.comparisonMeta = document.getElementById("comparison-meta");
   el.tableBody = document.getElementById("table-body");
@@ -412,7 +413,13 @@ function bindEvents() {
   el.donutChart.addEventListener("pointerover", (event) => {
     const segment = event.target.closest(".donut-segment");
     if (!segment) return;
-    showDonutTooltip(segment);
+    showDonutTooltip(segment, event);
+  });
+
+  el.donutChart.addEventListener("pointermove", (event) => {
+    const segment = event.target.closest(".donut-segment");
+    if (!segment) return;
+    positionDonutTooltip(event);
   });
 
   el.donutChart.addEventListener("pointerout", (event) => {
@@ -421,14 +428,11 @@ function bindEvents() {
   });
 
   if (el.monthlyBaseView) {
-    el.monthlyBaseView.addEventListener("change", (event) => {
-      const input = event.target.closest("[data-pnr-goal-input]");
-      if (!input) return;
-      const value = parseCurrencyInput(input.value);
-      state.pnrGoalLimit = value > 0 ? value : DEFAULT_PNR_GOAL_LIMIT;
-      persistState();
-      renderAll();
-    });
+    el.monthlyBaseView.addEventListener("change", handlePnrGoalInput);
+  }
+
+  if (el.pnrGoalSummary) {
+    el.pnrGoalSummary.addEventListener("change", handlePnrGoalInput);
   }
 
   if (el.monthlyComparison) {
@@ -458,6 +462,15 @@ function bindEvents() {
     hydrateValueSortControls();
     renderAll();
   });
+}
+
+function handlePnrGoalInput(event) {
+  const input = event.target.closest("[data-pnr-goal-input]");
+  if (!input) return;
+  const value = parseCurrencyInput(input.value);
+  state.pnrGoalLimit = value > 0 ? value : DEFAULT_PNR_GOAL_LIMIT;
+  persistState();
+  renderAll();
 }
 
 function handleEscapeFilter(event) {
@@ -781,23 +794,40 @@ function renderInsights(filtered, summary) {
                   <span>${escapeHtml(item.label)}</span>
                   <span>${item.share.toFixed(1)}%</span>
                 </div>
-                <div class="legend__value">${currency.format(item.total)} em descontos · ${integer.format(item.count)} registros</div>
+                <div class="legend__value">${compactCurrency.format(item.total)} · ${integer.format(item.count)}</div>
               </div>
             </button>
           `;
         })
         .join("")
     : emptyState("Sem mix por aba", "Os dados filtrados não têm distribuição.");
+
+  renderPnrGoalSummary(filtered);
 }
 
 function renderDonutChart(summary, sheetShare, colors) {
   const circumference = 2 * Math.PI * 42;
   let offset = 0;
+  const labels = [];
   const segments = sheetShare
     .map((item, index) => {
+      const start = offset;
       const length = (item.share / 100) * circumference;
       const dashOffset = -offset;
       offset += length;
+      if (item.share >= 5) {
+        const midpoint = start + length / 2;
+        const angle = (midpoint / circumference) * Math.PI * 2 - Math.PI / 2;
+        const x = 50 + Math.cos(angle) * 42;
+        const y = 50 + Math.sin(angle) * 42;
+        labels.push(`
+          <text
+            class="donut-percent-label"
+            x="${x.toFixed(2)}"
+            y="${y.toFixed(2)}"
+          >${item.share.toFixed(1)}%</text>
+        `);
+      }
       return `
         <circle
           class="donut-segment"
@@ -826,6 +856,7 @@ function renderDonutChart(summary, sheetShare, colors) {
         <circle class="donut-track" cx="50" cy="50" r="42" fill="none" stroke-width="18"></circle>
         ${segments}
       </g>
+      ${labels.join("")}
     </svg>
     <div class="donut__center">
       <strong id="donut-total">${currency.format(summary.totalValue)}</strong>
@@ -837,7 +868,7 @@ function renderDonutChart(summary, sheetShare, colors) {
   el.donutTooltip = document.getElementById("donut-tooltip");
 }
 
-function showDonutTooltip(segment) {
+function showDonutTooltip(segment, event) {
   if (!el.donutTooltip) return;
   el.donutTooltip.innerHTML = `
     <strong>${escapeHtml(segment.dataset.title || "")}</strong>
@@ -845,10 +876,44 @@ function showDonutTooltip(segment) {
     <span>${escapeHtml(segment.dataset.count || "0")} registros · ${escapeHtml(segment.dataset.share || "0%")}</span>
   `;
   el.donutTooltip.hidden = false;
+  positionDonutTooltip(event);
+}
+
+function positionDonutTooltip(event) {
+  if (!el.donutTooltip || el.donutTooltip.hidden || !event) return;
+  const gap = 14;
+  const tooltipRect = el.donutTooltip.getBoundingClientRect();
+  const width = tooltipRect.width || 220;
+  const height = tooltipRect.height || 72;
+  const left = Math.min(window.innerWidth - width - 12, Math.max(12, event.clientX + gap));
+  const top = Math.min(window.innerHeight - height - 12, Math.max(12, event.clientY + gap));
+  el.donutTooltip.style.left = `${left}px`;
+  el.donutTooltip.style.top = `${top}px`;
 }
 
 function hideDonutTooltip() {
   if (el.donutTooltip) el.donutTooltip.hidden = true;
+}
+
+function renderPnrGoalSummary(filtered) {
+  if (!el.pnrGoalSummary) return;
+  const pnrRows = filtered.filter((row) => row.aba_origem === "PNR");
+  const pnrValue = pnrRows.reduce((acc, row) => acc + Number(row.valor_numerico || 0), 0);
+  const goal = getPnrGoalStatus(pnrValue);
+  const percent = goal.limit ? Math.min((pnrValue / goal.limit) * 100, 999) : 0;
+  el.pnrGoalSummary.innerHTML = `
+    <div class="pnr-goal-summary__main">
+      ${renderPnrGoalGauge(goal)}
+      <div class="pnr-goal-summary__copy">
+        <strong>${escapeHtml(goal.valueLabel)}</strong>
+        <span>Meta mensal: ${escapeHtml(goal.limitLabel)}</span>
+        <small>${integer.format(pnrRows.length)} registros PNR · ${percent.toFixed(1)}% da meta</small>
+      </div>
+    </div>
+    <div class="pnr-goal-summary__track" aria-hidden="true">
+      <span style="width:${Math.min(percent, 100).toFixed(1)}%"></span>
+    </div>
+  `;
 }
 
 function renderMonthlyComparison() {

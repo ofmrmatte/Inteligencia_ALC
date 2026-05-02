@@ -225,23 +225,35 @@
               <div class="mini-table" id="driver-rank"></div>
             </article>
 
-            <article class="panel panel--donut">
-              <div class="panel__header">
-                <div>
-                  <h2>Mix por aba</h2>
-                </div>
-                <span class="panel__meta">share de descontos</span>
-              </div>
-              <div class="donut-wrap">
-                <div class="donut" id="donut-chart">
-                  <div class="donut__center">
-                    <strong id="donut-total">R$ 0,00</strong>
-                    <span>Total de descontos</span>
+            <div class="mix-stack">
+              <article class="panel panel--donut">
+                <div class="panel__header">
+                  <div>
+                    <h2>Mix por aba</h2>
                   </div>
+                  <span class="panel__meta">share</span>
                 </div>
-                <div class="legend" id="donut-legend"></div>
-              </div>
-            </article>
+                <div class="donut-wrap">
+                  <div class="donut" id="donut-chart">
+                    <div class="donut__center">
+                      <strong id="donut-total">R$ 0,00</strong>
+                      <span>Total de descontos</span>
+                    </div>
+                  </div>
+                  <div class="legend legend--compact" id="donut-legend"></div>
+                </div>
+              </article>
+
+              <article class="panel panel--pnr-goal">
+                <div class="panel__header">
+                  <div>
+                    <h2>Meta PNR mensal</h2>
+                  </div>
+                  <span class="panel__meta">vigente</span>
+                </div>
+                <div class="pnr-goal-summary" id="pnr-goal-summary"></div>
+              </article>
+            </div>
           </section>
 
           <section class="panel comparison-panel">
