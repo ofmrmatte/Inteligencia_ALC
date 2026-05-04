@@ -2210,6 +2210,11 @@ body[data-theme="light"] .sidebar-card--users {
     linear-gradient(180deg, rgba(255, 255, 255, 0.96), rgba(244, 248, 252, 0.98));
 }
 
+body[data-theme="light"] .account-login input {
+  background: rgba(19, 35, 55, 0.04);
+  border-color: rgba(19, 35, 55, 0.12);
+}
+
 body[data-theme="light"] .user-row {
   background: rgba(19, 35, 55, 0.04);
 }
@@ -2362,6 +2367,18 @@ html {
   display: none !important;
 }
 
+.layout[data-dashboard-ready="false"] .content {
+  visibility: hidden;
+}
+
+html[data-filters-sidebar-open="false"] .layout {
+  grid-template-columns: minmax(0, 1fr) !important;
+}
+
+html[data-filters-sidebar-open="false"] .sidebar {
+  display: none !important;
+}
+
 .sidebar-card--library[hidden],
 [hidden] {
   display: none !important;
@@ -2408,6 +2425,17 @@ html {
   transform: none;
 }
 
+.ghost-button.is-action-blocked,
+.danger-button.is-action-blocked {
+  cursor: not-allowed;
+  opacity: 0.48;
+}
+
+.ghost-button.is-action-blocked:hover,
+.danger-button.is-action-blocked:hover {
+  transform: none;
+}
+
 .file-delete-picker {
   position: relative;
   order: 2;
@@ -2428,6 +2456,10 @@ html {
   border-radius: 0.9rem;
   background: var(--surface-strong);
   box-shadow: var(--shadow-soft);
+}
+
+.account-menu {
+  position: fixed;
 }
 
 .file-delete-menu button,
@@ -2457,14 +2489,84 @@ html {
 
 .account-menu {
   display: none;
+  gap: 0.55rem;
+  width: min(21rem, calc(100vw - 2rem));
+  padding: 0.8rem;
+  z-index: 120;
+  top: var(--account-menu-top, 4rem);
+  right: var(--account-menu-right, 1rem);
 }
 
-#account-toggle:hover + .account-menu,
-#account-toggle:focus + .account-menu,
-#account-toggle:focus-visible + .account-menu,
-.account-menu:hover,
-.account-menu:focus-within {
+.account-menu.is-open {
   display: grid;
+}
+
+.account-menu__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  padding: 0.15rem 0.18rem 0.45rem;
+  border-bottom: 1px solid rgba(164, 183, 202, 0.14);
+}
+
+.account-menu__header strong {
+  font-size: 0.9rem;
+  font-weight: 800;
+}
+
+.account-menu__header span {
+  color: var(--muted);
+  font-size: 0.76rem;
+  font-weight: 700;
+}
+
+.account-menu__actions {
+  display: grid;
+  gap: 0.25rem;
+}
+
+.account-login {
+  display: grid;
+  gap: 0.6rem;
+  padding-top: 0.15rem;
+}
+
+.account-login label {
+  display: grid;
+  gap: 0.35rem;
+  color: var(--muted);
+  font-size: 0.78rem;
+  font-weight: 700;
+}
+
+.account-login input {
+  width: 100%;
+  min-height: 2.35rem;
+  border: 1px solid rgba(164, 183, 202, 0.16);
+  border-radius: 0.7rem;
+  background: rgba(255, 255, 255, 0.05);
+  color: var(--text);
+  padding: 0.58rem 0.72rem;
+  outline: none;
+}
+
+.account-login input:focus {
+  border-color: rgba(59, 166, 255, 0.45);
+  box-shadow: 0 0 0 3px rgba(59, 166, 255, 0.12);
+}
+
+.account-login__actions {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0.5rem;
+}
+
+.account-login__note {
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.75rem;
+  line-height: 1.35;
 }
 
 .view-toolbar {

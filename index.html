@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="pt-BR">
+<html lang="pt-BR" data-filters-sidebar-open="false">
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
@@ -8,6 +8,16 @@
       name="description"
       content="Painel de Inteligência Operacional para análise de performance a partir de planilhas Excel com filtros, gráficos, relatórios, usuários e sincronização online."
     />
+    <script>
+      (function () {
+        try {
+          var saved = window.localStorage.getItem("filtersSidebarOpen");
+          document.documentElement.dataset.filtersSidebarOpen = saved === "true" ? "true" : "false";
+        } catch (error) {
+          document.documentElement.dataset.filtersSidebarOpen = "false";
+        }
+      })();
+    </script>
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link
@@ -59,14 +69,36 @@
               <circle cx="12" cy="12" r="4"></circle>
             </svg>
           </button>
-          <button class="ghost-button ghost-button--icon" id="account-toggle" type="button" aria-label="Acesso e configurações">
+          <button class="ghost-button ghost-button--icon" id="account-toggle" type="button" aria-label="Acesso e configurações" aria-haspopup="true" aria-expanded="false">
             <svg viewBox="0 0 24 24" aria-hidden="true">
               <path d="M12 12a4 4 0 1 0-4-4 4 4 0 0 0 4 4Zm0 2c-4.42 0-8 1.79-8 4v2h16v-2c0-2.21-3.58-4-8-4Z" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8"></path>
             </svg>
           </button>
-          <div class="account-menu" id="account-menu" aria-label="Menu do usuário">
-            <button type="button" data-account-page="profile">Perfil</button>
-            <button type="button" data-account-page="settings">Configurações gerais</button>
+          <div class="account-menu" id="account-menu" aria-label="Menu do usuário" hidden>
+            <div class="account-menu__header">
+              <strong>Conta</strong>
+              <span id="auth-status">Modo local</span>
+            </div>
+            <div class="account-menu__actions" id="account-actions">
+              <button type="button" data-account-page="profile">Perfil</button>
+              <button type="button" data-account-page="settings">Configurações gerais</button>
+              <button type="button" id="auth-logout" hidden>Sair</button>
+            </div>
+            <section class="account-login" id="account-card" hidden>
+              <label>
+                <span>Email</span>
+                <input id="auth-email" type="email" autocomplete="email" placeholder="admin@empresa.com" />
+              </label>
+              <label>
+                <span>Senha</span>
+                <input id="auth-password" type="password" autocomplete="current-password" placeholder="mínimo 6 caracteres" />
+              </label>
+              <div class="account-login__actions">
+                <button class="secondary-button" id="auth-login" type="button">Entrar</button>
+                <button class="secondary-button" id="auth-signup" type="button">Criar acesso</button>
+              </div>
+              <p class="account-login__note" id="auth-note">Configure a API para usar login online. No modo local, a edição continua liberada.</p>
+            </section>
           </div>
           <span class="connection-indicator" id="sync-status" aria-label="Status da conexão" title="Status da conexão: Local">
             <svg viewBox="0 0 24 24" aria-hidden="true">
@@ -88,7 +120,7 @@
         </div>
       </header>
 
-      <main class="layout">
+      <main class="layout" data-dashboard-ready="false">
         <aside class="sidebar" id="sidebar">
           <section class="sidebar-card sidebar-card--library" hidden>
             <div class="sidebar-card__title">
@@ -130,27 +162,6 @@
               <button class="secondary-button" id="backend-sync" type="button">Sincronizar agora</button>
             </div>
             <p class="sidebar-note">Os arquivos carregados podem ser salvos no backend e acessados no GitHub Pages.</p>
-          </section>
-
-          <section class="sidebar-card sidebar-card--auth" id="account-card">
-            <div class="sidebar-card__title">
-              <h2>Acesso</h2>
-              <span id="auth-status">Sem login</span>
-            </div>
-            <label>
-              <span>Email</span>
-              <input id="auth-email" type="email" autocomplete="email" placeholder="admin@empresa.com" />
-            </label>
-            <label>
-              <span>Senha</span>
-              <input id="auth-password" type="password" autocomplete="current-password" placeholder="mínimo 6 caracteres" />
-            </label>
-            <div class="sidebar-actions sidebar-actions--stack">
-              <button class="secondary-button" id="auth-login" type="button">Entrar</button>
-              <button class="secondary-button" id="auth-signup" type="button">Criar acesso</button>
-              <button class="secondary-button" id="auth-logout" type="button" hidden>Sair</button>
-            </div>
-            <p class="sidebar-note" id="auth-note">O primeiro usuário criado vira Admin. Os próximos entram como Visualização.</p>
           </section>
 
           <section class="sidebar-card sidebar-card--users" id="users-card" hidden>

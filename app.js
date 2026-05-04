@@ -5,6 +5,7 @@ const LIBRARY_STORAGE_KEY = "alc-pre-fatura-dashboard-library-v1";
 const THEME_STORAGE_KEY = "alc-pre-fatura-dashboard-theme-v1";
 const BACKEND_STORAGE_KEY = "alc-pre-fatura-dashboard-backend-v1";
 const AUTH_STORAGE_KEY = "alc-pre-fatura-dashboard-auth-v1";
+const SIDEBAR_STORAGE_KEY = "filtersSidebarOpen";
 const PDF_LOGO_IMAGE = {
   name: "ImLogo",
   width: 1080,
@@ -92,11 +93,13 @@ let currentUser = null;
 let knownUsers = [];
 let sidebarAnimationTimer = null;
 let liveClockTimer = null;
+let accountMenuCloseTimer = null;
 
 const el = {};
 
 async function bootstrapDashboard() {
   cacheDom();
+  hydrateSidebarState();
   startLiveClock();
   bindEvents();
   hydrateThemeControls();
@@ -108,6 +111,7 @@ async function bootstrapDashboard() {
   renderAll();
   updateTopbar();
   updateAccessControls();
+  markDashboardReady();
   void hydrateSession();
   void hydrateRemoteLibrary();
 }
@@ -224,8 +228,7 @@ function bindEvents() {
 
   if (el.uploadButton) {
     el.uploadButton.addEventListener("click", () => {
-      if (!canEdit()) {
-        showToast("Upload disponível apenas para Admin.", "warn", 5200);
+      if (!ensureUploadPermission()) {
         return;
       }
       el.fileInput.click();
@@ -245,19 +248,32 @@ function bindEvents() {
     });
   }
   if (el.accountToggle) {
-    el.accountToggle.addEventListener("click", () => {
-      state.accountPanelOpen = !state.accountPanelOpen;
-      persistState();
-      updateAccessControls();
+    el.accountToggle.addEventListener("click", (event) => {
+      event.stopPropagation();
+      setAccountMenuOpen(!state.accountPanelOpen);
     });
+    el.accountToggle.addEventListener("mouseenter", clearAccountMenuCloseTimer);
   }
   if (el.accountMenu) {
+    el.accountMenu.addEventListener("mouseenter", clearAccountMenuCloseTimer);
     el.accountMenu.addEventListener("click", (event) => {
       const button = event.target.closest("[data-account-page]");
       if (!button) return;
       openAccountPage(button.dataset.accountPage);
     });
   }
+  document.addEventListener("click", (event) => {
+    if (!state.accountPanelOpen) return;
+    if (event.target.closest("#account-toggle") || event.target.closest("#account-menu")) return;
+    setAccountMenuOpen(false);
+  });
+  document.addEventListener("keydown", (event) => {
+    if (event.key !== "Escape" || !state.accountPanelOpen) return;
+    setAccountMenuOpen(false);
+    el.accountToggle?.focus();
+  });
+  window.addEventListener("resize", positionAccountMenu);
+  window.addEventListener("scroll", positionAccountMenu, true);
   document.addEventListener("click", (event) => {
     const button = event.target.closest("[data-account-home]");
     if (!button) return;
@@ -286,6 +302,9 @@ function bindEvents() {
   }
   if (el.reportButton) {
     el.reportButton.addEventListener("click", () => {
+      if (!ensureReportPermission()) {
+        return;
+      }
       downloadMonthlyReport();
     });
   }
@@ -334,6 +353,7 @@ function bindEvents() {
   if (el.authLogout) {
     el.authLogout.addEventListener("click", async () => {
       await logoutUser();
+      setAccountMenuOpen(false);
     });
   }
   if (el.usersList) {
@@ -350,8 +370,7 @@ function bindEvents() {
   }
   if (el.fileSelectButton) {
     el.fileSelectButton.addEventListener("click", () => {
-      if (!canEdit()) {
-        showToast("Seleção de arquivo disponível apenas para Admin.", "warn", 5200);
+      if (!ensureDeletePermission()) {
         return;
       }
       renderFileDeleteMenu();
@@ -663,7 +682,33 @@ function setValueSort(direction) {
   renderAll();
 }
 
-function setSidebarCollapsed(collapsed) {
+function getSavedSidebarOpen() {
+  try {
+    const saved = window.localStorage.getItem(SIDEBAR_STORAGE_KEY);
+    return saved === null ? false : saved === "true";
+  } catch (error) {
+    return false;
+  }
+}
+
+function persistSidebarOpen(isOpen) {
+  try {
+    window.localStorage.setItem(SIDEBAR_STORAGE_KEY, String(isOpen));
+  } catch (error) {
+    // localStorage can be unavailable in restrictive browser modes.
+  }
+}
+
+function syncSidebarDataset(isOpen) {
+  document.documentElement.dataset.filtersSidebarOpen = isOpen ? "true" : "false";
+}
+
+function hydrateSidebarState() {
+  setSidebarCollapsed(!getSavedSidebarOpen(), { persist: false });
+}
+
+function setSidebarCollapsed(collapsed, options = {}) {
+  const isOpen = !collapsed;
   el.sidebar.classList.toggle("is-collapsed", collapsed);
   if (el.layout) {
     el.layout.classList.toggle("is-sidebar-collapsed", collapsed);
@@ -671,6 +716,16 @@ function setSidebarCollapsed(collapsed) {
     clearTimeout(sidebarAnimationTimer);
   }
   el.sidebarToggle.setAttribute("aria-expanded", collapsed ? "false" : "true");
+  syncSidebarDataset(isOpen);
+  if (options.persist !== false) {
+    persistSidebarOpen(isOpen);
+  }
+}
+
+function markDashboardReady() {
+  if (el.layout) {
+    el.layout.dataset.dashboardReady = "true";
+  }
 }
 
 function hydrateControls() {
@@ -761,24 +816,40 @@ function renderDatasetSelect() {
 function updateDatasetMeta() {
   const totalFiles = library.datasets.length;
   const active = getActiveDataset();
+  const permissions = getActionPermissions();
   if (el.datasetCount) el.datasetCount.textContent = `${integer.format(totalFiles)} arquivo${totalFiles === 1 ? "" : "s"}`;
   if (el.datasetNote) el.datasetNote.textContent = active
     ? `${integer.format(allRows.length)} registros no recorte atual. O mês completo é consolidado automaticamente.`
     : "Carregue meses anteriores e troque sem reimportar o workbook.";
   if (el.deleteActiveButton) {
     const selected = getSelectedDeleteDataset();
-    const deletable = Boolean(selected && selected.id !== EMPTY_DATASET_ID && canEdit());
+    const deletable = Boolean(selected && selected.id !== EMPTY_DATASET_ID && permissions.canDeleteFile);
     el.deleteActiveButton.hidden = false;
-    el.deleteActiveButton.disabled = !deletable;
-    const label = selected ? `Excluir ${selected.label}` : "Selecione um arquivo antes de excluir";
+    el.deleteActiveButton.disabled = false;
+    el.deleteActiveButton.classList.toggle("is-action-blocked", !deletable);
+    el.deleteActiveButton.setAttribute("aria-disabled", deletable ? "false" : "true");
+    const label = permissions.canDeleteFile
+      ? selected
+        ? `Excluir ${selected.label}`
+        : "Selecione um arquivo antes de excluir"
+      : getAdminActionDeniedMessage("Somente administradores podem usar esta função.");
     el.deleteActiveButton.setAttribute("aria-label", label);
     el.deleteActiveButton.setAttribute("title", label);
   }
   if (el.fileSelectButton) {
     const selected = getSelectedDeleteDataset();
-    el.fileSelectButton.disabled = !canEdit();
+    el.fileSelectButton.disabled = false;
+    el.fileSelectButton.classList.toggle("is-action-blocked", !permissions.canDeleteFile);
     el.fileSelectButton.classList.toggle("is-active", Boolean(selected));
-    el.fileSelectButton.setAttribute("title", selected ? `Selecionado: ${selected.label}` : "Selecionar arquivo para exclusão");
+    el.fileSelectButton.setAttribute("aria-disabled", permissions.canDeleteFile ? "false" : "true");
+    el.fileSelectButton.setAttribute(
+      "title",
+      permissions.canDeleteFile
+        ? selected
+          ? `Selecionado: ${selected.label}`
+          : "Selecionar arquivo para exclusão"
+        : getAdminActionDeniedMessage("Somente administradores podem usar esta função."),
+    );
   }
 }
 
@@ -872,6 +943,29 @@ function toggleAccountView(accountView) {
   if (el.content) el.content.classList.toggle("is-account-page", accountView);
   if (el.profileView) el.profileView.hidden = state.appView !== "profile";
   if (el.settingsView) el.settingsView.hidden = state.appView !== "settings";
+}
+
+function clearAccountMenuCloseTimer() {
+  if (!accountMenuCloseTimer) return;
+  clearTimeout(accountMenuCloseTimer);
+  accountMenuCloseTimer = null;
+}
+
+function setAccountMenuOpen(isOpen) {
+  clearAccountMenuCloseTimer();
+  state.accountPanelOpen = Boolean(isOpen);
+  persistState();
+  updateAccessControls();
+}
+
+function positionAccountMenu() {
+  if (!el.accountMenu || !el.accountToggle || el.accountMenu.hidden) return;
+  const rect = el.accountToggle.getBoundingClientRect();
+  const viewportPadding = 16;
+  const top = Math.max(viewportPadding, rect.bottom + 8);
+  const right = Math.max(viewportPadding, window.innerWidth - rect.right);
+  el.accountMenu.style.setProperty("--account-menu-top", `${top}px`);
+  el.accountMenu.style.setProperty("--account-menu-right", `${right}px`);
 }
 
 function openAccountPage(page) {
@@ -1494,6 +1588,9 @@ function parseCurrencyInput(value) {
 }
 
 function downloadMonthlyReport() {
+  if (!ensureReportPermission()) {
+    return;
+  }
   const allMonthlyRows = buildMonthlyComparison();
   const filteredRows = getFilteredRows();
   const summary = buildSummary(filteredRows);
@@ -2905,8 +3002,7 @@ function normalizeWorkbook(workbook) {
 async function handleUpload(event) {
   const files = Array.from((event.target && event.target.files) || []);
   if (!files.length) return;
-  if (!canEdit()) {
-    showToast("Seu usuário é somente visualização.", "warn", 5200);
+  if (!ensureUploadPermission()) {
     event.target.value = "";
     return;
   }
@@ -3117,10 +3213,61 @@ function canEdit() {
   return currentUser?.role === "admin";
 }
 
+function getActionPermissions() {
+  const isLoggedIn = Boolean(currentUser);
+  const isAdmin = currentUser?.role === "admin" || currentUser?.isAdmin === true;
+  return {
+    isLoggedIn,
+    isAdmin,
+    canDownloadReport: isLoggedIn,
+    canUploadFile: isLoggedIn && isAdmin,
+    canDeleteFile: isLoggedIn && isAdmin,
+  };
+}
+
+function getAdminActionDeniedMessage(adminMessage = "Apenas administradores podem realizar esta ação.") {
+  return getActionPermissions().isLoggedIn ? adminMessage : "Faça login para acessar esta função.";
+}
+
+function ensureReportPermission() {
+  if (getActionPermissions().canDownloadReport) return true;
+  showToast("Faça login para acessar esta função.", "warn", 5200);
+  return false;
+}
+
+function ensureUploadPermission() {
+  const permissions = getActionPermissions();
+  if (permissions.canUploadFile) return true;
+  showToast(permissions.isLoggedIn ? "Apenas administradores podem realizar esta ação." : "Faça login para acessar esta função.", "warn", 5200);
+  return false;
+}
+
+function ensureDeletePermission() {
+  const permissions = getActionPermissions();
+  if (permissions.canDeleteFile) return true;
+  showToast(permissions.isLoggedIn ? "Apenas administradores podem realizar esta ação." : "Faça login para acessar esta função.", "warn", 5200);
+  return false;
+}
+
+function setActionButtonState(button, allowed, title) {
+  if (!button) return;
+  button.disabled = false;
+  button.hidden = false;
+  button.classList.toggle("is-action-blocked", !allowed);
+  button.setAttribute("aria-disabled", allowed ? "false" : "true");
+  if (title) {
+    button.setAttribute("title", title);
+    button.setAttribute("aria-label", title);
+  }
+}
+
 function updateAccessControls() {
   const backendConfigured = Boolean(getBackendBaseUrl());
   const isAdmin = canEdit();
-  const showAccount = Boolean(state.accountPanelOpen || currentUser);
+  const permissions = getActionPermissions();
+  const accountMenuOpen = Boolean(state.accountPanelOpen);
+  const showLogin = accountMenuOpen && !currentUser;
+  const showLocalSettings = accountMenuOpen && !backendConfigured;
   if (el.authStatus) {
     el.authStatus.textContent = currentUser ? (currentUser.role === "admin" ? "Admin" : "Visualização") : backendConfigured ? "Login necessário" : "Modo local";
     el.authStatus.dataset.state = currentUser?.role || (backendConfigured ? "required" : "local");
@@ -3135,26 +3282,56 @@ function updateAccessControls() {
   if (el.authLogin) el.authLogin.hidden = Boolean(currentUser);
   if (el.authSignup) el.authSignup.hidden = Boolean(currentUser);
   if (el.authLogout) el.authLogout.hidden = !currentUser;
-  if (el.uploadButton) {
-    el.uploadButton.disabled = backendConfigured && !isAdmin;
-    el.uploadButton.hidden = backendConfigured && !isAdmin;
-  }
-  if (el.fileSelectButton) {
-    el.fileSelectButton.disabled = backendConfigured && !isAdmin;
-    el.fileSelectButton.hidden = backendConfigured && !isAdmin;
-  }
+  setActionButtonState(el.reportButton, permissions.canDownloadReport, permissions.canDownloadReport ? "Baixar relatório." : "Faça login para usar esta função.");
+  setActionButtonState(
+    el.uploadButton,
+    permissions.canUploadFile,
+    permissions.canUploadFile
+      ? "Importar Excel"
+      : permissions.isLoggedIn
+        ? "Somente administradores podem usar esta função."
+        : "Faça login para usar esta função.",
+  );
+  setActionButtonState(
+    el.fileSelectButton,
+    permissions.canDeleteFile,
+    permissions.canDeleteFile
+      ? el.fileSelectButton?.getAttribute("title") || "Selecionar arquivo para exclusão"
+      : permissions.isLoggedIn
+        ? "Somente administradores podem usar esta função."
+        : "Faça login para usar esta função.",
+  );
   if (el.backendSync) el.backendSync.disabled = backendConfigured && !isAdmin;
-  if (el.deleteActiveButton) el.deleteActiveButton.disabled = el.deleteActiveButton.disabled || (backendConfigured && !isAdmin);
-  if (el.usersCard) el.usersCard.hidden = currentUser?.role !== "admin";
-  if (el.settingsCard) el.settingsCard.hidden = !(currentUser?.role === "admin" && showAccount);
-  if (el.accountCard) el.accountCard.hidden = !showAccount;
+  if (el.deleteActiveButton) {
+    const selected = getSelectedDeleteDataset();
+    setActionButtonState(
+      el.deleteActiveButton,
+      permissions.canDeleteFile && Boolean(selected),
+      permissions.canDeleteFile
+        ? selected
+          ? `Excluir ${selected.label}`
+          : "Selecione um arquivo antes de excluir"
+        : permissions.isLoggedIn
+          ? "Somente administradores podem usar esta função."
+          : "Faça login para usar esta função.",
+    );
+  }
+  if (el.usersCard) el.usersCard.hidden = true;
+  if (el.settingsCard) el.settingsCard.hidden = true;
+  if (el.accountCard) el.accountCard.hidden = !showLogin;
   if (el.accountToggle) {
     el.accountToggle.dataset.state = currentUser?.role || (backendConfigured ? "required" : "local");
-    el.accountToggle.classList.toggle("is-active", showAccount);
+    el.accountToggle.classList.toggle("is-active", accountMenuOpen);
+    el.accountToggle.setAttribute("aria-expanded", accountMenuOpen ? "true" : "false");
   }
   if (el.accountMenu) {
+    el.accountMenu.hidden = !accountMenuOpen;
+    el.accountMenu.classList.toggle("is-open", accountMenuOpen);
+    const profileButton = el.accountMenu.querySelector('[data-account-page="profile"]');
     const settingsButton = el.accountMenu.querySelector('[data-account-page="settings"]');
-    if (settingsButton) settingsButton.hidden = backendConfigured && !isAdmin;
+    if (profileButton) profileButton.hidden = !currentUser;
+    if (settingsButton) settingsButton.hidden = !(currentUser || showLocalSettings) || (backendConfigured && !isAdmin);
+    positionAccountMenu();
   }
   renderUsers();
   renderFileDeleteMenu();
@@ -3218,6 +3395,7 @@ async function authenticateUser(path, successMessage) {
     updateAccessControls();
     if (currentUser?.role === "admin") await loadUsers();
     await hydrateRemoteLibrary(true);
+    setAccountMenuOpen(false);
     showToast(successMessage, "good", 4200);
   } catch (error) {
     console.error(error);
@@ -3269,7 +3447,11 @@ async function updateUserRole(userId, role) {
     const data = await response.json();
     if (!response.ok) throw new Error(data.error || "Falha ao atualizar usuário");
     knownUsers = Array.isArray(data.users) ? data.users : [];
-    renderUsers();
+    const refreshedCurrentUser = knownUsers.find((user) => (currentUser?.id && user.id === currentUser.id) || (currentUser?.email && user.email === currentUser.email));
+    if (refreshedCurrentUser) {
+      currentUser = { ...currentUser, ...refreshedCurrentUser };
+    }
+    renderAll();
     showToast("Permissão atualizada.", "good", 4200);
   } catch (error) {
     console.error(error);
@@ -3401,13 +3583,12 @@ async function syncLibraryToBackend(showToastOnFailure = true) {
 }
 
 async function deleteActiveDataset() {
+  if (!ensureDeletePermission()) {
+    return;
+  }
   const active = getSelectedDeleteDataset();
   if (!active || active.id === EMPTY_DATASET_ID) {
     showToast("Selecione um arquivo antes de excluir.", "warn", 5000);
-    return;
-  }
-  if (!canEdit()) {
-    showToast("Seu usuário é somente visualização.", "warn", 5200);
     return;
   }
 
@@ -3591,6 +3772,7 @@ function normalizeLoadedState(loadedState) {
   loadedState.pnrGoalLimit = loadedState.metaMensal;
   loadedState.metaAnual = Number(loadedState.metaAnual || 0);
   loadedState.metaAnualEditada = Boolean(loadedState.metaAnualEditada && loadedState.metaAnual > 0);
+  loadedState.accountPanelOpen = false;
   return loadedState;
 }
 
