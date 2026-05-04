@@ -84,6 +84,9 @@ let workbookEnginePromise = null;
 let currentUser = null;
 let currentProfile = null;
 let knownUsers = [];
+let dashboardFileRecords = [];
+let currentActiveFile = null;
+let dashboardFilesLoading = false;
 let sidebarAnimationTimer = null;
 let liveClockTimer = null;
 let accountMenuCloseTimer = null;
@@ -368,14 +371,8 @@ function bindEvents() {
     });
   }
   el.fileInput.addEventListener("change", handleUpload);
-  if (el.datasetSelect) el.datasetSelect.addEventListener("change", (event) => {
-    state.activeDatasetId = event.target.value;
-    state.page = 1;
-    syncActiveDataset();
-    persistState();
-    void persistLibrary();
-    hydrateControls();
-    renderAll();
+  if (el.datasetSelect) el.datasetSelect.addEventListener("change", async (event) => {
+    await handleDatasetSelection(event.target.value);
   });
 
   el.clearFilters.addEventListener("click", () => {
@@ -779,10 +776,36 @@ function renderDatasetSelect() {
   el.datasetSelect.innerHTML = datasets
     .map((dataset) => {
       const selected = dataset.id === state.activeDatasetId ? "selected" : "";
-      const count = integer.format(dataset.rows.length);
-      return `<option value="${escapeAttribute(dataset.id)}" ${selected}>${escapeHtml(dataset.label)} (${count})</option>`;
+      const count = Array.isArray(dataset.rows) && dataset.rows.length ? ` (${integer.format(dataset.rows.length)})` : "";
+      const active = dataset.remoteRecord?.is_active ? " · ativo" : "";
+      return `<option value="${escapeAttribute(dataset.id)}" ${selected}>${escapeHtml(dataset.label)}${count}${active}</option>`;
     })
     .join("");
+}
+
+async function handleDatasetSelection(datasetId) {
+  const dataset = library.datasets.find((entry) => entry.id === datasetId);
+  if (!dataset) {
+    renderDatasetSelect();
+    return;
+  }
+
+  if (dataset.source === "supabase" && dataset.remoteRecord && dataset.id !== currentActiveFile?.id) {
+    if (!getActionPermissions().isAdmin) {
+      showToast("Apenas administradores podem alterar o arquivo ativo.", "warn", 5200);
+      renderDatasetSelect();
+      return;
+    }
+    await setActiveDashboardFile(dataset.remoteRecord.id);
+    return;
+  }
+
+  state.activeDatasetId = datasetId;
+  state.page = 1;
+  syncActiveDataset();
+  persistState();
+  hydrateControls();
+  renderAll();
 }
 
 function updateDatasetMeta() {
@@ -790,9 +813,16 @@ function updateDatasetMeta() {
   const active = getActiveDataset();
   const permissions = getActionPermissions();
   if (el.datasetCount) el.datasetCount.textContent = `${integer.format(totalFiles)} arquivo${totalFiles === 1 ? "" : "s"}`;
-  if (el.datasetNote) el.datasetNote.textContent = active
-    ? `${integer.format(allRows.length)} registros no recorte atual. O mês completo é consolidado automaticamente.`
-    : "Carregue meses anteriores e troque sem reimportar o workbook.";
+  if (el.datasetNote) {
+    if (dashboardFilesLoading) {
+      el.datasetNote.textContent = "Carregando arquivo ativo...";
+    } else if (active && active.id !== EMPTY_DATASET_ID) {
+      const source = currentActiveFile ? `Arquivo salvo no Supabase: ${currentActiveFile.file_name}.` : "O mês completo é consolidado automaticamente.";
+      el.datasetNote.textContent = `${integer.format(allRows.length)} registros no recorte atual. ${source}`;
+    } else {
+      el.datasetNote.textContent = currentUser ? "Nenhum arquivo carregado. Faça upload de um arquivo para iniciar." : "Faça login para carregar o arquivo ativo salvo.";
+    }
+  }
   if (el.deleteActiveButton) {
     const selected = getSelectedDeleteDataset();
     const deletable = Boolean(selected && selected.id !== EMPTY_DATASET_ID && permissions.canDeleteFile);
@@ -826,7 +856,7 @@ function updateDatasetMeta() {
 }
 
 function getDeletableDatasets() {
-  return library.datasets.filter((dataset) => dataset && dataset.id !== EMPTY_DATASET_ID && Array.isArray(dataset.rows) && dataset.rows.length);
+  return library.datasets.filter((dataset) => dataset && dataset.id !== EMPTY_DATASET_ID && (dataset.source === "supabase" || (Array.isArray(dataset.rows) && dataset.rows.length)));
 }
 
 function getSelectedDeleteDataset() {
@@ -843,10 +873,12 @@ function renderFileDeleteMenu() {
   el.fileDeleteMenu.innerHTML = datasets
     .map((dataset) => {
       const selected = dataset.id === state.deleteDatasetId ? "is-selected" : "";
+      const active = dataset.remoteRecord?.is_active ? " · ativo" : "";
+      const uploaded = dataset.remoteRecord?.uploaded_by_email ? ` · ${dataset.remoteRecord.uploaded_by_email}` : "";
       return `
         <button type="button" class="${selected}" data-delete-dataset-id="${escapeAttribute(dataset.id)}">
           <span>${escapeHtml(dataset.label)}</span>
-          <small>${integer.format(dataset.rows.length)} registros</small>
+          <small>${integer.format(dataset.rows.length)} registros${escapeHtml(active)}${escapeHtml(uploaded)}</small>
         </button>
       `;
     })
@@ -3019,57 +3051,370 @@ async function handleUpload(event) {
   }
 
   try {
-    const engineReady = await loadWorkbookEngine();
-    if (!engineReady || !window.XLSX || typeof window.XLSX.read !== "function") {
-      showToast("Não foi possível ler o Excel porque o parser local não carregou.", "error", 7000);
-      event.target.value = "";
-      return;
-    }
-
-    const imported = [];
     for (const file of files) {
-      const buffer = await file.arrayBuffer();
-      const workbook = XLSX.read(buffer, { type: "array", cellDates: true });
-      const rows = normalizeWorkbook(workbook);
-      const duplicatesSkipped = normalizeWorkbook.lastStats?.duplicatesSkipped || 0;
-      const dataset = {
-        id: makeDatasetId(file.name),
-        fileName: file.name,
-        label: humanizeWorkbookName(file.name),
-        source: "upload",
-        importedAt: new Date().toISOString(),
-        rows,
-      };
-      imported.push(dataset);
+      await uploadDashboardFile(file);
     }
 
-    if (!imported.length) return;
-
-    for (const dataset of imported) {
-      upsertDataset(dataset);
-    }
-
-    state.activeDatasetId = imported[imported.length - 1].id;
-    state.fileName = imported[imported.length - 1].fileName;
-    state.page = 1;
-    syncActiveDataset();
-    hydrateControls();
-    persistState();
-    persistLibrary();
-    renderAll();
-    showToast(
-      imported.length === 1
-        ? `Arquivo carregado: ${imported[0].label}${(normalizeWorkbook.lastStats?.duplicatesSkipped || 0) ? ` · ${normalizeWorkbook.lastStats.duplicatesSkipped} duplicatas ignoradas` : ""}`
-        : `${imported.length} arquivos carregados na biblioteca`,
-      "good",
-      5200,
-    );
+    showToast(files.length === 1 ? "Arquivo salvo e carregado com sucesso." : `${files.length} arquivos salvos no Supabase.`, "good", 5200);
   } catch (error) {
     console.error(error);
-    showToast("Não foi possível ler esse Excel.", "error", 5200);
+    showToast(error.message || "Não foi possível salvar esse Excel.", "error", 6200);
   } finally {
     event.target.value = "";
   }
+}
+
+async function processDashboardFile(file, fileRecord = null) {
+  const engineReady = await loadWorkbookEngine();
+  if (!engineReady || !window.XLSX || typeof window.XLSX.read !== "function") {
+    throw new Error("Não foi possível ler o Excel porque o parser local não carregou.");
+  }
+
+  const buffer = await file.arrayBuffer();
+  const workbook = XLSX.read(buffer, { type: "array", cellDates: true });
+  const rows = normalizeWorkbook(workbook);
+  return {
+    id: fileRecord?.id || makeDatasetId(file.name),
+    fileName: fileRecord?.file_name || file.name,
+    label: humanizeWorkbookName(fileRecord?.file_name || file.name),
+    source: fileRecord ? "supabase" : "upload",
+    importedAt: fileRecord?.created_at || new Date().toISOString(),
+    remoteRecord: fileRecord,
+    storagePath: fileRecord?.storage_path || "",
+    rows,
+  };
+}
+
+async function uploadDashboardFile(file) {
+  const permissions = getActionPermissions();
+
+  if (!permissions.canUploadFile) {
+    showToast(permissions.isLoggedIn ? "Apenas administradores podem realizar esta ação." : "Faça login para acessar esta função.", "warn", 5200);
+    return;
+  }
+  if (!window.supabaseClient || !currentUser) {
+    showToast("Faça login para acessar esta função.", "warn", 5200);
+    return;
+  }
+
+  const previewDataset = await processDashboardFile(file);
+  const period = getDatasetPeriod(previewDataset);
+  const [referenceYear, referenceMonth] = String(period.key || "").split("-");
+  const safeName = file.name
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/[^\w.-]+/g, "_");
+  const storagePath = `${referenceYear || "sem-ano"}/${referenceMonth || "sem-mes"}/${Date.now()}_${safeName}`;
+
+  const { error: uploadError } = await window.supabaseClient.storage
+    .from("dashboard-files")
+    .upload(storagePath, file, {
+      cacheControl: "3600",
+      upsert: false,
+    });
+
+  if (uploadError) {
+    console.error("Erro no upload:", uploadError);
+    throw new Error("Erro ao salvar arquivo no Supabase Storage.");
+  }
+
+  const { error: deactivateError } = await window.supabaseClient
+    .from("dashboard_files")
+    .update({ is_active: false, updated_at: new Date().toISOString() })
+    .eq("is_active", true);
+
+  if (deactivateError) {
+    console.error("Erro ao desativar arquivos:", deactivateError);
+    throw new Error("Arquivo enviado, mas houve erro ao atualizar o arquivo ativo.");
+  }
+
+  const { data, error } = await window.supabaseClient
+    .from("dashboard_files")
+    .insert({
+      file_name: file.name,
+      storage_path: storagePath,
+      file_type: file.type || "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+      file_size: file.size,
+      uploaded_by: currentUser.id,
+      uploaded_by_email: currentUser.email,
+      reference_month: referenceMonth || "",
+      reference_year: referenceYear || "",
+      is_active: true,
+      status: "uploaded",
+      metadata: {
+        rows: previewDataset.rows.length,
+        duplicatesSkipped: normalizeWorkbook.lastStats?.duplicatesSkipped || 0,
+      },
+    })
+    .select()
+    .single();
+
+  if (error) {
+    console.error("Erro ao salvar metadados:", error);
+    throw new Error("Arquivo enviado, mas houve erro ao salvar o registro.");
+  }
+
+  await loadFileFromStorage(data, { skipDownloadDataset: previewDataset });
+  await loadDashboardFilesFromSupabase({ loadActive: false });
+}
+
+async function loadDashboardFilesFromSupabase(options = {}) {
+  const { loadActive = true, render = true } = options;
+  if (!window.supabaseClient || !currentUser) {
+    dashboardFileRecords = [];
+    currentActiveFile = null;
+    return;
+  }
+
+  dashboardFilesLoading = true;
+  updateDatasetMeta();
+  try {
+    const { data, error } = await window.supabaseClient
+      .from("dashboard_files")
+      .select("*")
+      .order("created_at", { ascending: false });
+
+    if (error) {
+      console.error("Erro ao buscar arquivos:", error);
+      showToast("Erro ao carregar arquivos salvos.", "warn", 5200);
+      return;
+    }
+
+    dashboardFileRecords = Array.isArray(data) ? data : [];
+    const activeFile = dashboardFileRecords.find((record) => record.is_active) || dashboardFileRecords[0] || null;
+    currentActiveFile = activeFile;
+
+    const previousDatasets = Array.isArray(library.datasets) ? library.datasets : [];
+    const datasets = dashboardFileRecords.map((record) => {
+      const previous = previousDatasets.find((dataset) => dataset.id === record.id);
+      return normalizeDatasetRecord({
+        id: record.id,
+        fileName: record.file_name,
+        label: humanizeWorkbookName(record.file_name),
+        source: "supabase",
+        importedAt: record.created_at,
+        remoteRecord: record,
+        storagePath: record.storage_path,
+        rows: previous?.rows || [],
+      });
+    }).filter(Boolean);
+
+    library = {
+      activeDatasetId: activeFile?.id || datasets[0]?.id || EMPTY_DATASET_ID,
+      seedDeleted: true,
+      datasets: datasets.length ? datasets : [buildEmptyDataset()],
+    };
+    state.activeDatasetId = library.activeDatasetId;
+
+    if (loadActive && activeFile) {
+      await loadFileFromStorage(activeFile, { render: false, silent: true });
+    } else {
+      syncActiveDataset();
+    }
+  } finally {
+    dashboardFilesLoading = false;
+    if (render) {
+      hydrateControls();
+      renderAll();
+    } else {
+      updateDatasetMeta();
+    }
+  }
+}
+
+async function loadActiveDashboardFile() {
+  if (!window.supabaseClient || !currentUser) return;
+
+  dashboardFilesLoading = true;
+  updateDatasetMeta();
+  try {
+    const { data: activeFile, error } = await window.supabaseClient
+      .from("dashboard_files")
+      .select("*")
+      .eq("is_active", true)
+      .order("created_at", { ascending: false })
+      .limit(1)
+      .maybeSingle();
+
+    if (error) {
+      console.error("Erro ao buscar arquivo ativo:", error);
+      showToast("Erro ao carregar arquivo ativo.", "warn", 5200);
+      return;
+    }
+
+    if (!activeFile) {
+      library = {
+        activeDatasetId: EMPTY_DATASET_ID,
+        seedDeleted: true,
+        datasets: [buildEmptyDataset()],
+      };
+      state.activeDatasetId = EMPTY_DATASET_ID;
+      currentActiveFile = null;
+      syncActiveDataset();
+      showToast("Nenhum arquivo ativo encontrado.", "info", 4200);
+      return;
+    }
+
+    await loadFileFromStorage(activeFile);
+  } finally {
+    dashboardFilesLoading = false;
+    updateDatasetMeta();
+  }
+}
+
+async function loadFileFromStorage(fileRecord, options = {}) {
+  const { render = true, silent = false, skipDownloadDataset = null } = options;
+  if (!fileRecord || !window.supabaseClient) return;
+
+  let dataset = skipDownloadDataset;
+  if (!dataset) {
+    const { data: blob, error } = await window.supabaseClient.storage
+      .from("dashboard-files")
+      .download(fileRecord.storage_path);
+
+    if (error) {
+      console.error("Erro ao baixar arquivo do Storage:", error);
+      showToast("Não foi possível carregar o arquivo salvo.", "error", 6200);
+      return;
+    }
+
+    const file = new File([blob], fileRecord.file_name, {
+      type: fileRecord.file_type || blob.type,
+    });
+    dataset = await processDashboardFile(file, fileRecord);
+  }
+
+  dataset = normalizeDatasetRecord({
+    ...dataset,
+    id: fileRecord.id,
+    fileName: fileRecord.file_name,
+    label: humanizeWorkbookName(fileRecord.file_name),
+    source: "supabase",
+    importedAt: fileRecord.created_at,
+    remoteRecord: fileRecord,
+    storagePath: fileRecord.storage_path,
+  });
+
+  const existingRecords = dashboardFileRecords.length ? dashboardFileRecords : [fileRecord];
+  const existingDatasets = Array.isArray(library.datasets) ? library.datasets : [];
+  const datasets = existingRecords.map((record) => {
+    if (record.id === fileRecord.id) return dataset;
+    const previous = existingDatasets.find((entry) => entry.id === record.id);
+    return normalizeDatasetRecord({
+      id: record.id,
+      fileName: record.file_name,
+      label: humanizeWorkbookName(record.file_name),
+      source: "supabase",
+      importedAt: record.created_at,
+      remoteRecord: record,
+      storagePath: record.storage_path,
+      rows: previous?.rows || [],
+    });
+  }).filter(Boolean);
+
+  library = {
+    activeDatasetId: fileRecord.id,
+    seedDeleted: true,
+    datasets: datasets.length ? datasets : [dataset],
+  };
+  currentActiveFile = fileRecord;
+  state.activeDatasetId = fileRecord.id;
+  state.fileName = fileRecord.file_name;
+  state.page = 1;
+  syncActiveDataset();
+  hydrateControls();
+  if (render) renderAll();
+  if (!silent) showToast("Arquivo carregado com sucesso.", "good", 4200);
+}
+
+async function setActiveDashboardFile(fileId) {
+  const permissions = getActionPermissions();
+  if (!permissions.isAdmin) {
+    showToast("Apenas administradores podem alterar o arquivo ativo.", "warn", 5200);
+    return;
+  }
+
+  const { error: deactivateError } = await window.supabaseClient
+    .from("dashboard_files")
+    .update({ is_active: false, updated_at: new Date().toISOString() })
+    .eq("is_active", true);
+
+  if (deactivateError) {
+    console.error(deactivateError);
+    showToast("Erro ao ativar arquivo.", "error", 5200);
+    return;
+  }
+
+  const { data, error } = await window.supabaseClient
+    .from("dashboard_files")
+    .update({
+      is_active: true,
+      updated_at: new Date().toISOString(),
+    })
+    .eq("id", fileId)
+    .select()
+    .single();
+
+  if (error) {
+    console.error(error);
+    showToast("Erro ao ativar arquivo.", "error", 5200);
+    return;
+  }
+
+  dashboardFileRecords = dashboardFileRecords.map((record) => ({
+    ...record,
+    is_active: record.id === data.id,
+  }));
+  await loadFileFromStorage(data, { silent: true });
+  showToast("Arquivo ativo atualizado.", "good", 4200);
+}
+
+async function deleteDashboardFile(fileRecord) {
+  const permissions = getActionPermissions();
+  if (!permissions.canDeleteFile) {
+    showToast(permissions.isLoggedIn ? "Apenas administradores podem realizar esta ação." : "Faça login para acessar esta função.", "warn", 5200);
+    return;
+  }
+
+  const { error: storageError } = await window.supabaseClient.storage
+    .from("dashboard-files")
+    .remove([fileRecord.storage_path]);
+
+  if (storageError) {
+    console.error("Erro ao remover do storage:", storageError);
+    showToast("Erro ao remover arquivo do Storage.", "error", 5200);
+    return;
+  }
+
+  const { error: dbError } = await window.supabaseClient
+    .from("dashboard_files")
+    .delete()
+    .eq("id", fileRecord.id);
+
+  if (dbError) {
+    console.error("Erro ao remover registro:", dbError);
+    showToast("Erro ao remover registro do arquivo.", "error", 5200);
+    return;
+  }
+
+  showToast("Arquivo removido com sucesso.", "good", 4200);
+  if (fileRecord.is_active) {
+    const { data: nextFile, error: nextError } = await window.supabaseClient
+      .from("dashboard_files")
+      .select("*")
+      .order("created_at", { ascending: false })
+      .limit(1)
+      .maybeSingle();
+
+    if (nextError) {
+      console.error("Erro ao buscar próximo arquivo ativo:", nextError);
+    }
+    if (nextFile) {
+      await setActiveDashboardFile(nextFile.id);
+      return;
+    }
+  }
+  await loadDashboardFilesFromSupabase({ loadActive: true });
 }
 
 
@@ -3373,6 +3718,7 @@ async function applyAuthenticatedUser(user, options = {}) {
     knownUsers = [];
   }
 
+  await loadDashboardFilesFromSupabase({ loadActive: true, render: false });
   updateAccessControls();
   updateDatasetMeta();
   renderAccountPage();
@@ -3626,6 +3972,13 @@ async function deleteActiveDataset() {
     return;
   }
 
+  if (active.source === "supabase" && active.remoteRecord) {
+    const confirmed = window.confirm(`Excluir o arquivo "${active.label}"? Essa ação remove o arquivo do Supabase Storage e da lista do dashboard.`);
+    if (!confirmed) return;
+    await deleteDashboardFile(active.remoteRecord);
+    return;
+  }
+
   const message =
     active.id === "seed"
       ? `Zerar a base fixa "${active.label}"? O dashboard ficará vazio até importar outro Excel.`
@@ -3818,27 +4171,6 @@ function persistState() {
 }
 
 function loadLibrary() {
-  try {
-    const raw = window.localStorage.getItem(LIBRARY_STORAGE_KEY);
-    if (raw) {
-      const parsed = JSON.parse(raw);
-      const datasets = Array.isArray(parsed.datasets) ? parsed.datasets : [];
-      const normalized = datasets
-        .map(normalizeDatasetRecord)
-        .filter(Boolean);
-      const hasUploadedDatasets = normalized.some((dataset) => dataset.source === "upload");
-      if ((normalized.length && hasUploadedDatasets) || parsed.seedDeleted) {
-        return {
-          activeDatasetId: parsed.activeDatasetId || normalized[0]?.id || EMPTY_DATASET_ID,
-          seedDeleted: Boolean(parsed.seedDeleted),
-          datasets: normalized,
-        };
-      }
-    }
-  } catch {
-    // fall through to seed
-  }
-
   return {
     activeDatasetId: "seed",
     seedDeleted: false,
@@ -3848,7 +4180,7 @@ function loadLibrary() {
 
 function persistLibrary() {
   try {
-    window.localStorage.setItem(LIBRARY_STORAGE_KEY, JSON.stringify(library));
+    window.localStorage.removeItem(LIBRARY_STORAGE_KEY);
   } catch {
     // no-op
   }
@@ -3863,6 +4195,8 @@ function normalizeDatasetRecord(dataset) {
     label: String(dataset.label || humanizeWorkbookName(dataset.fileName || "arquivo.xlsx")),
     source: String(dataset.source || "upload"),
     importedAt: dataset.importedAt || new Date().toISOString(),
+    remoteRecord: dataset.remoteRecord || null,
+    storagePath: dataset.storagePath || dataset.remoteRecord?.storage_path || "",
     rows: dataset.rows.map(normalizeStoredRow),
   };
 }
