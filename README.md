@@ -13,8 +13,8 @@ Para importar novos dados, use o botão **Importar Excel** e selecione uma ou ma
 - `index.html`: estrutura da aplicação.
 - `styles.css`: estilos e responsividade.
 - `app.js`: lógica do dashboard, filtros, rankings, gráficos e importação.
-- `seed-data.js`: dados iniciais carregados no modo local.
-- `xlsx.full.min.js`: biblioteca usada para leitura dos arquivos Excel no navegador.
+- `assets/data/seed-data.js`: dados iniciais carregados no modo local.
+- `assets/vendor/xlsx.full.min.js`: biblioteca usada para leitura dos arquivos Excel no navegador.
 - `backend/`: backend simples para sincronização opcional.
 - `render.yaml`: configuração opcional de deploy no Render.
 

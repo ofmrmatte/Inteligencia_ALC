@@ -15,6 +15,12 @@ const SHEET_COLORS = {
   "XPT PERDIDOS": "#58d68d",
   PNR: "#3ba6ff",
 };
+const DONUT_SHEETS = ["PNR", "SVC PERDIDOS", "XPT PERDIDOS"];
+const DONUT_LABELS = {
+  PNR: "PNR",
+  "SVC PERDIDOS": "SVC Perd.",
+  "XPT PERDIDOS": "XPT Perd.",
+};
 const MONTHS = ["janeiro", "fevereiro", "março", "abril", "maio", "junho", "julho", "agosto", "setembro", "outubro", "novembro", "dezembro"];
 
 const STATE_DEFAULT = {
@@ -30,9 +36,15 @@ const STATE_DEFAULT = {
   pageSize: 15,
   fileName: "PRE FATURA 2 Q MARÇO 26.xlsx",
   activeDatasetId: "seed",
+  monthFilter: "",
+  deleteDatasetId: "",
+  appView: "dashboard",
   theme: "dark",
   apiBaseUrl: "",
   pnrGoalLimit: DEFAULT_PNR_GOAL_LIMIT,
+  metaMensal: DEFAULT_PNR_GOAL_LIMIT,
+  metaAnual: 0,
+  metaAnualEditada: false,
   accountPanelOpen: false,
 };
 
@@ -108,6 +120,7 @@ if (document.readyState === "loading") {
 
 function cacheDom() {
   el.layout = document.querySelector(".layout");
+  el.content = document.querySelector(".content");
   el.sidebar = document.getElementById("sidebar");
   el.sidebarToggle = document.getElementById("sidebar-toggle");
   el.uploadButton = document.getElementById("upload-button");
@@ -117,6 +130,9 @@ function cacheDom() {
   el.accountToggle = document.getElementById("account-toggle");
   el.fileInput = document.getElementById("file-input");
   el.reportButton = document.getElementById("report-button");
+  el.fileSelectButton = document.getElementById("file-select-button");
+  el.fileDeleteMenu = document.getElementById("file-delete-menu");
+  el.accountMenu = document.getElementById("account-menu");
   el.datasetSelect = document.getElementById("dataset-select");
   el.datasetCount = document.getElementById("dataset-count");
   el.datasetNote = document.getElementById("dataset-note");
@@ -144,6 +160,15 @@ function cacheDom() {
   el.syncStatus = document.getElementById("sync-status");
   el.sheetTabs = document.getElementById("sheet-tabs");
   el.monthlyBaseView = document.getElementById("monthly-base-view");
+  el.profileView = document.getElementById("profile-view");
+  el.settingsView = document.getElementById("settings-view");
+  el.settingsUsersList = document.getElementById("settings-users-list");
+  el.profileAvatar = document.getElementById("profile-avatar");
+  el.profileName = document.getElementById("profile-name");
+  el.profileRoleTitle = document.getElementById("profile-role-title");
+  el.profileEmail = document.getElementById("profile-email");
+  el.profilePassword = document.getElementById("profile-password");
+  el.profileSave = document.getElementById("profile-save");
   el.kpiGrid = document.getElementById("kpi-grid");
   el.baseBars = document.getElementById("base-bars");
   el.driverRank = document.getElementById("driver-rank");
@@ -164,6 +189,7 @@ function cacheDom() {
   el.toast = document.getElementById("toast");
   el.clearFilters = document.getElementById("clear-filters");
   el.searchInput = document.getElementById("search-input");
+  el.monthSelect = document.getElementById("month-select");
   el.periodSelect = document.getElementById("period-select");
   el.sheetSelect = document.getElementById("sheet-select");
   el.typeSelect = document.getElementById("type-select");
@@ -190,7 +216,15 @@ function bindEvents() {
     setSidebarCollapsed(!el.sidebar.classList.contains("is-collapsed"));
   });
 
-  el.uploadButton.addEventListener("click", () => el.fileInput.click());
+  if (el.uploadButton) {
+    el.uploadButton.addEventListener("click", () => {
+      if (!canEdit()) {
+        showToast("Upload disponível apenas para Admin.", "warn", 5200);
+        return;
+      }
+      el.fileInput.click();
+    });
+  }
   if (el.refreshButton) {
     el.refreshButton.addEventListener("click", () => {
       void hydrateRemoteLibrary(true);
@@ -209,6 +243,39 @@ function bindEvents() {
       state.accountPanelOpen = !state.accountPanelOpen;
       persistState();
       updateAccessControls();
+    });
+  }
+  if (el.accountMenu) {
+    el.accountMenu.addEventListener("click", (event) => {
+      const button = event.target.closest("[data-account-page]");
+      if (!button) return;
+      openAccountPage(button.dataset.accountPage);
+    });
+  }
+  document.addEventListener("click", (event) => {
+    const button = event.target.closest("[data-account-home]");
+    if (!button) return;
+    state.appView = "dashboard";
+    state.accountPanelOpen = false;
+    persistState();
+    renderAll();
+    updateAccessControls();
+  });
+  if (el.profileSave) {
+    el.profileSave.addEventListener("click", () => {
+      if (el.profilePassword) el.profilePassword.value = "";
+      showToast("Perfil salvo localmente.", "good", 4200);
+    });
+  }
+  if (el.settingsUsersList) {
+    el.settingsUsersList.addEventListener("click", async (event) => {
+      const button = event.target.closest("button[data-user-id][data-role]");
+      if (!button) return;
+      if (!getBackendBaseUrl()) {
+        showToast("Permissões de usuários dependem da API configurada.", "info", 5200);
+        return;
+      }
+      await updateUserRole(button.dataset.userId, button.dataset.role);
     });
   }
   if (el.reportButton) {
@@ -243,7 +310,7 @@ function bindEvents() {
   if (el.settingsPnrGoal) {
     el.settingsPnrGoal.addEventListener("change", (event) => {
       const value = parseCurrencyInput(event.target.value);
-      state.pnrGoalLimit = value > 0 ? value : DEFAULT_PNR_GOAL_LIMIT;
+      setPnrGoalByMode("monthly", value > 0 ? value : DEFAULT_PNR_GOAL_LIMIT);
       persistState();
       renderAll();
     });
@@ -275,8 +342,34 @@ function bindEvents() {
       await deleteActiveDataset();
     });
   }
+  if (el.fileSelectButton) {
+    el.fileSelectButton.addEventListener("click", () => {
+      if (!canEdit()) {
+        showToast("Seleção de arquivo disponível apenas para Admin.", "warn", 5200);
+        return;
+      }
+      renderFileDeleteMenu();
+      if (el.fileDeleteMenu) el.fileDeleteMenu.hidden = !el.fileDeleteMenu.hidden;
+    });
+  }
+  if (el.fileDeleteMenu) {
+    el.fileDeleteMenu.addEventListener("click", (event) => {
+      const button = event.target.closest("[data-delete-dataset-id]");
+      if (!button) return;
+      state.deleteDatasetId = button.dataset.deleteDatasetId;
+      persistState();
+      renderFileDeleteMenu();
+      updateDatasetMeta();
+      el.fileDeleteMenu.hidden = true;
+      showToast("Arquivo selecionado para exclusão.", "info", 3500);
+    });
+    document.addEventListener("click", (event) => {
+      if (el.fileDeleteMenu.hidden || event.target.closest("#file-delete-picker")) return;
+      el.fileDeleteMenu.hidden = true;
+    });
+  }
   el.fileInput.addEventListener("change", handleUpload);
-  el.datasetSelect.addEventListener("change", (event) => {
+  if (el.datasetSelect) el.datasetSelect.addEventListener("change", (event) => {
     state.activeDatasetId = event.target.value;
     state.page = 1;
     syncActiveDataset();
@@ -295,6 +388,8 @@ function bindEvents() {
       base: "Todos",
       motorista: "Todos",
       period: "month",
+      monthFilter: "",
+      appView: "dashboard",
       sortKey: "valor_numerico",
       sortDir: "desc",
       page: 1,
@@ -326,6 +421,16 @@ function bindEvents() {
     el.periodSelect.addEventListener("change", (event) => {
       state.period = normalizePeriodMode(event.target.value);
       state.page = 1;
+      hydrateControls();
+      persistState();
+      renderAll();
+    });
+  }
+  if (el.monthSelect) {
+    el.monthSelect.addEventListener("change", (event) => {
+      state.monthFilter = event.target.value;
+      state.page = 1;
+      syncActiveDataset();
       hydrateControls();
       persistState();
       renderAll();
@@ -363,6 +468,7 @@ function bindEvents() {
   el.sheetTabs.addEventListener("click", (event) => {
     const button = event.target.closest("button[data-sheet]");
     if (!button) return;
+    state.appView = "dashboard";
     state.sheet = button.dataset.sheet;
     state.page = 1;
     persistState();
@@ -411,28 +517,27 @@ function bindEvents() {
   });
 
   el.donutChart.addEventListener("pointerover", (event) => {
-    const segment = event.target.closest(".donut-segment");
+    const segment = event.target.closest(".mix-chart__segment");
     if (!segment) return;
     showDonutTooltip(segment, event);
   });
 
   el.donutChart.addEventListener("pointermove", (event) => {
-    const segment = event.target.closest(".donut-segment");
+    const segment = event.target.closest(".mix-chart__segment");
     if (!segment) return;
     positionDonutTooltip(event);
   });
 
   el.donutChart.addEventListener("pointerout", (event) => {
-    if (!event.target.closest(".donut-segment")) return;
+    if (!event.target.closest(".mix-chart__segment")) return;
     hideDonutTooltip();
   });
 
-  if (el.monthlyBaseView) {
-    el.monthlyBaseView.addEventListener("change", handlePnrGoalInput);
-  }
-
   if (el.pnrGoalSummary) {
-    el.pnrGoalSummary.addEventListener("change", handlePnrGoalInput);
+    const pnrGoalPanel = el.pnrGoalSummary.closest(".goal-card");
+    const goalTarget = pnrGoalPanel || el.pnrGoalSummary;
+    goalTarget.addEventListener("click", handlePnrGoalConfig);
+    goalTarget.addEventListener("submit", handlePnrGoalConfig);
   }
 
   if (el.monthlyComparison) {
@@ -464,13 +569,30 @@ function bindEvents() {
   });
 }
 
-function handlePnrGoalInput(event) {
-  const input = event.target.closest("[data-pnr-goal-input]");
+function handlePnrGoalConfig(event) {
+  const form = event.target.closest("[data-goal-config-form]");
+  const cancelButton = event.target.closest("[data-goal-config-cancel]");
+  const saveButton = event.target.closest("[data-goal-config-save]");
+  if (!form && !cancelButton && !saveButton) return;
+  if (event.type === "submit" || cancelButton || saveButton) event.preventDefault();
+
+  const panel = (form || cancelButton || saveButton).closest(".goal-config");
+  if (cancelButton) {
+    if (panel) panel.removeAttribute("open");
+    return;
+  }
+
+  if (event.type !== "submit" && !saveButton) return;
+  const input = panel ? panel.querySelector("[data-pnr-goal-input]") : null;
   if (!input) return;
+  const mode = input.dataset.goalMode === "annual" ? "annual" : "monthly";
   const value = parseCurrencyInput(input.value);
-  state.pnrGoalLimit = value > 0 ? value : DEFAULT_PNR_GOAL_LIMIT;
+  setPnrGoalByMode(mode, value > 0 ? value : DEFAULT_PNR_GOAL_LIMIT);
+  if (panel) panel.removeAttribute("open");
+  hydrateControls();
   persistState();
   renderAll();
+  showToast(mode === "annual" ? "Meta anual atualizada." : "Meta mensal atualizada.", "good");
 }
 
 function handleEscapeFilter(event) {
@@ -486,6 +608,12 @@ function handleEscapeFilter(event) {
     "period-select": () => {
       if (state.period === "month") return false;
       state.period = "month";
+      return true;
+    },
+    "month-select": () => {
+      const activeMonth = getDatasetPeriod(getActiveDataset()).key;
+      if (!state.monthFilter || state.monthFilter === activeMonth) return false;
+      state.monthFilter = activeMonth;
       return true;
     },
     "sheet-select": () => {
@@ -534,54 +662,9 @@ function setSidebarCollapsed(collapsed) {
   if (el.layout) {
     el.layout.classList.toggle("is-sidebar-collapsed", collapsed);
     el.layout.classList.remove("is-layout-animating");
-    void el.layout.offsetWidth;
-    el.layout.classList.add("is-layout-animating");
     clearTimeout(sidebarAnimationTimer);
-    sidebarAnimationTimer = setTimeout(() => {
-      el.layout.classList.remove("is-layout-animating");
-    }, 520);
   }
   el.sidebarToggle.setAttribute("aria-expanded", collapsed ? "false" : "true");
-}
-
-function ensureWorkbookEngine() {
-  if (window.XLSX && typeof window.XLSX.read === "function" && window.XLSX.utils && typeof window.XLSX.utils.sheet_to_json === "function") {
-    return true;
-  }
-
-  if (el.statusText) {
-    el.statusText.textContent = "Leitor de Excel indisponível nesta abertura";
-  }
-  if (el.sourceLine) {
-    el.sourceLine.textContent = "O parser local do Excel não carregou";
-  }
-  if (el.datasetNote) {
-    el.datasetNote.textContent = "O arquivo xlsx.full.min.js não foi carregado. Reabra a página a partir desta pasta.";
-  }
-  if (el.uploadButton) {
-    el.uploadButton.disabled = true;
-  }
-  showToast("Parser de Excel indisponível. Verifique xlsx.full.min.js.", "error", 7000);
-  return false;
-}
-
-function renderOfflineShell() {
-  renderDatasetSelect();
-  renderTabs();
-  el.kpiGrid.innerHTML = emptyState("Excel indisponível", "A base não pode ser processada porque o parser local não carregou.");
-  el.baseBars.innerHTML = emptyState("Sem leitura", "Abra a página pela pasta correta para carregar xlsx.full.min.js.");
-  el.driverRank.innerHTML = emptyState("Sem leitura", "O arquivo Excel não pôde ser interpretado.");
-  el.donutLegend.innerHTML = emptyState("Sem leitura", "A importação está indisponível até o parser carregar.");
-  el.tableBody.innerHTML = `
-    <tr>
-      <td colspan="9">
-        <div class="empty-state">
-          <strong>Excel não carregado</strong>
-          <span>Reabra o HTML nesta mesma pasta ou use a versão online publicada.</span>
-        </div>
-      </td>
-    </tr>
-  `;
 }
 
 function hydrateControls() {
@@ -589,6 +672,8 @@ function hydrateControls() {
   const options = buildOptions(allRows);
   renderDatasetSelect();
   renderPeriodSelect();
+  renderMonthSelect();
+  renderFileDeleteMenu();
   populateSelect(el.sheetSelect, SHEET_ORDER, state.sheet);
   populateSelect(el.typeSelect, options.tipos, state.tipo);
   populateSelect(el.baseSelect, options.bases, state.base);
@@ -597,7 +682,7 @@ function hydrateControls() {
   el.searchInput.value = state.query;
   el.pageSize.value = String(state.pageSize || 15);
   if (el.settingsPageSize) el.settingsPageSize.value = String(state.pageSize || 15);
-  if (el.settingsPnrGoal) el.settingsPnrGoal.value = String(state.pnrGoalLimit || DEFAULT_PNR_GOAL_LIMIT);
+  if (el.settingsPnrGoal) el.settingsPnrGoal.value = String(getMonthlyPnrGoalLimit());
   hydrateValueSortControls();
 
   updateDatasetMeta();
@@ -619,6 +704,36 @@ function renderPeriodSelect() {
     .join("");
 }
 
+function renderMonthSelect() {
+  if (!el.monthSelect) return;
+  const months = getAvailableMonthOptions();
+  const activePeriod = getDatasetPeriod(getActiveDataset());
+  if (!state.monthFilter) state.monthFilter = activePeriod.key;
+  if (state.monthFilter !== "all" && !months.some((month) => month.key === state.monthFilter)) {
+    state.monthFilter = activePeriod.key;
+  }
+  el.monthSelect.innerHTML = [
+    `<option value="all" ${state.monthFilter === "all" ? "selected" : ""}>Todos</option>`,
+    ...months.map(
+      (month) =>
+        `<option value="${escapeAttribute(month.key)}" ${state.monthFilter === month.key ? "selected" : ""}>${escapeHtml(shortMonthYear(month.label))}</option>`,
+    ),
+  ].join("");
+}
+
+function getAvailableMonthOptions() {
+  const months = new Map();
+  library.datasets
+    .filter((dataset) => dataset && dataset.id !== EMPTY_DATASET_ID && Array.isArray(dataset.rows) && dataset.rows.length)
+    .forEach((dataset) => {
+      const period = getDatasetPeriod(dataset);
+      if (!months.has(period.key)) {
+        months.set(period.key, { key: period.key, label: period.monthLabel, sort: period.sort });
+      }
+    });
+  return Array.from(months.values()).sort((a, b) => a.sort - b.sort);
+}
+
 function hydrateValueSortControls() {
   const isLow = state.sortKey === "valor_numerico" && state.sortDir === "asc";
   if (el.sortHigh) el.sortHigh.classList.toggle("is-active", !isLow);
@@ -626,6 +741,7 @@ function hydrateValueSortControls() {
 }
 
 function renderDatasetSelect() {
+  if (!el.datasetSelect) return;
   const datasets = library.datasets.length ? library.datasets : [buildEmptyDataset()];
   el.datasetSelect.innerHTML = datasets
     .map((dataset) => {
@@ -639,18 +755,53 @@ function renderDatasetSelect() {
 function updateDatasetMeta() {
   const totalFiles = library.datasets.length;
   const active = getActiveDataset();
-  el.datasetCount.textContent = `${integer.format(totalFiles)} arquivo${totalFiles === 1 ? "" : "s"}`;
-  el.datasetNote.textContent = active
+  if (el.datasetCount) el.datasetCount.textContent = `${integer.format(totalFiles)} arquivo${totalFiles === 1 ? "" : "s"}`;
+  if (el.datasetNote) el.datasetNote.textContent = active
     ? `${integer.format(allRows.length)} registros no recorte atual. O mês completo é consolidado automaticamente.`
     : "Carregue meses anteriores e troque sem reimportar o workbook.";
   if (el.deleteActiveButton) {
-    const deletable = Boolean(active && active.id !== EMPTY_DATASET_ID && canEdit());
-    el.deleteActiveButton.hidden = !deletable;
+    const selected = getSelectedDeleteDataset();
+    const deletable = Boolean(selected && selected.id !== EMPTY_DATASET_ID && canEdit());
+    el.deleteActiveButton.hidden = false;
     el.deleteActiveButton.disabled = !deletable;
-    const label = active?.id === "seed" ? "Zerar base fixa" : "Excluir arquivo";
+    const label = selected ? `Excluir ${selected.label}` : "Selecione um arquivo antes de excluir";
     el.deleteActiveButton.setAttribute("aria-label", label);
     el.deleteActiveButton.setAttribute("title", label);
   }
+  if (el.fileSelectButton) {
+    const selected = getSelectedDeleteDataset();
+    el.fileSelectButton.disabled = !canEdit();
+    el.fileSelectButton.classList.toggle("is-active", Boolean(selected));
+    el.fileSelectButton.setAttribute("title", selected ? `Selecionado: ${selected.label}` : "Selecionar arquivo para exclusão");
+  }
+}
+
+function getDeletableDatasets() {
+  return library.datasets.filter((dataset) => dataset && dataset.id !== EMPTY_DATASET_ID && Array.isArray(dataset.rows) && dataset.rows.length);
+}
+
+function getSelectedDeleteDataset() {
+  return getDeletableDatasets().find((dataset) => dataset.id === state.deleteDatasetId) || null;
+}
+
+function renderFileDeleteMenu() {
+  if (!el.fileDeleteMenu) return;
+  const datasets = getDeletableDatasets();
+  if (!datasets.length) {
+    el.fileDeleteMenu.innerHTML = `<p class="file-delete-menu__empty">Nenhum arquivo disponível.</p>`;
+    return;
+  }
+  el.fileDeleteMenu.innerHTML = datasets
+    .map((dataset) => {
+      const selected = dataset.id === state.deleteDatasetId ? "is-selected" : "";
+      return `
+        <button type="button" class="${selected}" data-delete-dataset-id="${escapeAttribute(dataset.id)}">
+          <span>${escapeHtml(dataset.label)}</span>
+          <small>${integer.format(dataset.rows.length)} registros</small>
+        </button>
+      `;
+    })
+    .join("");
 }
 
 function renderTabs() {
@@ -681,6 +832,19 @@ function renderAll() {
   const paged = paginateRows(sorted);
   const summary = buildSummary(filtered);
 
+  if (state.appView === "settings" && !canEdit()) {
+    state.appView = "dashboard";
+  }
+  const accountView = state.appView === "profile" || state.appView === "settings";
+  toggleAccountView(accountView);
+  if (accountView) {
+    renderAccountPage();
+    renderFilterSummary();
+    updateTopbar(summary);
+    updateAccessControls();
+    return;
+  }
+
   const monthlyView = state.sheet === MONTHLY_BASE_VIEW;
   toggleDashboardView(monthlyView);
   if (monthlyView) {
@@ -696,6 +860,75 @@ function renderAll() {
   updateAccessControls();
   persistState();
   persistLibrary();
+}
+
+function toggleAccountView(accountView) {
+  if (el.content) el.content.classList.toggle("is-account-page", accountView);
+  if (el.profileView) el.profileView.hidden = state.appView !== "profile";
+  if (el.settingsView) el.settingsView.hidden = state.appView !== "settings";
+}
+
+function openAccountPage(page) {
+  if (page === "settings" && !canEdit()) {
+    showToast("Configurações gerais disponíveis apenas para Admin.", "warn", 5200);
+    return;
+  }
+  state.appView = page === "settings" ? "settings" : "profile";
+  state.accountPanelOpen = false;
+  persistState();
+  renderAll();
+}
+
+function renderAccountPage() {
+  renderProfilePage();
+  renderSettingsPage();
+}
+
+function renderProfilePage() {
+  if (!el.profileView) return;
+  const user = currentUser || { email: "admin@empresa.com", role: "admin" };
+  const email = user.email || "admin@empresa.com";
+  const initials =
+    email
+      .split("@")[0]
+      .split(/[.\s_-]+/)
+      .map((part) => part.charAt(0))
+      .join("")
+      .slice(0, 2)
+      .toUpperCase() || "AL";
+  if (el.profileAvatar) el.profileAvatar.textContent = initials;
+  if (el.profileName) el.profileName.value = user.name || email.split("@")[0] || "Usuário";
+  if (el.profileRoleTitle) el.profileRoleTitle.value = user.role === "admin" ? "Administrador" : "Visualização";
+  if (el.profileEmail) el.profileEmail.value = email;
+}
+
+function renderSettingsPage() {
+  if (!el.settingsUsersList) return;
+  if (!canEdit()) {
+    el.settingsUsersList.innerHTML = emptyState("Acesso restrito", "Somente administradores podem editar usuários.");
+    return;
+  }
+  const users = knownUsers.length
+    ? knownUsers
+    : [{ id: "local-admin", email: currentUser?.email || "admin@empresa.com", role: "admin" }];
+  el.settingsUsersList.innerHTML = users
+    .map((user) => {
+      const isAdmin = user.role === "admin";
+      const name = user.name || (user.email ? user.email.split("@")[0] : "Usuário");
+      return `
+        <div class="settings-user">
+          <div class="settings-user__identity">
+            <strong>${escapeHtml(name)}</strong>
+            <span>${escapeHtml(user.email || "Sem e-mail")}</span>
+          </div>
+          <span class="settings-user__badge ${isAdmin ? "is-admin" : "is-viewer"}">${isAdmin ? "Admin" : "Visualização"}</span>
+          <button class="secondary-button secondary-button--mini settings-user__action" type="button" data-user-id="${escapeAttribute(user.id)}" data-role="${isAdmin ? "viewer" : "admin"}">
+            ${isAdmin ? "Remover admin" : "Tornar admin"}
+          </button>
+        </div>
+      `;
+    })
+    .join("");
 }
 
 function toggleDashboardView(monthlyView) {
@@ -767,7 +1000,7 @@ function renderInsights(filtered, summary) {
   const bestBases = bottomBy(filtered, "base", "valor_numerico", 5);
   const worstDrivers = topBy(filtered, "motorista", "valor_numerico", 5);
   const bestDrivers = bottomBy(filtered, "motorista", "valor_numerico", 5);
-  const sheetShare = shareBySheet(filtered);
+  const mixRows = buildMixRows(filtered);
   const baseScale = Math.max(...worstBases.concat(bestBases).map((item) => item.total), 1);
 
   el.baseBars.innerHTML = worstBases.length || bestBases.length
@@ -780,92 +1013,97 @@ function renderInsights(filtered, summary) {
        ${renderDriverRankingGroup("5 drivers mais ofensivos", worstDrivers, bestDrivers.length)}`
     : emptyState("Sem drivers no recorte", "Importe o Excel ou libere os filtros.");
 
-  const colors = sheetShare.map((item) => SHEET_COLORS[item.label] || "#9aa8b8");
-  renderDonutChart(summary, sheetShare, colors);
-  el.donutLegend.innerHTML = sheetShare.length
-    ? sheetShare
-        .map((item, index) => {
-          const color = colors[index];
-          return `
-            <button class="legend__row" type="button" data-sheet="${escapeAttribute(item.label)}" style="--reveal-index:${index}">
-              <span class="legend__swatch" style="background:${color}"></span>
-              <div>
-                <div class="legend__title">
-                  <span>${escapeHtml(item.label)}</span>
-                  <span>${item.share.toFixed(1)}%</span>
-                </div>
-                <div class="legend__value">${compactCurrency.format(item.total)} · ${integer.format(item.count)}</div>
-              </div>
-            </button>
-          `;
-        })
-        .join("")
-    : emptyState("Sem mix por aba", "Os dados filtrados não têm distribuição.");
+  renderDonutChart(mixRows);
+  renderMixLegend(mixRows);
 
   renderPnrGoalSummary(filtered);
 }
 
-function renderDonutChart(summary, sheetShare, colors) {
+function renderDonutChart(mixRows) {
   const circumference = 2 * Math.PI * 42;
+  const totalMix = mixRows.reduce((acc, item) => acc + Number(item.total || 0), 0);
   let offset = 0;
   const labels = [];
-  const segments = sheetShare
+  const segments = mixRows
     .map((item, index) => {
       const start = offset;
       const length = (item.share / 100) * circumference;
       const dashOffset = -offset;
       offset += length;
-      if (item.share >= 5) {
+      if (item.share >= 8 && length > 22) {
         const midpoint = start + length / 2;
         const angle = (midpoint / circumference) * Math.PI * 2 - Math.PI / 2;
-        const x = 50 + Math.cos(angle) * 42;
-        const y = 50 + Math.sin(angle) * 42;
+        const x = 50 + Math.cos(angle) * 41;
+        const y = 50 + Math.sin(angle) * 41;
         labels.push(`
           <text
-            class="donut-percent-label"
+            class="mix-chart__percent"
             x="${x.toFixed(2)}"
             y="${y.toFixed(2)}"
-          >${item.share.toFixed(1)}%</text>
+          >${formatPercent(item.share)}</text>
         `);
       }
       return `
         <circle
-          class="donut-segment"
-          cx="50"
-          cy="50"
-          r="42"
-          fill="none"
-          stroke="${colors[index]}"
-          stroke-width="18"
-          stroke-dasharray="${length.toFixed(3)} ${(circumference - length).toFixed(3)}"
-          stroke-dashoffset="${dashOffset.toFixed(3)}"
-          data-sheet="${escapeAttribute(item.label)}"
-          data-title="${escapeAttribute(item.label)}"
-          data-value="${escapeAttribute(currency.format(item.total))}"
-          data-count="${escapeAttribute(integer.format(item.count))}"
-          data-share="${escapeAttribute(`${item.share.toFixed(1)}%`)}"
+            class="mix-chart__segment"
+            cx="50"
+            cy="50"
+            r="42"
+            fill="none"
+            stroke="${item.color}"
+            stroke-width="18"
+            stroke-dasharray="${length.toFixed(3)} ${(circumference - length).toFixed(3)}"
+            stroke-dashoffset="${dashOffset.toFixed(3)}"
+            data-sheet="${escapeAttribute(item.label)}"
+            data-title="${escapeAttribute(item.shortLabel)}"
+            data-value="${escapeAttribute(currency.format(item.total))}"
+            data-count="${escapeAttribute(integer.format(item.count))}"
+            data-share="${escapeAttribute(formatPercent(item.share))}"
         ></circle>
       `;
     })
     .join("");
 
-  el.donutChart.style.background = "transparent";
   el.donutChart.innerHTML = `
-    <svg class="donut-svg" viewBox="0 0 100 100" aria-hidden="true">
+    <svg class="mix-chart__svg" viewBox="0 0 100 100" aria-hidden="true">
       <g transform="rotate(-90 50 50)">
-        <circle class="donut-track" cx="50" cy="50" r="42" fill="none" stroke-width="18"></circle>
+        <circle class="mix-chart__track" cx="50" cy="50" r="42" fill="none" stroke-width="18"></circle>
         ${segments}
       </g>
       ${labels.join("")}
     </svg>
-    <div class="donut__center">
-      <strong id="donut-total">${currency.format(summary.totalValue)}</strong>
+    <div class="mix-chart__center">
+      <strong class="mix-center-value" id="donut-total">${formatCurrencyShort(totalMix)}</strong>
       <span>Total de descontos</span>
     </div>
-    <div class="donut-tooltip" id="donut-tooltip" hidden></div>
+    <div class="mix-tooltip" id="donut-tooltip" hidden></div>
   `;
   el.donutTotal = document.getElementById("donut-total");
   el.donutTooltip = document.getElementById("donut-tooltip");
+}
+
+function renderMixLegend(mixRows) {
+  el.donutLegend.innerHTML = `
+    <div class="mix-legend__head" aria-hidden="true">
+      <span>Categoria</span>
+      <span>Valor</span>
+      <span>Qtd.</span>
+      <span>%</span>
+    </div>
+    ${mixRows
+    .map((item) => `
+      <button class="mix-legend__row" type="button" data-sheet="${escapeAttribute(item.label)}">
+        <span class="mix-legend__category">
+          <i style="background:${item.color}"></i>
+          ${escapeHtml(item.shortLabel)}
+        </span>
+        <span class="mix-legend__value">${formatCurrencyShort(item.total)}</span>
+        <span class="mix-legend__count">${integer.format(item.count)}</span>
+        <span class="mix-legend__share">${formatPercent(item.share)}</span>
+      </button>
+    `)
+    .join("")}
+  `;
 }
 
 function showDonutTooltip(segment, event) {
@@ -897,21 +1135,63 @@ function hideDonutTooltip() {
 
 function renderPnrGoalSummary(filtered) {
   if (!el.pnrGoalSummary) return;
-  const pnrRows = filtered.filter((row) => row.aba_origem === "PNR");
+  const pnrRows = filtered.filter((row) => normalizeDonutSheet(row) === "PNR");
   const pnrValue = pnrRows.reduce((acc, row) => acc + Number(row.valor_numerico || 0), 0);
-  const goal = getPnrGoalStatus(pnrValue);
-  const percent = goal.limit ? Math.min((pnrValue / goal.limit) * 100, 999) : 0;
+  const isAnnual = state.monthFilter === "all";
+  const monthCount = isAnnual ? countScopedGoalMonths(filtered) : 1;
+  const periodLabel = isAnnual ? "anual" : "mensal";
+  const title = isAnnual ? "Meta PNR anual" : "Meta PNR mensal";
+  const goalMode = isAnnual ? "annual" : "monthly";
+  const goalLimit = isAnnual ? getAnnualPnrGoalLimit(monthCount) : getMonthlyPnrGoalLimit();
+  const goal = getPnrGoalStatus(pnrValue, goalLimit);
+  const panel = el.pnrGoalSummary.closest(".goal-card");
+  const titleNode = panel?.querySelector(".panel__header h2");
+  const actionsNode = panel?.querySelector(".goal-card__actions");
+  if (panel) {
+    panel.dataset.goalPeriod = periodLabel;
+    panel.dataset.goalStatus = goal.tone;
+  }
+  if (titleNode) titleNode.textContent = title;
+  if (actionsNode) {
+    const configTitle = isAnnual ? "Configurar meta anual" : "Configurar meta mensal";
+    actionsNode.innerHTML = `
+      <span class="goal-status ${goal.tone}">${escapeHtml(goal.label)}</span>
+      <details class="goal-config" data-goal-mode="${goalMode}">
+        <summary title="${escapeAttribute(configTitle)}" aria-label="${escapeAttribute(configTitle)}">⚙</summary>
+        <form class="goal-config__panel" data-goal-config-form>
+          <strong>${escapeHtml(configTitle)}</strong>
+          <label>
+            <span>Valor em reais</span>
+            <input
+              class="goal-config__input"
+              type="text"
+              inputmode="decimal"
+              placeholder="R$ 0,00"
+              value="${escapeAttribute(currency.format(goalLimit))}"
+              data-pnr-goal-input
+              data-goal-mode="${goalMode}"
+            >
+          </label>
+          <div class="goal-config__actions">
+            <button type="button" data-goal-config-cancel>Cancelar</button>
+            <button type="submit" data-goal-config-save>Salvar</button>
+          </div>
+        </form>
+      </details>
+    `;
+  }
   el.pnrGoalSummary.innerHTML = `
-    <div class="pnr-goal-summary__main">
-      ${renderPnrGoalGauge(goal)}
-      <div class="pnr-goal-summary__copy">
-        <strong>${escapeHtml(goal.valueLabel)}</strong>
-        <span>Meta mensal: ${escapeHtml(goal.limitLabel)}</span>
-        <small>${integer.format(pnrRows.length)} registros PNR · ${percent.toFixed(1)}% da meta</small>
+    <div class="goal-body">
+      <div class="goal-copy">
+        <span class="goal-eyebrow">Valor atual</span>
+        <strong class="goal-value">${escapeHtml(goal.valueLabel)}</strong>
+        <span>Meta ${periodLabel}: ${escapeHtml(goal.limitLabel)}</span>
+        <small>${integer.format(pnrRows.length)} registros PNR · ${formatPercent(goal.percent)} da meta ${periodLabel}</small>
       </div>
+      ${renderPnrGoalGauge(goal)}
     </div>
-    <div class="pnr-goal-summary__track" aria-hidden="true">
-      <span style="width:${Math.min(percent, 100).toFixed(1)}%"></span>
+    <div class="goal-progress" title="${escapeAttribute(`${formatPercent(goal.percent)} da meta ${periodLabel}`)}" aria-hidden="true">
+      <span style="width:${goal.progress.toFixed(1)}%"></span>
     </div>
   `;
 }
@@ -1084,80 +1364,6 @@ function renderBaseHorizontalGroup(base, rowsByDataset, max, metricLabel) {
   `;
 }
 
-function renderBaseColumnGroup(base, rowsByDataset, max, metricLabel) {
-  const values = rowsByDataset.map((period) => {
-    const rows = period.rows.filter((row) => row.base === base);
-    const total = rows.length;
-    const value = rows.reduce((acc, row) => acc + Number(row.valor_numerico || 0), 0);
-    return { label: period.label, total, value };
-  });
-  const evolution = getBaseEvolution(values);
-  const bars = values.map((period) => {
-    const total = period.total;
-    const value = period.value;
-    const height = total ? Math.max(5, (total / max) * 100) : 0;
-    const color = getOffenseColor(total, max);
-    return `
-      <span class="timeline-period">
-        <span class="tower-bar-rail">
-        <span
-          class="tower-bar"
-          style="height:${height.toFixed(1)}%; background:${color}"
-            title="${escapeAttribute(`${formatBaseCode(base)} · ${period.label}: ${integer.format(total)} ${metricLabel} · ${currency.format(value)}`)}"
-        ><em>${total ? integer.format(total) : ""}</em></span>
-        </span>
-        <span class="timeline-period__label">${escapeHtml(shortPeriodLabel(period.label))}</span>
-      </span>
-    `;
-  }).join("");
-  const code = formatBaseCode(base);
-  return `
-    <div class="tower-base-group">
-      <div class="tower-bars">
-        ${bars}
-      </div>
-      <div class="tower-base-footer">
-        <strong class="tower-base-code">${escapeHtml(code)}</strong>
-        <span class="tower-status ${evolution.tone}">${escapeHtml(evolution.status)}</span>
-      </div>
-    </div>
-  `;
-}
-
-function renderBaseTower(base, rowsByDataset, max, metricLabel) {
-  const values = rowsByDataset.map((period, index) => {
-    const rows = period.rows.filter((row) => row.base === base);
-    const total = rows.length;
-    const value = rows.reduce((acc, row) => acc + Number(row.valor_numerico || 0), 0);
-    return { index, label: period.label, total, value };
-  });
-  const evolution = getBaseEvolution(values);
-  const bars = values.map((period) => {
-    const height = period.total ? Math.max(5, (period.total / max) * 100) : 0;
-    const color = getOffenseColor(period.total, max);
-    return `
-      <span class="timeline-period">
-        <span class="tower-bar-rail">
-        <span
-        class="tower-bar"
-            style="height:${height.toFixed(1)}%; background:${color}"
-          title="${escapeAttribute(`${formatBaseCode(base)} · ${period.label}: ${integer.format(period.total)} ${metricLabel} · ${currency.format(period.value)}`)}"
-        ><em>${period.total ? integer.format(period.total) : ""}</em></span>
-        </span>
-        <span class="timeline-period__label">${escapeHtml(shortPeriodLabel(period.label))}</span>
-      </span>
-    `;
-  }).join("");
-  const code = formatBaseCode(base);
-  return `
-    <div class="tower-base">
-      <strong>${escapeHtml(code)}</strong>
-      <div class="tower-bars">${bars}</div>
-      <span class="tower-status ${evolution.tone}">${escapeHtml(evolution.status)}</span>
-    </div>
-  `;
-}
-
 function getBaseEvolution(values) {
   const first = values[0]?.total || 0;
   const last = values[values.length - 1]?.total || 0;
@@ -1172,49 +1378,75 @@ function getBaseEvolution(values) {
   return { arrow: "→", label, tone: "is-flat", status: "estável" };
 }
 
-function getPairEvolution(previous, current) {
-  if (!previous && !current) return { arrow: "→", label: "0.0%", tone: "is-flat", status: "estável" };
-  const delta = previous ? ((current - previous) / previous) * 100 : 100;
-  const label = `${delta > 0 ? "+" : ""}${delta.toFixed(1)}%`;
-  if (delta < 0) return { arrow: "↓", label, tone: "is-good", status: "menos ofensiva" };
-  if (delta > 0) return { arrow: "↑", label, tone: "is-bad", status: "mais ofensiva" };
-  return { arrow: "→", label, tone: "is-flat", status: "estável" };
-}
-
-function getPnrGoalStatus(totalValue) {
-  const limit = Number(state.pnrGoalLimit || DEFAULT_PNR_GOAL_LIMIT);
-  const ok = totalValue <= limit;
-  const ratio = Math.min(totalValue / (limit * 2), 1);
-  const angle = -70 + ratio * 140;
+function getPnrGoalStatus(totalValue, limitOverride) {
+  const limit = Number(limitOverride || getMonthlyPnrGoalLimit());
+  const percent = limit > 0 ? (Number(totalValue || 0) / limit) * 100 : 0;
+  let tone = "is-under";
+  let label = "Abaixo da meta";
+  if (percent < 70) {
+    tone = "is-under";
+    label = "Abaixo da meta";
+  } else if (percent < 100) {
+    tone = "is-warning";
+    label = "Em atenção";
+  } else if (percent <= 150) {
+    tone = "is-hit";
+    label = "Meta atingida";
+  } else {
+    tone = "is-over";
+    label = "Acima do previsto";
+  }
+  const progress = Math.min(percent, 100);
+  const angle = -180 + (progress / 100) * 180;
   return {
-    tone: ok ? "is-good" : "is-bad",
-    label: ok ? "OK" : "atenção",
+    tone,
+    label,
     angle: angle.toFixed(1),
     valueLabel: currency.format(totalValue),
     limit,
     limitLabel: currency.format(limit),
+    percent,
+    progress,
   };
 }
 
 function renderPnrGoalGauge(goal) {
   return `
     <div
-      class="pnr-gauge ${goal.tone}"
-      style="--needle-angle:${goal.angle}deg"
-      title="${escapeAttribute(`Meta PNR do mês vigente: abaixo de ${goal.limitLabel} está OK. Atual: ${goal.valueLabel}`)}"
+      class="goal-gauge"
+      style="--needle-angle:${goal.angle}deg; --goal-progress:${goal.progress.toFixed(1)}%"
+      title="${escapeAttribute(`${formatPercent(goal.percent)} da meta`)}"
     >
-      <span class="pnr-gauge__label">Meta PNR</span>
-      <span class="pnr-gauge__dial"><i></i></span>
-      <strong>${escapeHtml(goal.label)}</strong>
-      <details class="pnr-goal-menu">
-        <summary title="Editar meta PNR">⚙</summary>
-        <label>
-          Meta
-          <input type="number" min="1" step="100" value="${escapeAttribute(goal.limit)}" data-pnr-goal-input>
-        </label>
-      </details>
+      <span class="goal-gauge__label">Progresso</span>
+      <span class="goal-gauge__dial">
+        <span class="goal-gauge__needle"></span>
+        <span class="goal-gauge__pivot"></span>
+      </span>
+      <strong>${formatPercent(goal.percent)}</strong>
     </div>
   `;
+}
+
+function getMonthlyPnrGoalLimit() {
+  const monthlyGoal = Number(state.metaMensal || state.pnrGoalLimit || DEFAULT_PNR_GOAL_LIMIT);
+  return monthlyGoal > 0 ? monthlyGoal : DEFAULT_PNR_GOAL_LIMIT;
+}
+
+function getAnnualPnrGoalLimit(monthCount = 1) {
+  const savedAnnualGoal = Number(state.metaAnual || 0);
+  if (state.metaAnualEditada && savedAnnualGoal > 0) return savedAnnualGoal;
+  return getMonthlyPnrGoalLimit() * Math.max(Number(monthCount) || 1, 1);
+}
+
+function setPnrGoalByMode(mode, value) {
+  const safeValue = Number(value) > 0 ? Number(value) : DEFAULT_PNR_GOAL_LIMIT;
+  if (mode === "annual") {
+    state.metaAnual = safeValue;
+    state.metaAnualEditada = true;
+    return;
+  }
+  state.metaMensal = safeValue;
+  state.pnrGoalLimit = safeValue;
 }
 
 function formatBaseCode(base) {
@@ -1255,221 +1487,732 @@ function parseCurrencyInput(value) {
 }
 
 function downloadMonthlyReport() {
-  const rows = buildMonthlyComparison();
+  const allMonthlyRows = buildMonthlyComparison();
   const filteredRows = getFilteredRows();
-  const summary = buildSummary(getFilteredRows());
-  const activeKey = getDatasetPeriod(getActiveDataset()).key;
-  const active = rows.find((row) => row.key === activeKey) || rows[rows.length - 1] || null;
-  const snapshot = readDashboardSnapshot();
-  const reportWindow = window.open("", "_blank", "width=1100,height=800");
-  if (!reportWindow) {
-    showToast("Permita pop-ups para gerar o PDF do relatório.", "warn", 5200);
-    return;
-  }
-  reportWindow.document.write(buildReportHtml({ rows, filteredRows, summary, active, snapshot }));
-  reportWindow.document.close();
-  reportWindow.focus();
-  reportWindow.setTimeout(() => {
-    reportWindow.print();
-  }, 450);
+  const summary = buildSummary(filteredRows);
+  const analysis = buildReportAnalysis({ rows: allMonthlyRows, filteredRows, summary });
+  const pdf = buildReportPdfBlob({ analysis, filteredRows, summary });
+  downloadBlob(pdf, analysis.fileName);
+  showToast("Relatório LOSS baixado.", "good", 4200);
 }
 
-function readDashboardSnapshot() {
-  const readText = (selector) =>
-    Array.from(document.querySelectorAll(selector))
-      .filter((node) => node && !node.closest("[hidden]"))
-      .map((node) => node.textContent.replace(/\s+/g, " ").trim())
-      .filter(Boolean);
+function buildReportPdfBlob({ analysis, summary }) {
+  const pages = [];
+  let commands = [];
+  let y = 740;
+  const page = { width: 595, height: 842, margin: 34, bottom: 38 };
+  const contentW = page.width - page.margin * 2;
+  const colors = {
+    ink: "0.06 0.13 0.22",
+    muted: "0.36 0.44 0.55",
+    soft: "0.95 0.98 1",
+    line: "0.82 0.87 0.93",
+    tableHead: "0.90 0.94 0.98",
+    navy: "0.04 0.18 0.31",
+    teal: "0.05 0.55 0.48",
+    blue: "0.08 0.47 0.78",
+    green: "0.08 0.52 0.28",
+    orange: "0.74 0.35 0",
+    red: "0.76 0.16 0.18",
+    white: "1 1 1",
+    warm: "1 0.95 0.88",
+    dangerSoft: "1 0.92 0.93",
+    blueSoft: "0.91 0.96 1",
+    greenSoft: "0.91 0.98 0.94",
+  };
+  const addPage = () => {
+    if (commands.length) pages.push(commands.join("\n"));
+    commands = [];
+    commands.push(`${colors.soft} rg 0 0 ${page.width} ${page.height} re f`);
+    commands.push(`${colors.navy} rg 0 764 ${page.width} 78 re f`);
+    commands.push("0.09 0.48 0.54 rg 442 764 153 78 re f");
+    addText("Dashboard Pré-Fatura", page.margin, 822, 9.5, "0.74 0.88 1");
+    addText("Relatório Executivo LOSS", page.margin, 803, 19, colors.white);
+    addText(`Período: ${analysis.scopeLabel}`, page.margin, 784, 10, colors.white);
+    addText(analysis.generatedAt, page.margin, 770, 8.5, "0.78 0.88 0.96");
+    y = 734;
+  };
+  const addText = (text, x, yy, size = 10, color = "0.08 0.14 0.22", align = "left") => {
+    const value = String(text ?? "");
+    const offset = align === "right" ? estimatePdfTextWidth(value, size) : align === "center" ? estimatePdfTextWidth(value, size) / 2 : 0;
+    commands.push(`${color} rg BT /F1 ${size} Tf ${Math.max(0, x - offset).toFixed(1)} ${yy.toFixed(1)} Td <${pdfTextHex(value)}> Tj ET`);
+  };
+  const addRect = (x, yy, w, h, color) => {
+    commands.push(`${color} rg ${x.toFixed(1)} ${yy.toFixed(1)} ${w.toFixed(1)} ${h.toFixed(1)} re f`);
+  };
+  const addStrokeRect = (x, yy, w, h, color = colors.line) => {
+    commands.push(`${color} RG ${x.toFixed(1)} ${yy.toFixed(1)} ${w.toFixed(1)} ${h.toFixed(1)} re S`);
+  };
+  const addLine = (x1, y1, x2, y2, color = colors.line, width = 0.7) => {
+    commands.push(`${color} RG ${width} w ${x1.toFixed(1)} ${y1.toFixed(1)} m ${x2.toFixed(1)} ${y2.toFixed(1)} l S`);
+  };
+  const ensure = (height) => {
+    if (y - height < page.bottom) addPage();
+  };
+  const card = (x, top, w, h, fill = colors.white, accent = "") => {
+    addRect(x, top - h, w, h, fill);
+    addStrokeRect(x, top - h, w, h);
+    if (accent) addRect(x, top - h, 4, h, accent);
+  };
+  const addWrappedText = (text, x, top, width, size = 9.5, color = colors.ink, lineHeight = 13, maxLines = 6, clip = false) => {
+    const lines = wrapPdfText(text, width, size, maxLines);
+    const drawable = clip ? lines : wrapPdfText(text, width, size, 60);
+    lines.forEach((line, index) => addText(line, x, top - index * lineHeight, size, color));
+    return Math.min(drawable.length, lines.length) * lineHeight;
+  };
+  const sectionTitle = (title, meta = "") => {
+    ensure(38);
+    addText(title, page.margin, y, 13, colors.ink);
+    if (meta) addText(meta, page.width - page.margin, y, 9, colors.muted, "right");
+    y -= 10;
+    addLine(page.margin, y, page.width - page.margin, y, colors.line, 0.6);
+    y -= 16;
+  };
+  const metricCard = (x, top, w, h, label, value, note, accent, fill) => {
+    card(x, top, w, h, fill, accent);
+    addText(label, x + 12, top - 17, 7.8, colors.muted);
+    addWrappedText(value, x + 12, top - 36, w - 24, value.length > 18 ? 11.5 : 14.5, accent, 13, 2, true);
+    addWrappedText(note, x + 12, top - 55, w - 24, 7.2, colors.muted, 8.5, 2, true);
+  };
+  const drawParagraphCard = (title, text, height, accent = colors.teal, fill = colors.white) => {
+    ensure(height + 26);
+    sectionTitle(title, analysis.scope.mode === "annual" ? "consolidado anual" : "mês selecionado");
+    card(page.margin, y, contentW, height, fill, accent);
+    const paragraphs = String(text).split(/\n+/).filter(Boolean);
+    let textY = y - 18;
+    paragraphs.forEach((paragraph) => {
+      const used = addWrappedText(paragraph, page.margin + 16, textY, contentW - 32, 9.5, colors.ink, 12.5, 8);
+      textY -= used + 6;
+    });
+    y -= height + 22;
+  };
+  const drawKpiGrid = () => {
+    const gap = 10;
+    const cols = 4;
+    const w = (contentW - gap * (cols - 1)) / cols;
+    const h = 64;
+    const metrics = [
+      ["Impacto financeiro", currency.format(summary.totalValue), `Ticket médio: ${currency.format(analysis.ticketAverage)} por ocorrência`, colors.orange, colors.warm],
+      ["Ticket médio", currency.format(analysis.ticketAverage), "por ocorrência válida", colors.teal, colors.white],
+      ["PNR", integer.format(summary.pnrCount), `${analysis.pnrShare}% dos registros`, colors.red, colors.dangerSoft],
+      ["Pacotes perdidos", integer.format(summary.packageCount), `${analysis.packageShare}% dos registros`, colors.blue, colors.blueSoft],
+      ["Registros", integer.format(summary.count), `${integer.format(summary.baseCount)} bases`, colors.blue, colors.white],
+      ["Média mensal", currency.format(analysis.monthlyAverage), `Mês crítico: ${analysis.criticalMonthLabel}`, colors.orange, colors.white],
+      ["Mês crítico", analysis.criticalMonthLabel, formatCurrencyShort(analysis.criticalMonth.totalValue), colors.red, colors.dangerSoft],
+      ["Categoria líder", analysis.dominantCategoryLabel, `${analysis.dominantCategoryShare}% do impacto`, colors.teal, colors.greenSoft],
+    ];
+    ensure(160);
+    for (let index = 0; index < metrics.length; index += 1) {
+      const row = Math.floor(index / cols);
+      const col = index % cols;
+      metricCard(page.margin + col * (w + gap), y - row * (h + 10), w, h, ...metrics[index]);
+    }
+    y -= h * 2 + 32;
+  };
+  const drawDiagnosticCards = () => {
+    ensure(154);
+    sectionTitle("Diagnóstico operacional", "leitura automática");
+    const gap = 10;
+    const w = (contentW - gap) / 2;
+    const h = 72;
+    analysis.diagnostics.slice(0, 4).forEach((item, index) => {
+      const row = Math.floor(index / 2);
+      const col = index % 2;
+      const x = page.margin + col * (w + gap);
+      const top = y - row * (h + 10);
+      const accent = index === 0 ? colors.red : index === 1 ? colors.orange : index === 2 ? colors.blue : colors.teal;
+      const fill = index === 0 ? colors.dangerSoft : index === 1 ? colors.warm : colors.white;
+      card(x, top, w, h, fill, accent);
+      addText(item.title, x + 12, top - 17, 9, accent);
+      addWrappedText(item.text, x + 12, top - 34, w - 24, 8.2, colors.ink, 10.5, 4);
+    });
+    y -= h * 2 + 34;
+  };
+  const drawTable = (x, top, w, title, headers, rows, widths, height, accent = colors.blue, aligns = []) => {
+    card(x, top, w, height, colors.white, accent);
+    addText(title, x + 12, top - 18, 10.5, colors.ink);
+    const tableTop = top - 32;
+    addRect(x + 10, tableTop - 14, w - 20, 18, colors.tableHead);
+    let cursor = x + 14;
+    headers.forEach((header, index) => {
+      const align = aligns[index] || (index >= 2 ? "right" : "left");
+      addText(header, align === "right" ? cursor + widths[index] - 4 : cursor, tableTop - 8, 7.3, colors.muted, align);
+      cursor += widths[index];
+    });
+    rows.forEach((row, rowIndex) => {
+      const rowY = tableTop - 29 - rowIndex * 18;
+      if (rowIndex % 2 === 1) addRect(x + 10, rowY - 7, w - 20, 16, "0.97 0.985 1");
+      cursor = x + 14;
+      row.forEach((cell, index) => {
+        const text = String(cell ?? "");
+        const align = aligns[index] || (index >= 2 ? "right" : "left");
+        const size = index === 1 && text.length > 28 ? 7.2 : 8;
+        if (index === 1) {
+          addWrappedText(text, cursor, rowY, widths[index] - 8, size, colors.ink, 8.5, 2, true);
+        } else {
+          addText(text, align === "right" ? cursor + widths[index] - 4 : cursor, rowY, 8, colors.ink, align);
+        }
+        cursor += widths[index];
+      });
+    });
+  };
+  const drawMonthlyTable = () => {
+    ensure(150);
+    sectionTitle("Comparativo mensal", analysis.scope.mode === "annual" ? "ano consolidado" : "mês selecionado");
+    const rows = analysis.timelineRows.slice(-8).map((row, index) => [
+      shortMonthYear(row.label),
+      integer.format(row.count || 0),
+      formatCurrencyShort(row.totalValue),
+      index === 0 || !row.previous ? "—" : formatSignedPct(row.deltaPct),
+    ]);
+    drawTable(page.margin, y, contentW, "Evolução por competência", ["Mês", "Ocorrências", "Descontos", "Variação"], rows, [110, 100, 150, 120], 48 + rows.length * 18, colors.blue, ["left", "right", "right", "right"]);
+    y -= 68 + rows.length * 18;
+  };
+  const drawAlertCards = () => {
+    ensure(150);
+    sectionTitle("Alertas críticos", `${analysis.alerts.length} alertas`);
+    const h = 54;
+    analysis.alerts.slice(0, 5).forEach((alert, index) => {
+      ensure(h + 8);
+      card(page.margin, y, contentW, h, index === 0 ? colors.dangerSoft : colors.white, colors.red);
+      addText(alert.title, page.margin + 14, y - 17, 9, colors.red);
+      addWrappedText(alert.text, page.margin + 14, y - 33, contentW - 28, 8.4, colors.ink, 10.5, 2);
+      y -= h + 8;
+    });
+    y -= 8;
+  };
+  const drawRankings = () => {
+    ensure(210);
+    sectionTitle("Rankings de concentração financeira", "base e driver");
+    const gap = 10;
+    const w = (contentW - gap) / 2;
+    const h = 178;
+    const baseRows = analysis.topBases.slice(0, 6).map((item, index) => [`${index + 1}`, item.label, formatCurrencyShort(item.total), `${item.share}%`]);
+    const driverRows = analysis.topDrivers.slice(0, 6).map((item, index) => [`${index + 1}`, item.label, formatCurrencyShort(item.total), `${item.share}%`]);
+    drawTable(page.margin, y, w, "Bases com maior prejuízo", ["#", "Nome", "Valor", "%"], baseRows, [22, 116, 62, 34], h, colors.orange);
+    drawTable(page.margin + w + gap, y, w, "Drivers com maior impacto", ["#", "Nome", "Valor", "%"], driverRows, [22, 116, 62, 34], h, colors.blue);
+    y -= h + 26;
+  };
+  const drawCategoryTable = () => {
+    ensure(124);
+    sectionTitle("Participação por categoria", "impacto total");
+    const rows = analysis.categoryTotals.map((item) => [reportCategoryLabel(item.label), `${analysis.categoryShareMap[item.label] || "0,0"}%`, formatCurrencyShort(item.total)]);
+    drawTable(page.margin, y, contentW, "Mix financeiro LOSS", ["Categoria", "Percentual", "Valor"], rows, [230, 120, 150], 104, colors.teal, ["left", "right", "right"]);
+    y -= 130;
+  };
+  const drawNumberedList = (title, meta, items, accent = colors.green) => {
+    ensure(128);
+    sectionTitle(title, meta);
+    const h = Math.max(96, 26 + items.length * 22);
+    card(page.margin, y, contentW, h, colors.greenSoft, accent);
+    items.forEach((item, index) => {
+      const rowY = y - 22 - index * 21;
+      addText(`${index + 1}.`, page.margin + 16, rowY, 8.8, accent);
+      addWrappedText(item, page.margin + 36, rowY, contentW - 52, 8.8, colors.ink, 10.5, 2);
+    });
+    y -= h + 24;
+  };
+  const drawConclusion = () => {
+    ensure(160);
+    sectionTitle("Conclusão executiva", "prioridade operacional");
+    const h = 132;
+    card(page.margin, y, contentW, h, colors.white, colors.navy);
+    analysis.conclusionItems.forEach((item, index) => {
+      const rowY = y - 20 - index * 22;
+      addText(`${item.label}:`, page.margin + 16, rowY, 8.8, colors.navy);
+      addWrappedText(item.text, page.margin + 122, rowY, contentW - 138, 8.8, colors.ink, 10.5, 2);
+    });
+    y -= h + 18;
+  };
+
+  addPage();
+  drawKpiGrid();
+  drawParagraphCard("Análise inteligente do período", analysis.intelligentSummary, 132);
+  drawDiagnosticCards();
+  drawMonthlyTable();
+  drawAlertCards();
+  drawRankings();
+  drawCategoryTable();
+  drawNumberedList("Recomendações de ação", "próximos passos", analysis.recommendations);
+  drawConclusion();
+
+  pages.push(commands.join("\n"));
+  return createPdfBlob(pages);
+}
+
+function buildReportAnalysis({ rows, filteredRows, summary }) {
+  const scope = getReportScope();
+  const yearRows = rows.filter((row) => String(row.key).startsWith(`${scope.year}-`));
+  const allRowsForScope = scope.mode === "annual" ? yearRows : rows;
+  const activeMonth = scope.mode === "monthly" ? rows.find((row) => row.key === scope.key) || null : null;
+  const activeIndex = activeMonth ? rows.findIndex((row) => row.key === activeMonth.key) : -1;
+  const previousMonth = activeIndex > 0 ? rows[activeIndex - 1] : null;
+  const fallbackRow = {
+    key: scope.key || `${scope.year}-01`,
+    label: scope.mode === "annual" ? `Anual / ${scope.year}` : scope.label.replace("/", " / "),
+    count: summary.count,
+    totalValue: summary.totalValue,
+    pnrCount: summary.pnrCount,
+    packageCount: summary.packageCount,
+    previous: previousMonth,
+    deltaValue: activeMonth && previousMonth ? activeMonth.totalValue - previousMonth.totalValue : 0,
+    deltaPct: activeMonth && previousMonth && previousMonth.totalValue ? ((activeMonth.totalValue - previousMonth.totalValue) / previousMonth.totalValue) * 100 : 0,
+  };
+  const timelineRows = (scope.mode === "annual" ? yearRows : activeMonth ? [activeMonth] : [fallbackRow]).filter(Boolean);
+  const comparisonRows = timelineRows.length ? timelineRows : [fallbackRow];
+  const topBases = reportTopBy(filteredRows, "base", "valor_numerico", 8);
+  const topDrivers = reportTopBy(filteredRows, "motorista", "valor_numerico", 8);
+  const topBaseByCount = reportTopBy(filteredRows, "base", null, 5);
+  const categoryTotals = DONUT_SHEETS.map((sheet) => {
+    const rowsForSheet = filteredRows.filter((row) => normalizeDonutSheet(row) === sheet);
+    return {
+      label: sheet,
+      total: rowsForSheet.reduce((acc, row) => acc + Number(row.valor_numerico || 0), 0),
+      count: rowsForSheet.length,
+    };
+  });
+  const totalCategoryValue = Math.max(categoryTotals.reduce((acc, item) => acc + item.total, 0), 1);
+  const categoryShareMap = categoryTotals.reduce((acc, item) => {
+    acc[item.label] = formatNumberPt((item.total / totalCategoryValue) * 100, 1);
+    return acc;
+  }, {});
+  const dominantCategory = categoryTotals.reduce((best, item) => (item.total > best.total ? item : best), categoryTotals[0] || { label: "PNR", total: 0, count: 0 });
+  const totalOccurrences = Math.max(summary.count, 1);
+  const ticketAverage = summary.count ? summary.totalValue / summary.count : 0;
+  const monthlyAverage = comparisonRows.length ? comparisonRows.reduce((acc, row) => acc + Number(row.totalValue || 0), 0) / comparisonRows.length : summary.totalValue;
+  const criticalMonth = comparisonRows.reduce((best, row) => (Number(row.totalValue || 0) > Number(best.totalValue || 0) ? row : best), comparisonRows[0] || fallbackRow);
+  const volumeMonth = comparisonRows.reduce((best, row) => (Number(row.count || 0) > Number(best.count || 0) ? row : best), comparisonRows[0] || fallbackRow);
+  const topBase = topBases[0] || { label: "Não identificado", total: 0, count: 0 };
+  const topDriver = topDrivers[0] || { label: "Não identificado", total: 0, count: 0 };
+  const topBaseShareNumber = summary.totalValue ? (topBase.total / summary.totalValue) * 100 : 0;
+  const topDriverShareNumber = summary.totalValue ? (topDriver.total / summary.totalValue) * 100 : 0;
+  const topBaseShare = formatNumberPt(topBaseShareNumber, 1);
+  const topDriverShare = formatNumberPt(topDriverShareNumber, 1);
+  const topBasesWithShare = topBases.map((item) => ({ ...item, share: formatNumberPt(summary.totalValue ? (item.total / summary.totalValue) * 100 : 0, 1) }));
+  const topDriversWithShare = topDrivers.map((item) => ({ ...item, share: formatNumberPt(summary.totalValue ? (item.total / summary.totalValue) * 100 : 0, 1) }));
+  const missingBaseCount = filteredRows.filter((row) => !hasReportLabel(row.base)).length;
+  const missingDriverCount = filteredRows.filter((row) => !hasReportLabel(row.motorista)).length;
+  const pnrShare = formatNumberPt((summary.pnrCount / totalOccurrences) * 100, 1);
+  const packageShare = formatNumberPt((summary.packageCount / totalOccurrences) * 100, 1);
+  const trend = buildReportTrend(scope, activeMonth, previousMonth, comparisonRows);
+  const diagnostics = buildReportDiagnostics({
+    scope,
+    summary,
+    criticalMonth,
+    volumeMonth,
+    dominantCategory,
+    topBase,
+    topDriver,
+    ticketAverage,
+    trend,
+  });
+  const alerts = buildReportAlerts({
+    scope,
+    summary,
+    comparisonRows,
+    monthlyAverage,
+    topBase,
+    topDriver,
+    topBaseShare,
+    topDriverShare,
+    topBaseShareNumber,
+    topDriverShareNumber,
+    topBaseByCount,
+    dominantCategory,
+    categoryShareMap,
+    missingBaseCount,
+    missingDriverCount,
+    trend,
+  });
+  const recommendations = buildReportRecommendations({
+    topBase,
+    topDriver,
+    dominantCategory,
+    missingBaseCount,
+    missingDriverCount,
+    trend,
+  });
+  const conclusion = buildReportConclusionText({
+    scope,
+    topBase,
+    topDriver,
+    dominantCategory,
+    criticalMonth,
+    trend,
+    recommendations,
+  });
+
   return {
-    source: el.sourceLine?.textContent?.trim() || "",
-    updatedAt: el.lastUpdate?.textContent?.trim() || "",
-    tabs: readText(".sheet-tab"),
-    kpis: readText(".kpi-card"),
-    tableRows: readText("#table-body tr").slice(0, 15),
+    title: scope.title,
+    fileName: scope.fileName,
+    scope,
+    scopeLabel: scope.label,
+    generatedAt: `Gerado em: ${liveClockFormatter.format(new Date())}`,
+    timelineRows: comparisonRows,
+    ticketAverage,
+    monthlyAverage,
+    criticalMonth,
+    volumeMonth,
+    criticalMonthLabel: shortMonthYear(criticalMonth.label),
+    volumeMonthLabel: shortMonthYear(volumeMonth.label),
+    pnrShare,
+    packageShare,
+    dominantCategoryLabel: reportCategoryLabel(dominantCategory.label),
+    dominantCategoryShare: categoryShareMap[dominantCategory.label] || "0,0",
+    categoryTotals,
+    categoryShareMap,
+    topBases: topBasesWithShare,
+    topDrivers: topDriversWithShare,
+    topBaseShare,
+    topDriverShare,
+    diagnostics,
+    alerts,
+    recommendations,
+    conclusion,
+    conclusionItems: buildReportConclusionItems({
+      scope,
+      topBase,
+      topDriver,
+      dominantCategory,
+      criticalMonth,
+      trend,
+      recommendations,
+    }),
+    intelligentSummary: buildIntelligentSummary({
+      scope,
+      summary,
+      criticalMonth,
+      volumeMonth,
+      dominantCategory,
+      topBase,
+      topDriver,
+      topBaseShare,
+      topDriverShare,
+      trend,
+      ticketAverage,
+      pnrShare,
+      packageShare,
+    }),
   };
 }
 
-function buildReportHtml({ rows, filteredRows, summary, active, snapshot }) {
-  const topBases = topBy(filteredRows, "base", "valor_numerico", 8);
-  const topDrivers = topBy(filteredRows, "motorista", "valor_numerico", 8);
-  const maxMonth = Math.max(...rows.map((row) => row.pnrCount + row.packageCount), 1);
-  const maxBase = Math.max(...topBases.map((item) => item.total), 1);
-  const criticalBase = topBases[0]?.label || "Sem base crítica";
-  const criticalDriver = topDrivers[0]?.label || "Sem driver crítico";
-  const activeTrend = active?.previous ? `${active.deltaPct > 0 ? "+" : ""}${active.deltaPct.toFixed(1)}% vs. mês anterior` : "Sem mês anterior";
-  const css = `
-    @page { size: A4; margin: 10mm; }
-    * { box-sizing: border-box; }
-    body { margin: 0; background: #eef3f8; color: #132235; font-family: Arial, sans-serif; }
-    h1, h2, h3, p { margin: 0; }
-    .page { display: grid; gap: 14px; }
-    .hero, .card { break-inside: avoid; page-break-inside: avoid; }
-    .hero { position: relative; overflow: hidden; display: grid; grid-template-columns: 1fr auto; gap: 18px; padding: 24px; border-radius: 20px; color: #fff; background: linear-gradient(135deg, #10243a 0%, #145b7a 58%, #0f8b78 100%); box-shadow: 0 18px 38px rgba(16,36,58,.22); }
-    .hero::after { content: ""; position: absolute; inset: auto -60px -90px auto; width: 230px; height: 230px; border-radius: 50%; background: rgba(255,159,67,.24); }
-    .hero h1 { font-size: 27px; letter-spacing: -.02em; }
-    .hero p { margin-top: 7px; color: rgba(255,255,255,.78); font-size: 12px; }
-    .hero-badge { align-self: start; padding: 9px 12px; border-radius: 999px; background: rgba(255,255,255,.12); border: 1px solid rgba(255,255,255,.22); font-size: 12px; font-weight: 700; }
-    .section-title { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 10px; }
-    .section-title h2 { font-size: 16px; }
-    .muted { color: #66768d; }
-    .card { border: 1px solid #d9e2ec; border-radius: 16px; padding: 14px; background: #fff; box-shadow: 0 10px 24px rgba(19,34,53,.07); }
-    .kpi-grid { display: grid; grid-template-columns: 1.25fr 1fr 1fr; gap: 12px; }
-    .metric { position: relative; overflow: hidden; min-height: 104px; border: 0; color: #fff; }
-    .metric::after { content: ""; position: absolute; right: -28px; top: -28px; width: 96px; height: 96px; border-radius: 50%; background: rgba(255,255,255,.16); }
-    .metric span { display: block; font-size: 12px; color: rgba(255,255,255,.82); }
-    .metric strong { display: block; margin-top: 10px; font-size: 28px; letter-spacing: -.04em; }
-    .metric small { display: block; margin-top: 7px; color: rgba(255,255,255,.8); font-weight: 700; }
-    .metric--money { background: linear-gradient(135deg, #b35d00, #ff9f43); }
-    .metric--loss { background: linear-gradient(135deg, #b8232f, #ff6b6b); }
-    .metric--pnr { background: linear-gradient(135deg, #8f2430, #bf3030); }
-    .metric--volume { background: linear-gradient(135deg, #0b67ad, #3ba6ff); }
-    .insight-grid { display: grid; grid-template-columns: 1.15fr .85fr; gap: 12px; }
-    .narrative { line-height: 1.5; font-size: 12.5px; }
-    .callouts { display: grid; gap: 8px; }
-    .callout { padding: 11px; border-radius: 12px; background: linear-gradient(135deg, rgba(20,120,200,.12), #fff); border-left: 5px solid #1478c8; }
-    .callout.is-bad { background: linear-gradient(135deg, rgba(191,48,48,.13), #fff); border-left-color: #bf3030; }
-    .callout.is-warm { background: linear-gradient(135deg, rgba(255,159,67,.18), #fff); border-left-color: #b35d00; }
-    .callout strong { display: block; font-size: 12px; }
-    .callout span { display: block; margin-top: 3px; color: #66768d; font-size: 11px; }
-    .chart { display: flex; align-items: end; gap: 22px; min-height: 205px; padding: 12px 8px 0; border-bottom: 1px solid #cfd9e4; border-radius: 14px; background: linear-gradient(to top, rgba(20,120,200,.09) 1px, transparent 1px) 0 0/100% 25%, linear-gradient(180deg, #f8fbff, #fff); }
-    .month { display: grid; justify-items: center; gap: 7px; min-width: 82px; text-align: center; }
-    .bar { display: flex; align-items: flex-start; justify-content: center; width: 38px; min-height: 28px; border-radius: 11px 11px 0 0; color: #fff; font-size: 11px; font-weight: 800; padding-top: 6px; box-shadow: 0 10px 18px rgba(19,34,53,.16); }
-    .bar.is-good { background: #168447; } .bar.is-low { background: #1478c8; } .bar.is-warn { background: #ff9f43; } .bar.is-bad { background: #bf3030; }
-    .month strong { font-size: 12px; }
-    .month span { font-size: 10.5px; }
-    .two-col { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
-    .bars-list { display: grid; gap: 9px; }
-    .row { display: grid; grid-template-columns: 22px 165px minmax(0,1fr) 78px; gap: 10px; align-items: center; font-size: 11.5px; }
-    .rank { display: grid; place-items: center; width: 20px; height: 20px; border-radius: 999px; background: #e7eef6; color: #66768d; font-weight: 800; font-size: 10px; }
-    .row.is-top .rank { background: #bf3030; color: #fff; }
-    .track { height: 11px; background: #e7eef6; border-radius: 999px; overflow: hidden; }
-    .fill { height: 100%; border-radius: 999px; background: linear-gradient(90deg, #ff9f43, #bf3030); }
-    table { width: 100%; border-collapse: collapse; font-size: 11px; }
-    th, td { border-bottom: 1px solid #edf1f5; padding: 7px 5px; text-align: left; }
-    tbody tr:nth-child(even) { background: #f8fbff; }
-    td:last-child { color: #b35d00; font-weight: 800; }
-    .conclusion { border-color: rgba(15,139,120,.28); background: linear-gradient(135deg, rgba(15,139,120,.12), #fff 58%); }
-    .conclusion p { line-height: 1.55; font-size: 12.5px; }
-    th { color: #66768d; font-size: 10px; text-transform: uppercase; }
-    .footer-note { color: #66768d; font-size: 10.5px; text-align: right; }
-    .no-print { border: 0; border-radius: 999px; padding: 10px 14px; background: #fff; color: #10243a; font-weight: 800; cursor: pointer; }
-    @media print { body { background: #fff; } .no-print { display: none; } .card, .hero { box-shadow: none; } }
-  `;
-  const monthBars = rows
-    .map((row) => {
-      const total = row.pnrCount + row.packageCount;
-      const ratio = total / maxMonth;
-      const tone = ratio >= 0.72 ? "is-bad" : ratio >= 0.45 ? "is-warn" : ratio >= 0.22 ? "is-low" : "is-good";
-      return `
-        <div class="month">
-          <div class="bar ${tone}" style="height:${Math.max(32, ratio * 160).toFixed(0)}px">${integer.format(total)}</div>
-          <strong>${escapeHtml(shortMonthYear(row.label))}</strong>
-          <span class="muted">${currency.format(row.totalValue)}</span>
-        </div>
-      `;
-    })
-    .join("");
-  const baseRows = topBases
-    .map((item, index) => `
-      <div class="row${index < 3 ? " is-top" : ""}">
-        <span class="rank">${index + 1}</span>
-        <strong>${escapeHtml(item.label)}</strong>
-        <span class="track"><span class="fill" style="width:${((item.total / maxBase) * 100).toFixed(1)}%"></span></span>
-        <strong>${compactCurrency.format(item.total)}</strong>
-      </div>
-    `)
-    .join("");
-  const driverRows = topDrivers
-    .map((item) => `
-      <tr>
-        <td>${escapeHtml(item.label)}</td>
-        <td>${integer.format(item.count)}</td>
-        <td>${currency.format(item.total)}</td>
-      </tr>
-    `)
-    .join("");
-  return `<!doctype html>
-    <html lang="pt-BR">
-      <head><meta charset="utf-8"><title>Relatório</title><style>${css}</style></head>
-      <body>
-        <main class="page">
-          <section class="hero">
-            <div>
-              <h1>Relatório Executivo</h1>
-              <p class="muted">${escapeHtml(snapshot.source)} · ${escapeHtml(snapshot.updatedAt)}</p>
-            </div>
-            <div>
-              <div class="hero-badge">${escapeHtml(activeTrend)}</div>
-              <button class="no-print" onclick="window.print()">Baixar PDF</button>
-            </div>
-          </section>
-          <section class="kpi-grid">
-            <div class="card metric metric--money"><span>Total de descontos</span><strong>${currency.format(summary.totalValue)}</strong><small>Impacto financeiro do recorte</small></div>
-            <div class="card metric metric--loss"><span>Pacotes perdidos</span><strong>${integer.format(summary.packageCount)}</strong><small>${summary.packageShare}% do total</small></div>
-            <div class="card metric metric--pnr"><span>PNR</span><strong>${integer.format(summary.pnrCount)}</strong><small>${summary.pnrShare}% do total</small></div>
-          </section>
-          <section class="insight-grid">
-            <div class="card narrative">
-              <div class="section-title"><h2>Visão geral</h2><span class="muted">${integer.format(summary.count)} registros</span></div>
-              <p>${escapeHtml(buildMonthlyNarrative(rows, summary))}</p>
-              <p class="muted" style="margin-top:8px">Leitura real do dashboard, tratamento dos dados filtrados, análise operacional e geração do PDF.</p>
-            </div>
-            <div class="card callouts">
-              <div class="section-title"><h2>Destaques</h2></div>
-              <div class="callout is-bad"><strong>Base mais ofensiva</strong><span>${escapeHtml(criticalBase)}</span></div>
-              <div class="callout is-warm"><strong>Driver com maior impacto</strong><span>${escapeHtml(criticalDriver)}</span></div>
-              <div class="callout"><strong>Pressão operacional</strong><span>${summary.pnrCount >= summary.packageCount ? "PNR concentra a maior parte das ocorrências." : "Pacotes perdidos concentram a maior parte das ocorrências."}</span></div>
-            </div>
-          </section>
-          <section class="card">
-            <div class="section-title"><h2>Gráfico comparativo mensal</h2><span class="muted">PNR + perdidos por mês</span></div>
-            <div class="chart">${monthBars}</div>
-          </section>
-          <section class="two-col">
-            <div class="card">
-              <div class="section-title"><h2>Análise por base</h2><span class="muted">mais ofensivas</span></div>
-              <div class="bars-list">${baseRows}</div>
-            </div>
-            <div class="card">
-              <div class="section-title"><h2>Análise por driver</h2><span class="muted">maior impacto</span></div>
-              <table><thead><tr><th>Driver</th><th>Registros</th><th>Desconto</th></tr></thead><tbody>${driverRows}</tbody></table>
-            </div>
-          </section>
-          <section class="card conclusion">
-            <div class="section-title"><h2>Conclusão e próximos passos</h2><span class="muted">insights finais</span></div>
-            <p>${escapeHtml(buildReportConclusion(rows, summary, criticalBase, criticalDriver))}</p>
-          </section>
-          <p class="footer-note">Relatório gerado a partir dos dados exibidos no dashboard.</p>
-        </main>
-      </body>
-    </html>`;
+function getReportScope() {
+  const referencePeriod = getDatasetPeriod(getActiveDataset());
+  const selectedKey = state.monthFilter || referencePeriod.key;
+  const key = selectedKey === "all" ? referencePeriod.key : selectedKey;
+  const year = String(key || referencePeriod.key).slice(0, 4) || String(new Date().getFullYear());
+  if (selectedKey === "all") {
+    return {
+      mode: "annual",
+      key: "all",
+      year,
+      label: `Anual ${year}`,
+      title: `Relatório Executivo LOSS — Anual ${year}`,
+      fileName: `relatorio-executivo-loss-anual-${year}.pdf`,
+    };
+  }
+  const monthIndex = Number(String(key).slice(5, 7)) || 1;
+  const monthName = MONTHS[monthIndex - 1] || "período";
+  const label = `${capitalize(monthName)}/${year}`;
+  return {
+    mode: "monthly",
+    key,
+    year,
+    label,
+    title: `Relatório Executivo LOSS — ${label}`,
+    fileName: `relatorio-executivo-loss-${slugify(`${monthName}-${year}`)}.pdf`,
+  };
 }
 
-function buildMonthlyNarrative(rows, summary) {
-  if (!rows.length) return "Sem histórico suficiente para gerar leitura mensal.";
-  const latest = rows[rows.length - 1];
-  const previous = rows[rows.length - 2] || null;
-  const trend = previous
-    ? latest.totalValue < previous.totalValue
-      ? "O mês ativo reduziu o impacto financeiro frente ao mês anterior."
-      : latest.totalValue > previous.totalValue
-        ? "O mês ativo ampliou o impacto financeiro frente ao mês anterior."
-        : "O mês ativo manteve o mesmo patamar financeiro do mês anterior."
-    : "Há apenas uma competência consolidada até o momento.";
-  const pressure = summary.pnrCount >= summary.packageCount ? "PNR segue como principal vetor de pressão." : "Pacotes perdidos seguem como principal vetor de pressão.";
-  return `${trend} ${pressure}`;
+function buildReportTrend(scope, activeMonth, previousMonth, comparisonRows) {
+  if (scope.mode === "monthly") {
+    if (!activeMonth || !previousMonth) {
+      return { direction: "neutral", pct: 0, text: "não há mês anterior carregado para comparação direta." };
+    }
+    const deltaPct = previousMonth.totalValue ? ((activeMonth.totalValue - previousMonth.totalValue) / previousMonth.totalValue) * 100 : 0;
+    if (deltaPct > 0.5) return { direction: "up", pct: deltaPct, text: `aumento de ${formatSignedPct(deltaPct)} em descontos vs. ${shortMonthYear(previousMonth.label)}.` };
+    if (deltaPct < -0.5) return { direction: "down", pct: deltaPct, text: `queda de ${Math.abs(deltaPct).toFixed(1)}% em descontos vs. ${shortMonthYear(previousMonth.label)}.` };
+    return { direction: "neutral", pct: deltaPct, text: "estabilidade financeira frente ao mês anterior." };
+  }
+  const first = comparisonRows[0] || null;
+  const last = comparisonRows[comparisonRows.length - 1] || null;
+  if (!first || !last || first.key === last.key || !first.totalValue) {
+    return { direction: "neutral", pct: 0, text: "histórico anual insuficiente para tendência robusta." };
+  }
+  const deltaPct = ((last.totalValue - first.totalValue) / first.totalValue) * 100;
+  if (deltaPct > 0.5) return { direction: "up", pct: deltaPct, text: `o ano mostra aumento de ${formatSignedPct(deltaPct)} do primeiro para o último mês carregado.` };
+  if (deltaPct < -0.5) return { direction: "down", pct: deltaPct, text: `o ano mostra redução de ${Math.abs(deltaPct).toFixed(1)}% do primeiro para o último mês carregado.` };
+  return { direction: "neutral", pct: deltaPct, text: "o ano permanece praticamente estável entre início e fim do período carregado." };
 }
 
-function buildReportConclusion(rows, summary, criticalBase, criticalDriver) {
-  const latest = rows[rows.length - 1] || null;
-  const previous = rows[rows.length - 2] || null;
-  const trend = latest && previous
-    ? latest.totalValue <= previous.totalValue
-      ? "houve melhora no impacto financeiro frente ao mês anterior"
-      : "houve aumento de ofensividade frente ao mês anterior"
-    : "o histórico ainda é curto para concluir tendência";
-  const dominant = summary.pnrCount >= summary.packageCount ? "PNR" : "pacotes perdidos";
-  return `A principal pressão do recorte está em ${dominant}, com atenção prioritária para ${criticalBase}. O driver de maior impacto é ${criticalDriver}. No comparativo mensal, ${trend}; a recomendação é revisar as bases mais ofensivas, separar causa por tipo de desconto e acompanhar a próxima competência contra a meta vigente.`;
+function buildIntelligentSummary({ scope, summary, criticalMonth, volumeMonth, dominantCategory, topBase, topDriver, topBaseShare, topDriverShare, trend, ticketAverage, pnrShare, packageShare }) {
+  const period = scope.mode === "annual" ? `No consolidado anual de ${scope.year}` : `Em ${scope.label}`;
+  const impactSentence =
+    scope.mode === "annual"
+      ? `${shortMonthYear(criticalMonth.label)} teve o maior impacto financeiro, com ${currency.format(criticalMonth.totalValue)} em descontos.`
+      : `o recorte registra ${currency.format(summary.totalValue)} em descontos e ticket médio de ${currency.format(ticketAverage)} por ocorrência.`;
+  return [
+    `${period}, ${impactSentence}`,
+    `A categoria ${reportCategoryLabel(dominantCategory.label)} concentra ${currency.format(dominantCategory.total)} e lidera a pressão operacional.`,
+    `A base ${topBase.label} responde por ${topBaseShare}% do impacto financeiro, enquanto o driver ${topDriver.label} concentra ${topDriverShare}%.`,
+    `O volume de PNR representa ${pnrShare}% dos registros e pacotes perdidos representam ${packageShare}%.`,
+    `A tendência indica que ${trend.text}`,
+  ].join("\n");
+}
+
+function buildReportDiagnostics({ scope, summary, criticalMonth, volumeMonth, dominantCategory, topBase, topDriver, ticketAverage, trend }) {
+  return [
+    {
+      title: scope.mode === "annual" ? "Mês mais crítico" : "Impacto do mês",
+      text:
+        scope.mode === "annual"
+          ? `${shortMonthYear(criticalMonth.label)} concentrou ${currency.format(criticalMonth.totalValue)} em descontos.`
+          : `${scope.label} concentrou ${currency.format(summary.totalValue)} em descontos, com ticket médio de ${currency.format(ticketAverage)}.`,
+    },
+    {
+      title: "Volume operacional",
+      text: `${shortMonthYear(volumeMonth.label)} teve ${integer.format(volumeMonth.count)} ocorrências; a categoria ${reportCategoryLabel(dominantCategory.label)} foi a mais relevante.`,
+    },
+    {
+      title: "Prioridade",
+      text: `Tratar primeiro a base ${topBase.label} e acompanhar o driver ${topDriver.label}.`,
+    },
+    {
+      title: "Tendência",
+      text: trend.text,
+    },
+  ];
+}
+
+function buildReportAlerts({ scope, summary, comparisonRows, monthlyAverage, topBase, topDriver, topBaseShare, topDriverShare, topBaseShareNumber, topDriverShareNumber, topBaseByCount, dominantCategory, categoryShareMap, missingBaseCount, missingDriverCount, trend }) {
+  const alerts = [];
+  if (topBase.total > 0) alerts.push({ title: "Base crítica", text: `${topBase.label} concentra ${topBaseShare}% do impacto financeiro do recorte.` });
+  if (topDriver.total > 0) alerts.push({ title: "Driver crítico", text: `${topDriver.label} soma ${currency.format(topDriver.total)} em descontos.` });
+  if (topBaseShareNumber >= 30) alerts.push({ title: "Concentração em bases", text: "Há concentração relevante de prejuízo em poucas bases, exigindo ação direcionada." });
+  if (topDriverShareNumber >= 20) alerts.push({ title: "Concentração em driver", text: "Há concentração financeira em driver específico, exigindo acompanhamento individual." });
+  if (topBaseByCount[0]?.count >= Math.max(3, summary.count * 0.08)) {
+    alerts.push({ title: "Reincidência", text: `${topBaseByCount[0].label} também lidera reincidência, com ${integer.format(topBaseByCount[0].count)} registros.` });
+  }
+  if (scope.mode === "annual") {
+    comparisonRows
+      .filter((row) => row.totalValue > monthlyAverage * 1.2)
+      .slice(0, 3)
+      .forEach((row) => alerts.push({ title: "Mês acima da média", text: `${shortMonthYear(row.label)} ficou acima da média mensal em valor de descontos.` }));
+  }
+  if (trend.direction === "up") alerts.push({ title: "Tendência de alta", text: "O período apresenta aumento de ofensividade financeira e precisa de plano de contenção." });
+  if (missingBaseCount) alerts.push({ title: "Cadastro de base", text: `${integer.format(missingBaseCount)} registro(s) sem base identificada exigem correção cadastral.` });
+  if (missingDriverCount) alerts.push({ title: "Cadastro de driver", text: `${integer.format(missingDriverCount)} registro(s) sem driver identificado exigem correção cadastral.` });
+  if (dominantCategory.total > 0) alerts.push({ title: "Categoria líder", text: `${reportCategoryLabel(dominantCategory.label)} representa ${categoryShareMap[dominantCategory.label] || "0,0"}% do impacto financeiro por categoria.` });
+  return alerts.length ? alerts : [{ title: "Sem alerta crítico", text: "Não foram encontrados alertas críticos relevantes no recorte atual." }];
+}
+
+function buildReportRecommendations({ topBase, topDriver, dominantCategory, missingBaseCount, missingDriverCount, trend }) {
+  const recommendations = [
+    `Priorizar a tratativa da base ${topBase.label}, que lidera o impacto financeiro.`,
+    `Acompanhar o driver ${topDriver.label} com plano de redução de recorrência.`,
+    "Separar a análise de PNR, SVC Perdidos e XPT Perdidos para validar causa raiz.",
+    `Investigar a categoria ${reportCategoryLabel(dominantCategory.label)} para identificar causa raiz.`,
+    "Medir a evolução no próximo fechamento para confirmar eficiência das ações.",
+  ];
+  if (trend.direction === "up") recommendations.unshift("Criar plano de contenção imediato para reduzir a ofensividade no próximo mês.");
+  if (missingBaseCount || missingDriverCount) recommendations.push("Corrigir cadastros e registros não identificados antes da próxima análise.");
+  return recommendations;
+}
+
+function buildReportConclusionText({ scope, topBase, topDriver, dominantCategory, criticalMonth, trend, recommendations }) {
+  const periodText = scope.mode === "annual" ? `O período anual ${scope.year}` : `O mês ${scope.label}`;
+  const criticalText = scope.mode === "annual" ? `O mês de maior impacto foi ${shortMonthYear(criticalMonth.label)}.` : "A leitura está concentrada no mês selecionado.";
+  return `${periodText} mostra que o principal problema está em ${reportCategoryLabel(dominantCategory.label)}, com maior impacto financeiro na base ${topBase.label} e prioridade de acompanhamento para o driver ${topDriver.label}. ${criticalText} A tendência indica que ${trend.text} A primeira ação recomendada é: ${recommendations[0]}`;
+}
+
+function buildReportConclusionItems({ scope, topBase, topDriver, dominantCategory, criticalMonth, trend, recommendations }) {
+  return [
+    { label: "Principal problema", text: reportCategoryLabel(dominantCategory.label) },
+    { label: "Maior impacto financeiro", text: scope.mode === "annual" ? `${shortMonthYear(criticalMonth.label)} com ${currency.format(criticalMonth.totalValue)}` : `${scope.label} com ${currency.format(criticalMonth.totalValue)}` },
+    { label: "Prioridade operacional", text: `Base ${topBase.label}; driver ${topDriver.label}.` },
+    { label: "Tendência", text: trend.text },
+    { label: "Primeira ação recomendada", text: recommendations[0] },
+  ];
+}
+
+function reportTopBy(rows, key, metric, limit) {
+  const map = new Map();
+  for (const row of rows) {
+    const label = reportLabel(row[key]);
+    if (!map.has(label)) map.set(label, { label, total: 0, count: 0 });
+    const item = map.get(label);
+    item.total += metric ? Number(row[metric] || 0) : 1;
+    item.count += 1;
+  }
+  return Array.from(map.values())
+    .sort((a, b) => b.total - a.total || b.count - a.count || String(a.label).localeCompare(String(b.label), "pt-BR"))
+    .slice(0, limit);
+}
+
+function hasReportLabel(value) {
+  const text = String(value ?? "").trim();
+  if (!text) return false;
+  const normalized = normalize(text);
+  return !["undefined", "null", "sem valor", "sem base", "sem driver", "nao informado", "nao identificada", "nao identificado", "nao identificados"].includes(normalized);
+}
+
+function reportLabel(value) {
+  return hasReportLabel(value) ? String(value).trim() : "Não identificado";
+}
+
+function reportCategoryLabel(label) {
+  const raw = String(label || "");
+  return DONUT_LABELS[raw] || reportLabel(raw);
+}
+
+function getReportCategoryColor(label) {
+  if (label === "PNR") return "0.08 0.47 0.78";
+  if (label === "SVC PERDIDOS") return "1 0.62 0.26";
+  if (label === "XPT PERDIDOS") return "0.32 0.78 0.50";
+  return "0.36 0.44 0.55";
+}
+
+function getReportOffenseColor(value, max) {
+  const ratio = max ? Number(value || 0) / max : 0;
+  if (ratio >= 0.72) return "0.76 0.16 0.18";
+  if (ratio >= 0.45) return "0.95 0.51 0.10";
+  if (ratio >= 0.22) return "0.08 0.47 0.78";
+  return "0.08 0.52 0.28";
+}
+
+function formatSignedPct(value) {
+  const number = Number(value || 0);
+  return `${number >= 0 ? "+" : ""}${formatNumberPt(number, 1)}%`;
+}
+
+function formatNumberPt(value, digits = 1) {
+  return Number(value || 0).toLocaleString("pt-BR", {
+    minimumFractionDigits: digits,
+    maximumFractionDigits: digits,
+  });
+}
+
+function estimatePdfTextWidth(text, size) {
+  return String(text ?? "").length * size * 0.5;
+}
+
+function wrapPdfText(text, width, size = 10, maxLines = 6) {
+  const maxChars = Math.max(12, Math.floor(width / (size * 0.52)));
+  const words = String(text ?? "")
+    .replace(/\s+/g, " ")
+    .trim()
+    .split(" ")
+    .filter(Boolean);
+  const lines = [];
+  let line = "";
+  words.forEach((word) => {
+    const next = line ? `${line} ${word}` : word;
+    if (next.length <= maxChars) {
+      line = next;
+      return;
+    }
+    if (line) lines.push(line);
+    line = word;
+  });
+  if (line) lines.push(line);
+  if (lines.length > maxLines) {
+    const clipped = lines.slice(0, maxLines);
+    clipped[maxLines - 1] = `${clipped[maxLines - 1].slice(0, Math.max(0, maxChars - 3))}...`;
+    return clipped;
+  }
+  return lines.length ? lines : [""];
+}
+
+function pdfEscape(value) {
+  return String(value ?? "")
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/[–—]/g, "-")
+    .replace(/[“”]/g, '"')
+    .replace(/[‘’]/g, "'")
+    .replace(/[^\x20-\x7E]/g, " ")
+    .replace(/\\/g, "\\\\")
+    .replace(/\(/g, "\\(")
+    .replace(/\)/g, "\\)");
+}
+
+function pdfTextHex(value) {
+  const winAnsi = {
+    "€": 0x80,
+    "‚": 0x82,
+    "ƒ": 0x83,
+    "„": 0x84,
+    "…": 0x85,
+    "†": 0x86,
+    "‡": 0x87,
+    "ˆ": 0x88,
+    "‰": 0x89,
+    "Š": 0x8a,
+    "‹": 0x8b,
+    "Œ": 0x8c,
+    "Ž": 0x8e,
+    "‘": 0x91,
+    "’": 0x92,
+    "“": 0x93,
+    "”": 0x94,
+    "•": 0x95,
+    "–": 0x96,
+    "—": 0x97,
+    "˜": 0x98,
+    "™": 0x99,
+    "š": 0x9a,
+    "›": 0x9b,
+    "œ": 0x9c,
+    "ž": 0x9e,
+    "Ÿ": 0x9f,
+  };
+  return Array.from(String(value ?? "")).map((char) => {
+    const code = char.charCodeAt(0);
+    const byte = winAnsi[char] || (code <= 0xff ? code : 0x20);
+    return byte.toString(16).padStart(2, "0").toUpperCase();
+  }).join("");
+}
+
+function createPdfBlob(pageCommands) {
+  const objects = [];
+  const addObject = (content) => {
+    objects.push(content);
+    return objects.length;
+  };
+  const fontId = addObject("<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>");
+  const pageIds = pageCommands.map((content) => {
+    const streamId = addObject(`<< /Length ${content.length} >>\nstream\n${content}\nendstream`);
+    return addObject(`<< /Type /Page /Parent 0 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 ${fontId} 0 R >> >> /Contents ${streamId} 0 R >>`);
+  });
+  const pagesId = addObject(`<< /Type /Pages /Kids [${pageIds.map((id) => `${id} 0 R`).join(" ")}] /Count ${pageIds.length} >>`);
+  const catalogId = addObject(`<< /Type /Catalog /Pages ${pagesId} 0 R >>`);
+  pageIds.forEach((id) => {
+    objects[id - 1] = objects[id - 1].replace("/Parent 0 0 R", `/Parent ${pagesId} 0 R`);
+  });
+  let pdf = "%PDF-1.4\n";
+  const offsets = [0];
+  objects.forEach((object, index) => {
+    offsets.push(pdf.length);
+    pdf += `${index + 1} 0 obj\n${object}\nendobj\n`;
+  });
+  const xref = pdf.length;
+  pdf += `xref\n0 ${objects.length + 1}\n0000000000 65535 f \n`;
+  for (let i = 1; i < offsets.length; i += 1) {
+    pdf += `${String(offsets[i]).padStart(10, "0")} 00000 n \n`;
+  }
+  pdf += `trailer\n<< /Size ${objects.length + 1} /Root ${catalogId} 0 R >>\nstartxref\n${xref}\n%%EOF`;
+  return new Blob([pdf], { type: "application/pdf" });
+}
+
+function downloadBlob(blob, fileName) {
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = fileName;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
 
 function slugify(value) {
@@ -1488,17 +2231,18 @@ function getActiveMonthlyStatus() {
 
 function renderBaseRankingGroup(title, items, maxValue, offset) {
   if (!items.length) return "";
+  const isLessOffensive = title.toLowerCase().includes("menos");
   return `
-    <div class="rank-section">
+    <div class="rank-section rank-section--base ${isLessOffensive ? "rank-section--simple" : "rank-section--bars"}">
       <h3>${escapeHtml(title)}</h3>
       ${items
         .map((item, index) => {
           const pct = maxValue > 0 ? (item.total / maxValue) * 100 : 0;
           return `
-            <button class="bar-row" type="button" data-base="${escapeAttribute(item.label)}" style="--reveal-index:${offset + index}">
+            <button class="bar-row ${isLessOffensive ? "bar-row--simple" : ""}" type="button" data-base="${escapeAttribute(item.label)}" style="--reveal-index:${offset + index}" title="${escapeAttribute(item.label)}">
               <div class="bar-row__label">${escapeHtml(item.label)}</div>
               <div class="bar-row__track"><div class="bar-row__fill" style="width:${pct.toFixed(1)}%"></div></div>
-              <div class="bar-row__value">${compactCurrency.format(item.total)}</div>
+              <div class="bar-row__value">${formatCurrencyShort(item.total)}</div>
             </button>
           `;
         })
@@ -1510,7 +2254,7 @@ function renderBaseRankingGroup(title, items, maxValue, offset) {
 function renderDriverRankingGroup(title, items, offset) {
   if (!items.length) return "";
   return `
-    <div class="rank-section">
+    <div class="rank-section rank-section--drivers">
       <h3>${escapeHtml(title)}</h3>
       <div class="mini-table__head">
         <span>#</span>
@@ -1523,8 +2267,8 @@ function renderDriverRankingGroup(title, items, offset) {
           (item, index) => `
             <button class="mini-table__row" type="button" data-driver="${escapeAttribute(item.label)}" style="--reveal-index:${offset + index}">
               <span class="mini-table__rank">${index + 1}</span>
-              <span class="mini-table__name">${escapeHtml(item.label)}</span>
-              <span class="mini-table__value">${compactCurrency.format(item.total)}</span>
+              <span class="mini-table__name" title="${escapeAttribute(item.label)}">${escapeHtml(item.label)}</span>
+              <span class="mini-table__value">${formatCurrencyShort(item.total)}</span>
               <span class="mini-table__count">${integer.format(item.count)}</span>
             </button>
           `,
@@ -1774,7 +2518,7 @@ function paginateRows(rows) {
 }
 
 function populateSelect(select, values, current) {
-  const unique = Array.from(new Set(values.filter(Boolean)));
+  const unique = Array.from(new Set(values.filter(Boolean).filter((value) => value !== "Todos")));
   const opts = ["Todos", ...unique];
   select.innerHTML = opts
     .map((value) => `<option value="${escapeAttribute(value)}">${escapeHtml(value)}</option>`)
@@ -1805,25 +2549,96 @@ function countBySheet(rows) {
   }, {});
 }
 
-function shareBySheet(rows) {
-  const totals = rows.reduce((acc, row) => {
-    const label = row.aba_origem || "Sem aba";
-    if (!acc[label]) acc[label] = { label, total: 0, count: 0 };
-    acc[label].total += Number(row.valor_numerico || 0);
-    acc[label].count += 1;
+function buildMixRows(rows) {
+  const totals = DONUT_SHEETS.reduce((acc, label) => {
+    acc[label] = { label, total: 0, count: 0 };
     return acc;
   }, {});
 
-  const list = Object.values(totals).sort((a, b) => b.total - a.total);
-  const grand = list.reduce((acc, item) => acc + item.total, 0) || 1;
+  rows.forEach((row) => {
+    const label = normalizeDonutSheet(row);
+    if (!DONUT_SHEETS.includes(label)) return;
+    totals[label].total += Number(row.valor_numerico || 0);
+    totals[label].count += 1;
+  });
+
+  const valorPNR = totals.PNR.total;
+  const valorSVCPerdidos = totals["SVC PERDIDOS"].total;
+  const valorXPTPerdidos = totals["XPT PERDIDOS"].total;
+  const totalMix = valorPNR + valorSVCPerdidos + valorXPTPerdidos;
+  const percentualPNR = totalMix > 0 ? (valorPNR / totalMix) * 100 : 0;
+  const percentualSVC = totalMix > 0 ? (valorSVCPerdidos / totalMix) * 100 : 0;
+  const percentualXPT = totalMix > 0 ? (valorXPTPerdidos / totalMix) * 100 : 0;
+  const shares = {
+    PNR: percentualPNR,
+    "SVC PERDIDOS": percentualSVC,
+    "XPT PERDIDOS": percentualXPT,
+  };
+
   let cursor = 0;
-  return list.map((item) => {
-    const share = (item.total / grand) * 100;
+  return DONUT_SHEETS.map((label) => {
+    const item = totals[label];
+    const share = shares[label] || 0;
     const start = cursor;
     const end = cursor + share;
     cursor = end;
-    return { ...item, share, start, end };
+    return {
+      ...item,
+      color: SHEET_COLORS[label],
+      shortLabel: DONUT_LABELS[label],
+      share,
+      start,
+      end,
+    };
   });
+}
+
+function normalizeDonutSheet(row) {
+  if (!row || typeof row !== "object") return "";
+  const label = normalizeSheetLabel(row.aba_origem || row.aba || row.sheetName, row.tipo_desconto || row.tipo_registro);
+  return DONUT_SHEETS.includes(label) ? label : "";
+}
+
+function countScopedGoalMonths(rows) {
+  const months = new Set();
+  const datasets = Array.isArray(fileMeta?.scopedDatasets) ? fileMeta.scopedDatasets : [];
+  datasets.forEach((dataset) => {
+    const key = getDatasetPeriod(dataset).key;
+    if (key) months.add(key);
+  });
+  if (!months.size) {
+    rows.forEach((row) => {
+      const key = getRowMonthKey(row);
+      if (key) months.add(key);
+    });
+  }
+  return Math.max(months.size, 1);
+}
+
+function getRowMonthKey(row) {
+  const rawDate = row?.data_normalizada || row?.data_sort || row?.data || "";
+  if (!rawDate) return "";
+  const parsed = row?.data_normalizada ? new Date(`${rawDate}T00:00:00Z`) : new Date(rawDate);
+  if (Number.isNaN(parsed.getTime())) return "";
+  return `${parsed.getUTCFullYear()}-${String(parsed.getUTCMonth() + 1).padStart(2, "0")}`;
+}
+
+function formatCurrencyShort(value) {
+  const number = Number(value || 0);
+  if (Math.abs(number) >= 1000) {
+    return `R$ ${(number / 1000).toLocaleString("pt-BR", {
+      minimumFractionDigits: 2,
+      maximumFractionDigits: 2,
+    })} mil`;
+  }
+  return currency.format(number);
+}
+
+function formatPercent(value) {
+  return `${Number(value || 0).toLocaleString("pt-BR", {
+    minimumFractionDigits: 1,
+    maximumFractionDigits: 1,
+  })}%`;
 }
 
 function topBy(rows, key, metric, limit) {
@@ -1890,6 +2705,48 @@ function findHeaderIndex(headers, aliases) {
   return -1;
 }
 
+function normalizeSheetLabel(value, type = "") {
+  const raw = normalize(`${value || ""} ${type || ""}`);
+  if (raw.includes("pnr")) return "PNR";
+  if (raw.includes("xpt")) return "XPT PERDIDOS";
+  if (raw.includes("svc") || raw.includes("service") || raw.includes("servico")) return "SVC PERDIDOS";
+  return String(value || "").trim() || "Sem aba";
+}
+
+function normalizeStoredRow(row) {
+  if (!row || typeof row !== "object") return row;
+  const sheet = normalizeSheetLabel(row.aba_origem || row.aba || row.sheetName, row.tipo_desconto || row.tipo_registro);
+  const baseParts = splitBase(row.base);
+  const normalized = {
+    ...row,
+    aba_origem: sheet,
+    cidade_base: row.cidade_base || baseParts.cidade_base,
+    sigla_base: row.sigla_base || baseParts.sigla_base,
+    tipo_registro: sheet === "PNR" ? "PNR" : "PACOTE PERDIDO",
+  };
+
+  normalized._search = normalize(
+    [
+      normalized.aba_origem,
+      normalized.tipo_desconto,
+      normalized.tipo_registro,
+      normalized.base,
+      normalized.cidade_base,
+      normalized.sigla_base,
+      normalized.motorista,
+      normalized.placa,
+      normalized.descricao,
+      normalized.id_pacote,
+      normalized.n_rota,
+      normalized.data_normalizada,
+    ]
+      .filter(Boolean)
+      .join(" "),
+  );
+
+  return normalized;
+}
+
 function normalizeWorkbook(workbook) {
   const records = [];
   const seen = new Set();
@@ -1923,6 +2780,7 @@ function normalizeWorkbook(workbook) {
       const motorista = readCell(row, idx.motorista);
       const placa = readCell(row, idx.placa);
       const tipoDesc = readCell(row, idx.tipo) || (sheetName === "PNR" ? "DESCONTO PNR" : "DESCONTO PACOTE PERDIDO");
+      const canonicalSheet = normalizeSheetLabel(sheetName, tipoDesc);
       const dataValue = readCell(row, idx.data);
       const idPacote = readCell(row, idx.pacote);
       const rota = readCell(row, idx.rota);
@@ -1931,7 +2789,7 @@ function normalizeWorkbook(workbook) {
       const parsedDate = parseDateValue(dataValue);
 
       const normalized = {
-        aba_origem: sheetName,
+        aba_origem: canonicalSheet,
         tipo_desconto: tipoDesc,
         base,
         cidade_base: splitBase(base).cidade_base,
@@ -1946,7 +2804,7 @@ function normalizeWorkbook(workbook) {
         valor_numerico: parseMoney(valor),
       };
 
-      normalized.tipo_registro = sheetName === "PNR" ? "PNR" : "PACOTE PERDIDO";
+      normalized.tipo_registro = canonicalSheet === "PNR" ? "PNR" : "PACOTE PERDIDO";
       normalized._search = normalize(
         [
           normalized.aba_origem,
@@ -2064,7 +2922,7 @@ async function loadWorkbookEngine() {
   if (!workbookEnginePromise) {
     workbookEnginePromise = new Promise((resolve, reject) => {
       const script = document.createElement("script");
-      script.src = new URL("./xlsx.full.min.js", document.baseURI).href;
+      script.src = new URL("./assets/vendor/xlsx.full.min.js", document.baseURI).href;
       script.async = true;
       script.onload = () => resolve(true);
       script.onerror = () => reject(new Error("Failed to load xlsx.full.min.js"));
@@ -2128,7 +2986,7 @@ function buildSeedDataset() {
     label: humanizeWorkbookName(seedMeta.fileName || STATE_DEFAULT.fileName),
     source: "seed",
     importedAt: seedMeta.importedAt || new Date().toISOString(),
-    rows: seedRows.slice(),
+    rows: seedRows.map(normalizeStoredRow),
   };
 }
 
@@ -2224,7 +3082,14 @@ function updateAccessControls() {
   if (el.authLogin) el.authLogin.hidden = Boolean(currentUser);
   if (el.authSignup) el.authSignup.hidden = Boolean(currentUser);
   if (el.authLogout) el.authLogout.hidden = !currentUser;
-  if (el.uploadButton) el.uploadButton.disabled = backendConfigured && !isAdmin;
+  if (el.uploadButton) {
+    el.uploadButton.disabled = backendConfigured && !isAdmin;
+    el.uploadButton.hidden = backendConfigured && !isAdmin;
+  }
+  if (el.fileSelectButton) {
+    el.fileSelectButton.disabled = backendConfigured && !isAdmin;
+    el.fileSelectButton.hidden = backendConfigured && !isAdmin;
+  }
   if (el.backendSync) el.backendSync.disabled = backendConfigured && !isAdmin;
   if (el.deleteActiveButton) el.deleteActiveButton.disabled = el.deleteActiveButton.disabled || (backendConfigured && !isAdmin);
   if (el.usersCard) el.usersCard.hidden = currentUser?.role !== "admin";
@@ -2234,7 +3099,12 @@ function updateAccessControls() {
     el.accountToggle.dataset.state = currentUser?.role || (backendConfigured ? "required" : "local");
     el.accountToggle.classList.toggle("is-active", showAccount);
   }
+  if (el.accountMenu) {
+    const settingsButton = el.accountMenu.querySelector('[data-account-page="settings"]');
+    if (settingsButton) settingsButton.hidden = backendConfigured && !isAdmin;
+  }
   renderUsers();
+  renderFileDeleteMenu();
 }
 
 async function hydrateSession() {
@@ -2478,9 +3348,9 @@ async function syncLibraryToBackend(showToastOnFailure = true) {
 }
 
 async function deleteActiveDataset() {
-  const active = getActiveDataset();
+  const active = getSelectedDeleteDataset();
   if (!active || active.id === EMPTY_DATASET_ID) {
-    showToast("Não há arquivo ativo para excluir.", "info", 5000);
+    showToast("Selecione um arquivo antes de excluir.", "warn", 5000);
     return;
   }
   if (!canEdit()) {
@@ -2502,9 +3372,11 @@ async function deleteActiveDataset() {
   if (index < 0) return;
 
   library.datasets.splice(index, 1);
-  const nextActive = library.datasets[index] || library.datasets[index - 1] || buildEmptyDataset();
+  const nextActive =
+    state.activeDatasetId === active.id ? library.datasets[index] || library.datasets[index - 1] || buildEmptyDataset() : getActiveDataset();
   library.activeDatasetId = nextActive.id;
   state.activeDatasetId = nextActive.id;
+  state.deleteDatasetId = "";
   state.fileName = nextActive.fileName;
   syncActiveDataset();
   hydrateControls();
@@ -2653,11 +3525,20 @@ function showToast(message, tone = "info", timeout = 3800) {
 function loadState() {
   try {
     const raw = window.localStorage.getItem(STORAGE_KEY);
-    if (!raw) return { ...STATE_DEFAULT };
-    return { ...STATE_DEFAULT, ...JSON.parse(raw) };
+    if (!raw) return normalizeLoadedState({ ...STATE_DEFAULT });
+    return normalizeLoadedState({ ...STATE_DEFAULT, ...JSON.parse(raw) });
   } catch {
-    return { ...STATE_DEFAULT };
+    return normalizeLoadedState({ ...STATE_DEFAULT });
   }
+}
+
+function normalizeLoadedState(loadedState) {
+  const monthlyGoal = Number(loadedState.metaMensal || loadedState.pnrGoalLimit || DEFAULT_PNR_GOAL_LIMIT);
+  loadedState.metaMensal = monthlyGoal > 0 ? monthlyGoal : DEFAULT_PNR_GOAL_LIMIT;
+  loadedState.pnrGoalLimit = loadedState.metaMensal;
+  loadedState.metaAnual = Number(loadedState.metaAnual || 0);
+  loadedState.metaAnualEditada = Boolean(loadedState.metaAnualEditada && loadedState.metaAnual > 0);
+  return loadedState;
 }
 
 function persistState() {
@@ -2734,7 +3615,7 @@ function normalizeDatasetRecord(dataset) {
     label: String(dataset.label || humanizeWorkbookName(dataset.fileName || "arquivo.xlsx")),
     source: String(dataset.source || "upload"),
     importedAt: dataset.importedAt || new Date().toISOString(),
-    rows: dataset.rows,
+    rows: dataset.rows.map(normalizeStoredRow),
   };
 }
 
@@ -2749,11 +3630,6 @@ function upsertDataset(dataset) {
   library.datasets.push(normalized);
 }
 
-function setActiveDataset(id) {
-  state.activeDatasetId = id;
-  syncActiveDataset();
-}
-
 function getActiveDataset() {
   if (!library || !Array.isArray(library.datasets) || !library.datasets.length) {
     return buildEmptyDataset();
@@ -2761,11 +3637,6 @@ function getActiveDataset() {
 
   const found = library.datasets.find((dataset) => dataset.id === state.activeDatasetId);
   return found || library.datasets[0] || buildEmptyDataset();
-}
-
-function getDatasetById(id) {
-  if (!id || !library || !Array.isArray(library.datasets)) return null;
-  return library.datasets.find((dataset) => dataset.id === id) || null;
 }
 
 function syncActiveDataset() {
@@ -2795,16 +3666,22 @@ function buildActiveDatasetScope(referenceDataset) {
     return { rows: reference.rows ? reference.rows.slice() : [], datasets: [reference], label: reference.label || "Sem dados" };
   }
   const referencePeriod = getDatasetPeriod(reference);
-  const monthDatasets = getDatasetsForMonth(referencePeriod.key);
+  const monthKey = state.monthFilter || referencePeriod.key;
+  const year = String(referencePeriod.key).slice(0, 4);
+  const monthDatasets = monthKey === "all" ? getDatasetsForYear(year) : getDatasetsForMonth(monthKey);
   const periodMode = normalizePeriodMode(state.period);
   const filteredDatasets =
     periodMode === "month" ? monthDatasets : monthDatasets.filter((dataset) => getDatasetQuarterMode(dataset) === periodMode);
   const selectedDatasets = filteredDatasets.length || periodMode !== "month" ? filteredDatasets : [reference];
   const rows = selectedDatasets.flatMap((dataset) => (Array.isArray(dataset.rows) ? dataset.rows : []));
+  const selectedPeriod = monthKey === "all" ? null : getAvailableMonthOptions().find((month) => month.key === monthKey);
   return {
     rows,
     datasets: selectedDatasets,
-    label: `${referencePeriod.monthLabel}${periodMode === "month" ? " · mês completo" : ` · ${getPeriodModeLabel(periodMode)}`}`,
+    label:
+      monthKey === "all"
+        ? `${year} · todos os meses${periodMode === "month" ? "" : ` · ${getPeriodModeLabel(periodMode)}`}`
+        : `${selectedPeriod?.label || referencePeriod.monthLabel}${periodMode === "month" ? " · mês completo" : ` · ${getPeriodModeLabel(periodMode)}`}`,
   };
 }
 
@@ -2816,6 +3693,17 @@ function getDatasetsForMonth(monthKey) {
       const qa = getDatasetQuarterOrder(a);
       const qb = getDatasetQuarterOrder(b);
       return qa - qb || String(a.label || "").localeCompare(String(b.label || ""), "pt-BR");
+    });
+}
+
+function getDatasetsForYear(year) {
+  return library.datasets
+    .filter((dataset) => dataset && dataset.id !== EMPTY_DATASET_ID && Array.isArray(dataset.rows) && dataset.rows.length)
+    .filter((dataset) => String(getDatasetPeriod(dataset).key).startsWith(`${year}-`))
+    .sort((a, b) => {
+      const pa = getDatasetPeriod(a);
+      const pb = getDatasetPeriod(b);
+      return pa.sort - pb.sort || getDatasetQuarterOrder(a) - getDatasetQuarterOrder(b) || String(a.label || "").localeCompare(String(b.label || ""), "pt-BR");
     });
 }
 
