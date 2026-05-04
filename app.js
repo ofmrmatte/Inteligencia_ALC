@@ -3292,7 +3292,7 @@ function updateAccessControls() {
 function bindSupabaseAuthState() {
   if (supabaseAuthListenerBound || !window.supabaseClient?.auth) return;
   supabaseAuthListenerBound = true;
-  window.supabaseClient.auth.onAuthStateChange(async (event, session) => {
+  window.supabaseClient.auth.onAuthStateChange((event, session) => {
     console.log("[AUTH STATE]", event, session);
     if (!session?.user) {
       currentUser = null;
@@ -3302,11 +3302,15 @@ function bindSupabaseAuthState() {
       renderAccountPage();
       return;
     }
-    await loadCurrentSession();
+    window.setTimeout(() => {
+      void applyAuthenticatedUser(session.user, {
+        showProfileWarning: event !== "INITIAL_SESSION",
+      });
+    }, 0);
   });
 }
 
-async function loadCurrentSession() {
+async function loadCurrentSession(options = {}) {
   if (!window.supabaseClient?.auth) {
     currentUser = null;
     currentProfile = null;
@@ -3332,20 +3336,7 @@ async function loadCurrentSession() {
       return;
     }
 
-    currentUser = session.user;
-    currentProfile = await loadUserProfile(session.user);
-    console.log("[SESSION] Usuário:", currentUser);
-    console.log("[SESSION] Profile:", currentProfile);
-    console.log("[PROFILE] Perfil carregado:", currentProfile);
-    console.log("[PROFILE] is_admin:", currentProfile?.is_admin);
-    if (canEdit()) {
-      await loadUsers();
-    } else {
-      knownUsers = [];
-    }
-    updateAccessControls();
-    renderAccountPage();
-    return { user: currentUser, profile: currentProfile };
+    return applyAuthenticatedUser(session.user, options);
   } catch (error) {
     console.error("Erro ao carregar sessão:", error);
     currentUser = null;
@@ -3353,18 +3344,54 @@ async function loadCurrentSession() {
     knownUsers = [];
     updateAccessControls();
     renderAccountPage();
-    showToast("Login feito, mas houve erro ao carregar a sessão.", "warn", 5600);
+    if (options.showSessionWarning) {
+      showToast("Login feito, mas houve erro ao carregar a sessão.", "warn", 5600);
+    }
   }
 }
 
-async function loadUserProfile(user) {
-  const fallbackProfile = {
+async function applyAuthenticatedUser(user, options = {}) {
+  currentUser = user;
+  try {
+    currentProfile = await loadUserProfile(user);
+  } catch (profileError) {
+    console.error("[PROFILE] Erro ao carregar profile:", profileError);
+    currentProfile = buildFallbackProfile(user);
+    if (options.showProfileWarning) {
+      showToast("Login realizado, mas houve erro ao carregar o perfil.", "warn", 5600);
+    }
+  }
+
+  console.log("[SESSION] Usuário:", currentUser);
+  console.log("[SESSION] Profile:", currentProfile);
+  console.log("[PROFILE] Perfil carregado:", currentProfile);
+  console.log("[PROFILE] is_admin:", currentProfile?.is_admin);
+
+  if (canEdit()) {
+    await loadUsers();
+  } else {
+    knownUsers = [];
+  }
+
+  updateAccessControls();
+  updateDatasetMeta();
+  renderAccountPage();
+  renderFileDeleteMenu();
+  return { user: currentUser, profile: currentProfile };
+}
+
+function buildFallbackProfile(user) {
+  return {
     id: user.id,
     email: user.email,
     name: user.user_metadata?.name || user.email || "Usuário",
     role: "user",
     is_admin: false,
   };
+}
+
+async function loadUserProfile(user) {
+  const fallbackProfile = buildFallbackProfile(user);
 
   let { data: profile, error } = await window.supabaseClient
     .from("profiles")
@@ -3377,7 +3404,7 @@ async function loadUserProfile(user) {
 
   if (error) {
     console.error("[PROFILE] Erro ao buscar profile:", error);
-    return fallbackProfile;
+    throw error;
   }
 
   if (!profile) {
@@ -3389,7 +3416,7 @@ async function loadUserProfile(user) {
 
     if (createError) {
       console.error("[PROFILE] Erro ao criar profile:", createError);
-      return fallbackProfile;
+      throw createError;
     }
 
     profile = createdProfile;
@@ -3442,16 +3469,22 @@ async function loginUser(event) {
       return;
     }
 
-    if (el.authPassword) el.authPassword.value = "";
-    await loadCurrentSession();
-    renderAccountPage();
-    updateAccessControls();
-    if (currentUser) {
-      showToast("Login realizado com sucesso.", "good", 4200);
-      setAccountMenuOpen(false);
-      return;
+    currentUser = data.user;
+    try {
+      await applyAuthenticatedUser(data.user, { showProfileWarning: true });
+    } catch (profileError) {
+      console.error("[PROFILE] Erro ao carregar profile:", profileError);
+      currentProfile = buildFallbackProfile(data.user);
+      updateAccessControls();
+      updateDatasetMeta();
+      renderAccountPage();
+      renderFileDeleteMenu();
+      showToast("Login realizado, mas houve erro ao carregar o perfil.", "warn", 5600);
     }
-    showToast("Login feito, mas não foi possível carregar a sessão.", "warn", 5600);
+
+    if (el.authPassword) el.authPassword.value = "";
+    showToast("Login realizado com sucesso.", "good", 4200);
+    setAccountMenuOpen(false);
   } catch (error) {
     console.error("[LOGIN] Erro inesperado:", error);
     const message = String(error?.message || "").toLowerCase();
