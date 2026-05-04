@@ -148,7 +148,7 @@ svg {
   top: 0;
   z-index: 30;
   display: grid;
-  grid-template-columns: minmax(240px, 1fr) minmax(160px, auto) minmax(420px, auto);
+  grid-template-columns: minmax(360px, 1fr) minmax(210px, auto) minmax(420px, auto);
   align-items: center;
   gap: 1rem;
   padding: 1rem 1.2rem;
@@ -164,11 +164,46 @@ svg {
   min-width: 0;
 }
 
+.brand-lockup {
+  display: flex;
+  align-items: center;
+  gap: 0.95rem;
+  min-width: 0;
+}
+
+.brand-logo {
+  width: 4.25rem;
+  height: 4.25rem;
+  flex: 0 0 auto;
+  align-self: center;
+  display: grid;
+  place-items: center;
+  padding: 0.22rem;
+  border: 1px solid rgba(164, 183, 202, 0.18);
+  border-radius: 12px;
+  background: #ffffff;
+  box-shadow: 0 8px 18px rgba(0, 0, 0, 0.14);
+  overflow: hidden;
+}
+
+.brand-logo img {
+  width: 100%;
+  height: 100%;
+  display: block;
+  object-fit: contain;
+  object-position: center;
+}
+
+.topbar__titles {
+  min-width: 0;
+}
+
 .topbar__left h1 {
   margin: 0;
   font-family: var(--font-display);
-  font-size: clamp(1.25rem, 2vw, 1.65rem);
-  letter-spacing: -0.03em;
+  font-size: clamp(1.18rem, 1.8vw, 1.55rem);
+  letter-spacing: 0;
+  line-height: 1.08;
 }
 
 .topbar__left p,
@@ -179,6 +214,14 @@ svg {
   margin: 0.24rem 0 0;
   color: var(--muted);
   font-size: 0.92rem;
+}
+
+.topbar__titles p {
+  margin: 0.22rem 0 0;
+  color: var(--muted);
+  font-size: 0.9rem;
+  font-weight: 600;
+  text-transform: none;
 }
 
 .topbar__center {
@@ -192,12 +235,26 @@ svg {
   white-space: normal;
 }
 
+.topbar__center span + span::before {
+  content: "";
+  display: inline-block;
+  width: 1px;
+  height: 1rem;
+  margin-right: 0.7rem;
+  vertical-align: -0.16rem;
+  background: var(--line-strong);
+}
+
 .topbar__actions {
   display: flex;
   justify-content: flex-end;
   align-items: center;
   min-width: 0;
   margin-left: auto;
+}
+
+.content {
+  padding-top: 0.15rem;
 }
 
 .layout {
@@ -766,6 +823,46 @@ body[data-theme="light"] #theme-toggle::before {
 
 .tower-card {
   min-width: 0;
+}
+
+.tower-card .panel__header {
+  align-items: flex-start;
+  gap: 0.9rem;
+}
+
+.tower-card .goal-gauge {
+  width: clamp(68px, 7vw, 88px);
+  min-width: 68px;
+  gap: 0.12rem;
+  justify-self: end;
+  align-self: flex-start;
+  flex: 0 0 auto;
+  margin: -0.08rem 0 0 auto;
+}
+
+.tower-card .goal-gauge__label {
+  font-size: 0.46rem;
+  letter-spacing: 0;
+}
+
+.tower-card .goal-gauge__dial {
+  width: calc(100% - 0.35rem);
+}
+
+.tower-card .goal-gauge__needle {
+  width: calc(50% - 0.48rem);
+  height: 2px;
+}
+
+.tower-card .goal-gauge__pivot {
+  width: 0.36rem;
+  height: 0.36rem;
+  border-width: 1.5px;
+}
+
+.tower-card .goal-gauge strong {
+  font-size: 0.64rem;
+  margin-top: 0.14rem;
 }
 
 .tower-summary {
@@ -2415,6 +2512,15 @@ html {
   font-size: clamp(1.45rem, 1.8vw, 2.15rem);
 }
 
+.layout:not(.is-sidebar-collapsed) .kpi-card--finance .kpi-card__value {
+  font-size: clamp(1.32rem, 1.55vw, 1.78rem);
+  line-height: 1.02;
+  letter-spacing: -0.035em;
+  white-space: nowrap;
+  overflow-wrap: normal;
+  word-break: normal;
+}
+
 #page-indicator {
   white-space: nowrap;
 }
@@ -3148,9 +3254,9 @@ html {
 }
 
 .goal-status.is-hit {
-  color: #7fd1ff;
-  border-color: rgba(59, 166, 255, 0.32);
-  background: rgba(59, 166, 255, 0.1);
+  color: #ff9d9d;
+  border-color: rgba(255, 107, 107, 0.32);
+  background: rgba(255, 107, 107, 0.1);
 }
 
 .goal-status.is-over {
@@ -3325,7 +3431,7 @@ html {
   overflow: hidden;
   border-radius: 999px 999px 0 0;
   background:
-    conic-gradient(from 270deg at 50% 100%, #58d68d 0deg 64deg, #f1c95d 64deg 116deg, #ff8d8d 116deg 180deg, transparent 180deg 360deg);
+    conic-gradient(from 270deg at 50% 100%, #58d68d 0deg 126deg, #f1c95d 126deg 162deg, #ff8d8d 162deg 180deg, transparent 180deg 360deg);
 }
 
 .goal-gauge__dial::after {
@@ -3388,7 +3494,16 @@ html {
   width: 0;
   height: 100%;
   border-radius: inherit;
-  background: linear-gradient(90deg, #58d68d, #f1c95d 68%, #ff8d8d);
+  background: #58d68d;
+}
+
+.goal-card[data-goal-status="is-warning"] .goal-progress span {
+  background: #f1c95d;
+}
+
+.goal-card[data-goal-status="is-hit"] .goal-progress span,
+.goal-card[data-goal-status="is-over"] .goal-progress span {
+  background: #ff6b6b;
 }
 
 @media (max-width: 1180px) {
