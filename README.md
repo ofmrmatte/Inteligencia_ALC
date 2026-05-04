@@ -1,43 +1,26 @@
-# Dashboard Pré-Fatura
+# Painel de Inteligência Operacional
 
-Dashboard web para análise de pré-fatura, descontos, PNR e pacotes perdidos por base, driver e competência.
+Dashboard web estático para análise de pré-fatura, descontos, PNR e pacotes perdidos por base, driver e competência.
 
 ## Como usar
 
-Abra `index.html` no navegador para usar em modo local.
+Abra `index.html` no navegador ou publique os arquivos estáticos no Vercel.
 
 Para importar novos dados, use o botão **Importar Excel** e selecione uma ou mais planilhas `.xlsx` ou `.xls`.
 
 ## Arquivos principais
 
 - `index.html`: estrutura da aplicação.
+- `config.js`: configuração pública do Supabase para o frontend estático.
+- `supabaseClient.js`: inicialização do cliente Supabase.
+- `authService.js`: autenticação, sessão, perfil e permissões via Supabase Auth.
+- `app.js`: lógica do dashboard, filtros, rankings, gráficos, importação e permissões.
 - `styles.css`: estilos e responsividade.
-- `app.js`: lógica do dashboard, filtros, rankings, gráficos e importação.
-- `assets/data/seed-data.js`: dados iniciais carregados no modo local.
+- `assets/data/seed-data.js`: dados iniciais carregados no navegador.
 - `assets/vendor/xlsx.full.min.js`: biblioteca usada para leitura dos arquivos Excel no navegador.
-- `backend/`: backend simples para sincronização opcional.
-- `render.yaml`: configuração opcional de deploy no Render.
 
-## Backend de login e permissões
+## Autenticação
 
-```powershell
-cd backend
-npm install
-npm run seed
-npm run dev
-```
+A autenticação usa Supabase Auth diretamente no frontend estático. O login fica no ícone de usuário do cabeçalho e as permissões administrativas vêm da tabela `profiles`.
 
-API local:
-
-```txt
-http://localhost:3001/api
-```
-
-Usuário inicial:
-
-```txt
-admin@empresa.com
-admin123
-```
-
-O dashboard já usa `http://localhost:3001/api` como backend padrão. A autenticação usa JWT, senha criptografada com bcrypt e permissões para relatório, upload, exclusão e administração de usuários.
+O arquivo `config.js` deve ser publicado junto com o projeto estático.

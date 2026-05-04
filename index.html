@@ -77,8 +77,9 @@
           <div class="account-menu" id="account-menu" aria-label="Menu do usuário" hidden>
             <div class="account-menu__header">
               <strong>Conta</strong>
-              <span id="auth-status">Modo local</span>
+              <span id="auth-status">Login necessário</span>
             </div>
+            <div class="account-menu__identity" id="account-identity" hidden></div>
             <div class="account-menu__actions" id="account-actions">
               <button type="button" data-account-page="profile">Perfil</button>
               <button type="button" data-account-page="settings">Configurações gerais</button>
@@ -86,8 +87,8 @@
             </div>
             <section class="account-login" id="account-card" hidden>
               <label>
-                <span>Email</span>
-                <input id="auth-email" type="email" autocomplete="email" placeholder="admin@empresa.com" />
+                <span>E-mail</span>
+                <input id="auth-email" type="email" autocomplete="email" placeholder="email@empresa.com" />
               </label>
               <label>
                 <span>Senha</span>
@@ -97,14 +98,14 @@
                 <button class="secondary-button" id="auth-login" type="button">Entrar</button>
                 <button class="secondary-button" id="auth-signup" type="button">Criar acesso</button>
               </div>
-              <p class="account-login__note" id="auth-note">Configure a API para usar login online. No modo local, a edição continua liberada.</p>
+              <p class="account-login__note" id="auth-note">Entre com sua conta para acessar relatório e permissões.</p>
             </section>
           </div>
-          <span class="connection-indicator" id="sync-status" aria-label="Status da conexão" title="Status da conexão: Local">
+          <span class="connection-indicator" id="sync-status" aria-label="Status da conexão" title="Status da conexão: Supabase">
             <svg viewBox="0 0 24 24" aria-hidden="true">
               <path d="M7 20h10M12 20V9m-5.5 2.5a7.8 7.8 0 0 1 11 0M3.8 7.8a11.6 11.6 0 0 1 16.4 0M9.5 15.2a3.5 3.5 0 0 1 5 0" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8"></path>
             </svg>
-            <span class="connection-indicator__label">Local</span>
+            <span class="connection-indicator__label">Supabase</span>
           </span>
           <button class="danger-button danger-button--compact danger-button--icon" id="delete-active-button" type="button" aria-label="Excluir arquivo" title="Excluir arquivo">
             <svg viewBox="0 0 24 24" aria-hidden="true">
@@ -132,44 +133,6 @@
               <select id="dataset-select"></select>
             </label>
             <p class="sidebar-note" id="dataset-note">Carregue meses anteriores e troque sem reimportar o workbook.</p>
-          </section>
-
-          <section class="sidebar-card sidebar-card--backend" id="settings-card" hidden>
-            <div class="sidebar-card__title">
-              <h2>Configurações</h2>
-              <span id="backend-status">Modo local</span>
-            </div>
-            <div class="settings-grid">
-              <label>
-                <span>Linhas na tabela</span>
-                <select id="settings-page-size">
-                  <option value="10">10</option>
-                  <option value="15" selected>15</option>
-                  <option value="25">25</option>
-                </select>
-              </label>
-              <label>
-                <span>Meta PNR</span>
-                <input id="settings-pnr-goal" type="number" min="1" step="100" placeholder="20000" />
-              </label>
-            </div>
-            <label>
-              <span>API Base URL</span>
-              <input id="backend-input" type="url" placeholder="https://api.seudominio.com" />
-            </label>
-            <div class="sidebar-actions sidebar-actions--stack">
-              <button class="secondary-button" id="backend-save" type="button">Salvar conexão</button>
-              <button class="secondary-button" id="backend-sync" type="button">Sincronizar agora</button>
-            </div>
-            <p class="sidebar-note">Os arquivos carregados podem ser salvos no backend e acessados no GitHub Pages.</p>
-          </section>
-
-          <section class="sidebar-card sidebar-card--users" id="users-card" hidden>
-            <div class="sidebar-card__title">
-              <h2>Usuários</h2>
-              <span id="users-count">0</span>
-            </div>
-            <div class="user-list" id="users-list"></div>
           </section>
 
           <section class="sidebar-card sidebar-card--search">
@@ -251,15 +214,15 @@
             <div class="account-form-grid">
               <label>
                 <span>Nome</span>
-                <input id="profile-name" type="text" value="ALC Admin" />
+                <input id="profile-name" type="text" value="" />
               </label>
               <label>
                 <span>Cargo</span>
-                <input id="profile-role-title" type="text" value="Administrador" />
+                <input id="profile-role-title" type="text" value="" />
               </label>
               <label>
                 <span>E-mail</span>
-                <input id="profile-email" type="email" value="admin@empresa.com" />
+                <input id="profile-email" type="email" value="" readonly />
               </label>
               <label>
                 <span>Alterar senha</span>
@@ -416,7 +379,10 @@
 
     <div class="toast" id="toast" aria-live="polite" aria-atomic="true"></div>
     <script src="./assets/data/seed-data.js" defer></script>
-    <script src="./authApi.js" defer></script>
+    <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2" defer></script>
+    <script src="./config.js" defer></script>
+    <script src="./supabaseClient.js" defer></script>
+    <script src="./authService.js" defer></script>
     <script src="./app.js" defer></script>
   </body>
 </html>

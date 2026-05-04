@@ -3,10 +3,7 @@
 const STORAGE_KEY = "alc-pre-fatura-dashboard-state-v1";
 const LIBRARY_STORAGE_KEY = "alc-pre-fatura-dashboard-library-v1";
 const THEME_STORAGE_KEY = "alc-pre-fatura-dashboard-theme-v1";
-const BACKEND_STORAGE_KEY = "alc-pre-fatura-dashboard-backend-v1";
-const AUTH_STORAGE_KEY = "alc-pre-fatura-dashboard-auth-v1";
 const SIDEBAR_STORAGE_KEY = "filtersSidebarOpen";
-const DEFAULT_BACKEND_URL = "http://localhost:3001/api";
 const PDF_LOGO_IMAGE = {
   name: "ImLogo",
   width: 1080,
@@ -48,7 +45,6 @@ const STATE_DEFAULT = {
   deleteDatasetId: "",
   appView: "dashboard",
   theme: "dark",
-  apiBaseUrl: DEFAULT_BACKEND_URL,
   pnrGoalLimit: DEFAULT_PNR_GOAL_LIMIT,
   metaMensal: DEFAULT_PNR_GOAL_LIMIT,
   metaAnual: 0,
@@ -79,22 +75,19 @@ const seedRows = Array.isArray(window.__PRE_FATURA_ROWS) ? window.__PRE_FATURA_R
 const state = loadState();
 const forcedTheme = new URLSearchParams(window.location.search).get("theme");
 state.theme = forcedTheme === "light" || forcedTheme === "dark" ? forcedTheme : state.theme === "light" ? "light" : "dark";
-state.apiBaseUrl = String(state.apiBaseUrl || window.__PRE_FATURA_BACKEND?.baseUrl || "").trim();
 state.period = normalizePeriodMode(state.period);
 let library = loadLibrary();
 let activeDataset = getActiveDataset();
 let allRows = activeDataset.rows.slice();
 let fileMeta = activeDataset;
 let workbookEnginePromise = null;
-let backendSyncPromise = null;
-let backendStatus = "local";
-let backendMessage = "Modo local";
-let authToken = loadAuthToken();
 let currentUser = null;
+let currentProfile = null;
 let knownUsers = [];
 let sidebarAnimationTimer = null;
 let liveClockTimer = null;
 let accountMenuCloseTimer = null;
+let supabaseAuthListenerBound = false;
 
 const el = {};
 
@@ -113,8 +106,8 @@ async function bootstrapDashboard() {
   updateTopbar();
   updateAccessControls();
   markDashboardReady();
-  void hydrateSession();
-  void hydrateRemoteLibrary();
+  bindSupabaseAuthState();
+  void loadCurrentSession();
 }
 
 if (document.readyState === "loading") {
@@ -144,17 +137,13 @@ function cacheDom() {
   el.fileSelectButton = document.getElementById("file-select-button");
   el.fileDeleteMenu = document.getElementById("file-delete-menu");
   el.accountMenu = document.getElementById("account-menu");
+  el.accountIdentity = document.getElementById("account-identity");
   el.datasetSelect = document.getElementById("dataset-select");
   el.datasetCount = document.getElementById("dataset-count");
   el.datasetNote = document.getElementById("dataset-note");
-  el.backendStatus = document.getElementById("backend-status");
-  el.settingsCard = document.getElementById("settings-card");
   el.accountCard = document.getElementById("account-card");
   el.settingsPageSize = document.getElementById("settings-page-size");
   el.settingsPnrGoal = document.getElementById("settings-pnr-goal");
-  el.backendInput = document.getElementById("backend-input");
-  el.backendSave = document.getElementById("backend-save");
-  el.backendSync = document.getElementById("backend-sync");
   el.authStatus = document.getElementById("auth-status");
   el.authEmail = document.getElementById("auth-email");
   el.authPassword = document.getElementById("auth-password");
@@ -237,7 +226,9 @@ function bindEvents() {
   }
   if (el.refreshButton) {
     el.refreshButton.addEventListener("click", () => {
-      void hydrateRemoteLibrary(true);
+      void loadCurrentSession();
+      renderAll();
+      showToast("Painel atualizado.", "info", 3200);
     });
   }
   if (el.themeToggle) {
@@ -285,19 +276,14 @@ function bindEvents() {
     updateAccessControls();
   });
   if (el.profileSave) {
-    el.profileSave.addEventListener("click", () => {
-      if (el.profilePassword) el.profilePassword.value = "";
-      showToast("Perfil salvo localmente.", "good", 4200);
+    el.profileSave.addEventListener("click", async () => {
+      await saveProfile();
     });
   }
   if (el.settingsUsersList) {
     el.settingsUsersList.addEventListener("click", async (event) => {
       const button = event.target.closest("button[data-user-id][data-role]");
       if (!button) return;
-      if (!getBackendBaseUrl()) {
-        showToast("Permissões de usuários dependem da API configurada.", "info", 5200);
-        return;
-      }
       await updateUserRole(button.dataset.userId, button.dataset.role);
     });
   }
@@ -310,20 +296,6 @@ function bindEvents() {
     });
   }
   document.addEventListener("keydown", handleEscapeFilter);
-  if (el.backendSave) {
-    el.backendSave.addEventListener("click", async () => {
-      state.apiBaseUrl = normalizeBaseUrl(el.backendInput ? el.backendInput.value : "");
-      persistState();
-      hydrateThemeControls();
-      showToast(state.apiBaseUrl ? "Conexão do backend salva." : "Conexão removida. Voltando para o modo local.", "good");
-      await hydrateRemoteLibrary(true);
-    });
-  }
-  if (el.backendSync) {
-    el.backendSync.addEventListener("click", async () => {
-      await hydrateRemoteLibrary(true);
-    });
-  }
   if (el.settingsPageSize) {
     el.settingsPageSize.addEventListener("change", (event) => {
       state.pageSize = Number(event.target.value) || 15;
@@ -401,7 +373,6 @@ function bindEvents() {
     syncActiveDataset();
     persistState();
     void persistLibrary();
-    void syncLibraryToBackend();
     hydrateControls();
     renderAll();
   });
@@ -575,7 +546,6 @@ function bindEvents() {
       syncActiveDataset();
       hydrateControls();
       renderAll();
-      void syncLibraryToBackend(false);
     });
   }
 
@@ -971,7 +941,7 @@ function positionAccountMenu() {
 
 function openAccountPage(page) {
   if (page === "settings" && !canEdit()) {
-    showToast("Configurações gerais disponíveis apenas para Admin.", "warn", 5200);
+    showToast(currentUser ? "Apenas administradores podem acessar as configurações." : "Faça login para acessar as configurações.", "warn", 5200);
     return;
   }
   state.appView = page === "settings" ? "settings" : "profile";
@@ -987,19 +957,13 @@ function renderAccountPage() {
 
 function renderProfilePage() {
   if (!el.profileView) return;
-  const user = currentUser || { email: "admin@empresa.com", role: "admin" };
-  const email = user.email || "admin@empresa.com";
-  const initials =
-    email
-      .split("@")[0]
-      .split(/[.\s_-]+/)
-      .map((part) => part.charAt(0))
-      .join("")
-      .slice(0, 2)
-      .toUpperCase() || "AL";
+  const email = currentProfile?.email || currentUser?.email || "";
+  const name = getProfileDisplayName();
+  const cargo = currentProfile?.cargo || (canEdit() ? "Administrador" : "Usuário");
+  const initials = getProfileInitials(name || email);
   if (el.profileAvatar) el.profileAvatar.textContent = initials;
-  if (el.profileName) el.profileName.value = user.name || email.split("@")[0] || "Usuário";
-  if (el.profileRoleTitle) el.profileRoleTitle.value = user.role === "admin" ? "Administrador" : "Visualização";
+  if (el.profileName) el.profileName.value = currentUser ? name : "";
+  if (el.profileRoleTitle) el.profileRoleTitle.value = currentUser ? cargo : "";
   if (el.profileEmail) el.profileEmail.value = email;
 }
 
@@ -1009,27 +973,72 @@ function renderSettingsPage() {
     el.settingsUsersList.innerHTML = emptyState("Acesso restrito", "Somente administradores podem editar usuários.");
     return;
   }
-  const users = knownUsers.length
-    ? knownUsers
-    : [{ id: "local-admin", email: currentUser?.email || "admin@empresa.com", role: "admin" }];
+  const users = knownUsers;
   el.settingsUsersList.innerHTML = users
     .map((user) => {
-      const isAdmin = user.role === "admin";
+      const isAdmin = user.is_admin === true || user.isAdmin === true || user.role === "admin";
       const name = user.name || (user.email ? user.email.split("@")[0] : "Usuário");
+      const cargo = user.cargo || (isAdmin ? "Administrador" : "Usuário");
       return `
         <div class="settings-user">
           <div class="settings-user__identity">
             <strong>${escapeHtml(name)}</strong>
-            <span>${escapeHtml(user.email || "Sem e-mail")}</span>
+            <span>${escapeHtml(user.email || "Sem e-mail")} · ${escapeHtml(cargo)}</span>
           </div>
           <span class="settings-user__badge ${isAdmin ? "is-admin" : "is-viewer"}">${isAdmin ? "Admin" : "Visualização"}</span>
-          <button class="secondary-button secondary-button--mini settings-user__action" type="button" data-user-id="${escapeAttribute(user.id)}" data-role="${isAdmin ? "viewer" : "admin"}">
+          <button class="secondary-button secondary-button--mini settings-user__action" type="button" data-user-id="${escapeAttribute(user.id)}" data-role="${isAdmin ? "user" : "admin"}">
             ${isAdmin ? "Remover admin" : "Tornar admin"}
           </button>
         </div>
       `;
     })
-    .join("");
+    .join("") || emptyState("Sem usuários", "Os perfis do Supabase aparecerão aqui.");
+}
+
+function getProfileDisplayName() {
+  return currentProfile?.name || currentUser?.user_metadata?.name || (currentUser?.email ? currentUser.email.split("@")[0] : "Usuário");
+}
+
+function getProfileInitials(value) {
+  return (
+    String(value || "Usuário")
+      .split("@")[0]
+      .split(/[.\s_-]+/)
+      .map((part) => part.charAt(0))
+      .join("")
+      .slice(0, 2)
+      .toUpperCase() || "US"
+  );
+}
+
+async function saveProfile() {
+  if (!currentUser || !window.authService) {
+    showToast("Faça login para acessar esta função.", "warn", 5200);
+    return;
+  }
+  const name = String(el.profileName?.value || "").trim() || "Usuário";
+  const cargo = String(el.profileRoleTitle?.value || "").trim();
+  const newPassword = String(el.profilePassword?.value || "");
+  if (newPassword && newPassword.length < 6) {
+    showToast("A nova senha precisa ter pelo menos 6 caracteres.", "warn", 5200);
+    return;
+  }
+  try {
+    currentProfile = await window.authService.updateProfile(currentUser.id, {
+      name,
+      cargo,
+      email: currentUser.email,
+    });
+    if (newPassword) {
+      await window.authService.updatePassword(newPassword);
+      if (el.profilePassword) el.profilePassword.value = "";
+    }
+    await loadCurrentSession();
+    showToast("Perfil atualizado.", "good", 4200);
+  } catch (error) {
+    console.error("Erro ao salvar perfil:", error);
+    showToast("Não foi possível salvar o perfil.", "error", 5200);
+  }
 }
 
 function toggleDashboardView(monthlyView) {
@@ -2517,7 +2526,7 @@ function updateTopbar(summary = buildSummary(getFilteredRows())) {
     el.sourceLine.hidden = true;
   }
   if (el.syncStatus) {
-    const label = backendStatus === "online" ? "Online" : backendStatus === "connecting" ? "Sync" : backendStatus === "offline" ? "Offline" : "Local";
+    const label = window.supabaseClient ? "Supabase" : "Offline";
     const textNode = el.syncStatus.querySelector(".connection-indicator__label");
     if (textNode) textNode.textContent = label;
     el.syncStatus.setAttribute("title", `Status da conexão: ${label}`);
@@ -3047,7 +3056,6 @@ async function handleUpload(event) {
     persistState();
     persistLibrary();
     renderAll();
-    void syncLibraryToBackend();
     showToast(
       imported.length === 1
         ? `Arquivo carregado: ${imported[0].label}${(normalizeWorkbook.lastStats?.duplicatesSkipped || 0) ? ` · ${normalizeWorkbook.lastStats.duplicatesSkipped} duplicatas ignoradas` : ""}`
@@ -3092,43 +3100,6 @@ async function loadWorkbookEngine() {
   }
 }
 
-function normalizeBaseUrl(value) {
-  const raw = String(value || "")
-    .trim()
-    .replace(/\/+$/, "");
-  if (!raw) return "";
-  if (/^https?:\/\//i.test(raw)) return raw;
-  return `https://${raw}`;
-}
-
-function getBackendBaseUrl() {
-  return normalizeBaseUrl(state.apiBaseUrl || window.__PRE_FATURA_BACKEND?.baseUrl || "");
-}
-
-async function apiFetch(path, options = {}) {
-  const baseUrl = getBackendBaseUrl();
-  if (!baseUrl) {
-    const error = new Error("Backend não configurado");
-    error.status = 0;
-    throw error;
-  }
-
-  const headers = new Headers(options.headers || {});
-  if (authToken) headers.set("Authorization", `Bearer ${authToken}`);
-  const response = await fetch(new URL(path, baseUrl).href, {
-    ...options,
-    headers,
-    credentials: "include",
-  });
-  if (response.status === 401) {
-    authToken = "";
-    currentUser = null;
-    persistAuthToken();
-    updateAccessControls();
-  }
-  return response;
-}
-
 function buildSeedDataset() {
   const seedMeta = window.__PRE_FATURA_META || {};
   return {
@@ -3168,38 +3139,13 @@ function mergeSeedIntoLibrary(store) {
   };
 }
 
-function updateBackendStatus(kind, message) {
-  backendStatus = kind;
-  backendMessage = message;
-  if (el.backendStatus) {
-    el.backendStatus.textContent = message;
-    el.backendStatus.dataset.state = kind;
-  }
-  if (el.syncStatus) {
-    el.syncStatus.dataset.state = kind;
-    const textNode = el.syncStatus.querySelector(".connection-indicator__label");
-    const label = kind === "online" ? "Online" : kind === "connecting" ? "Sync" : kind === "offline" ? "Offline" : "Local";
-    if (textNode) {
-      textNode.textContent = label;
-    }
-    el.syncStatus.setAttribute("title", `Status da conexão: ${label}`);
-    el.syncStatus.setAttribute("aria-label", `Status da conexão: ${label}`);
-  }
-}
-
 function hydrateThemeControls() {
-  if (el.backendInput) {
-    el.backendInput.value = getBackendBaseUrl();
-  }
   if (el.themeToggle) {
     const label = state.theme === "dark" ? "Modo claro" : "Modo escuro";
     el.themeToggle.setAttribute("aria-label", label);
     el.themeToggle.dataset.theme = state.theme;
   }
-  updateBackendStatus(
-    getBackendBaseUrl() ? backendStatus : "local",
-    getBackendBaseUrl() ? backendMessage || "Backend configurado" : "Modo local",
-  );
+  updateTopbar();
 }
 
 function applyTheme(theme) {
@@ -3211,18 +3157,19 @@ function applyTheme(theme) {
 }
 
 function canEdit() {
-  return currentUser?.role === "admin" || currentUser?.isAdmin === true;
+  return currentProfile?.is_admin === true || currentProfile?.isAdmin === true || currentProfile?.role === "admin";
 }
 
 function getActionPermissions() {
   const isLoggedIn = Boolean(currentUser);
-  const isAdmin = currentUser?.role === "admin" || currentUser?.isAdmin === true;
+  const isAdmin = canEdit();
   return {
     isLoggedIn,
     isAdmin,
     canDownloadReport: isLoggedIn,
     canUploadFile: isLoggedIn && isAdmin,
     canDeleteFile: isLoggedIn && isAdmin,
+    canOpenSettings: isLoggedIn && isAdmin,
   };
 }
 
@@ -3263,25 +3210,31 @@ function setActionButtonState(button, allowed, title) {
 }
 
 function updateAccessControls() {
-  const backendConfigured = Boolean(getBackendBaseUrl());
-  const isAdmin = canEdit();
   const permissions = getActionPermissions();
   const accountMenuOpen = Boolean(state.accountPanelOpen);
   const showLogin = accountMenuOpen && !currentUser;
+  const roleLabel = permissions.isAdmin ? "Admin" : "Visualização";
+  const accountName = getProfileDisplayName();
+  const accountEmail = currentProfile?.email || currentUser?.email || "";
+
   if (el.authStatus) {
-    el.authStatus.textContent = currentUser ? (currentUser.role === "admin" ? "Admin" : "Visualização") : backendConfigured ? "Login necessário" : "Modo local";
-    el.authStatus.dataset.state = currentUser?.role || (backendConfigured ? "required" : "local");
+    el.authStatus.textContent = currentUser ? roleLabel : "Login necessário";
+    el.authStatus.dataset.state = currentUser ? (permissions.isAdmin ? "admin" : "user") : "required";
   }
   if (el.authNote) {
     el.authNote.textContent = currentUser
-      ? `${currentUser.email} · ${currentUser.role === "admin" ? "pode editar e administrar" : "somente visualização"}`
-      : backendConfigured
-        ? "Entre para sincronizar. O primeiro usuário criado vira Admin."
-        : "Configure a API para usar login online. No modo local, a edição continua liberada.";
+      ? `${accountEmail} · ${permissions.isAdmin ? "pode editar e administrar" : "somente relatório"}`
+      : "Entre com sua conta para acessar relatório e permissões.";
   }
   if (el.authLogin) el.authLogin.hidden = Boolean(currentUser);
   if (el.authSignup) el.authSignup.hidden = Boolean(currentUser);
   if (el.authLogout) el.authLogout.hidden = !currentUser;
+  if (el.accountIdentity) {
+    el.accountIdentity.hidden = !currentUser;
+    el.accountIdentity.innerHTML = currentUser
+      ? `<strong>${escapeHtml(accountName)}</strong><span>${escapeHtml(accountEmail)}</span>`
+      : "";
+  }
   setActionButtonState(el.reportButton, permissions.canDownloadReport, permissions.canDownloadReport ? "Baixar relatório." : "Faça login para usar esta função.");
   setActionButtonState(
     el.uploadButton,
@@ -3301,7 +3254,6 @@ function updateAccessControls() {
         ? "Somente administradores podem usar esta função."
         : "Faça login para usar esta função.",
   );
-  if (el.backendSync) el.backendSync.disabled = backendConfigured && !isAdmin;
   if (el.deleteActiveButton) {
     const selected = getSelectedDeleteDataset();
     setActionButtonState(
@@ -3317,10 +3269,9 @@ function updateAccessControls() {
     );
   }
   if (el.usersCard) el.usersCard.hidden = true;
-  if (el.settingsCard) el.settingsCard.hidden = true;
   if (el.accountCard) el.accountCard.hidden = !showLogin;
   if (el.accountToggle) {
-    el.accountToggle.dataset.state = currentUser?.role || (backendConfigured ? "required" : "local");
+    el.accountToggle.dataset.state = currentUser ? (permissions.isAdmin ? "admin" : "user") : "required";
     el.accountToggle.classList.toggle("is-active", accountMenuOpen);
     el.accountToggle.setAttribute("aria-expanded", accountMenuOpen ? "true" : "false");
   }
@@ -3337,108 +3288,128 @@ function updateAccessControls() {
   renderFileDeleteMenu();
 }
 
-async function hydrateSession() {
-  if (!getBackendBaseUrl()) {
+function bindSupabaseAuthState() {
+  if (supabaseAuthListenerBound || !window.supabaseClient?.auth) return;
+  supabaseAuthListenerBound = true;
+  window.supabaseClient.auth.onAuthStateChange(async (_event, session) => {
+    if (!session?.user) {
+      currentUser = null;
+      currentProfile = null;
+      knownUsers = [];
+      updateAccessControls();
+      renderAccountPage();
+      return;
+    }
+    await loadCurrentSession();
+  });
+}
+
+async function loadCurrentSession() {
+  if (!window.authService) {
     currentUser = null;
+    currentProfile = null;
     knownUsers = [];
     updateAccessControls();
     return;
   }
   try {
-    const data = window.authApi
-      ? await window.authApi.getCurrentUser(getBackendBaseUrl(), authToken)
-      : await apiFetch("/api/auth/session", { headers: { Accept: "application/json" } }).then((response) => response.json());
-    currentUser = data.user || null;
+    const session = await window.authService.getSession();
+    if (!session) {
+      currentUser = null;
+      currentProfile = null;
+      knownUsers = [];
+      updateAccessControls();
+      renderAccountPage();
+      return;
+    }
+    const current = await window.authService.getCurrentProfile();
+    currentUser = current?.user || null;
+    currentProfile = current?.profile || null;
+    if (canEdit()) {
+      await loadUsers();
+    } else {
+      knownUsers = [];
+    }
     updateAccessControls();
-    if (currentUser?.role === "admin") await loadUsers();
+    renderAccountPage();
   } catch (error) {
-    console.error(error);
+    console.error("Erro ao carregar sessão:", error);
+    currentUser = null;
+    currentProfile = null;
+    knownUsers = [];
     updateAccessControls();
+    renderAccountPage();
   }
 }
 
 async function loginUser() {
-  await authenticateUser("/api/auth/login", "Login realizado.");
-}
-
-async function signupUser() {
-  await authenticateUser("/api/auth/signup", "Acesso criado.");
-}
-
-async function authenticateUser(path, successMessage) {
-  if (!getBackendBaseUrl()) {
-    showToast("Configure a API Base URL antes de usar login.", "warn", 5200);
-    return;
-  }
   const email = String(el.authEmail?.value || "").trim();
   const password = String(el.authPassword?.value || "");
   if (!email || password.length < 6) {
     showToast("Informe email e senha com pelo menos 6 caracteres.", "warn", 5200);
     return;
   }
+  if (!window.authService) {
+    showToast("Configuração do Supabase não encontrada.", "error", 5200);
+    return;
+  }
   try {
-    const data = window.authApi
-      ? path.includes("signup") || path.includes("register")
-        ? await window.authApi.registerUser(getBackendBaseUrl(), authToken, { email, password })
-        : await window.authApi.login(getBackendBaseUrl(), email, password)
-      : await apiFetch(path, {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            Accept: "application/json",
-          },
-          body: JSON.stringify({ email, password }),
-        }).then(async (response) => {
-          const payload = await response.json();
-          if (!response.ok) throw new Error(payload.message || payload.error || "Falha de autenticação");
-          return payload;
-        });
-    authToken = data.token || "";
-    currentUser = data.user || null;
-    persistAuthToken();
+    await window.authService.login(email, password);
     if (el.authPassword) el.authPassword.value = "";
-    updateAccessControls();
-    if (currentUser?.role === "admin") await loadUsers();
-    await hydrateRemoteLibrary(true);
+    await loadCurrentSession();
     setAccountMenuOpen(false);
-    showToast(successMessage, "good", 4200);
+    showToast("Login realizado com sucesso.", "good", 4200);
   } catch (error) {
-    console.error(error);
-    showToast(error.message || "Não foi possível autenticar.", "error", 5200);
+    console.error("Erro no login:", error);
+    showToast("E-mail ou senha inválidos.", "error", 5200);
+  }
+}
+
+async function signupUser() {
+  const email = String(el.authEmail?.value || "").trim();
+  const password = String(el.authPassword?.value || "");
+  const name = email ? email.split("@")[0] : "Usuário";
+  if (!email || password.length < 6) {
+    showToast("Informe email e senha com pelo menos 6 caracteres.", "warn", 5200);
+    return;
+  }
+  if (!window.authService) {
+    showToast("Configuração do Supabase não encontrada.", "error", 5200);
+    return;
+  }
+  try {
+    await window.authService.registerUser({ email, password, name });
+    if (el.authPassword) el.authPassword.value = "";
+    await loadCurrentSession();
+    showToast("Acesso criado. Verifique se é necessário confirmar o e-mail.", "good", 5600);
+  } catch (error) {
+    console.error("Erro ao criar acesso:", error);
+    showToast("Não foi possível criar o acesso.", "error", 5200);
   }
 }
 
 async function logoutUser() {
   try {
-    if (getBackendBaseUrl() && authToken) {
-      if (window.authApi) {
-        await window.authApi.logout(getBackendBaseUrl(), authToken);
-      } else {
-        await apiFetch("/api/auth/logout", { method: "POST" });
-      }
+    if (window.authService) {
+      await window.authService.logout();
     }
-  } catch {
-    // The local session is cleared even if the server is offline.
+  } catch (error) {
+    console.error("Erro ao encerrar sessão:", error);
   }
-  authToken = "";
   currentUser = null;
+  currentProfile = null;
   knownUsers = [];
-  persistAuthToken();
+  state.appView = "dashboard";
   updateAccessControls();
+  renderAll();
   showToast("Sessão encerrada.", "info", 4200);
 }
 
 async function loadUsers() {
-  if (!getBackendBaseUrl() || currentUser?.role !== "admin") return;
+  if (!canEdit() || !window.authService) return;
   try {
-    const data = window.authApi
-      ? await window.authApi.getUsers(getBackendBaseUrl(), authToken)
-      : await apiFetch("/api/users", { headers: { Accept: "application/json" } }).then(async (response) => {
-          const payload = await response.json();
-          if (!response.ok) throw new Error(payload.message || payload.error || "Falha ao carregar usuários");
-          return payload;
-        });
-    knownUsers = Array.isArray(data.users) ? data.users : [];
+    const users = await window.authService.getUsers();
+    knownUsers = Array.isArray(users) ? users : [];
     renderUsers();
   } catch (error) {
     console.error(error);
@@ -3447,156 +3418,61 @@ async function loadUsers() {
 }
 
 async function updateUserRole(userId, role) {
-  if (!userId || currentUser?.role !== "admin") return;
+  if (!userId || !canEdit() || !window.authService) return;
   try {
-    const data = window.authApi
-      ? await window.authApi.updateUserAdmin(getBackendBaseUrl(), authToken, userId, role === "admin")
-      : await apiFetch(`/api/users/${encodeURIComponent(userId)}`, {
-          method: "PATCH",
-          headers: {
-            "Content-Type": "application/json",
-            Accept: "application/json",
-          },
-          body: JSON.stringify({ role }),
-        }).then(async (response) => {
-          const payload = await response.json();
-          if (!response.ok) throw new Error(payload.message || payload.error || "Falha ao atualizar usuário");
-          return payload;
-        });
-    knownUsers = Array.isArray(data.users) ? data.users : [];
-    const refreshedCurrentUser = knownUsers.find((user) => (currentUser?.id && user.id === currentUser.id) || (currentUser?.email && user.email === currentUser.email));
-    if (refreshedCurrentUser) {
-      currentUser = { ...currentUser, ...refreshedCurrentUser };
+    const users = knownUsers.length ? knownUsers : await window.authService.getUsers();
+    const admins = users.filter((user) => user.is_admin === true || user.isAdmin === true || user.role === "admin");
+    const target = users.find((user) => String(user.id) === String(userId));
+    const targetIsAdmin = target?.is_admin === true || target?.isAdmin === true || target?.role === "admin";
+    const nextIsAdmin = role === "admin";
+    if (targetIsAdmin && !nextIsAdmin && admins.length <= 1) {
+      showToast("Não é possível remover o último administrador.", "warn", 5200);
+      return;
+    }
+    await window.authService.updateUserAdmin(userId, nextIsAdmin);
+    await loadUsers();
+    if (currentUser?.id === userId) {
+      const current = await window.authService.getCurrentProfile();
+      currentUser = current?.user || currentUser;
+      currentProfile = current?.profile || currentProfile;
     }
     renderAll();
     showToast("Permissão atualizada.", "good", 4200);
   } catch (error) {
     console.error(error);
-    showToast(error.message || "Não foi possível atualizar permissão.", "error", 5200);
+    showToast("Não foi possível atualizar permissão.", "error", 5200);
   }
 }
 
 function renderUsers() {
   if (!el.usersList || !el.usersCount) return;
   el.usersCount.textContent = integer.format(knownUsers.length);
-  if (currentUser?.role !== "admin") {
+  if (!canEdit()) {
     el.usersList.innerHTML = "";
     return;
   }
   el.usersList.innerHTML = knownUsers.length
     ? knownUsers
         .map(
-          (user) => `
+          (user) => {
+            const isAdmin = user.is_admin === true || user.isAdmin === true || user.role === "admin";
+            const name = user.name || (user.email ? user.email.split("@")[0] : "Usuário");
+            const cargo = user.cargo || (isAdmin ? "Administrador" : "Usuário");
+            return `
             <div class="user-row">
               <div>
-                <strong>${escapeHtml(user.email)}</strong>
-                <span>${user.role === "admin" ? "Admin" : "Visualização"}</span>
+                <strong>${escapeHtml(name)}</strong>
+                <span>${escapeHtml(user.email || "Sem e-mail")} · ${escapeHtml(cargo)}</span>
               </div>
-              <button class="secondary-button" type="button" data-user-id="${escapeAttribute(user.id)}" data-role="${user.role === "admin" ? "viewer" : "admin"}">
-                ${user.role === "admin" ? "Tornar viewer" : "Tornar admin"}
+              <button class="secondary-button" type="button" data-user-id="${escapeAttribute(user.id)}" data-role="${isAdmin ? "user" : "admin"}">
+                ${isAdmin ? "Remover admin" : "Tornar admin"}
               </button>
             </div>
-          `,
+          `;
+          },
         )
         .join("")
     : emptyState("Sem usuários", "Crie acessos para visualizar ou administrar.");
-}
-
-async function hydrateRemoteLibrary(force = false) {
-  const baseUrl = getBackendBaseUrl();
-  if (!baseUrl) {
-    updateBackendStatus("local", "Modo local");
-    return false;
-  }
-
-  if (backendSyncPromise && !force) {
-    return backendSyncPromise;
-  }
-
-  backendSyncPromise = (async () => {
-    updateBackendStatus("connecting", "Sincronizando backend...");
-    try {
-      const response = await apiFetch("/api/library", {
-        headers: {
-          Accept: "application/json",
-        },
-      });
-
-      if (!response.ok) {
-        const error = new Error(`GET /api/library failed (${response.status})`);
-        error.status = response.status;
-        throw error;
-      }
-
-      const remote = await response.json();
-      const remoteLibrary = mergeSeedIntoLibrary(remote);
-      const remoteHasUploads = remoteLibrary.datasets.some((dataset) => dataset.source !== "seed");
-      if (remoteHasUploads || remoteLibrary.seedDeleted) {
-        library = remoteLibrary;
-        state.activeDatasetId = remoteLibrary.activeDatasetId;
-        syncActiveDataset();
-        persistLibrary();
-        hydrateControls();
-        renderAll();
-        updateBackendStatus("online", "Backend online");
-      } else {
-        persistLibrary();
-        updateBackendStatus("online", "Backend online");
-        if (library.datasets.some((dataset) => dataset.source !== "seed")) {
-          await syncLibraryToBackend(false);
-        }
-      }
-      return true;
-    } catch (error) {
-      console.error(error);
-      updateBackendStatus(error.status === 401 ? "offline" : "offline", error.status === 401 ? "Login necessário" : "Backend offline");
-      if (force) {
-        showToast("Não foi possível sincronizar com o backend. Mantendo o modo local.", "warn", 6000);
-      }
-      return false;
-    } finally {
-      backendSyncPromise = null;
-    }
-  })();
-
-  return backendSyncPromise;
-}
-
-async function syncLibraryToBackend(showToastOnFailure = true) {
-  const baseUrl = getBackendBaseUrl();
-  if (!baseUrl) return false;
-
-  try {
-    const response = await apiFetch("/api/library", {
-      method: "PUT",
-      headers: {
-        "Content-Type": "application/json",
-        Accept: "application/json",
-      },
-      body: JSON.stringify({
-        activeDatasetId: library.activeDatasetId || state.activeDatasetId || "seed",
-        seedDeleted: Boolean(library.seedDeleted),
-        datasets: library.datasets.filter((dataset) => dataset.id !== EMPTY_DATASET_ID),
-      }),
-    });
-
-    if (!response.ok) {
-      const error = new Error(`PUT /api/library failed (${response.status})`);
-      error.status = response.status;
-      throw error;
-    }
-
-    updateBackendStatus("online", "Backend online");
-    persistLibrary();
-    return true;
-  } catch (error) {
-    console.error(error);
-    updateBackendStatus(error.status === 403 ? "offline" : "offline", error.status === 403 ? "Sem permissão de edição" : "Backend offline");
-    if (showToastOnFailure) {
-      showToast("Não foi possível salvar no backend. O cache local foi mantido.", "warn", 6000);
-    }
-    return false;
-  }
 }
 
 async function deleteActiveDataset() {
@@ -3612,7 +3488,7 @@ async function deleteActiveDataset() {
   const message =
     active.id === "seed"
       ? `Zerar a base fixa "${active.label}"? O dashboard ficará vazio até importar outro Excel.`
-      : `Excluir o arquivo "${active.label}"? Essa ação remove a biblioteca local e o backend.`;
+      : `Excluir o arquivo "${active.label}"? Essa ação remove a biblioteca local deste painel.`;
   const confirmed = window.confirm(message);
   if (!confirmed) return;
 
@@ -3634,7 +3510,6 @@ async function deleteActiveDataset() {
   persistState();
   persistLibrary();
   renderAll();
-  await syncLibraryToBackend();
   showToast(active.id === "seed" ? "Base fixa zerada." : `Arquivo "${active.label}" excluído.`, "good", 5000);
 }
 
@@ -3790,33 +3665,12 @@ function normalizeLoadedState(loadedState) {
   loadedState.metaAnual = Number(loadedState.metaAnual || 0);
   loadedState.metaAnualEditada = Boolean(loadedState.metaAnualEditada && loadedState.metaAnual > 0);
   loadedState.accountPanelOpen = false;
-  loadedState.apiBaseUrl = loadedState.apiBaseUrl || DEFAULT_BACKEND_URL;
   return loadedState;
 }
 
 function persistState() {
   try {
     window.localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
-  } catch {
-    // no-op
-  }
-}
-
-function loadAuthToken() {
-  try {
-    return String(window.localStorage.getItem(AUTH_STORAGE_KEY) || "");
-  } catch {
-    return "";
-  }
-}
-
-function persistAuthToken() {
-  try {
-    if (authToken) {
-      window.localStorage.setItem(AUTH_STORAGE_KEY, authToken);
-    } else {
-      window.localStorage.removeItem(AUTH_STORAGE_KEY);
-    }
   } catch {
     // no-op
   }

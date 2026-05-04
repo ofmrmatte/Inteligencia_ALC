@@ -2147,13 +2147,6 @@ body[data-theme="light"] .toast {
   flex-direction: column;
 }
 
-.sidebar-card--backend {
-  border-color: rgba(33, 212, 176, 0.18);
-  background:
-    radial-gradient(circle at top left, rgba(33, 212, 176, 0.08), transparent 30%),
-    linear-gradient(180deg, rgba(20, 29, 42, 0.9), rgba(16, 23, 34, 0.96));
-}
-
 .sidebar-card--auth,
 .sidebar-card--users {
   border-color: rgba(255, 159, 67, 0.18);
@@ -2202,7 +2195,6 @@ body[data-theme="light"] .toast {
   white-space: nowrap;
 }
 
-body[data-theme="light"] .sidebar-card--backend,
 body[data-theme="light"] .sidebar-card--auth,
 body[data-theme="light"] .sidebar-card--users {
   background:
@@ -2219,7 +2211,6 @@ body[data-theme="light"] .user-row {
   background: rgba(19, 35, 55, 0.04);
 }
 
-#backend-status,
 #sync-status,
 #auth-status {
   display: inline-flex;
@@ -2234,7 +2225,6 @@ body[data-theme="light"] .user-row {
   white-space: nowrap;
 }
 
-#backend-status[data-state="online"],
 #sync-status[data-state="online"] {
   color: #7fd8a5;
   border-color: rgba(88, 214, 141, 0.22);
@@ -2247,14 +2237,13 @@ body[data-theme="light"] .user-row {
   background: rgba(88, 214, 141, 0.08);
 }
 
-#auth-status[data-state="viewer"],
+#auth-status[data-state="user"],
 #auth-status[data-state="required"] {
   color: #ffc27f;
   border-color: rgba(255, 159, 67, 0.22);
   background: rgba(255, 159, 67, 0.08);
 }
 
-#backend-status[data-state="offline"],
 #sync-status[data-state="offline"] {
   color: #ff9d9d;
   border-color: rgba(255, 107, 107, 0.22);
@@ -2310,14 +2299,6 @@ body[data-theme="light"] .user-row {
 
 #account-toggle {
   order: 7;
-}
-
-.sidebar-card--backend .sidebar-card__title span {
-  color: #8fd0ff;
-}
-
-body[data-theme="light"] .sidebar-card--backend .sidebar-card__title span {
-  color: #12808f;
 }
 
 @keyframes riseIn {
@@ -2524,6 +2505,29 @@ html[data-filters-sidebar-open="false"] .sidebar {
 .account-menu__actions {
   display: grid;
   gap: 0.25rem;
+}
+
+.account-menu__identity {
+  display: grid;
+  gap: 0.12rem;
+  padding: 0.1rem 0.18rem 0.35rem;
+}
+
+.account-menu__identity strong {
+  overflow: hidden;
+  color: var(--text);
+  font-size: 0.88rem;
+  font-weight: 800;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.account-menu__identity span {
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 0.76rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .account-login {
