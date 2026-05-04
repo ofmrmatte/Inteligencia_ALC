@@ -60,13 +60,30 @@
         return null;
       }
 
-      const { data: profile, error } = await getClient()
+      let { data: profile, error } = await getClient()
         .from("profiles")
         .select("*")
         .eq("id", user.id)
-        .single();
+        .maybeSingle();
 
       if (error) throw error;
+
+      if (!profile) {
+        const { data: createdProfile, error: createError } = await getClient()
+          .from("profiles")
+          .insert({
+            id: user.id,
+            email: user.email,
+            name: user.user_metadata?.name || "Usuário",
+            role: "user",
+            is_admin: false,
+          })
+          .select()
+          .single();
+
+        if (createError) throw createError;
+        profile = createdProfile;
+      }
 
       return {
         user,

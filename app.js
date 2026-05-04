@@ -326,7 +326,6 @@ function bindEvents() {
   if (el.authLogout) {
     el.authLogout.addEventListener("click", async () => {
       await logoutUser();
-      setAccountMenuOpen(false);
     });
   }
   if (el.usersList) {
@@ -3157,7 +3156,7 @@ function applyTheme(theme) {
 }
 
 function canEdit() {
-  return currentProfile?.is_admin === true || currentProfile?.isAdmin === true || currentProfile?.role === "admin";
+  return currentProfile?.is_admin === true;
 }
 
 function getActionPermissions() {
@@ -3291,7 +3290,8 @@ function updateAccessControls() {
 function bindSupabaseAuthState() {
   if (supabaseAuthListenerBound || !window.supabaseClient?.auth) return;
   supabaseAuthListenerBound = true;
-  window.supabaseClient.auth.onAuthStateChange(async (_event, session) => {
+  window.supabaseClient.auth.onAuthStateChange(async (event, session) => {
+    console.log("Auth event:", event);
     if (!session?.user) {
       currentUser = null;
       currentProfile = null;
@@ -3300,7 +3300,26 @@ function bindSupabaseAuthState() {
       renderAccountPage();
       return;
     }
-    await loadCurrentSession();
+    try {
+      const current = await window.authService.getCurrentProfile();
+      currentUser = current?.user || session.user;
+      currentProfile = current?.profile || null;
+      if (canEdit()) {
+        await loadUsers();
+      } else {
+        knownUsers = [];
+      }
+      updateAccessControls();
+      renderAccountPage();
+    } catch (error) {
+      console.error("Erro ao carregar profile após auth change:", error);
+      currentUser = session.user;
+      currentProfile = null;
+      knownUsers = [];
+      updateAccessControls();
+      renderAccountPage();
+      showToast("Login feito, mas não foi possível carregar o perfil.", "warn", 5600);
+    }
   });
 }
 
@@ -3322,16 +3341,28 @@ async function loadCurrentSession() {
       renderAccountPage();
       return;
     }
-    const current = await window.authService.getCurrentProfile();
-    currentUser = current?.user || null;
-    currentProfile = current?.profile || null;
-    if (canEdit()) {
-      await loadUsers();
-    } else {
+    try {
+      const current = await window.authService.getCurrentProfile();
+      currentUser = current?.user || session.user;
+      currentProfile = current?.profile || null;
+      if (canEdit()) {
+        await loadUsers();
+      } else {
+        knownUsers = [];
+      }
+      updateAccessControls();
+      renderAccountPage();
+      return current;
+    } catch (profileError) {
+      console.error("Erro ao carregar profile:", profileError);
+      currentUser = session.user;
+      currentProfile = null;
       knownUsers = [];
+      updateAccessControls();
+      renderAccountPage();
+      showToast("Login feito, mas não foi possível carregar o perfil.", "warn", 5600);
+      return { user: session.user, profile: null };
     }
-    updateAccessControls();
-    renderAccountPage();
   } catch (error) {
     console.error("Erro ao carregar sessão:", error);
     currentUser = null;
@@ -3354,14 +3385,35 @@ async function loginUser() {
     return;
   }
   try {
-    await window.authService.login(email, password);
+    console.log("Tentando login:", email);
+    const loginData = await window.authService.login(email, password);
+    console.log("Login Supabase OK:", loginData?.user?.email);
+    if (!loginData?.user) {
+      showToast("Não foi possível autenticar o usuário.", "error", 5200);
+      return;
+    }
     if (el.authPassword) el.authPassword.value = "";
     await loadCurrentSession();
-    setAccountMenuOpen(false);
-    showToast("Login realizado com sucesso.", "good", 4200);
+    console.log("Profile carregado:", currentProfile);
+    console.log("isAdmin:", currentProfile?.is_admin);
+    if (currentUser) {
+      setAccountMenuOpen(false);
+      showToast("Login realizado com sucesso.", "good", 4200);
+    } else {
+      showToast("Login feito, mas não foi possível carregar a sessão.", "warn", 5600);
+    }
   } catch (error) {
     console.error("Erro no login:", error);
-    showToast("E-mail ou senha inválidos.", "error", 5200);
+    const message = String(error?.message || "").toLowerCase();
+    if (message.includes("invalid login credentials")) {
+      showToast("E-mail ou senha inválidos.", "error", 5200);
+      return;
+    }
+    if (message.includes("email not confirmed")) {
+      showToast("Confirme seu e-mail antes de acessar.", "warn", 5600);
+      return;
+    }
+    showToast("Não foi possível realizar login. Verifique o Supabase e tente novamente.", "error", 6200);
   }
 }
 
@@ -3395,11 +3447,14 @@ async function logoutUser() {
     }
   } catch (error) {
     console.error("Erro ao encerrar sessão:", error);
+    showToast("Não foi possível sair da conta.", "error", 5200);
+    return;
   }
   currentUser = null;
   currentProfile = null;
   knownUsers = [];
   state.appView = "dashboard";
+  state.accountPanelOpen = true;
   updateAccessControls();
   renderAll();
   showToast("Sessão encerrada.", "info", 4200);
