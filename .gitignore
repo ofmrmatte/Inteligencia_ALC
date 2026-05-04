@@ -1,4 +1,6 @@
 node_modules/
 backend/node_modules/
+backend/src/database/*.db
+backend/src/database/*.db-*
 .DS_Store
 Thumbs.db

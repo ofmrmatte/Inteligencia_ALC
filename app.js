@@ -6,6 +6,7 @@ const THEME_STORAGE_KEY = "alc-pre-fatura-dashboard-theme-v1";
 const BACKEND_STORAGE_KEY = "alc-pre-fatura-dashboard-backend-v1";
 const AUTH_STORAGE_KEY = "alc-pre-fatura-dashboard-auth-v1";
 const SIDEBAR_STORAGE_KEY = "filtersSidebarOpen";
+const DEFAULT_BACKEND_URL = "http://localhost:3001/api";
 const PDF_LOGO_IMAGE = {
   name: "ImLogo",
   width: 1080,
@@ -47,7 +48,7 @@ const STATE_DEFAULT = {
   deleteDatasetId: "",
   appView: "dashboard",
   theme: "dark",
-  apiBaseUrl: "",
+  apiBaseUrl: DEFAULT_BACKEND_URL,
   pnrGoalLimit: DEFAULT_PNR_GOAL_LIMIT,
   metaMensal: DEFAULT_PNR_GOAL_LIMIT,
   metaAnual: 0,
@@ -3117,6 +3118,7 @@ async function apiFetch(path, options = {}) {
   const response = await fetch(new URL(path, baseUrl).href, {
     ...options,
     headers,
+    credentials: "include",
   });
   if (response.status === 401) {
     authToken = "";
@@ -3209,8 +3211,7 @@ function applyTheme(theme) {
 }
 
 function canEdit() {
-  if (!getBackendBaseUrl()) return true;
-  return currentUser?.role === "admin";
+  return currentUser?.role === "admin" || currentUser?.isAdmin === true;
 }
 
 function getActionPermissions() {
@@ -3267,7 +3268,6 @@ function updateAccessControls() {
   const permissions = getActionPermissions();
   const accountMenuOpen = Boolean(state.accountPanelOpen);
   const showLogin = accountMenuOpen && !currentUser;
-  const showLocalSettings = accountMenuOpen && !backendConfigured;
   if (el.authStatus) {
     el.authStatus.textContent = currentUser ? (currentUser.role === "admin" ? "Admin" : "Visualização") : backendConfigured ? "Login necessário" : "Modo local";
     el.authStatus.dataset.state = currentUser?.role || (backendConfigured ? "required" : "local");
@@ -3330,7 +3330,7 @@ function updateAccessControls() {
     const profileButton = el.accountMenu.querySelector('[data-account-page="profile"]');
     const settingsButton = el.accountMenu.querySelector('[data-account-page="settings"]');
     if (profileButton) profileButton.hidden = !currentUser;
-    if (settingsButton) settingsButton.hidden = !(currentUser || showLocalSettings) || (backendConfigured && !isAdmin);
+    if (settingsButton) settingsButton.hidden = !permissions.isAdmin;
     positionAccountMenu();
   }
   renderUsers();
@@ -3345,10 +3345,9 @@ async function hydrateSession() {
     return;
   }
   try {
-    const response = await apiFetch("/api/auth/session", {
-      headers: { Accept: "application/json" },
-    });
-    const data = await response.json();
+    const data = window.authApi
+      ? await window.authApi.getCurrentUser(getBackendBaseUrl(), authToken)
+      : await apiFetch("/api/auth/session", { headers: { Accept: "application/json" } }).then((response) => response.json());
     currentUser = data.user || null;
     updateAccessControls();
     if (currentUser?.role === "admin") await loadUsers();
@@ -3378,16 +3377,22 @@ async function authenticateUser(path, successMessage) {
     return;
   }
   try {
-    const response = await apiFetch(path, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Accept: "application/json",
-      },
-      body: JSON.stringify({ email, password }),
-    });
-    const data = await response.json();
-    if (!response.ok) throw new Error(data.error || "Falha de autenticação");
+    const data = window.authApi
+      ? path.includes("signup") || path.includes("register")
+        ? await window.authApi.registerUser(getBackendBaseUrl(), authToken, { email, password })
+        : await window.authApi.login(getBackendBaseUrl(), email, password)
+      : await apiFetch(path, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Accept: "application/json",
+          },
+          body: JSON.stringify({ email, password }),
+        }).then(async (response) => {
+          const payload = await response.json();
+          if (!response.ok) throw new Error(payload.message || payload.error || "Falha de autenticação");
+          return payload;
+        });
     authToken = data.token || "";
     currentUser = data.user || null;
     persistAuthToken();
@@ -3406,7 +3411,11 @@ async function authenticateUser(path, successMessage) {
 async function logoutUser() {
   try {
     if (getBackendBaseUrl() && authToken) {
-      await apiFetch("/api/auth/logout", { method: "POST" });
+      if (window.authApi) {
+        await window.authApi.logout(getBackendBaseUrl(), authToken);
+      } else {
+        await apiFetch("/api/auth/logout", { method: "POST" });
+      }
     }
   } catch {
     // The local session is cleared even if the server is offline.
@@ -3422,9 +3431,13 @@ async function logoutUser() {
 async function loadUsers() {
   if (!getBackendBaseUrl() || currentUser?.role !== "admin") return;
   try {
-    const response = await apiFetch("/api/users", { headers: { Accept: "application/json" } });
-    const data = await response.json();
-    if (!response.ok) throw new Error(data.error || "Falha ao carregar usuários");
+    const data = window.authApi
+      ? await window.authApi.getUsers(getBackendBaseUrl(), authToken)
+      : await apiFetch("/api/users", { headers: { Accept: "application/json" } }).then(async (response) => {
+          const payload = await response.json();
+          if (!response.ok) throw new Error(payload.message || payload.error || "Falha ao carregar usuários");
+          return payload;
+        });
     knownUsers = Array.isArray(data.users) ? data.users : [];
     renderUsers();
   } catch (error) {
@@ -3436,16 +3449,20 @@ async function loadUsers() {
 async function updateUserRole(userId, role) {
   if (!userId || currentUser?.role !== "admin") return;
   try {
-    const response = await apiFetch(`/api/users/${encodeURIComponent(userId)}`, {
-      method: "PATCH",
-      headers: {
-        "Content-Type": "application/json",
-        Accept: "application/json",
-      },
-      body: JSON.stringify({ role }),
-    });
-    const data = await response.json();
-    if (!response.ok) throw new Error(data.error || "Falha ao atualizar usuário");
+    const data = window.authApi
+      ? await window.authApi.updateUserAdmin(getBackendBaseUrl(), authToken, userId, role === "admin")
+      : await apiFetch(`/api/users/${encodeURIComponent(userId)}`, {
+          method: "PATCH",
+          headers: {
+            "Content-Type": "application/json",
+            Accept: "application/json",
+          },
+          body: JSON.stringify({ role }),
+        }).then(async (response) => {
+          const payload = await response.json();
+          if (!response.ok) throw new Error(payload.message || payload.error || "Falha ao atualizar usuário");
+          return payload;
+        });
     knownUsers = Array.isArray(data.users) ? data.users : [];
     const refreshedCurrentUser = knownUsers.find((user) => (currentUser?.id && user.id === currentUser.id) || (currentUser?.email && user.email === currentUser.email));
     if (refreshedCurrentUser) {
@@ -3773,6 +3790,7 @@ function normalizeLoadedState(loadedState) {
   loadedState.metaAnual = Number(loadedState.metaAnual || 0);
   loadedState.metaAnualEditada = Boolean(loadedState.metaAnualEditada && loadedState.metaAnual > 0);
   loadedState.accountPanelOpen = false;
+  loadedState.apiBaseUrl = loadedState.apiBaseUrl || DEFAULT_BACKEND_URL;
   return loadedState;
 }
 

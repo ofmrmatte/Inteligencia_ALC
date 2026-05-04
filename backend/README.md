@@ -1,45 +1,49 @@
-# Pre-fatura storage API
+# Backend - Painel de Inteligência Operacional
 
-Backend Node para o dashboard estático da pré-fatura.
-
-Ele guarda a biblioteca de arquivos, controla login e separa permissões:
-
-- `admin`: importa, exclui, sincroniza e administra usuários.
-- `viewer`: acessa o dashboard apenas para visualização e filtros.
-
-O primeiro usuário criado vira `admin`. Os próximos usuários entram como `viewer` até um admin alterar o papel.
+API Node.js + Express com autenticação JWT, senhas com bcrypt e banco SQLite.
 
 ## Rodar localmente
 
-```bash
-node backend/server.js
+```powershell
+cd backend
+npm install
+npm run seed
+npm run dev
 ```
 
-Por padrão ele sobe em `http://localhost:8787`.
+Servidor local:
 
-## Endpoints principais
+```txt
+http://localhost:3001/api
+```
 
-- `GET /api/health`
-- `POST /api/auth/signup`
+Usuário inicial:
+
+```txt
+admin@empresa.com
+admin123
+```
+
+## Scripts
+
+- `npm run dev`: inicia com nodemon.
+- `npm start`: inicia em modo normal.
+- `npm run seed`: cria o admin inicial se ele ainda não existir.
+
+## Rotas principais
+
 - `POST /api/auth/login`
+- `POST /api/auth/register`
 - `POST /api/auth/logout`
-- `GET /api/auth/session`
-- `GET /api/users` somente admin
-- `PATCH /api/users/:id` somente admin
-- `GET /api/library`
-- `PUT /api/library` somente admin quando houver usuários cadastrados
-- `POST /api/reset` somente admin quando houver usuários cadastrados
+- `GET /api/auth/me`
+- `GET /api/users`
+- `POST /api/users`
+- `PATCH /api/users/:id`
+- `PATCH /api/users/:id/admin`
+- `DELETE /api/users/:id`
+- `POST /api/files/upload`
+- `DELETE /api/files/:id`
+- `GET /api/reports/download`
 
-## Deploy recomendado
+O token JWT é retornado no login e também enviado em cookie `httpOnly`. O dashboard ainda mantém fallback por `localStorage` para funcionamento local simples; em produção, priorizar cookie `httpOnly`.
 
-Use Render para o backend e GitHub Pages para o front-end.
-
-O `render.yaml` já está configurado com disco persistente em `/var/data`. Isso é importante porque o backend salva a biblioteca em JSON. Sem disco persistente, a biblioteca pode sumir em redeploy.
-
-Depois do deploy:
-
-1. Abra o dashboard no GitHub Pages.
-2. Cole a URL do Render em `API Base URL`.
-3. Clique em `Salvar conexão`.
-4. Crie o primeiro acesso pelo card `Acesso`.
-5. Use esse primeiro acesso como Admin para importar arquivos e administrar usuários.

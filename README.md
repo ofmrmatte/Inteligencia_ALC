@@ -18,12 +18,26 @@ Para importar novos dados, use o botão **Importar Excel** e selecione uma ou ma
 - `backend/`: backend simples para sincronização opcional.
 - `render.yaml`: configuração opcional de deploy no Render.
 
-## Backend opcional
+## Backend de login e permissões
 
 ```powershell
 cd backend
 npm install
-npm start
+npm run seed
+npm run dev
 ```
 
-Depois informe a URL do backend no campo **API Base URL** dentro do dashboard.
+API local:
+
+```txt
+http://localhost:3001/api
+```
+
+Usuário inicial:
+
+```txt
+admin@empresa.com
+admin123
+```
+
+O dashboard já usa `http://localhost:3001/api` como backend padrão. A autenticação usa JWT, senha criptografada com bcrypt e permissões para relatório, upload, exclusão e administração de usuários.

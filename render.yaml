@@ -3,7 +3,7 @@ services:
     name: pre-fatura-storage
     runtime: node
     rootDir: backend
-    buildCommand: npm install
+    buildCommand: npm install && npm run seed
     startCommand: npm start
     healthCheckPath: /api/health
     disk:
@@ -12,6 +12,12 @@ services:
       sizeGB: 1
     envVars:
       - key: PORT
-        value: 8787
-      - key: PRE_FATURA_DATA_DIR
-        value: /var/data
+        value: 3001
+      - key: JWT_SECRET
+        generateValue: true
+      - key: JWT_EXPIRES_IN
+        value: 7d
+      - key: DATABASE_URL
+        value: /var/data/app.db
+      - key: FRONTEND_URL
+        value: https://ofmrmatte.github.io
