@@ -238,6 +238,7 @@ function cacheDom() {
   el.statusText = document.getElementById("status-text");
   el.lastUpdate = document.getElementById("last-update");
   el.syncStatus = document.getElementById("sync-status");
+  el.viewToolbar = document.querySelector(".view-toolbar");
   el.sheetTabs = document.getElementById("sheet-tabs");
   el.monthlyBaseView = document.getElementById("monthly-base-view");
   el.profileView = document.getElementById("profile-view");
@@ -858,8 +859,20 @@ function hydrateControls() {
 
   updateDatasetMeta();
   hydrateThemeControls();
+  updateGlobalPeriodFiltersVisibility();
 
   renderTabs();
+}
+
+function updateGlobalPeriodFiltersVisibility(isEvolutionView = state.sheet === MONTHLY_BASE_VIEW) {
+  const monthFilter = el.monthSelect?.closest(".global-period-filter");
+  const periodFilter = el.periodSelect?.closest(".global-period-filter");
+  [monthFilter, periodFilter].forEach((filter) => {
+    if (filter) filter.hidden = isEvolutionView;
+  });
+  if (el.viewToolbar) {
+    el.viewToolbar.classList.toggle("is-evolution-view", isEvolutionView);
+  }
 }
 
 function renderPeriodSelect() {
@@ -1104,11 +1117,13 @@ function renderAll() {
   const sorted = sortRows(filtered);
   const paged = paginateRows(sorted);
   const summary = buildSummary(filtered);
+  const monthlyView = state.sheet === MONTHLY_BASE_VIEW;
 
   if (state.appView === "settings" && !canEdit()) {
     state.appView = "dashboard";
   }
   const accountView = state.appView === "profile" || state.appView === "settings";
+  updateGlobalPeriodFiltersVisibility(monthlyView && !accountView);
   toggleAccountView(accountView);
   if (accountView) {
     renderAccountPage();
@@ -1129,7 +1144,6 @@ function renderAll() {
     return;
   }
 
-  const monthlyView = state.sheet === MONTHLY_BASE_VIEW;
   toggleDashboardView(monthlyView);
   if (monthlyView) {
     renderMonthlyBaseEvolution();

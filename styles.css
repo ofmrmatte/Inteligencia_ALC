@@ -648,6 +648,10 @@ body[data-theme="light"] #theme-toggle::before {
   gap: 0.75rem;
 }
 
+.view-toolbar.is-evolution-view {
+  grid-template-columns: minmax(0, 1fr);
+}
+
 .sheet-tabs {
   display: flex;
   flex-wrap: wrap;
@@ -2759,6 +2763,10 @@ html[data-filters-sidebar-open="false"] .sidebar {
 .view-toolbar {
   grid-template-columns: minmax(0, 1fr) auto auto;
   align-items: center;
+}
+
+.view-toolbar.is-evolution-view {
+  grid-template-columns: minmax(0, 1fr);
 }
 
 .sheet-tabs {
