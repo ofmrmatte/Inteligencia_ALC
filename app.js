@@ -348,6 +348,7 @@ function bindEvents() {
         return;
       }
       await reloadDashboardFilesList();
+      hydrateControls();
       renderFileDeleteMenu();
       if (el.fileDeleteMenu) el.fileDeleteMenu.hidden = !el.fileDeleteMenu.hidden;
     });
@@ -411,22 +412,20 @@ function bindEvents() {
   });
 
   if (el.periodSelect) {
-    el.periodSelect.addEventListener("change", (event) => {
+    el.periodSelect.addEventListener("change", async (event) => {
       state.period = normalizePeriodMode(event.target.value);
       state.page = 1;
-      hydrateControls();
       persistState();
-      renderAll();
+      await loadDashboardDataByFilters();
     });
   }
   if (el.monthSelect) {
-    el.monthSelect.addEventListener("change", (event) => {
+    el.monthSelect.addEventListener("change", async (event) => {
       state.monthFilter = event.target.value;
       state.page = 1;
-      syncActiveDataset();
-      hydrateControls();
+      ensureCurrentPeriodIsAvailable();
       persistState();
-      renderAll();
+      await loadDashboardDataByFilters();
     });
   }
 
@@ -699,8 +698,8 @@ function hydrateControls() {
   syncActiveDataset();
   const options = buildOptions(allRows);
   renderDatasetSelect();
-  renderPeriodSelect();
   renderMonthSelect();
+  renderPeriodSelect();
   renderFileDeleteMenu();
   populateSelect(el.sheetSelect, SHEET_ORDER, state.sheet);
   populateSelect(el.typeSelect, options.tipos, state.tipo);
@@ -722,11 +721,10 @@ function hydrateControls() {
 function renderPeriodSelect() {
   if (!el.periodSelect) return;
   state.period = normalizePeriodMode(state.period);
-  const options = [
-    ["month", "Mês completo"],
-    ["q1", "1ª quinzena"],
-    ["q2", "2ª quinzena"],
-  ];
+  const options = buildPeriodOptions();
+  if (!options.some(([value]) => value === state.period)) {
+    state.period = options[0]?.[0] || "month";
+  }
   el.periodSelect.innerHTML = options
     .map(([value, label]) => `<option value="${value}" ${state.period === value ? "selected" : ""}>${escapeHtml(label)}</option>`)
     .join("");
@@ -735,10 +733,9 @@ function renderPeriodSelect() {
 function renderMonthSelect() {
   if (!el.monthSelect) return;
   const months = getAvailableMonthOptions();
-  const activePeriod = getDatasetPeriod(getActiveDataset());
-  if (!state.monthFilter) state.monthFilter = activePeriod.key;
+  if (!state.monthFilter) state.monthFilter = "all";
   if (state.monthFilter !== "all" && !months.some((month) => month.key === state.monthFilter)) {
-    state.monthFilter = activePeriod.key;
+    state.monthFilter = "all";
   }
   el.monthSelect.innerHTML = [
     `<option value="all" ${state.monthFilter === "all" ? "selected" : ""}>Todos</option>`,
@@ -751,15 +748,32 @@ function renderMonthSelect() {
 
 function getAvailableMonthOptions() {
   const months = new Map();
-  library.datasets
-    .filter((dataset) => dataset && dataset.id !== EMPTY_DATASET_ID && Array.isArray(dataset.rows) && dataset.rows.length)
-    .forEach((dataset) => {
-      const period = getDatasetPeriod(dataset);
+  dashboardFileRecords
+    .filter(isUsableDashboardFileRecord)
+    .forEach((record) => {
+      const period = getFileRecordPeriod(record);
       if (!months.has(period.key)) {
         months.set(period.key, { key: period.key, label: period.monthLabel, sort: period.sort });
       }
     });
   return Array.from(months.values()).sort((a, b) => a.sort - b.sort);
+}
+
+function buildPeriodOptions() {
+  const files = getFilesForMonth(dashboardFileRecords, state.monthFilter || "all");
+  if (!files.length) return [["month", "Mês completo"]];
+  const modes = new Set(files.map((file) => getFileRecordPeriod(file).periodType));
+  const options = [["month", "Mês completo"]];
+  if (modes.has("q1")) options.push(["q1", "1ª quinzena"]);
+  if (modes.has("q2")) options.push(["q2", "2ª quinzena"]);
+  return options;
+}
+
+function ensureCurrentPeriodIsAvailable() {
+  const options = buildPeriodOptions();
+  if (!options.some(([value]) => value === state.period)) {
+    state.period = options[0]?.[0] || "month";
+  }
 }
 
 function hydrateValueSortControls() {
@@ -770,7 +784,8 @@ function hydrateValueSortControls() {
 
 function renderDatasetSelect() {
   if (!el.datasetSelect) return;
-  const datasets = library.datasets.length ? library.datasets : [buildEmptyDataset()];
+  const selectableDatasets = library.datasets.filter((dataset) => dataset?.source !== "filtered");
+  const datasets = selectableDatasets.length ? selectableDatasets : [buildEmptyDataset()];
   el.datasetSelect.innerHTML = datasets
     .map((dataset) => {
       const selected = dataset.id === state.activeDatasetId ? "selected" : "";
@@ -854,7 +869,7 @@ function updateDatasetMeta() {
 }
 
 function getDeletableDatasets() {
-  return library.datasets.filter((dataset) => dataset && dataset.id !== EMPTY_DATASET_ID && (dataset.source === "supabase" || (Array.isArray(dataset.rows) && dataset.rows.length)));
+  return library.datasets.filter((dataset) => dataset && dataset.source !== "filtered" && dataset.id !== EMPTY_DATASET_ID && (dataset.source === "supabase" || (Array.isArray(dataset.rows) && dataset.rows.length)));
 }
 
 function isUsableDashboardFileRecord(record) {
@@ -875,6 +890,21 @@ function getFileRowsLabel(fileRecord, dataset = null) {
   if (rows > 0) return `${integer.format(rows)} registros`;
   if (fileRecord?.status === "empty_or_parse_error") return "0 registros válidos";
   return "Registros não calculados";
+}
+
+function getFilesForMonth(files, monthKey) {
+  return (Array.isArray(files) ? files : [])
+    .filter(isUsableDashboardFileRecord)
+    .filter((file) => monthKey === "all" || getFileRecordPeriod(file).key === monthKey);
+}
+
+function getFilesByMonthAndPeriod(files, monthKey, periodMode) {
+  const normalizedMonth = monthKey || "all";
+  const normalizedPeriod = normalizePeriodMode(periodMode);
+  return getFilesForMonth(files, normalizedMonth).filter((file) => {
+    if (normalizedPeriod === "month") return true;
+    return getFileRecordPeriod(file).periodType === normalizedPeriod;
+  });
 }
 
 function getSelectedDeleteDataset() {
@@ -2657,7 +2687,7 @@ function buildSummary(rows) {
 function buildMonthlyComparison() {
   const map = new Map();
   for (const dataset of library.datasets) {
-    if (!dataset || dataset.id === EMPTY_DATASET_ID || !Array.isArray(dataset.rows) || !dataset.rows.length) continue;
+    if (!dataset || dataset.source === "filtered" || dataset.id === EMPTY_DATASET_ID || !Array.isArray(dataset.rows) || !dataset.rows.length) continue;
     const scopedRows = getMonthlyComparisonRows(dataset.rows);
     if (!scopedRows.length) continue;
     const period = getDatasetPeriod({ ...dataset, rows: scopedRows });
@@ -2697,6 +2727,7 @@ function getMonthlyComparisonRows(rows) {
 }
 
 function getDatasetPeriod(dataset) {
+  if (dataset?.remoteRecord) return getFileRecordPeriod(dataset.remoteRecord);
   const fromName = String(dataset.label || dataset.fileName || "");
   const month = detectMonth(fromName) || detectMonthFromRows(dataset.rows);
   const year = detectYear(fromName) || detectYearFromRows(dataset.rows) || String(new Date().getFullYear());
@@ -2707,6 +2738,63 @@ function getDatasetPeriod(dataset) {
     sort: Number(year) * 100 + monthIndex,
     monthLabel,
   };
+}
+
+function getFileRecordPeriod(fileRecord) {
+  const name = `${fileRecord?.file_name || ""} ${fileRecord?.period_label || ""} ${fileRecord?.metadata?.period_label || ""}`;
+  const monthNumberValue =
+    normalizeReferenceMonth(fileRecord?.reference_month) ||
+    normalizeReferenceMonth(fileRecord?.metadata?.reference_month) ||
+    String(monthNumber(detectMonth(name)) || 1).padStart(2, "0");
+  const yearValue =
+    normalizeReferenceYear(fileRecord?.reference_year) ||
+    normalizeReferenceYear(fileRecord?.metadata?.reference_year) ||
+    detectYear(name) ||
+    String(new Date().getFullYear());
+  const monthIndex = Number(monthNumberValue) || 1;
+  const monthName = MONTHS[monthIndex - 1] || "";
+  const periodType = normalizePeriodMode(fileRecord?.period_type || fileRecord?.metadata?.period_type || getPeriodModeFromLabel(name));
+  return {
+    key: `${yearValue}-${String(monthIndex).padStart(2, "0")}`,
+    sort: Number(yearValue) * 100 + monthIndex,
+    monthLabel: `${capitalize(monthName || "Sem mês")} / ${yearValue}`,
+    periodType,
+    periodLabel: getPeriodModeLabel(periodType),
+  };
+}
+
+function normalizeReferenceMonth(value) {
+  if (value == null || value === "") return "";
+  const numeric = Number(String(value).replace(/\D/g, ""));
+  if (Number.isFinite(numeric) && numeric >= 1 && numeric <= 12) return String(numeric).padStart(2, "0");
+  const detected = monthNumber(String(value));
+  return detected ? String(detected).padStart(2, "0") : "";
+}
+
+function normalizeReferenceYear(value) {
+  if (value == null || value === "") return "";
+  const detected = detectYear(String(value));
+  return detected || "";
+}
+
+function getPeriodModeFromLabel(value) {
+  const label = detectQuinzena(value);
+  if (label.includes("1")) return "q1";
+  if (label.includes("2")) return "q2";
+  return "month";
+}
+
+function buildActivePeriodLabel(monthKey, periodMode, selectedFiles = []) {
+  const normalizedPeriod = normalizePeriodMode(periodMode);
+  const periodLabel = getPeriodModeLabel(normalizedPeriod);
+  const fileCount = selectedFiles.length;
+  if (monthKey === "all") {
+    const years = [...new Set(selectedFiles.map((file) => getFileRecordPeriod(file).key.slice(0, 4)).filter(Boolean))].sort();
+    const yearLabel = years.length === 1 ? years[0] : years.length ? `${years[0]}-${years[years.length - 1]}` : "Todos";
+    return `${yearLabel} · todos os meses${normalizedPeriod === "month" ? "" : ` · ${periodLabel}`} · ${integer.format(fileCount)} arquivo${fileCount === 1 ? "" : "s"}`;
+  }
+  const month = getAvailableMonthOptions().find((option) => option.key === monthKey);
+  return `${month?.label || monthKey}${normalizedPeriod === "month" ? " · mês completo" : ` · ${periodLabel}`} · ${integer.format(fileCount)} arquivo${fileCount === 1 ? "" : "s"}`;
 }
 
 function detectMonthFromRows(rows) {
@@ -3164,6 +3252,8 @@ async function uploadDashboardFile(file) {
   }
   const period = getDatasetPeriod(previewDataset);
   const [referenceYear, referenceMonth] = String(period.key || "").split("-");
+  const periodType = getDatasetQuarterMode(previewDataset);
+  const periodLabel = getPeriodModeLabel(periodType);
   const safeName = file.name
     .normalize("NFD")
     .replace(/[\u0300-\u036f]/g, "")
@@ -3203,10 +3293,14 @@ async function uploadDashboardFile(file) {
       uploaded_by_email: currentUser.email,
       reference_month: referenceMonth || "",
       reference_year: referenceYear || "",
+      period_label: periodLabel,
+      period_type: periodType,
       is_active: true,
       status: "loaded",
       metadata: {
         parsed_rows: previewDataset.rows.length,
+        period_label: periodLabel,
+        period_type: periodType,
         uploaded_at: new Date().toISOString(),
         duplicatesSkipped: normalizeWorkbook.lastStats?.duplicatesSkipped || 0,
       },
@@ -3219,8 +3313,12 @@ async function uploadDashboardFile(file) {
     throw new Error("Arquivo enviado, mas houve erro ao salvar o registro.");
   }
 
-  await loadFileFromStorage(data, { skipDownloadDataset: previewDataset });
+  const uploadedPeriod = getFileRecordPeriod(data);
+  state.monthFilter = uploadedPeriod.key;
+  state.period = uploadedPeriod.periodType;
+  persistState();
   await loadDashboardFilesFromSupabase({ loadActive: false, render: false });
+  await loadDashboardDataByFilters({ files: dashboardFileRecords, render: true, silent: true });
 }
 
 async function loadDashboardFilesFromSupabase(options = {}) {
@@ -3247,6 +3345,7 @@ async function loadDashboardFilesFromSupabase(options = {}) {
     }
 
     dashboardFileRecords = (Array.isArray(data) ? data : []).filter(isUsableDashboardFileRecord);
+    await hydrateDashboardFileMetadata(dashboardFileRecords);
     if (validateStorage && dashboardFileRecords.length) {
       dashboardFileRecords = await validateDashboardFileRecords(dashboardFileRecords);
     }
@@ -3273,14 +3372,15 @@ async function loadDashboardFilesFromSupabase(options = {}) {
       });
     }).filter(Boolean);
 
+    const currentScope = activeDataset?.source === "filtered" ? activeDataset : null;
     library = {
-      activeDatasetId: activeFile?.id || datasets[0]?.id || EMPTY_DATASET_ID,
-      datasets: datasets.length ? datasets : [buildEmptyDataset()],
+      activeDatasetId: loadActive ? activeFile?.id || datasets[0]?.id || EMPTY_DATASET_ID : currentScope?.id || activeFile?.id || datasets[0]?.id || EMPTY_DATASET_ID,
+      datasets: currentScope ? [currentScope, ...datasets] : datasets.length ? datasets : [buildEmptyDataset()],
     };
     state.activeDatasetId = library.activeDatasetId;
 
     if (loadActive && activeFile) {
-      await loadFileFromStorage(activeFile, { render: false, silent: true });
+      await loadDashboardDataByFilters({ files: dashboardFileRecords, render: false, silent: true });
     } else {
       syncActiveDataset();
     }
@@ -3299,9 +3399,94 @@ async function loadDashboardFilesFromSupabase(options = {}) {
 async function reloadDashboardFilesList(options = {}) {
   return loadDashboardFilesFromSupabase({
     loadActive: false,
-    render: true,
+    render: options.render === true,
     validateStorage: options.validateStorage !== false,
   });
+}
+
+async function hydrateDashboardFileMetadata(records) {
+  if (!Array.isArray(records) || !records.length) return records;
+  const updates = [];
+  for (const record of records) {
+    const original = {
+      reference_month: record.reference_month,
+      reference_year: record.reference_year,
+      period_label: record.period_label,
+      period_type: record.period_type,
+      metadataPeriodLabel: record.metadata?.period_label,
+      metadataPeriodType: record.metadata?.period_type,
+    };
+    const hadStoredPeriod = Boolean(original.period_type || original.metadataPeriodType);
+    const nameText = `${record.file_name || ""} ${record.period_label || ""} ${record.metadata?.period_label || ""}`;
+    let month = normalizeReferenceMonth(record.reference_month) || normalizeReferenceMonth(record.metadata?.reference_month) || normalizeReferenceMonth(detectMonth(nameText));
+    let year = normalizeReferenceYear(record.reference_year) || normalizeReferenceYear(record.metadata?.reference_year) || detectYear(nameText);
+    let periodType = normalizePeriodMode(record.period_type || record.metadata?.period_type || getPeriodModeFromLabel(nameText));
+
+    if ((!month || !year) && record.storage_path && window.supabaseClient) {
+      try {
+        const dataset = await loadRowsFromStorage(record);
+        const rows = Array.isArray(dataset?.rows) ? dataset.rows : [];
+        month = month || normalizeReferenceMonth(detectMonthFromRows(rows));
+        year = year || detectYearFromRows(rows);
+        if (!hadStoredPeriod) {
+          periodType = getDatasetQuarterMode(dataset);
+        }
+      } catch (error) {
+        console.error("[FILES] Não foi possível inferir metadados a partir do arquivo:", error);
+      }
+    }
+
+    const inferred = getFileRecordPeriod({
+      ...record,
+      reference_month: month || record.reference_month,
+      reference_year: year || record.reference_year,
+      period_type: periodType,
+    });
+    const next = {
+      ...record,
+      reference_month: month || String(inferred.key).slice(5, 7),
+      reference_year: year || String(inferred.key).slice(0, 4),
+      period_label: original.period_label || original.metadataPeriodLabel || getPeriodModeLabel(periodType),
+      period_type: periodType,
+      metadata: {
+        ...(record.metadata || {}),
+        reference_month: record.metadata?.reference_month || month || String(inferred.key).slice(5, 7),
+        reference_year: record.metadata?.reference_year || year || String(inferred.key).slice(0, 4),
+        period_label: original.metadataPeriodLabel || original.period_label || getPeriodModeLabel(periodType),
+        period_type: original.metadataPeriodType || original.period_type || periodType,
+      },
+    };
+    Object.assign(record, next);
+    const needsUpdate =
+      !original.reference_month ||
+      !original.reference_year ||
+      !original.period_label ||
+      !original.period_type ||
+      !original.metadataPeriodLabel ||
+      !original.metadataPeriodType;
+    if (canEdit() && needsUpdate) {
+      updates.push(next);
+    }
+  }
+
+  for (const record of updates) {
+    try {
+      await window.supabaseClient
+        .from("dashboard_files")
+        .update({
+          reference_month: record.reference_month,
+          reference_year: record.reference_year,
+          period_label: record.period_label,
+          period_type: record.period_type,
+          metadata: record.metadata,
+          updated_at: new Date().toISOString(),
+        })
+        .eq("id", record.id);
+    } catch (error) {
+      console.error("[FILES] Não foi possível atualizar metadados de período:", error);
+    }
+  }
+  return records;
 }
 
 async function validateDashboardFileRecords(records) {
@@ -3339,6 +3524,205 @@ async function markDashboardFileMissing(fileRecord, error) {
       .eq("id", fileRecord.id);
   } catch (updateError) {
     console.error("[STORAGE] Não foi possível marcar arquivo ausente:", updateError);
+  }
+}
+
+async function loadDashboardDataByFilters(options = {}) {
+  if (!currentUser || !window.supabaseClient) {
+    clearDashboardData({ render: options.render !== false, preserveRecords: false });
+    return;
+  }
+  const shouldRender = options.render !== false;
+  dashboardFilesLoading = true;
+  updateDatasetMeta();
+  try {
+    const files = Array.isArray(options.files) ? options.files : await loadDashboardFilesFromSupabase({ loadActive: false, render: false, validateStorage: false });
+    await hydrateDashboardFileMetadata(files);
+    dashboardFileRecords = files.filter(isUsableDashboardFileRecord);
+    if (!dashboardFileRecords.length) {
+      dashboardFilesLoading = false;
+      clearDashboardData({ render: shouldRender, preserveRecords: false });
+      return;
+    }
+
+    if (!state.monthFilter) state.monthFilter = "all";
+    if (state.monthFilter !== "all" && !getAvailableMonthOptions().some((month) => month.key === state.monthFilter)) {
+      state.monthFilter = "all";
+    }
+    ensureCurrentPeriodIsAvailable();
+
+    const selectedFiles = getFilesByMonthAndPeriod(dashboardFileRecords, state.monthFilter || "all", state.period);
+    if (!selectedFiles.length) {
+      dashboardFilesLoading = false;
+      clearDashboardData({ render: shouldRender, preserveRecords: true });
+      showToast("Nenhum arquivo encontrado para o mês/período selecionado.", "warn", 5200);
+      return;
+    }
+
+    const selectedDatasets = [];
+    for (const fileRecord of selectedFiles) {
+      const dataset = await loadRowsFromStorage(fileRecord);
+      if (dataset?.rows?.length) selectedDatasets.push(dataset);
+    }
+
+    const rows = selectedDatasets.flatMap((dataset) => dataset.rows);
+    if (!rows.length) {
+      dashboardFilesLoading = false;
+      clearDashboardData({ render: shouldRender, preserveRecords: true });
+      showToast("Nenhum registro válido encontrado para o mês/período selecionado.", "warn", 5200);
+      return;
+    }
+
+    replaceDashboardData(rows, {
+      selectedFiles,
+      selectedDatasets,
+      selectedMonth: state.monthFilter || "all",
+      selectedPeriod: state.period,
+    });
+    if (shouldRender) {
+      hydrateControls();
+      renderAll();
+    } else {
+      syncActiveDataset();
+      updateDatasetMeta();
+    }
+    if (!options.silent) showToast("Dados do período carregados.", "good", 3200);
+  } finally {
+    dashboardFilesLoading = false;
+    updateDatasetMeta();
+  }
+}
+
+async function loadRowsFromStorage(fileRecord) {
+  const { data: blob, error } = await window.supabaseClient.storage
+    .from("dashboard-files")
+    .download(fileRecord.storage_path);
+
+  if (error) {
+    console.error("[STORAGE] Arquivo não encontrado ou erro no download:", error);
+    await markDashboardFileMissing(fileRecord, error);
+    return null;
+  }
+
+  const file = new File([blob], fileRecord.file_name, {
+    type: fileRecord.file_type || blob.type,
+  });
+  const dataset = await processDashboardFile(file, fileRecord);
+  const normalized = normalizeDatasetRecord({
+    ...dataset,
+    id: fileRecord.id,
+    fileName: fileRecord.file_name,
+    label: humanizeWorkbookName(fileRecord.file_name),
+    source: "supabase",
+    importedAt: fileRecord.created_at,
+    remoteRecord: fileRecord,
+    storagePath: fileRecord.storage_path,
+  });
+
+  const parsedRows = normalized?.rows?.length || 0;
+  if (!parsedRows) {
+    await markDashboardFileParseEmpty(fileRecord);
+    return null;
+  }
+
+  await updateDashboardFileParsedRows(fileRecord, parsedRows);
+  return normalized;
+}
+
+function replaceDashboardData(rows, context = {}) {
+  const selectedFiles = Array.isArray(context.selectedFiles) ? context.selectedFiles : [];
+  const selectedDatasets = Array.isArray(context.selectedDatasets) ? context.selectedDatasets : [];
+  const label = buildActivePeriodLabel(context.selectedMonth || "all", context.selectedPeriod || "month", selectedFiles);
+  const scopeDataset = {
+    id: "__filtered_scope",
+    fileName: label,
+    label,
+    source: "filtered",
+    importedAt: new Date().toISOString(),
+    remoteRecord: null,
+    rows: rows.map(normalizeStoredRow),
+    scopedDatasets: selectedDatasets,
+  };
+
+  const datasetById = new Map(selectedDatasets.map((dataset) => [dataset.id, dataset]));
+  const fileDatasets = dashboardFileRecords.map((record) => {
+    const loaded = datasetById.get(record.id);
+    return loaded || normalizeDatasetRecord({
+      id: record.id,
+      fileName: record.file_name,
+      label: humanizeWorkbookName(record.file_name),
+      source: "supabase",
+      importedAt: record.created_at,
+      remoteRecord: record,
+      storagePath: record.storage_path,
+      rows: [],
+    });
+  }).filter(Boolean);
+
+  currentActiveFile = {
+    id: scopeDataset.id,
+    file_name: label,
+    is_active: false,
+    files_count: selectedFiles.length,
+    rows_count: rows.length,
+  };
+  library = {
+    activeDatasetId: scopeDataset.id,
+    datasets: [scopeDataset, ...fileDatasets],
+  };
+  state.activeDatasetId = scopeDataset.id;
+  state.fileName = label;
+  state.page = 1;
+  syncActiveDataset();
+}
+
+async function updateDashboardFileParsedRows(fileRecord, parsedRows) {
+  const metadata = {
+    ...(fileRecord.metadata || {}),
+    parsed_rows: parsedRows,
+    last_loaded_at: new Date().toISOString(),
+    period_label: fileRecord.period_label || fileRecord.metadata?.period_label || getFileRecordPeriod(fileRecord).periodLabel,
+    period_type: fileRecord.period_type || fileRecord.metadata?.period_type || getFileRecordPeriod(fileRecord).periodType,
+  };
+  Object.assign(fileRecord, {
+    status: "loaded",
+    metadata,
+  });
+  if (!canEdit()) return;
+  try {
+    await window.supabaseClient
+      .from("dashboard_files")
+      .update({
+        status: "loaded",
+        metadata,
+        updated_at: new Date().toISOString(),
+      })
+      .eq("id", fileRecord.id);
+  } catch (error) {
+    console.error("[FILES] Não foi possível atualizar contagem processada:", error);
+  }
+}
+
+async function markDashboardFileParseEmpty(fileRecord) {
+  const metadata = {
+    ...(fileRecord.metadata || {}),
+    parsed_rows: 0,
+    last_parse_error: "Arquivo sem registros ou falha de leitura",
+    last_loaded_at: new Date().toISOString(),
+  };
+  Object.assign(fileRecord, { status: "empty_or_parse_error", metadata });
+  if (!canEdit()) return;
+  try {
+    await window.supabaseClient
+      .from("dashboard_files")
+      .update({
+        status: "empty_or_parse_error",
+        metadata,
+        updated_at: new Date().toISOString(),
+      })
+      .eq("id", fileRecord.id);
+  } catch (error) {
+    console.error("[FILES] Não foi possível marcar arquivo vazio:", error);
   }
 }
 
@@ -3628,7 +4012,11 @@ async function setActiveDashboardFile(fileId) {
     });
   });
   dashboardFileRecords = Array.from(recordsById.values());
-  await loadFileFromStorage(data, { silent: true });
+  const period = getFileRecordPeriod(data);
+  state.monthFilter = period.key;
+  state.period = period.periodType;
+  persistState();
+  await loadDashboardDataByFilters({ files: dashboardFileRecords, render: true, silent: true });
   showToast("Arquivo ativo atualizado.", "good", 4200);
 }
 
@@ -4483,6 +4871,13 @@ function normalizePeriodMode(value) {
 
 function buildActiveDatasetScope(referenceDataset) {
   const reference = referenceDataset || buildEmptyDataset();
+  if (reference.source === "filtered") {
+    return {
+      rows: Array.isArray(reference.rows) ? reference.rows.slice() : [],
+      datasets: Array.isArray(reference.scopedDatasets) ? reference.scopedDatasets : [reference],
+      label: reference.label || "Período filtrado",
+    };
+  }
   if (!reference.rows?.length || reference.id === EMPTY_DATASET_ID) {
     return { rows: reference.rows ? reference.rows.slice() : [], datasets: [reference], label: reference.label || "Sem dados" };
   }
@@ -4508,7 +4903,7 @@ function buildActiveDatasetScope(referenceDataset) {
 
 function getDatasetsForMonth(monthKey) {
   return library.datasets
-    .filter((dataset) => dataset && dataset.id !== EMPTY_DATASET_ID && Array.isArray(dataset.rows) && dataset.rows.length)
+    .filter((dataset) => dataset && dataset.source !== "filtered" && dataset.id !== EMPTY_DATASET_ID && Array.isArray(dataset.rows) && dataset.rows.length)
     .filter((dataset) => getDatasetPeriod(dataset).key === monthKey)
     .sort((a, b) => {
       const qa = getDatasetQuarterOrder(a);
@@ -4519,7 +4914,7 @@ function getDatasetsForMonth(monthKey) {
 
 function getDatasetsForYear(year) {
   return library.datasets
-    .filter((dataset) => dataset && dataset.id !== EMPTY_DATASET_ID && Array.isArray(dataset.rows) && dataset.rows.length)
+    .filter((dataset) => dataset && dataset.source !== "filtered" && dataset.id !== EMPTY_DATASET_ID && Array.isArray(dataset.rows) && dataset.rows.length)
     .filter((dataset) => String(getDatasetPeriod(dataset).key).startsWith(`${year}-`))
     .sort((a, b) => {
       const pa = getDatasetPeriod(a);
@@ -4529,6 +4924,7 @@ function getDatasetsForYear(year) {
 }
 
 function getDatasetQuarterMode(dataset) {
+  if (dataset?.remoteRecord) return getFileRecordPeriod(dataset.remoteRecord).periodType;
   const text = `${dataset?.label || ""} ${dataset?.fileName || ""}`;
   const labelQuarter = detectQuinzena(text);
   if (labelQuarter.includes("1")) return "q1";
