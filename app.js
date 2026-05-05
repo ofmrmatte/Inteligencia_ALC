@@ -88,6 +88,9 @@ let dashboardFileRecords = [];
 let currentActiveFile = null;
 let dashboardFilesLoading = false;
 let dashboardVisualState = "loading-session";
+let hasInitialLoadCompleted = false;
+let isLoadingDashboardData = false;
+let isRefreshingFilesList = false;
 let dashboardPermissionTimer = null;
 let sidebarAnimationTimer = null;
 let liveClockTimer = null;
@@ -316,7 +319,7 @@ function bindEvents() {
   }
   if (el.refreshButton) {
     el.refreshButton.addEventListener("click", async () => {
-      await loadCurrentSession();
+      await loadCurrentSession({ forceReload: true, showLoading: true });
       showToast("Painel atualizado.", "info", 3200);
     });
   }
@@ -473,7 +476,7 @@ function bindEvents() {
       if (!ensureDeletePermission()) {
         return;
       }
-      await reloadDashboardFilesList();
+      await reloadDashboardFilesList({ silent: true });
       hydrateControls();
       renderFileDeleteMenu();
       if (el.fileDeleteMenu) el.fileDeleteMenu.hidden = !el.fileDeleteMenu.hidden;
@@ -3762,7 +3765,7 @@ async function uploadDashboardFile(file) {
 }
 
 async function loadDashboardFilesFromSupabase(options = {}) {
-  const { loadActive = true, render = true, validateStorage = false } = options;
+  const { loadActive = true, render = true, validateStorage = false, showLoading = null } = options;
   if (!window.supabaseClient || !currentUser) {
     dashboardFileRecords = [];
     clearDashboardData({ render: false, preserveRecords: false });
@@ -3770,7 +3773,9 @@ async function loadDashboardFilesFromSupabase(options = {}) {
   }
 
   dashboardFilesLoading = true;
-  setDashboardVisualState("loading-files");
+  const shouldShowLoading = showLoading ?? (!hasInitialLoadCompleted && !hasLoadedDashboardData());
+  const didSetLoadingState = shouldShowLoading && dashboardVisualState !== "processing-file";
+  if (didSetLoadingState) setDashboardVisualState("loading-files");
   updateDatasetMeta();
   try {
     const { data, error } = await window.supabaseClient
@@ -3781,9 +3786,11 @@ async function loadDashboardFilesFromSupabase(options = {}) {
     if (error) {
       console.error("Erro ao buscar arquivos:", error);
       showToast("Erro ao carregar arquivos salvos.", "warn", 5200);
-      setDashboardVisualState("supabase-error", { render: false });
-      clearDashboardData({ render: false, preserveRecords: false });
-      return [];
+      if (didSetLoadingState || !hasLoadedDashboardData()) setDashboardVisualState("supabase-error", { render: false });
+      if (!hasLoadedDashboardData()) {
+        clearDashboardData({ render: false, preserveRecords: false });
+      }
+      return dashboardFileRecords;
     }
 
     dashboardFileRecords = (Array.isArray(data) ? data : []).filter(isUsableDashboardFileRecord);
@@ -3793,7 +3800,7 @@ async function loadDashboardFilesFromSupabase(options = {}) {
     }
     if (!dashboardFileRecords.length) {
       clearDashboardData({ render: false, preserveRecords: false });
-      setDashboardVisualState("", { render: false });
+      if (didSetLoadingState) setDashboardVisualState("", { render: false });
       return [];
     }
 
@@ -3823,11 +3830,11 @@ async function loadDashboardFilesFromSupabase(options = {}) {
     state.activeDatasetId = library.activeDatasetId;
 
     if (loadActive && activeFile) {
-      await loadDashboardDataByFilters({ files: dashboardFileRecords, render: false, silent: true });
+      await loadDashboardDataByFilters({ files: dashboardFileRecords, render: false, silent: true, showLoading: shouldShowLoading });
     } else {
       syncActiveDataset();
     }
-    if (dashboardVisualState !== "supabase-error") setDashboardVisualState("", { render: false });
+    if (didSetLoadingState && dashboardVisualState !== "supabase-error") setDashboardVisualState("", { render: false });
     return dashboardFileRecords;
   } finally {
     dashboardFilesLoading = false;
@@ -3841,11 +3848,18 @@ async function loadDashboardFilesFromSupabase(options = {}) {
 }
 
 async function reloadDashboardFilesList(options = {}) {
-  return loadDashboardFilesFromSupabase({
-    loadActive: false,
-    render: options.render === true,
-    validateStorage: options.validateStorage !== false,
-  });
+  if (isRefreshingFilesList) return dashboardFileRecords;
+  isRefreshingFilesList = true;
+  try {
+    return await loadDashboardFilesFromSupabase({
+      loadActive: false,
+      render: options.render === true,
+      validateStorage: options.validateStorage !== false,
+      showLoading: options.showLoading === true,
+    });
+  } finally {
+    isRefreshingFilesList = false;
+  }
 }
 
 async function hydrateDashboardFileMetadata(records) {
@@ -3976,12 +3990,15 @@ async function loadDashboardDataByFilters(options = {}) {
     clearDashboardData({ render: options.render !== false, preserveRecords: false });
     return;
   }
+  if (isLoadingDashboardData && options.force !== true) return;
   const shouldRender = options.render !== false;
+  const shouldShowLoading = options.showLoading ?? (!hasInitialLoadCompleted || !hasLoadedDashboardData());
+  isLoadingDashboardData = true;
   dashboardFilesLoading = true;
-  setDashboardVisualState("processing-file", { render: shouldRender });
+  if (shouldShowLoading) setDashboardVisualState("processing-file", { render: shouldRender });
   updateDatasetMeta();
   try {
-    const files = Array.isArray(options.files) ? options.files : await loadDashboardFilesFromSupabase({ loadActive: false, render: false, validateStorage: false });
+    const files = Array.isArray(options.files) ? options.files : await loadDashboardFilesFromSupabase({ loadActive: false, render: false, validateStorage: false, showLoading: false });
     await hydrateDashboardFileMetadata(files);
     dashboardFileRecords = files.filter(isUsableDashboardFileRecord);
     if (!dashboardFileRecords.length) {
@@ -4038,7 +4055,8 @@ async function loadDashboardDataByFilters(options = {}) {
     if (!options.silent) showToast("Dados do período carregados.", "good", 3200);
   } finally {
     dashboardFilesLoading = false;
-    if (dashboardVisualState === "processing-file") setDashboardVisualState("", { render: false });
+    isLoadingDashboardData = false;
+    if (shouldShowLoading && dashboardVisualState === "processing-file") setDashboardVisualState("", { render: false });
     updateDatasetMeta();
   }
 }
@@ -4752,6 +4770,7 @@ function bindSupabaseAuthState() {
   supabaseAuthListenerBound = true;
   window.supabaseClient.auth.onAuthStateChange((event, session) => {
     console.log("[AUTH STATE]", event, session);
+    if (event === "INITIAL_SESSION") return;
     if (!session?.user) {
       currentUser = null;
       currentProfile = null;
@@ -4763,6 +4782,11 @@ function bindSupabaseAuthState() {
       renderAll();
       return;
     }
+    if (hasInitialLoadCompleted && currentUser?.id === session.user.id) {
+      currentUser = session.user;
+      updateAccessControls();
+      return;
+    }
     window.setTimeout(() => {
       void applyAuthenticatedUser(session.user, {
         showProfileWarning: event !== "INITIAL_SESSION",
@@ -4772,13 +4796,14 @@ function bindSupabaseAuthState() {
 }
 
 async function loadCurrentSession(options = {}) {
-  setDashboardVisualState("loading-session");
+  const shouldShowLoading = options.showLoading === true || (!hasInitialLoadCompleted && !hasLoadedDashboardData());
+  if (shouldShowLoading) setDashboardVisualState("loading-session");
   if (!window.supabaseClient?.auth) {
     currentUser = null;
     currentProfile = null;
     knownUsers = [];
     auditLogs = [];
-    setDashboardVisualState("supabase-error", { render: false });
+    if (shouldShowLoading || !hasLoadedDashboardData()) setDashboardVisualState("supabase-error", { render: false });
     updateAccessControls();
     renderAccountPage();
     renderAll();
@@ -4813,7 +4838,7 @@ async function loadCurrentSession(options = {}) {
     knownUsers = [];
     auditLogs = [];
     clearDashboardData({ render: false, preserveRecords: false });
-    setDashboardVisualState("supabase-error", { render: false });
+    if (shouldShowLoading || !hasLoadedDashboardData()) setDashboardVisualState("supabase-error", { render: false });
     updateAccessControls();
     renderAccountPage();
     renderAll();
@@ -4824,6 +4849,15 @@ async function loadCurrentSession(options = {}) {
 }
 
 async function applyAuthenticatedUser(user, options = {}) {
+  if (hasInitialLoadCompleted && currentUser?.id === user.id && options.forceReload !== true) {
+    currentUser = user;
+    updateAccessControls();
+    renderAccountPage();
+    return { user: currentUser, profile: currentProfile };
+  }
+  if (isLoadingDashboardData && options.forceReload !== true) {
+    return { user: currentUser || user, profile: currentProfile };
+  }
   currentUser = user;
   try {
     currentProfile = await loadUserProfile(user);
@@ -4848,7 +4882,12 @@ async function applyAuthenticatedUser(user, options = {}) {
     auditLogs = [];
   }
 
-  await loadDashboardFilesFromSupabase({ loadActive: true, render: false });
+  await loadDashboardFilesFromSupabase({
+    loadActive: true,
+    render: false,
+    showLoading: options.showLoading === true || (!hasInitialLoadCompleted && !hasLoadedDashboardData()),
+  });
+  hasInitialLoadCompleted = true;
   updateAccessControls();
   updateDatasetMeta();
   renderAccountPage();
