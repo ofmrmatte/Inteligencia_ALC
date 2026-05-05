@@ -4,6 +4,13 @@
   --bg-2: #0a1520;
   --surface: rgba(13, 21, 32, 0.88);
   --surface-strong: rgba(17, 28, 41, 0.96);
+  --surface-soft: rgba(18, 30, 44, 0.82);
+  --field-bg: rgba(8, 15, 24, 0.92);
+  --field-bg-hover: rgba(13, 25, 38, 0.96);
+  --field-border: rgba(164, 183, 202, 0.2);
+  --dropdown-bg: #0d1724;
+  --dropdown-hover: rgba(59, 166, 255, 0.16);
+  --dropdown-selected: rgba(59, 166, 255, 0.24);
   --line: rgba(164, 183, 202, 0.14);
   --line-strong: rgba(164, 183, 202, 0.22);
   --text: #f3f7fc;
@@ -1960,6 +1967,13 @@ body[data-theme="light"] {
   color-scheme: light;
   --surface: rgba(255, 255, 255, 0.84);
   --surface-strong: rgba(255, 255, 255, 0.98);
+  --surface-soft: rgba(244, 248, 252, 0.9);
+  --field-bg: rgba(255, 255, 255, 0.88);
+  --field-bg-hover: rgba(255, 255, 255, 0.96);
+  --field-border: rgba(19, 35, 55, 0.12);
+  --dropdown-bg: #ffffff;
+  --dropdown-hover: rgba(59, 166, 255, 0.08);
+  --dropdown-selected: rgba(59, 166, 255, 0.14);
   --line: rgba(19, 35, 55, 0.12);
   --line-strong: rgba(19, 35, 55, 0.18);
   --text: #0e1826;
@@ -2851,6 +2865,204 @@ html[data-filters-sidebar-open="false"] .sidebar {
   }
 }
 
+/* Dark theme contrast hardening */
+body:not([data-theme="light"]) {
+  color-scheme: dark;
+}
+
+body:not([data-theme="light"]) select,
+body:not([data-theme="light"]) input[type="search"],
+body:not([data-theme="light"]) input[type="date"],
+body:not([data-theme="light"]) input[type="email"],
+body:not([data-theme="light"]) input[type="password"],
+body:not([data-theme="light"]) input[type="url"],
+body:not([data-theme="light"]) .account-page input {
+  border-color: var(--field-border);
+  background-color: var(--field-bg);
+  color: var(--text);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.025);
+}
+
+body:not([data-theme="light"]) select {
+  appearance: none;
+  padding-right: 2.45rem;
+  background-image:
+    linear-gradient(45deg, transparent 50%, var(--muted) 50%),
+    linear-gradient(135deg, var(--muted) 50%, transparent 50%);
+  background-position:
+    calc(100% - 1.1rem) 50%,
+    calc(100% - 0.78rem) 50%;
+  background-size: 0.36rem 0.36rem, 0.36rem 0.36rem;
+  background-repeat: no-repeat;
+}
+
+body:not([data-theme="light"]) select:hover,
+body:not([data-theme="light"]) input[type="search"]:hover,
+body:not([data-theme="light"]) input[type="date"]:hover,
+body:not([data-theme="light"]) input[type="email"]:hover,
+body:not([data-theme="light"]) input[type="password"]:hover,
+body:not([data-theme="light"]) input[type="url"]:hover {
+  border-color: var(--line-strong);
+  background-color: var(--field-bg-hover);
+}
+
+body:not([data-theme="light"]) select option,
+body:not([data-theme="light"]) select optgroup {
+  background: var(--dropdown-bg);
+  color: var(--text);
+}
+
+body:not([data-theme="light"]) select option:checked {
+  background: var(--dropdown-selected);
+  color: var(--text);
+}
+
+body:not([data-theme="light"]) input::placeholder,
+body:not([data-theme="light"]) .account-login input::placeholder,
+body:not([data-theme="light"]) .account-page input::placeholder {
+  color: #8da2ba;
+}
+
+body:not([data-theme="light"]) .search-box,
+body:not([data-theme="light"]) .global-period-filter,
+body:not([data-theme="light"]) .account-login input {
+  border-color: var(--field-border);
+  background: var(--field-bg);
+}
+
+body:not([data-theme="light"]) .sidebar-card,
+body:not([data-theme="light"]) .panel,
+body:not([data-theme="light"]) .kpi-card,
+body:not([data-theme="light"]) .account-page__header {
+  border-color: rgba(164, 183, 202, 0.16);
+  background:
+    linear-gradient(180deg, rgba(20, 32, 47, 0.88), rgba(12, 22, 34, 0.96)),
+    var(--surface);
+}
+
+body:not([data-theme="light"]) .sidebar-card--library,
+body:not([data-theme="light"]) .sidebar-card--users {
+  background:
+    radial-gradient(circle at top right, rgba(59, 166, 255, 0.09), transparent 30%),
+    linear-gradient(180deg, rgba(20, 32, 47, 0.92), rgba(12, 22, 34, 0.97));
+}
+
+body:not([data-theme="light"]) .topbar {
+  background: linear-gradient(180deg, rgba(7, 15, 24, 0.94), rgba(7, 15, 24, 0.78));
+  border-bottom-color: rgba(164, 183, 202, 0.16);
+}
+
+body:not([data-theme="light"]) .secondary-button,
+body:not([data-theme="light"]) .ghost-button,
+body:not([data-theme="light"]) .icon-button,
+body:not([data-theme="light"]) .sheet-tab,
+body:not([data-theme="light"]) #sync-status,
+body:not([data-theme="light"]) #auth-status,
+body:not([data-theme="light"]) .connection-indicator {
+  border-color: rgba(164, 183, 202, 0.18);
+  background: rgba(13, 25, 38, 0.88);
+  color: var(--text);
+}
+
+body:not([data-theme="light"]) .secondary-button:hover,
+body:not([data-theme="light"]) .ghost-button:hover,
+body:not([data-theme="light"]) .icon-button:hover,
+body:not([data-theme="light"]) .sheet-tab:hover {
+  border-color: rgba(59, 166, 255, 0.42);
+  background: rgba(59, 166, 255, 0.12);
+}
+
+body:not([data-theme="light"]) .sheet-tab.is-active,
+body:not([data-theme="light"]) .filter-pill.is-active,
+body:not([data-theme="light"]) .file-delete-menu button.is-selected {
+  border-color: rgba(59, 166, 255, 0.58);
+  background: rgba(59, 166, 255, 0.18);
+  color: var(--text);
+}
+
+body:not([data-theme="light"]) .ghost-button.is-action-blocked,
+body:not([data-theme="light"]) .danger-button.is-action-blocked,
+body:not([data-theme="light"]) button:disabled {
+  opacity: 0.52;
+  cursor: not-allowed;
+  color: rgba(243, 247, 252, 0.72);
+}
+
+body:not([data-theme="light"]) .account-menu,
+body:not([data-theme="light"]) .file-delete-menu {
+  border-color: rgba(164, 183, 202, 0.2);
+  background:
+    linear-gradient(180deg, rgba(17, 29, 43, 0.98), rgba(9, 18, 29, 0.98)),
+    var(--dropdown-bg);
+  box-shadow: 0 20px 46px rgba(0, 0, 0, 0.42);
+}
+
+body:not([data-theme="light"]) .account-menu__header {
+  border-bottom-color: rgba(164, 183, 202, 0.18);
+}
+
+body:not([data-theme="light"]) .account-menu button,
+body:not([data-theme="light"]) .file-delete-menu button {
+  color: var(--text);
+}
+
+body:not([data-theme="light"]) .account-menu button:hover,
+body:not([data-theme="light"]) .file-delete-menu button:hover {
+  background: var(--dropdown-hover);
+}
+
+body:not([data-theme="light"]) .account-login label,
+body:not([data-theme="light"]) .sidebar-card label,
+body:not([data-theme="light"]) .sidebar-note,
+body:not([data-theme="light"]) .account-login__note,
+body:not([data-theme="light"]) .account-menu__identity span,
+body:not([data-theme="light"]) .account-menu__header span,
+body:not([data-theme="light"]) .file-delete-menu small,
+body:not([data-theme="light"]) .file-delete-menu__empty {
+  color: #b3c3d5;
+}
+
+body:not([data-theme="light"]) thead th {
+  background: rgba(13, 25, 38, 0.96);
+  color: #c8d7e8;
+  border-bottom-color: rgba(164, 183, 202, 0.18);
+}
+
+body:not([data-theme="light"]) tbody td,
+body:not([data-theme="light"]) .mini-table__name,
+body:not([data-theme="light"]) .bar-row__name,
+body:not([data-theme="light"]) .settings-user__identity strong,
+body:not([data-theme="light"]) .user-row strong {
+  color: var(--text);
+}
+
+body:not([data-theme="light"]) tbody tr:hover,
+body:not([data-theme="light"]) .mini-table__row:hover,
+body:not([data-theme="light"]) .user-row:hover {
+  background: rgba(59, 166, 255, 0.075);
+}
+
+body:not([data-theme="light"]) tbody td,
+body:not([data-theme="light"]) .mini-table__head,
+body:not([data-theme="light"]) .mini-table__row,
+body:not([data-theme="light"]) .settings-user,
+body:not([data-theme="light"]) .table-footer {
+  border-color: rgba(164, 183, 202, 0.13);
+}
+
+body:not([data-theme="light"]) .bar-row__track,
+body:not([data-theme="light"]) .goal-progress__track,
+body:not([data-theme="light"]) .progress-track {
+  background: rgba(7, 14, 22, 0.82);
+}
+
+body:not([data-theme="light"]) .mix-tooltip,
+body:not([data-theme="light"]) .toast {
+  border-color: rgba(164, 183, 202, 0.22);
+  background: rgba(8, 18, 31, 0.96);
+  color: var(--text);
+}
+
 .app-shell,
 .app-shell * {
   letter-spacing: 0 !important;
@@ -3647,4 +3859,68 @@ html[data-filters-sidebar-open="false"] .sidebar {
   .goal-gauge {
     justify-self: center;
   }
+}
+
+/* Final dark theme precedence overrides */
+body:not([data-theme="light"]) select,
+body:not([data-theme="light"]) input[type="search"],
+body:not([data-theme="light"]) input[type="date"],
+body:not([data-theme="light"]) input[type="email"],
+body:not([data-theme="light"]) input[type="password"],
+body:not([data-theme="light"]) input[type="url"],
+body:not([data-theme="light"]) .account-login input,
+body:not([data-theme="light"]) .account-page input,
+body:not([data-theme="light"]) .goal-config input {
+  border-color: var(--field-border);
+  background-color: var(--field-bg);
+  color: var(--text);
+}
+
+body:not([data-theme="light"]) select option,
+body:not([data-theme="light"]) select optgroup {
+  background-color: var(--dropdown-bg);
+  color: var(--text);
+}
+
+body:not([data-theme="light"]) .sidebar-card,
+body:not([data-theme="light"]) .panel,
+body:not([data-theme="light"]) .kpi-card,
+body:not([data-theme="light"]) .goal-config__panel,
+body:not([data-theme="light"]) .account-menu,
+body:not([data-theme="light"]) .file-delete-menu {
+  border-color: rgba(164, 183, 202, 0.18);
+  background-color: var(--surface-strong);
+}
+
+body:not([data-theme="light"]) .goal-gauge__dial::after {
+  background: var(--surface-strong);
+}
+
+body:not([data-theme="light"]) .goal-progress,
+body:not([data-theme="light"]) .bar-row__track {
+  background: rgba(7, 14, 22, 0.82);
+}
+
+body:not([data-theme="light"]) .mix-legend__head,
+body:not([data-theme="light"]) .mix-legend__row,
+body:not([data-theme="light"]) .mini-table__head,
+body:not([data-theme="light"]) .mini-table__row,
+body:not([data-theme="light"]) tbody td,
+body:not([data-theme="light"]) thead th {
+  border-color: rgba(164, 183, 202, 0.13);
+}
+
+body:not([data-theme="light"]) .mix-legend__value,
+body:not([data-theme="light"]) .mix-legend__percent,
+body:not([data-theme="light"]) .mini-table__value,
+body:not([data-theme="light"]) .mini-table__count,
+body:not([data-theme="light"]) .bar-row__value,
+body:not([data-theme="light"]) tbody td,
+body:not([data-theme="light"]) .goal-value {
+  color: var(--text);
+}
+
+body:not([data-theme="light"]) .goal-value,
+body:not([data-theme="light"]) .kpi-card--finance .kpi-card__value {
+  color: var(--warm);
 }
