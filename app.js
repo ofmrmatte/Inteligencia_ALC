@@ -102,6 +102,7 @@ let pendingAvatarFile = null;
 let pendingAvatarPreviewUrl = "";
 let pendingAvatarSourceUrl = "";
 let evolutionPeriodView = loadEvolutionPeriodView();
+let totalDiscountComparisonRequest = 0;
 
 const DASHBOARD_STATE_CONFIG = {
   "loading-session": {
@@ -1639,13 +1640,14 @@ async function retryDashboardLoad() {
 }
 
 function renderKpis(summary) {
-  const monthlyStatus = getActiveMonthlyStatus();
+  const monthlyStatus = getTotalDiscountComparisonInitialText();
   const cards = [
     {
       label: "Total de descontos",
       value: currency.format(summary.totalValue),
       tone: "kpi-card--finance",
       delta: monthlyStatus,
+      key: "total-discounts",
     },
     {
       label: "Registros válidos",
@@ -1682,17 +1684,18 @@ function renderKpis(summary) {
   el.kpiGrid.innerHTML = cards
     .map(
       (card, index) => `
-      <article class="kpi-card ${card.tone}" style="--reveal-index:${index}">
+      <article class="kpi-card ${card.tone}"${card.key ? ` data-kpi="${escapeAttribute(card.key)}"` : ""} style="--reveal-index:${index}">
         <div class="kpi-card__label">
           <span>${card.label}</span>
           <span class="kpi-card__icon">i</span>
         </div>
         <div class="kpi-card__value">${card.value}</div>
-        <div class="kpi-card__delta">${card.delta}</div>
+        <div class="kpi-card__delta"${card.key === "total-discounts" ? " data-total-discounts-delta" : ""}>${card.delta}</div>
       </article>
     `,
     )
     .join("");
+  void hydrateTotalDiscountComparison(summary);
 }
 
 function renderInsights(filtered, summary) {
@@ -2749,8 +2752,14 @@ function buildReportTrend(scope, activeMonth, previousMonth, comparisonRows) {
       return { direction: "neutral", pct: 0, text: `Mês anterior ${shortMonthYear(previousMonth.label)} sem valor base para comparação percentual.` };
     }
     const reference = getReportTrendReferenceLabel(scope, previousMonth);
-    if (deltaPct > 0.5) return { direction: "up", pct: deltaPct, text: `Aumento de ${formatNumberPt(Math.abs(deltaPct), 1)}% em relação a ${reference}.` };
-    if (deltaPct < -0.5) return { direction: "down", pct: deltaPct, text: `Redução de ${formatNumberPt(Math.abs(deltaPct), 1)}% em relação a ${reference}.` };
+    const text = formatTotalDiscountComparison({
+      currentValue: activeMonth.totalValue,
+      previousValue: previousMonth.totalValue,
+      previousLabel: reference,
+      isAllMonths: false,
+    }).replace(" vs. ", " em relação a ");
+    if (deltaPct > 0.5) return { direction: "up", pct: deltaPct, text: `${text}.` };
+    if (deltaPct < -0.5) return { direction: "down", pct: deltaPct, text: `${text}.` };
     return { direction: "neutral", pct: deltaPct, text: "Estabilidade financeira frente ao mês anterior." };
   }
   const first = comparisonRows[0] || null;
@@ -3082,6 +3091,56 @@ function getActiveMonthlyStatus() {
   if (!active.previous) return "Sem mês anterior carregado";
   const prefix = active.deltaValue > 0 ? "+" : "";
   return `${prefix}${active.deltaPct.toFixed(1)}% vs. mês anterior`;
+}
+
+function getTotalDiscountComparisonInitialText() {
+  if ((state.monthFilter || "all") === "all") {
+    return "Consolidado dos meses carregados";
+  }
+  return "Atualizando comparativo...";
+}
+
+async function hydrateTotalDiscountComparison(summary) {
+  const target = el.kpiGrid?.querySelector("[data-total-discounts-delta]");
+  if (!target) return;
+  const requestId = (totalDiscountComparisonRequest += 1);
+  const scope = getReportScope();
+
+  if (scope.mode === "annual") {
+    target.textContent = "Consolidado dos meses carregados";
+    return;
+  }
+
+  try {
+    const rows = await buildReportHistoricalComparisonRows(scope);
+    if (requestId !== totalDiscountComparisonRequest) return;
+    const activeMonth = rows.find((row) => row.key === scope.key) || null;
+    const activeIndex = activeMonth ? rows.findIndex((row) => row.key === activeMonth.key) : -1;
+    const previousMonth = activeIndex > 0 ? rows[activeIndex - 1] : null;
+    target.textContent = formatTotalDiscountComparison({
+      selectedMonth: scope.key,
+      selectedPeriod: scope.periodMode,
+      currentValue: summary.totalValue,
+      previousValue: previousMonth?.totalValue,
+      previousLabel: previousMonth ? getReportTrendReferenceLabel(scope, previousMonth) : "",
+      isAllMonths: false,
+    });
+  } catch (error) {
+    console.error("[KPI] Erro ao calcular comparativo histórico:", error);
+    if (requestId === totalDiscountComparisonRequest) {
+      target.textContent = "Comparativo indisponível";
+    }
+  }
+}
+
+function formatTotalDiscountComparison({ currentValue, previousValue, previousLabel, isAllMonths }) {
+  if (isAllMonths) return "Consolidado dos meses carregados";
+  const variation = calculateVariation(currentValue, previousValue);
+  if (variation == null) return "Sem mês anterior carregado";
+  const absVariation = formatNumberPt(Math.abs(variation), 1);
+  if (variation < -0.05) return `Redução de ${absVariation}% vs. ${previousLabel}`;
+  if (variation > 0.05) return `Aumento de ${absVariation}% vs. ${previousLabel}`;
+  return `Estável vs. ${previousLabel}`;
 }
 
 function renderBaseRankingGroup(title, items, maxValue, offset) {
