@@ -26,6 +26,7 @@ const DONUT_LABELS = {
   "XPT PERDIDOS": "XPT Perd.",
 };
 const MONTHS = ["janeiro", "fevereiro", "março", "abril", "maio", "junho", "julho", "agosto", "setembro", "outubro", "novembro", "dezembro"];
+const MONTH_ABBR = ["JAN", "FEV", "MAR", "ABR", "MAI", "JUN", "JUL", "AGO", "SET", "OUT", "NOV", "DEZ"];
 const SETOR_OPTIONS = ["LOSS", "Operação", "Administrativo", "Financeiro", "Qualidade", "Monitoramento", "Suporte", "Outros"];
 
 const STATE_DEFAULT = {
@@ -1925,7 +1926,7 @@ function renderMonthlyBaseEvolution() {
 function getComparableDatasets() {
   return library.datasets
     .filter((dataset) => dataset && dataset.id !== EMPTY_DATASET_ID && Array.isArray(dataset.rows) && dataset.rows.length)
-    .map((dataset) => ({ dataset, period: getDatasetPeriod(dataset), label: getDatasetPeriodLabel(dataset) }))
+    .map((dataset) => ({ dataset, period: getDatasetPeriod(dataset), label: formatEvolutionPeriodLabel(dataset) }))
     .sort((a, b) => a.period.sort - b.period.sort || a.label.localeCompare(b.label, "pt-BR"));
 }
 
@@ -2119,11 +2120,15 @@ function getOffenseColor(value, max) {
 
 function shortPeriodLabel(label) {
   const text = String(label || "");
+  const monthAbbrPattern = MONTH_ABBR.join("|");
+  const alreadyFormatted = text.toUpperCase().match(new RegExp(`\\b(?:(1|2)Q\\s*)?(${monthAbbrPattern})\\b`));
+  if (alreadyFormatted) return `${alreadyFormatted[1] ? `${alreadyFormatted[1]}Q ` : ""}${alreadyFormatted[2]}`;
   const quarter = text.match(/(\d+)[ªa]?\s*(?:quinzena|q)/i);
   const month = text.match(/(janeiro|fevereiro|março|marco|abril|maio|junho|julho|agosto|setembro|outubro|novembro|dezembro)/i);
   const q = quarter ? `${quarter[1]}Q` : "";
-  const m = month ? month[1].slice(0, 3).replace(/^mar$/i, "Mar") : text.slice(0, 3);
-  return `${q} ${m}`.trim();
+  const m = month ? getMonthAbbr(month[1]) : "";
+  const labelText = `${q} ${m}`.trim();
+  return isInvalidEvolutionPeriodLabel(labelText) ? "Período" : labelText;
 }
 
 function shortMonthYear(label) {
@@ -5633,12 +5638,43 @@ function humanizeWorkbookName(fileName) {
 
 function getDatasetPeriodLabel(dataset) {
   if (!dataset) return "Quinzena";
+  const evolutionLabel = formatEvolutionPeriodLabel(dataset);
+  if (evolutionLabel !== "Período") return evolutionLabel;
   const label = String(dataset.label || humanizeWorkbookName(dataset.fileName || ""));
   const period = detectQuinzena(label) || detectQuinzena(dataset.fileName || "");
   const month = detectMonth(label) || detectMonthFromRows(dataset.rows);
   const year = detectYear(label) || detectYearFromRows(dataset.rows);
   if (month && period) return `${compactQuinzena(period)} ${capitalize(month)}${year ? ` ${year}` : ""}`;
-  return label;
+  return isInvalidEvolutionPeriodLabel(label) ? "Período" : label;
+}
+
+function formatEvolutionPeriodLabel(datasetOrFile) {
+  const file = datasetOrFile?.remoteRecord || datasetOrFile || {};
+  const period = getDatasetPeriod(datasetOrFile);
+  const monthKey = normalizeReferenceMonth(file.reference_month || file.metadata?.reference_month || String(period.key || "").slice(5, 7));
+  const month =
+    getMonthAbbr(monthKey) ||
+    getMonthAbbr(detectMonth(file.file_name || datasetOrFile?.label || datasetOrFile?.fileName || "")) ||
+    getMonthAbbr(detectMonthFromRows(datasetOrFile?.rows || []));
+  const periodType = normalizePeriodMode(file.period_type || file.metadata?.period_type || getPeriodModeFromLabel(`${file.period_label || ""} ${file.metadata?.period_label || ""} ${file.file_name || ""}`) || getDatasetQuarterMode(datasetOrFile));
+  const prefix = periodType === "q1" ? "1Q" : periodType === "q2" ? "2Q" : "";
+  const label = `${prefix} ${month}`.trim();
+  return isInvalidEvolutionPeriodLabel(label) ? "Período" : label;
+}
+
+function getMonthAbbr(value) {
+  const number = normalizeReferenceMonth(value);
+  if (number) return MONTH_ABBR[Number(number) - 1] || "";
+  const detected = monthNumber(value);
+  return detected ? MONTH_ABBR[detected - 1] || "" : "";
+}
+
+function isInvalidEvolutionPeriodLabel(label) {
+  const text = String(label || "").trim();
+  if (!text || /^(undefined|null|nan)$/i.test(text)) return true;
+  if (/^(?:19|20)?\d{2,4}$/.test(text)) return true;
+  if (/^\d{1,2}$/.test(text)) return true;
+  return false;
 }
 
 function compactQuinzena(period) {
