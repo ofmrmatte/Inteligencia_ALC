@@ -756,6 +756,21 @@ body[data-theme="light"] #theme-toggle::before {
   font-weight: 700;
 }
 
+.dashboard-empty-card {
+  grid-column: 1 / -1;
+  min-height: 148px;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+}
+
+.dashboard-empty-card strong {
+  max-width: 720px;
+  font-size: clamp(1.05rem, 2vw, 1.45rem);
+  line-height: 1.25;
+  white-space: normal;
+}
+
 .kpi-card--finance .kpi-card__value {
   color: var(--warm);
 }

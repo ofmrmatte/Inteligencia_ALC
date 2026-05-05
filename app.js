@@ -1,7 +1,6 @@
 ﻿/* global XLSX */
 
 const STORAGE_KEY = "alc-pre-fatura-dashboard-state-v1";
-const LIBRARY_STORAGE_KEY = "alc-pre-fatura-dashboard-library-v1";
 const THEME_STORAGE_KEY = "alc-pre-fatura-dashboard-theme-v1";
 const SIDEBAR_STORAGE_KEY = "filtersSidebarOpen";
 const PDF_LOGO_IMAGE = {
@@ -39,8 +38,8 @@ const STATE_DEFAULT = {
   sortDir: "desc",
   page: 1,
   pageSize: 15,
-  fileName: "PRE FATURA 2 Q MARÇO 26.xlsx",
-  activeDatasetId: "seed",
+  fileName: "",
+  activeDatasetId: EMPTY_DATASET_ID,
   monthFilter: "",
   deleteDatasetId: "",
   appView: "dashboard",
@@ -71,7 +70,6 @@ const liveClockFormatter = new Intl.DateTimeFormat("pt-BR", {
   timeStyle: "short",
 });
 
-const seedRows = Array.isArray(window.__PRE_FATURA_ROWS) ? window.__PRE_FATURA_ROWS.slice() : [];
 const state = loadState();
 const forcedTheme = new URLSearchParams(window.location.search).get("theme");
 state.theme = forcedTheme === "light" || forcedTheme === "dark" ? forcedTheme : state.theme === "light" ? "light" : "dark";
@@ -103,7 +101,7 @@ async function bootstrapDashboard() {
   hydrateControls();
   applyTheme(state.theme);
   if (!allRows.length) {
-    showToast("Base inicial vazia. Use Upload Excel para carregar a planilha real.", "warn", 5200);
+    showToast("Nenhum arquivo carregado. Faça upload de um arquivo para iniciar.", "info", 5200);
   }
   renderAll();
   updateTopbar();
@@ -926,6 +924,16 @@ function renderAll() {
     return;
   }
 
+  if (!hasLoadedDashboardData()) {
+    renderDashboardEmptyState(getDashboardEmptyMessage());
+    renderFilterSummary();
+    updateTopbar(summary);
+    updateAccessControls();
+    persistState();
+    persistLibrary();
+    return;
+  }
+
   const monthlyView = state.sheet === MONTHLY_BASE_VIEW;
   toggleDashboardView(monthlyView);
   if (monthlyView) {
@@ -1079,6 +1087,33 @@ function toggleDashboardView(monthlyView) {
   [el.kpiGrid, document.querySelector(".insight-grid"), document.querySelector(".comparison-panel"), document.querySelector(".table-panel")].forEach((node) => {
     if (node) node.hidden = monthlyView;
   });
+}
+
+function hasLoadedDashboardData() {
+  return activeDataset && activeDataset.id !== EMPTY_DATASET_ID && Array.isArray(allRows) && allRows.length > 0;
+}
+
+function getDashboardEmptyMessage() {
+  if (dashboardFilesLoading) return "Carregando arquivo ativo...";
+  if (!currentUser) return "Faça login para carregar o arquivo ativo salvo.";
+  return "Nenhum arquivo carregado. Faça upload de um arquivo para iniciar.";
+}
+
+function renderDashboardEmptyState(message) {
+  if (el.monthlyBaseView) el.monthlyBaseView.hidden = true;
+  [document.querySelector(".insight-grid"), document.querySelector(".comparison-panel"), document.querySelector(".table-panel")].forEach((node) => {
+    if (node) node.hidden = true;
+  });
+  if (el.kpiGrid) {
+    el.kpiGrid.hidden = false;
+    el.kpiGrid.innerHTML = `
+      <article class="kpi-card dashboard-empty-card">
+        <span>Nenhum arquivo ativo</span>
+        <strong>${escapeHtml(message)}</strong>
+        <small>Os indicadores serão calculados assim que um arquivo ativo for carregado do Supabase.</small>
+      </article>
+    `;
+  }
 }
 
 function renderKpis(summary) {
@@ -3162,7 +3197,7 @@ async function loadDashboardFilesFromSupabase(options = {}) {
   const { loadActive = true, render = true } = options;
   if (!window.supabaseClient || !currentUser) {
     dashboardFileRecords = [];
-    currentActiveFile = null;
+    clearDashboardData({ render: false, preserveRecords: false });
     return;
   }
 
@@ -3177,10 +3212,16 @@ async function loadDashboardFilesFromSupabase(options = {}) {
     if (error) {
       console.error("Erro ao buscar arquivos:", error);
       showToast("Erro ao carregar arquivos salvos.", "warn", 5200);
+      clearDashboardData({ render: false, preserveRecords: false });
       return;
     }
 
     dashboardFileRecords = Array.isArray(data) ? data : [];
+    if (!dashboardFileRecords.length) {
+      clearDashboardData({ render: false, preserveRecords: false });
+      return;
+    }
+
     const activeFile = dashboardFileRecords.find((record) => record.is_active) || dashboardFileRecords[0] || null;
     currentActiveFile = activeFile;
 
@@ -3201,7 +3242,6 @@ async function loadDashboardFilesFromSupabase(options = {}) {
 
     library = {
       activeDatasetId: activeFile?.id || datasets[0]?.id || EMPTY_DATASET_ID,
-      seedDeleted: true,
       datasets: datasets.length ? datasets : [buildEmptyDataset()],
     };
     state.activeDatasetId = library.activeDatasetId;
@@ -3223,7 +3263,10 @@ async function loadDashboardFilesFromSupabase(options = {}) {
 }
 
 async function loadActiveDashboardFile() {
-  if (!window.supabaseClient || !currentUser) return;
+  if (!window.supabaseClient || !currentUser) {
+    clearDashboardData({ render: true, preserveRecords: false });
+    return;
+  }
 
   dashboardFilesLoading = true;
   updateDatasetMeta();
@@ -3239,18 +3282,14 @@ async function loadActiveDashboardFile() {
     if (error) {
       console.error("Erro ao buscar arquivo ativo:", error);
       showToast("Erro ao carregar arquivo ativo.", "warn", 5200);
+      dashboardFilesLoading = false;
+      clearDashboardData({ render: true, preserveRecords: false });
       return;
     }
 
     if (!activeFile) {
-      library = {
-        activeDatasetId: EMPTY_DATASET_ID,
-        seedDeleted: true,
-        datasets: [buildEmptyDataset()],
-      };
-      state.activeDatasetId = EMPTY_DATASET_ID;
-      currentActiveFile = null;
-      syncActiveDataset();
+      dashboardFilesLoading = false;
+      clearDashboardData({ render: true, preserveRecords: false });
       showToast("Nenhum arquivo ativo encontrado.", "info", 4200);
       return;
     }
@@ -3262,69 +3301,119 @@ async function loadActiveDashboardFile() {
   }
 }
 
+function clearDashboardData(options = {}) {
+  const { render = true, preserveRecords = true } = options;
+  if (!preserveRecords) dashboardFileRecords = [];
+  currentActiveFile = null;
+  library = {
+    activeDatasetId: EMPTY_DATASET_ID,
+    datasets: [buildEmptyDataset()],
+  };
+  state.activeDatasetId = EMPTY_DATASET_ID;
+  state.deleteDatasetId = "";
+  state.fileName = "";
+  state.page = 1;
+  activeDataset = buildEmptyDataset();
+  allRows = [];
+  fileMeta = {
+    ...activeDataset,
+    rows: [],
+    scopedDatasets: [activeDataset],
+  };
+  syncActiveDataset();
+  if (render) {
+    hydrateControls();
+    renderAll();
+  } else {
+    updateDatasetMeta();
+  }
+}
+
 async function loadFileFromStorage(fileRecord, options = {}) {
   const { render = true, silent = false, skipDownloadDataset = null } = options;
   if (!fileRecord || !window.supabaseClient) return;
 
+  dashboardFilesLoading = true;
+  updateDatasetMeta();
   let dataset = skipDownloadDataset;
-  if (!dataset) {
-    const { data: blob, error } = await window.supabaseClient.storage
-      .from("dashboard-files")
-      .download(fileRecord.storage_path);
+  try {
+    if (!dataset) {
+      const { data: blob, error } = await window.supabaseClient.storage
+        .from("dashboard-files")
+        .download(fileRecord.storage_path);
 
-    if (error) {
-      console.error("Erro ao baixar arquivo do Storage:", error);
-      showToast("Não foi possível carregar o arquivo salvo.", "error", 6200);
-      return;
+      if (error) {
+        console.error("Erro ao baixar arquivo do Storage:", error);
+        showToast("Não foi possível carregar o arquivo salvo.", "error", 6200);
+        dashboardFilesLoading = false;
+        clearDashboardData({ render });
+        return;
+      }
+
+      const file = new File([blob], fileRecord.file_name, {
+        type: fileRecord.file_type || blob.type,
+      });
+      dataset = await processDashboardFile(file, fileRecord);
     }
 
-    const file = new File([blob], fileRecord.file_name, {
-      type: fileRecord.file_type || blob.type,
-    });
-    dataset = await processDashboardFile(file, fileRecord);
-  }
-
-  dataset = normalizeDatasetRecord({
-    ...dataset,
-    id: fileRecord.id,
-    fileName: fileRecord.file_name,
-    label: humanizeWorkbookName(fileRecord.file_name),
-    source: "supabase",
-    importedAt: fileRecord.created_at,
-    remoteRecord: fileRecord,
-    storagePath: fileRecord.storage_path,
-  });
-
-  const existingRecords = dashboardFileRecords.length ? dashboardFileRecords : [fileRecord];
-  const existingDatasets = Array.isArray(library.datasets) ? library.datasets : [];
-  const datasets = existingRecords.map((record) => {
-    if (record.id === fileRecord.id) return dataset;
-    const previous = existingDatasets.find((entry) => entry.id === record.id);
-    return normalizeDatasetRecord({
-      id: record.id,
-      fileName: record.file_name,
-      label: humanizeWorkbookName(record.file_name),
+    dataset = normalizeDatasetRecord({
+      ...dataset,
+      id: fileRecord.id,
+      fileName: fileRecord.file_name,
+      label: humanizeWorkbookName(fileRecord.file_name),
       source: "supabase",
-      importedAt: record.created_at,
-      remoteRecord: record,
-      storagePath: record.storage_path,
-      rows: previous?.rows || [],
+      importedAt: fileRecord.created_at,
+      remoteRecord: fileRecord,
+      storagePath: fileRecord.storage_path,
     });
-  }).filter(Boolean);
 
-  library = {
-    activeDatasetId: fileRecord.id,
-    seedDeleted: true,
-    datasets: datasets.length ? datasets : [dataset],
-  };
-  currentActiveFile = fileRecord;
-  state.activeDatasetId = fileRecord.id;
-  state.fileName = fileRecord.file_name;
-  state.page = 1;
-  syncActiveDataset();
-  hydrateControls();
-  if (render) renderAll();
-  if (!silent) showToast("Arquivo carregado com sucesso.", "good", 4200);
+    const recordsById = new Map();
+    [...dashboardFileRecords, fileRecord].forEach((record) => {
+      if (!record?.id) return;
+      recordsById.set(record.id, {
+        ...record,
+        is_active: record.id === fileRecord.id,
+      });
+    });
+    const existingRecords = Array.from(recordsById.values());
+    dashboardFileRecords = existingRecords;
+    const existingDatasets = Array.isArray(library.datasets) ? library.datasets : [];
+    const datasets = existingRecords.map((record) => {
+      if (record.id === fileRecord.id) return dataset;
+      const previous = existingDatasets.find((entry) => entry.id === record.id);
+      return normalizeDatasetRecord({
+        id: record.id,
+        fileName: record.file_name,
+        label: humanizeWorkbookName(record.file_name),
+        source: "supabase",
+        importedAt: record.created_at,
+        remoteRecord: record,
+        storagePath: record.storage_path,
+        rows: previous?.rows || [],
+      });
+    }).filter(Boolean);
+
+    library = {
+      activeDatasetId: fileRecord.id,
+      datasets: datasets.length ? datasets : [dataset],
+    };
+    currentActiveFile = fileRecord;
+    state.activeDatasetId = fileRecord.id;
+    state.fileName = fileRecord.file_name;
+    state.page = 1;
+    syncActiveDataset();
+    hydrateControls();
+    if (render) renderAll();
+    if (!silent) showToast("Arquivo carregado com sucesso.", "good", 4200);
+  } catch (error) {
+    console.error("Erro ao processar arquivo do Storage:", error);
+    showToast("Não foi possível processar o arquivo salvo.", "error", 6200);
+    dashboardFilesLoading = false;
+    clearDashboardData({ render });
+  } finally {
+    dashboardFilesLoading = false;
+    updateDatasetMeta();
+  }
 }
 
 async function setActiveDashboardFile(fileId) {
@@ -3361,10 +3450,15 @@ async function setActiveDashboardFile(fileId) {
     return;
   }
 
-  dashboardFileRecords = dashboardFileRecords.map((record) => ({
-    ...record,
-    is_active: record.id === data.id,
-  }));
+  const recordsById = new Map();
+  [...dashboardFileRecords, data].forEach((record) => {
+    if (!record?.id) return;
+    recordsById.set(record.id, {
+      ...record,
+      is_active: record.id === data.id,
+    });
+  });
+  dashboardFileRecords = Array.from(recordsById.values());
   await loadFileFromStorage(data, { silent: true });
   showToast("Arquivo ativo atualizado.", "good", 4200);
 }
@@ -3402,6 +3496,7 @@ async function deleteDashboardFile(fileRecord) {
     const { data: nextFile, error: nextError } = await window.supabaseClient
       .from("dashboard_files")
       .select("*")
+      .neq("id", fileRecord.id)
       .order("created_at", { ascending: false })
       .limit(1)
       .maybeSingle();
@@ -3413,6 +3508,8 @@ async function deleteDashboardFile(fileRecord) {
       await setActiveDashboardFile(nextFile.id);
       return;
     }
+    clearDashboardData({ render: true, preserveRecords: false });
+    return;
   }
   await loadDashboardFilesFromSupabase({ loadActive: true });
 }
@@ -3446,18 +3543,6 @@ async function loadWorkbookEngine() {
   }
 }
 
-function buildSeedDataset() {
-  const seedMeta = window.__PRE_FATURA_META || {};
-  return {
-    id: "seed",
-    fileName: seedMeta.fileName || STATE_DEFAULT.fileName,
-    label: humanizeWorkbookName(seedMeta.fileName || STATE_DEFAULT.fileName),
-    source: "seed",
-    importedAt: seedMeta.importedAt || new Date().toISOString(),
-    rows: seedRows.map(normalizeStoredRow),
-  };
-}
-
 function buildEmptyDataset() {
   return {
     id: EMPTY_DATASET_ID,
@@ -3466,22 +3551,6 @@ function buildEmptyDataset() {
     source: "empty",
     importedAt: new Date().toISOString(),
     rows: [],
-  };
-}
-
-function mergeSeedIntoLibrary(store) {
-  const rawDatasets = Array.isArray(store?.datasets) ? store.datasets : [];
-  const normalized = rawDatasets.map(normalizeDatasetRecord).filter(Boolean);
-  const uploaded = normalized.filter((dataset) => dataset.source !== "seed" && dataset.id !== "seed");
-  const seed = buildSeedDataset();
-  const seedDeleted = Boolean(store?.seedDeleted);
-  const datasets = seedDeleted ? uploaded : [seed, ...uploaded];
-  const desiredActive = String(store?.activeDatasetId || (seedDeleted ? uploaded[0]?.id || EMPTY_DATASET_ID : "seed"));
-  const activeDatasetId = datasets.some((dataset) => dataset.id === desiredActive) ? desiredActive : datasets[0]?.id || EMPTY_DATASET_ID;
-  return {
-    activeDatasetId,
-    seedDeleted,
-    datasets,
   };
 }
 
@@ -3643,8 +3712,10 @@ function bindSupabaseAuthState() {
       currentUser = null;
       currentProfile = null;
       knownUsers = [];
+      clearDashboardData({ render: false, preserveRecords: false });
       updateAccessControls();
       renderAccountPage();
+      renderAll();
       return;
     }
     window.setTimeout(() => {
@@ -3676,8 +3747,10 @@ async function loadCurrentSession(options = {}) {
       currentUser = null;
       currentProfile = null;
       knownUsers = [];
+      clearDashboardData({ render: false, preserveRecords: false });
       updateAccessControls();
       renderAccountPage();
+      renderAll();
       return;
     }
 
@@ -3687,8 +3760,10 @@ async function loadCurrentSession(options = {}) {
     currentUser = null;
     currentProfile = null;
     knownUsers = [];
+    clearDashboardData({ render: false, preserveRecords: false });
     updateAccessControls();
     renderAccountPage();
+    renderAll();
     if (options.showSessionWarning) {
       showToast("Login feito, mas houve erro ao carregar a sessão.", "warn", 5600);
     }
@@ -3723,6 +3798,7 @@ async function applyAuthenticatedUser(user, options = {}) {
   updateDatasetMeta();
   renderAccountPage();
   renderFileDeleteMenu();
+  renderAll();
   return { user: currentUser, profile: currentProfile };
 }
 
@@ -3886,6 +3962,7 @@ async function logoutUser() {
   knownUsers = [];
   state.appView = "dashboard";
   state.accountPanelOpen = true;
+  clearDashboardData({ render: false, preserveRecords: false });
   updateAccessControls();
   renderAccountPage();
   renderAll();
@@ -3979,17 +4056,10 @@ async function deleteActiveDataset() {
     return;
   }
 
-  const message =
-    active.id === "seed"
-      ? `Zerar a base fixa "${active.label}"? O dashboard ficará vazio até importar outro Excel.`
-      : `Excluir o arquivo "${active.label}"? Essa ação remove a biblioteca local deste painel.`;
-  const confirmed = window.confirm(message);
+  const confirmed = window.confirm(`Remover o arquivo local "${active.label}" deste painel?`);
   if (!confirmed) return;
 
   const index = library.datasets.findIndex((dataset) => dataset.id === active.id);
-  if (active.id === "seed") {
-    library.seedDeleted = true;
-  }
   if (index < 0) return;
 
   library.datasets.splice(index, 1);
@@ -4004,7 +4074,7 @@ async function deleteActiveDataset() {
   persistState();
   persistLibrary();
   renderAll();
-  showToast(active.id === "seed" ? "Base fixa zerada." : `Arquivo "${active.label}" excluído.`, "good", 5000);
+  showToast(`Arquivo "${active.label}" excluído.`, "good", 5000);
 }
 
 function parseDateValue(value) {
@@ -4159,12 +4229,16 @@ function normalizeLoadedState(loadedState) {
   loadedState.metaAnual = Number(loadedState.metaAnual || 0);
   loadedState.metaAnualEditada = Boolean(loadedState.metaAnualEditada && loadedState.metaAnual > 0);
   loadedState.accountPanelOpen = false;
+  loadedState.fileName = "";
+  loadedState.activeDatasetId = EMPTY_DATASET_ID;
+  loadedState.deleteDatasetId = "";
   return loadedState;
 }
 
 function persistState() {
   try {
-    window.localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+    const { fileName, activeDatasetId, deleteDatasetId, ...visualPreferences } = state;
+    window.localStorage.setItem(STORAGE_KEY, JSON.stringify(visualPreferences));
   } catch {
     // no-op
   }
@@ -4172,15 +4246,14 @@ function persistState() {
 
 function loadLibrary() {
   return {
-    activeDatasetId: "seed",
-    seedDeleted: false,
-    datasets: [buildSeedDataset()],
+    activeDatasetId: EMPTY_DATASET_ID,
+    datasets: [buildEmptyDataset()],
   };
 }
 
 function persistLibrary() {
   try {
-    window.localStorage.removeItem(LIBRARY_STORAGE_KEY);
+    window.localStorage.removeItem("alc-pre-fatura-dashboard-library-v1");
   } catch {
     // no-op
   }
