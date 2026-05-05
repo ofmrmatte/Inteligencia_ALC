@@ -65,7 +65,12 @@ A permissao administrativa vem da tabela `profiles`, pelos campos `role = 'admin
 
 - `public.audit_logs`
   - auditoria de acoes importantes;
-  - registra login, logout, upload, exclusao, troca de arquivo ativo, geracao de relatorio, alteracao de perfil, setor e permissao admin.
+  - registra login, logout, upload, exclusao, troca de arquivo ativo, geracao de relatorio, alteracao de perfil, setor, permissao admin e meta PNR/LOSS.
+
+- `public.dashboard_settings`
+  - configuracoes globais do dashboard;
+  - chave `pnr_goal` armazena a meta PNR/LOSS mensal e anual;
+  - usuarios logados podem ler, somente administradores podem alterar.
 
 ### Buckets de Storage
 
@@ -86,8 +91,9 @@ A permissao administrativa vem da tabela `profiles`, pelos campos `role = 'admin
 4. Se for administrador, usar **Enviar arquivo** para carregar uma ou mais planilhas Excel.
 5. O arquivo e salvo no Supabase Storage e seus metadados sao salvos em `dashboard_files`.
 6. O painel carrega os arquivos salvos, aplica os filtros de mes/periodo e recalcula os indicadores.
-7. Usuarios comuns podem visualizar os indicadores e baixar relatorios.
-8. Administradores podem excluir arquivos, trocar arquivo ativo, editar usuarios e consultar auditoria em **Configuracoes gerais**.
+7. A meta PNR/LOSS e carregada de `dashboard_settings` e aparece igual para todos os usuarios.
+8. Usuarios comuns podem visualizar os indicadores e baixar relatorios.
+9. Administradores podem excluir arquivos, trocar arquivo ativo, editar usuarios, ajustar a meta global e consultar auditoria em **Configuracoes gerais**.
 
 ## Arquivos principais
 

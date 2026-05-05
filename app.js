@@ -12,7 +12,14 @@ const PDF_LOGO_IMAGE = {
 };
 const EMPTY_DATASET_ID = "__empty";
 const MONTHLY_BASE_VIEW = "Evolução mensal";
-const DEFAULT_PNR_GOAL_LIMIT = 20000;
+const PNR_GOAL_SETTINGS_KEY = "pnr_goal";
+const DEFAULT_PNR_GOAL_SETTINGS = {
+  monthly_goal: 40000,
+  annual_goal: 160000,
+  currency: "BRL",
+  goal_type: "loss_limit",
+};
+const DEFAULT_PNR_GOAL_LIMIT = DEFAULT_PNR_GOAL_SETTINGS.monthly_goal;
 const SHEET_ORDER = ["Todos", "SVC PERDIDOS", "XPT PERDIDOS", "PNR"];
 const SHEET_TABS = [...SHEET_ORDER, MONTHLY_BASE_VIEW];
 const SHEET_COLORS = {
@@ -47,10 +54,6 @@ const STATE_DEFAULT = {
   deleteDatasetId: "",
   appView: "dashboard",
   theme: "dark",
-  pnrGoalLimit: DEFAULT_PNR_GOAL_LIMIT,
-  metaMensal: DEFAULT_PNR_GOAL_LIMIT,
-  metaAnual: 0,
-  metaAnualEditada: false,
   accountPanelOpen: false,
 };
 
@@ -103,6 +106,7 @@ let pendingAvatarPreviewUrl = "";
 let pendingAvatarSourceUrl = "";
 let evolutionPeriodView = loadEvolutionPeriodView();
 let totalDiscountComparisonRequest = 0;
+let globalGoalSettings = getDefaultGoalSettings();
 
 const DASHBOARD_STATE_CONFIG = {
   "loading-session": {
@@ -168,6 +172,7 @@ const auditActionLabels = {
   update_profile: "Alteração de perfil",
   update_user_setor: "Alteração de setor",
   update_user_admin: "Alteração de permissão admin",
+  update_goal_settings: "Alteração da meta PNR/LOSS",
 };
 
 const el = {};
@@ -440,11 +445,9 @@ function bindEvents() {
     });
   }
   if (el.settingsPnrGoal) {
-    el.settingsPnrGoal.addEventListener("change", (event) => {
+    el.settingsPnrGoal.addEventListener("change", async (event) => {
       const value = parseCurrencyInput(event.target.value);
-      setPnrGoalByMode("monthly", value > 0 ? value : DEFAULT_PNR_GOAL_LIMIT);
-      persistState();
-      renderAll();
+      await savePnrGoalByMode("monthly", value > 0 ? value : getMonthlyPnrGoalLimit());
     });
   }
   if (el.authLogin) {
@@ -688,7 +691,7 @@ function bindEvents() {
   });
 }
 
-function handlePnrGoalConfig(event) {
+async function handlePnrGoalConfig(event) {
   const form = event.target.closest("[data-goal-config-form]");
   const cancelButton = event.target.closest("[data-goal-config-cancel]");
   const saveButton = event.target.closest("[data-goal-config-save]");
@@ -706,12 +709,8 @@ function handlePnrGoalConfig(event) {
   if (!input) return;
   const mode = input.dataset.goalMode === "annual" ? "annual" : "monthly";
   const value = parseCurrencyInput(input.value);
-  setPnrGoalByMode(mode, value > 0 ? value : DEFAULT_PNR_GOAL_LIMIT);
-  if (panel) panel.removeAttribute("open");
-  hydrateControls();
-  persistState();
-  renderAll();
-  showToast(mode === "annual" ? "Meta anual atualizada." : "Meta mensal atualizada.", "good");
+  const saved = await savePnrGoalByMode(mode, value > 0 ? value : getGoalLimitByMode(mode));
+  if (saved && panel) panel.removeAttribute("open");
 }
 
 function handleEscapeFilter(event) {
@@ -1857,9 +1856,12 @@ function renderPnrGoalSummary(filtered) {
   if (titleNode) titleNode.textContent = title;
   if (actionsNode) {
     const configTitle = isAnnual ? "Configurar meta anual" : "Configurar meta mensal";
+    const canConfigureGoal = getActionPermissions().isAdmin;
     actionsNode.innerHTML = `
       <span class="goal-status ${goal.tone}">${escapeHtml(goal.label)}</span>
-      <details class="goal-config" data-goal-mode="${goalMode}">
+      ${
+        canConfigureGoal
+          ? `<details class="goal-config" data-goal-mode="${goalMode}">
         <summary title="${escapeAttribute(configTitle)}" aria-label="${escapeAttribute(configTitle)}">⚙</summary>
         <form class="goal-config__panel" data-goal-config-form>
           <strong>${escapeHtml(configTitle)}</strong>
@@ -1880,7 +1882,9 @@ function renderPnrGoalSummary(filtered) {
             <button type="submit" data-goal-config-save>Salvar</button>
           </div>
         </form>
-      </details>
+      </details>`
+          : ""
+      }
     `;
   }
   el.pnrGoalSummary.innerHTML = `
@@ -2200,25 +2204,126 @@ function renderPnrGoalGauge(goal) {
 }
 
 function getMonthlyPnrGoalLimit() {
-  const monthlyGoal = Number(state.metaMensal || state.pnrGoalLimit || DEFAULT_PNR_GOAL_LIMIT);
+  const monthlyGoal = Number(normalizeGoalSettings(globalGoalSettings).monthly_goal);
   return monthlyGoal > 0 ? monthlyGoal : DEFAULT_PNR_GOAL_LIMIT;
 }
 
-function getAnnualPnrGoalLimit(monthCount = 1) {
-  const savedAnnualGoal = Number(state.metaAnual || 0);
-  if (state.metaAnualEditada && savedAnnualGoal > 0) return savedAnnualGoal;
-  return getMonthlyPnrGoalLimit() * Math.max(Number(monthCount) || 1, 1);
+function getAnnualPnrGoalLimit() {
+  const annualGoal = Number(normalizeGoalSettings(globalGoalSettings).annual_goal);
+  return annualGoal > 0 ? annualGoal : DEFAULT_PNR_GOAL_SETTINGS.annual_goal;
 }
 
-function setPnrGoalByMode(mode, value) {
-  const safeValue = Number(value) > 0 ? Number(value) : DEFAULT_PNR_GOAL_LIMIT;
-  if (mode === "annual") {
-    state.metaAnual = safeValue;
-    state.metaAnualEditada = true;
-    return;
+function getGoalLimitByMode(mode) {
+  return mode === "annual" ? getAnnualPnrGoalLimit() : getMonthlyPnrGoalLimit();
+}
+
+function getDefaultGoalSettings() {
+  return { ...DEFAULT_PNR_GOAL_SETTINGS };
+}
+
+function normalizeGoalSettings(settings = {}) {
+  const fallback = getDefaultGoalSettings();
+  const monthlyGoal = Number(settings.monthly_goal ?? settings.monthlyGoal ?? fallback.monthly_goal);
+  const annualGoal = Number(settings.annual_goal ?? settings.annualGoal ?? fallback.annual_goal);
+
+  return {
+    monthly_goal: monthlyGoal > 0 ? monthlyGoal : fallback.monthly_goal,
+    annual_goal: annualGoal > 0 ? annualGoal : fallback.annual_goal,
+    currency: settings.currency || fallback.currency,
+    goal_type: settings.goal_type || fallback.goal_type,
+  };
+}
+
+async function loadGlobalGoalSettings() {
+  if (!window.supabaseClient || !currentUser) {
+    globalGoalSettings = getDefaultGoalSettings();
+    return globalGoalSettings;
   }
-  state.metaMensal = safeValue;
-  state.pnrGoalLimit = safeValue;
+
+  try {
+    const { data, error } = await window.supabaseClient
+      .from("dashboard_settings")
+      .select("*")
+      .eq("key", PNR_GOAL_SETTINGS_KEY)
+      .maybeSingle();
+
+    if (error) throw error;
+
+    globalGoalSettings = normalizeGoalSettings(data?.value);
+    return globalGoalSettings;
+  } catch (error) {
+    console.error("Erro ao carregar meta global:", error);
+    globalGoalSettings = getDefaultGoalSettings();
+    showToast("Erro ao carregar configuração de meta.", "warn", 5200);
+    return globalGoalSettings;
+  }
+}
+
+async function savePnrGoalByMode(mode, value) {
+  const currentSettings = normalizeGoalSettings(globalGoalSettings);
+  const safeValue = Number(value) > 0 ? Number(value) : getGoalLimitByMode(mode);
+  const nextSettings = {
+    ...currentSettings,
+    [mode === "annual" ? "annual_goal" : "monthly_goal"]: safeValue,
+  };
+
+  return saveGlobalGoalSettings(nextSettings);
+}
+
+async function saveGlobalGoalSettings(settings) {
+  const permissions = getActionPermissions();
+
+  if (!permissions.isAdmin) {
+    showToast("Apenas administradores podem alterar a meta.", "warn", 5200);
+    showPermissionDeniedState();
+    hydrateControls();
+    return false;
+  }
+
+  if (!window.supabaseClient || !currentUser) {
+    showToast("Faça login para alterar a meta.", "warn", 4200);
+    return false;
+  }
+
+  const previousGoalSettings = normalizeGoalSettings(globalGoalSettings);
+  const nextGoalSettings = normalizeGoalSettings(settings);
+
+  try {
+    const { data, error } = await window.supabaseClient
+      .from("dashboard_settings")
+      .upsert(
+        {
+          key: PNR_GOAL_SETTINGS_KEY,
+          value: nextGoalSettings,
+          updated_by: currentUser.id,
+          updated_by_email: currentUser.email,
+          updated_at: new Date().toISOString(),
+        },
+        { onConflict: "key" },
+      )
+      .select()
+      .single();
+
+    if (error) throw error;
+
+    globalGoalSettings = normalizeGoalSettings(data?.value || nextGoalSettings);
+    hydrateControls();
+    renderAll();
+
+    await logAudit("update_goal_settings", "dashboard_settings", PNR_GOAL_SETTINGS_KEY, {
+      previous_value: previousGoalSettings,
+      new_value: globalGoalSettings,
+    });
+
+    if (canEdit()) void loadAuditLogs();
+    showToast("Meta atualizada para todos os usuários.", "good", 4200);
+    return true;
+  } catch (error) {
+    console.error("Erro ao salvar meta global:", error);
+    showToast("Erro ao salvar meta.", "error", 5200);
+    hydrateControls();
+    return false;
+  }
 }
 
 function formatBaseCode(base) {
@@ -5092,6 +5197,7 @@ async function loadCurrentSession(options = {}) {
     currentProfile = null;
     knownUsers = [];
     auditLogs = [];
+    globalGoalSettings = getDefaultGoalSettings();
     if (shouldShowLoading || !hasLoadedDashboardData()) setDashboardVisualState("supabase-error", { render: false });
     updateAccessControls();
     renderAccountPage();
@@ -5111,6 +5217,7 @@ async function loadCurrentSession(options = {}) {
       currentProfile = null;
       knownUsers = [];
       auditLogs = [];
+      globalGoalSettings = getDefaultGoalSettings();
       clearDashboardData({ render: false, preserveRecords: false });
       setDashboardVisualState("", { render: false });
       updateAccessControls();
@@ -5126,6 +5233,7 @@ async function loadCurrentSession(options = {}) {
     currentProfile = null;
     knownUsers = [];
     auditLogs = [];
+    globalGoalSettings = getDefaultGoalSettings();
     clearDashboardData({ render: false, preserveRecords: false });
     if (shouldShowLoading || !hasLoadedDashboardData()) setDashboardVisualState("supabase-error", { render: false });
     updateAccessControls();
@@ -5162,6 +5270,8 @@ async function applyAuthenticatedUser(user, options = {}) {
   console.log("[SESSION] Profile:", currentProfile);
   console.log("[PROFILE] Perfil carregado:", currentProfile);
   console.log("[PROFILE] is_admin:", currentProfile?.is_admin);
+
+  await loadGlobalGoalSettings();
 
   if (canEdit()) {
     await loadUsers();
@@ -5358,6 +5468,7 @@ async function logoutUser() {
   currentProfile = null;
   knownUsers = [];
   auditLogs = [];
+  globalGoalSettings = getDefaultGoalSettings();
   if (pendingAvatarPreviewUrl) URL.revokeObjectURL(pendingAvatarPreviewUrl);
   if (pendingAvatarSourceUrl) URL.revokeObjectURL(pendingAvatarSourceUrl);
   pendingAvatarFile = null;
@@ -5721,11 +5832,10 @@ function loadState() {
 }
 
 function normalizeLoadedState(loadedState) {
-  const monthlyGoal = Number(loadedState.metaMensal || loadedState.pnrGoalLimit || DEFAULT_PNR_GOAL_LIMIT);
-  loadedState.metaMensal = monthlyGoal > 0 ? monthlyGoal : DEFAULT_PNR_GOAL_LIMIT;
-  loadedState.pnrGoalLimit = loadedState.metaMensal;
-  loadedState.metaAnual = Number(loadedState.metaAnual || 0);
-  loadedState.metaAnualEditada = Boolean(loadedState.metaAnualEditada && loadedState.metaAnual > 0);
+  delete loadedState.pnrGoalLimit;
+  delete loadedState.metaMensal;
+  delete loadedState.metaAnual;
+  delete loadedState.metaAnualEditada;
   loadedState.accountPanelOpen = false;
   loadedState.fileName = "";
   loadedState.activeDatasetId = EMPTY_DATASET_ID;
@@ -5735,7 +5845,16 @@ function normalizeLoadedState(loadedState) {
 
 function persistState() {
   try {
-    const { fileName, activeDatasetId, deleteDatasetId, ...visualPreferences } = state;
+    const {
+      fileName,
+      activeDatasetId,
+      deleteDatasetId,
+      pnrGoalLimit,
+      metaMensal,
+      metaAnual,
+      metaAnualEditada,
+      ...visualPreferences
+    } = state;
     window.localStorage.setItem(STORAGE_KEY, JSON.stringify(visualPreferences));
   } catch {
     // no-op
