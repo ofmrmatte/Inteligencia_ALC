@@ -2263,10 +2263,11 @@ async function downloadMonthlyReport() {
   if (!ensureReportPermission()) {
     return;
   }
-  const allMonthlyRows = buildMonthlyComparison();
+  const reportScope = getReportScope();
+  const allMonthlyRows = await buildReportHistoricalComparisonRows(reportScope);
   const filteredRows = getFilteredRows();
   const summary = buildSummary(filteredRows);
-  const analysis = buildReportAnalysis({ rows: allMonthlyRows, filteredRows, summary });
+  const analysis = buildReportAnalysis({ rows: allMonthlyRows, filteredRows, summary, scope: reportScope });
   const pdf = buildReportPdfBlob({ analysis, filteredRows, summary });
   downloadBlob(pdf, analysis.fileName);
   await logAudit("generate_report", "report", null, {
@@ -2364,7 +2365,7 @@ function buildReportPdfBlob({ analysis, summary }) {
   };
   const drawParagraphCard = (title, text, height, accent = colors.teal, fill = colors.white) => {
     ensure(height + 26);
-    sectionTitle(title, analysis.scope.mode === "annual" ? "consolidado anual" : "mês selecionado");
+    sectionTitle(title, analysis.scope.mode === "annual" ? "consolidado anual" : "recorte selecionado");
     card(page.margin, y, contentW, height, fill, accent);
     const paragraphs = String(text).split(/\n+/).filter(Boolean);
     let textY = y - 18;
@@ -2446,7 +2447,7 @@ function buildReportPdfBlob({ analysis, summary }) {
   };
   const drawMonthlyTable = () => {
     ensure(150);
-    sectionTitle("Comparativo mensal", analysis.scope.mode === "annual" ? "ano consolidado" : "mês selecionado");
+    sectionTitle("Comparativo mensal", analysis.scope.mode === "annual" ? "ano consolidado" : "recorte selecionado x mês anterior");
     const rows = analysis.timelineRows.slice(-8).map((row, index) => [
       shortMonthYear(row.label),
       integer.format(row.count || 0),
@@ -2540,10 +2541,9 @@ function buildReportPdfBlob({ analysis, summary }) {
   return createPdfBlob(pagesWithFooter);
 }
 
-function buildReportAnalysis({ rows, filteredRows, summary }) {
-  const scope = getReportScope();
+function buildReportAnalysis({ rows, filteredRows, summary, scope: providedScope = null }) {
+  const scope = providedScope || getReportScope();
   const yearRows = rows.filter((row) => String(row.key).startsWith(`${scope.year}-`));
-  const allRowsForScope = scope.mode === "annual" ? yearRows : rows;
   const activeMonth = scope.mode === "monthly" ? rows.find((row) => row.key === scope.key) || null : null;
   const activeIndex = activeMonth ? rows.findIndex((row) => row.key === activeMonth.key) : -1;
   const previousMonth = activeIndex > 0 ? rows[activeIndex - 1] : null;
@@ -2558,7 +2558,13 @@ function buildReportAnalysis({ rows, filteredRows, summary }) {
     deltaValue: activeMonth && previousMonth ? activeMonth.totalValue - previousMonth.totalValue : 0,
     deltaPct: activeMonth && previousMonth && previousMonth.totalValue ? ((activeMonth.totalValue - previousMonth.totalValue) / previousMonth.totalValue) * 100 : 0,
   };
-  const timelineRows = (scope.mode === "annual" ? yearRows : activeMonth ? [activeMonth] : [fallbackRow]).filter(Boolean);
+  const timelineRows = (
+    scope.mode === "annual"
+      ? yearRows
+      : activeMonth
+        ? rows.filter((row) => row.key === previousMonth?.key || row.key === activeMonth.key)
+        : [fallbackRow]
+  ).filter(Boolean);
   const comparisonRows = timelineRows.length ? timelineRows : [fallbackRow];
   const topBases = reportTopBy(filteredRows, "base", "valor_numerico", 8);
   const topDrivers = reportTopBy(filteredRows, "motorista", "valor_numerico", 8);
@@ -2701,26 +2707,35 @@ function getReportScope() {
   const selectedKey = state.monthFilter || referencePeriod.key;
   const key = selectedKey === "all" ? referencePeriod.key : selectedKey;
   const year = String(key || referencePeriod.key).slice(0, 4) || String(new Date().getFullYear());
+  const periodMode = normalizePeriodMode(state.period);
+  const periodLabel = getPeriodModeLabel(periodMode);
   if (selectedKey === "all") {
+    const annualPeriodLabel = periodMode === "month" ? "todos os meses" : periodLabel.toLowerCase();
     return {
       mode: "annual",
       key: "all",
       year,
-      label: `Anual ${year}`,
+      periodMode,
+      periodLabel,
+      label: `Anual ${year} — ${annualPeriodLabel}`,
       title: `Relatório Executivo de Performance Operacional — Anual ${year}`,
       fileName: `relatorio-performance-operacional-anual-${year}.pdf`,
     };
   }
   const monthIndex = Number(String(key).slice(5, 7)) || 1;
   const monthName = MONTHS[monthIndex - 1] || "período";
-  const label = `${capitalize(monthName)}/${year}`;
+  const monthLabel = `${capitalize(monthName)}/${year}`;
+  const label = `${monthLabel} — ${periodLabel.toLowerCase()}`;
   return {
     mode: "monthly",
     key,
     year,
+    periodMode,
+    periodLabel,
+    monthLabel,
     label,
     title: `Relatório Executivo de Performance Operacional — ${label}`,
-    fileName: `relatorio-performance-operacional-${slugify(`${monthName}-${year}`)}.pdf`,
+    fileName: `relatorio-performance-operacional-${slugify(`${monthName}-${year}-${periodLabel}`)}.pdf`,
   };
 }
 
@@ -2729,9 +2744,13 @@ function buildReportTrend(scope, activeMonth, previousMonth, comparisonRows) {
     if (!activeMonth || !previousMonth) {
       return { direction: "neutral", pct: 0, text: "Não há mês anterior carregado para comparação direta." };
     }
-    const deltaPct = previousMonth.totalValue ? ((activeMonth.totalValue - previousMonth.totalValue) / previousMonth.totalValue) * 100 : 0;
-    if (deltaPct > 0.5) return { direction: "up", pct: deltaPct, text: `Aumento de ${formatSignedPct(deltaPct)} em descontos vs. ${shortMonthYear(previousMonth.label)}.` };
-    if (deltaPct < -0.5) return { direction: "down", pct: deltaPct, text: `Queda de ${formatNumberPt(Math.abs(deltaPct), 1)}% em descontos vs. ${shortMonthYear(previousMonth.label)}.` };
+    const deltaPct = calculateVariation(activeMonth.totalValue, previousMonth.totalValue);
+    if (deltaPct == null) {
+      return { direction: "neutral", pct: 0, text: `Mês anterior ${shortMonthYear(previousMonth.label)} sem valor base para comparação percentual.` };
+    }
+    const reference = getReportTrendReferenceLabel(scope, previousMonth);
+    if (deltaPct > 0.5) return { direction: "up", pct: deltaPct, text: `Aumento de ${formatNumberPt(Math.abs(deltaPct), 1)}% em relação a ${reference}.` };
+    if (deltaPct < -0.5) return { direction: "down", pct: deltaPct, text: `Redução de ${formatNumberPt(Math.abs(deltaPct), 1)}% em relação a ${reference}.` };
     return { direction: "neutral", pct: deltaPct, text: "Estabilidade financeira frente ao mês anterior." };
   }
   const first = comparisonRows[0] || null;
@@ -2743,6 +2762,14 @@ function buildReportTrend(scope, activeMonth, previousMonth, comparisonRows) {
   if (deltaPct > 0.5) return { direction: "up", pct: deltaPct, text: `O ano mostra aumento de ${formatSignedPct(deltaPct)} do primeiro para o último mês carregado.` };
   if (deltaPct < -0.5) return { direction: "down", pct: deltaPct, text: `O ano mostra redução de ${formatNumberPt(Math.abs(deltaPct), 1)}% do primeiro para o último mês carregado.` };
   return { direction: "neutral", pct: deltaPct, text: "O ano permanece praticamente estável entre início e fim do período carregado." };
+}
+
+function getReportTrendReferenceLabel(scope, previousMonth) {
+  const monthLabel = shortMonthYear(previousMonth.label);
+  if (scope.periodMode === "month") return monthLabel;
+  const previousPeriodMode = previousMonth.periodMode || scope.periodMode;
+  const periodLabel = getPeriodModeLabel(previousPeriodMode).toLowerCase();
+  return `${periodLabel} de ${monthLabel}`;
 }
 
 function buildIntelligentSummary({ scope, summary, criticalMonth, volumeMonth, dominantCategory, topBase, topDriver, topBaseShare, topDriverShare, trend, ticketAverage, pnrShare, packageShare }) {
@@ -2763,7 +2790,7 @@ function buildIntelligentSummary({ scope, summary, criticalMonth, volumeMonth, d
 function buildReportDiagnostics({ scope, summary, criticalMonth, volumeMonth, dominantCategory, topBase, topDriver, ticketAverage, trend }) {
   return [
     {
-      title: scope.mode === "annual" ? "Mês mais crítico" : "Impacto do mês",
+      title: scope.mode === "annual" ? "Mês mais crítico" : "Impacto do recorte",
       text:
         scope.mode === "annual"
           ? `${shortMonthYear(criticalMonth.label)} concentrou ${currency.format(criticalMonth.totalValue)} em descontos.`
@@ -2820,8 +2847,8 @@ function buildReportRecommendations({ topBase, topDriver, dominantCategory, miss
 }
 
 function buildReportConclusionText({ scope, topBase, topDriver, dominantCategory, criticalMonth, trend, recommendations }) {
-  const periodText = scope.mode === "annual" ? `O período anual ${scope.year}` : `O mês ${scope.label}`;
-  const criticalText = scope.mode === "annual" ? `O mês de maior impacto foi ${shortMonthYear(criticalMonth.label)}.` : "A leitura está concentrada no mês selecionado.";
+  const periodText = scope.mode === "annual" ? `O período anual ${scope.year}` : `O recorte ${scope.label}`;
+  const criticalText = scope.mode === "annual" ? `O mês de maior impacto foi ${shortMonthYear(criticalMonth.label)}.` : "A leitura está concentrada no recorte selecionado.";
   return `${periodText} mostra que o principal problema está em ${reportCategoryLabel(dominantCategory.label)}, com maior impacto financeiro na base ${topBase.label} e prioridade de acompanhamento para o driver ${topDriver.label}. ${criticalText} A tendência indica: ${trend.text} A primeira ação recomendada é: ${recommendations[0]}`;
 }
 
@@ -3234,10 +3261,15 @@ function buildSummary(rows) {
 }
 
 function buildMonthlyComparison() {
+  return buildMonthlyComparisonFromDatasets(library.datasets, { sheet: state.sheet });
+}
+
+function buildMonthlyComparisonFromDatasets(datasets, options = {}) {
+  const sheet = options.sheet || state.sheet;
   const map = new Map();
-  for (const dataset of library.datasets) {
+  for (const dataset of Array.isArray(datasets) ? datasets : []) {
     if (!dataset || dataset.source === "filtered" || dataset.id === EMPTY_DATASET_ID || !Array.isArray(dataset.rows) || !dataset.rows.length) continue;
-    const scopedRows = getMonthlyComparisonRows(dataset.rows);
+    const scopedRows = getMonthlyComparisonRows(dataset.rows, sheet);
     if (!scopedRows.length) continue;
     const period = getDatasetPeriod({ ...dataset, rows: scopedRows });
     const key = period.key;
@@ -3265,14 +3297,94 @@ function buildMonthlyComparison() {
   return rows.map((row, index) => {
     const previous = rows[index - 1] || null;
     const deltaValue = previous ? row.totalValue - previous.totalValue : 0;
-    const deltaPct = previous && previous.totalValue ? (deltaValue / previous.totalValue) * 100 : 0;
+    const deltaPct = calculateVariation(row.totalValue, previous?.totalValue) || 0;
     return { ...row, previous, deltaValue, deltaPct };
   });
 }
 
-function getMonthlyComparisonRows(rows) {
-  if (state.sheet === "Todos") return rows;
-  return rows.filter((row) => row.aba_origem === state.sheet);
+function getMonthlyComparisonRows(rows, sheet = state.sheet) {
+  if (sheet === "Todos") return rows;
+  return rows.filter((row) => row.aba_origem === sheet);
+}
+
+async function buildReportHistoricalComparisonRows(scope) {
+  const files = await getReportAvailableFileRecords();
+  if (!files.length) return buildMonthlyComparison();
+
+  if (scope.mode === "annual") {
+    const annualFiles = getFilesByMonthAndPeriod(files, "all", scope.periodMode)
+      .filter((file) => getFileRecordPeriod(file).key.startsWith(`${scope.year}-`));
+    return buildReportMonthlyComparisonForFiles(annualFiles.length ? annualFiles : files.filter((file) => getFileRecordPeriod(file).key.startsWith(`${scope.year}-`)));
+  }
+
+  const availableMonthKeys = Array.from(new Set(files.map((file) => getFileRecordPeriod(file).key))).sort();
+  const previousKey = getPreviousMonthKey(scope.key, availableMonthKeys);
+  const selectedFiles = getFilesByMonthAndPeriod(files, scope.key, scope.periodMode);
+  let previousFiles = [];
+  let previousPeriodMode = scope.periodMode;
+
+  if (previousKey) {
+    previousFiles = getFilesByMonthAndPeriod(files, previousKey, scope.periodMode);
+    if (!previousFiles.length && scope.periodMode !== "month") {
+      previousFiles = getFilesByMonthAndPeriod(files, previousKey, "month");
+      previousPeriodMode = "month";
+    }
+  }
+
+  const comparisonFiles = uniqueDashboardFileRecords([...previousFiles, ...selectedFiles]);
+  const comparisonRows = await buildReportMonthlyComparisonForFiles(comparisonFiles);
+  return comparisonRows.map((row) => ({
+    ...row,
+    periodMode: row.key === previousKey ? previousPeriodMode : row.key === scope.key ? scope.periodMode : row.periodMode,
+    comparisonFallback: row.key === previousKey && previousPeriodMode !== scope.periodMode,
+  }));
+}
+
+async function getReportAvailableFileRecords() {
+  let files = [];
+  if (currentUser && window.supabaseClient) {
+    try {
+      files = await loadDashboardFilesFromSupabase({
+        loadActive: false,
+        render: false,
+        validateStorage: false,
+        showLoading: false,
+      });
+    } catch (error) {
+      console.error("[REPORT] Erro ao buscar histórico no Supabase:", error);
+    }
+  }
+  if (!files?.length) files = dashboardFileRecords.filter(isUsableDashboardFileRecord);
+  return (files || []).filter(isUsableDashboardFileRecord);
+}
+
+async function buildReportMonthlyComparisonForFiles(files) {
+  const datasets = [];
+  for (const file of uniqueDashboardFileRecords(files)) {
+    const dataset = await loadRowsFromStorage(file);
+    if (dataset?.rows?.length) datasets.push(dataset);
+  }
+  return buildMonthlyComparisonFromDatasets(datasets, { sheet: state.sheet });
+}
+
+function uniqueDashboardFileRecords(files) {
+  const unique = new Map();
+  (Array.isArray(files) ? files : []).forEach((file) => {
+    if (file?.id && !unique.has(file.id)) unique.set(file.id, file);
+  });
+  return Array.from(unique.values());
+}
+
+function getPreviousMonthKey(selectedMonthKey, availableMonthKeys) {
+  const sorted = [...new Set(availableMonthKeys)].sort();
+  const index = sorted.indexOf(selectedMonthKey);
+  return index > 0 ? sorted[index - 1] : null;
+}
+
+function calculateVariation(currentValue, previousValue) {
+  const previous = Number(previousValue || 0);
+  if (!previous) return null;
+  return ((Number(currentValue || 0) - previous) / previous) * 100;
 }
 
 function getDatasetPeriod(dataset) {
