@@ -26,6 +26,7 @@ const DONUT_LABELS = {
   "XPT PERDIDOS": "XPT Perd.",
 };
 const MONTHS = ["janeiro", "fevereiro", "março", "abril", "maio", "junho", "julho", "agosto", "setembro", "outubro", "novembro", "dezembro"];
+const SETOR_OPTIONS = ["LOSS", "Operação", "Administrativo", "Financeiro", "Qualidade", "Monitoramento", "Suporte", "Outros"];
 
 const STATE_DEFAULT = {
   query: "",
@@ -82,13 +83,85 @@ let workbookEnginePromise = null;
 let currentUser = null;
 let currentProfile = null;
 let knownUsers = [];
+let auditLogs = [];
 let dashboardFileRecords = [];
 let currentActiveFile = null;
 let dashboardFilesLoading = false;
+let dashboardVisualState = "loading-session";
+let dashboardPermissionTimer = null;
 let sidebarAnimationTimer = null;
 let liveClockTimer = null;
 let accountMenuCloseTimer = null;
 let supabaseAuthListenerBound = false;
+let pendingAvatarFile = null;
+let pendingAvatarPreviewUrl = "";
+let pendingAvatarSourceUrl = "";
+
+const DASHBOARD_STATE_CONFIG = {
+  "loading-session": {
+    state: "loading-session",
+    title: "Carregando sessão",
+    description: "Estamos verificando seu acesso ao painel.",
+    loading: true,
+  },
+  "loading-files": {
+    state: "loading-files",
+    title: "Carregando arquivos salvos",
+    description: "Buscando arquivos vinculados ao dashboard.",
+    loading: true,
+  },
+  "processing-file": {
+    state: "processing-file",
+    title: "Processando arquivo",
+    description: "Estamos lendo os dados e atualizando os indicadores.",
+    loading: true,
+  },
+  "not-authenticated": {
+    state: "not-authenticated",
+    title: "Aguardando autenticação",
+    description: "Faça login para carregar os arquivos salvos e visualizar os indicadores do painel.",
+    action: "login",
+    actionLabel: "Entrar na conta",
+  },
+  "no-active-file": {
+    state: "no-active-file",
+    title: "Nenhum arquivo ativo",
+    description: "Nenhum arquivo foi encontrado. Faça upload de um arquivo para iniciar a análise.",
+    action: "upload",
+    actionLabel: "Enviar arquivo",
+  },
+  "no-filter-results": {
+    state: "no-filter-results",
+    title: "Nenhum registro encontrado",
+    description: "Não há dados para o mês, período ou categoria selecionados.",
+    action: "clear-filters",
+    actionLabel: "Limpar filtros",
+  },
+  "supabase-error": {
+    state: "supabase-error",
+    title: "Erro ao carregar dados",
+    description: "Não foi possível conectar ao Supabase. Verifique sua conexão ou tente novamente.",
+    action: "retry",
+    actionLabel: "Tentar novamente",
+  },
+  "permission-denied": {
+    state: "permission-denied",
+    title: "Acesso restrito",
+    description: "Apenas administradores podem realizar esta ação.",
+  },
+};
+
+const auditActionLabels = {
+  login: "Login",
+  logout: "Logout",
+  upload_file: "Upload de arquivo",
+  delete_file: "Exclusão de arquivo",
+  set_active_file: "Alteração de arquivo ativo",
+  generate_report: "Geração de relatório",
+  update_profile: "Alteração de perfil",
+  update_user_setor: "Alteração de setor",
+  update_user_admin: "Alteração de permissão admin",
+};
 
 const el = {};
 
@@ -164,11 +237,27 @@ function cacheDom() {
   el.profileView = document.getElementById("profile-view");
   el.settingsView = document.getElementById("settings-view");
   el.settingsUsersList = document.getElementById("settings-users-list");
+  el.settingsAuditList = document.getElementById("settings-audit-list");
   el.profileAvatar = document.getElementById("profile-avatar");
+  el.profileAvatarFile = document.getElementById("profile-avatar-file");
+  el.profileCropPanel = document.getElementById("profile-crop-panel");
+  el.profileCropImage = document.getElementById("profile-crop-image");
+  el.profileCropZoom = document.getElementById("profile-crop-zoom");
+  el.profileCropX = document.getElementById("profile-crop-x");
+  el.profileCropY = document.getElementById("profile-crop-y");
+  el.profileCropApply = document.getElementById("profile-crop-apply");
+  el.profileCropCancel = document.getElementById("profile-crop-cancel");
+  el.profileHeading = document.getElementById("profile-heading");
+  el.profileSummary = document.getElementById("profile-summary");
+  el.profileAccessBadge = document.getElementById("profile-access-badge");
+  el.profileCreatedAt = document.getElementById("profile-created-at");
   el.profileName = document.getElementById("profile-name");
   el.profileRoleTitle = document.getElementById("profile-role-title");
+  el.profileSector = document.getElementById("profile-sector");
+  el.profileAccessType = document.getElementById("profile-access-type");
   el.profileEmail = document.getElementById("profile-email");
   el.profilePassword = document.getElementById("profile-password");
+  el.profilePasswordConfirm = document.getElementById("profile-password-confirm");
   el.profileSave = document.getElementById("profile-save");
   el.kpiGrid = document.getElementById("kpi-grid");
   el.baseBars = document.getElementById("base-bars");
@@ -275,10 +364,42 @@ function bindEvents() {
     renderAll();
     updateAccessControls();
   });
+  document.addEventListener("click", (event) => {
+    const action = event.target.closest("[data-empty-action]");
+    if (!action) return;
+    if (action.dataset.emptyAction === "login") {
+      setAccountMenuOpen(true);
+      window.setTimeout(() => el.authEmail?.focus(), 80);
+    }
+    if (action.dataset.emptyAction === "upload") {
+      if (ensureUploadPermission()) el.fileInput?.click();
+    }
+    if (action.dataset.emptyAction === "clear-filters") {
+      resetDashboardFilters();
+    }
+    if (action.dataset.emptyAction === "retry") {
+      void retryDashboardLoad();
+    }
+  });
   if (el.profileSave) {
     el.profileSave.addEventListener("click", async () => {
       await saveProfile();
     });
+  }
+  if (el.profileAvatarFile) {
+    el.profileAvatarFile.addEventListener("change", (event) => {
+      handleAvatarSelection(event);
+    });
+  }
+  [el.profileCropZoom, el.profileCropX, el.profileCropY].forEach((control) => {
+    if (!control) return;
+    control.addEventListener("input", updateAvatarCropPreview);
+  });
+  if (el.profileCropCancel) {
+    el.profileCropCancel.addEventListener("click", cancelAvatarCrop);
+  }
+  if (el.profileCropApply) {
+    el.profileCropApply.addEventListener("click", applyAvatarCrop);
   }
   if (el.settingsUsersList) {
     el.settingsUsersList.addEventListener("click", async (event) => {
@@ -286,13 +407,18 @@ function bindEvents() {
       if (!button) return;
       await updateUserRole(button.dataset.userId, button.dataset.role);
     });
+    el.settingsUsersList.addEventListener("change", async (event) => {
+      const field = event.target.closest("[data-user-field]");
+      if (!field) return;
+      await updateUserProfileField(field.dataset.userId, field.dataset.userField, field.value);
+    });
   }
   if (el.reportButton) {
     el.reportButton.addEventListener("click", () => {
       if (!ensureReportPermission()) {
         return;
       }
-      downloadMonthlyReport();
+      void downloadMonthlyReport();
     });
   }
   document.addEventListener("keydown", handleEscapeFilter);
@@ -375,24 +501,7 @@ function bindEvents() {
   });
 
   el.clearFilters.addEventListener("click", () => {
-    Object.assign(state, {
-      query: "",
-      sheet: "Todos",
-      tipo: "Todos",
-      base: "Todos",
-      motorista: "Todos",
-      period: "month",
-      monthFilter: "",
-      appView: "dashboard",
-      sortKey: "valor_numerico",
-      sortDir: "desc",
-      page: 1,
-      pageSize: Number(el.pageSize.value || 15),
-    });
-    hydrateControls();
-    persistState();
-    renderAll();
-    showToast("Filtros limpos.", "info");
+    resetDashboardFilters();
   });
 
   [
@@ -974,8 +1083,9 @@ function renderAll() {
     return;
   }
 
-  if (!hasLoadedDashboardData()) {
-    renderDashboardEmptyState(getDashboardEmptyMessage());
+  const dashboardState = getDashboardState(filtered);
+  if (dashboardState) {
+    renderDashboardState(dashboardState);
     renderFilterSummary();
     updateTopbar(summary);
     updateAccessControls();
@@ -1037,6 +1147,9 @@ function openAccountPage(page) {
   }
   state.appView = page === "settings" ? "settings" : "profile";
   state.accountPanelOpen = false;
+  if (state.appView === "settings" && canEdit()) {
+    void loadAuditLogs();
+  }
   persistState();
   renderAll();
 }
@@ -1050,11 +1163,24 @@ function renderProfilePage() {
   if (!el.profileView) return;
   const email = currentProfile?.email || currentUser?.email || "";
   const name = getProfileDisplayName();
-  const cargo = currentProfile?.cargo || (canEdit() ? "Administrador" : "Usuário");
+  const cargo = currentProfile?.cargo || (canEdit() ? "Administrador" : "Não informado");
+  const setor = formatSetorLabel(currentProfile?.setor || "Não informado");
+  const isAdmin = canEdit();
+  const accessLabel = isAdmin ? "Admin" : "Usuário";
   const initials = getProfileInitials(name || email);
-  if (el.profileAvatar) el.profileAvatar.textContent = initials;
+  const avatarUrl = pendingAvatarPreviewUrl || currentProfile?.avatar_url || "";
+  if (el.profileAvatar) el.profileAvatar.innerHTML = avatarUrl ? `<img src="${escapeAttribute(avatarUrl)}" alt="${escapeAttribute(name)}" />` : escapeHtml(initials);
+  if (el.profileHeading) el.profileHeading.textContent = currentUser ? name : "Perfil";
+  if (el.profileSummary) el.profileSummary.textContent = currentUser ? `Setor: ${setor} · Cargo: ${cargo}` : "Dados do usuário conectado ao dashboard.";
+  if (el.profileAccessBadge) {
+    el.profileAccessBadge.textContent = accessLabel;
+    el.profileAccessBadge.classList.toggle("is-admin", isAdmin);
+    el.profileAccessBadge.classList.toggle("is-viewer", !isAdmin);
+  }
   if (el.profileName) el.profileName.value = currentUser ? name : "";
   if (el.profileRoleTitle) el.profileRoleTitle.value = currentUser ? cargo : "";
+  if (el.profileSector) el.profileSector.value = currentUser ? setor : "";
+  if (el.profileAccessType) el.profileAccessType.value = currentUser ? accessLabel : "";
   if (el.profileEmail) el.profileEmail.value = email;
 }
 
@@ -1062,6 +1188,7 @@ function renderSettingsPage() {
   if (!el.settingsUsersList) return;
   if (!canEdit()) {
     el.settingsUsersList.innerHTML = emptyState("Acesso restrito", "Somente administradores podem editar usuários.");
+    if (el.settingsAuditList) el.settingsAuditList.innerHTML = emptyState("Acesso restrito", "Somente administradores podem visualizar a auditoria.");
     return;
   }
   const users = knownUsers;
@@ -1070,12 +1197,24 @@ function renderSettingsPage() {
       const isAdmin = user.is_admin === true || user.isAdmin === true || user.role === "admin";
       const name = user.name || (user.email ? user.email.split("@")[0] : "Usuário");
       const cargo = user.cargo || (isAdmin ? "Administrador" : "Usuário");
+      const setor = user.setor || "LOSS";
+      const setorLabel = formatSetorLabel(setor);
       return `
         <div class="settings-user">
           <div class="settings-user__identity">
             <strong>${escapeHtml(name)}</strong>
-            <span>${escapeHtml(user.email || "Sem e-mail")} · ${escapeHtml(cargo)}</span>
+            <span>${escapeHtml(user.email || "Sem e-mail")} · ${escapeHtml(cargo)} · Setor: ${escapeHtml(setorLabel)}</span>
           </div>
+          <label class="settings-user__field">
+            <span>Cargo</span>
+            <input type="text" value="${escapeAttribute(cargo)}" data-user-id="${escapeAttribute(user.id)}" data-user-field="cargo" />
+          </label>
+          <label class="settings-user__field">
+            <span>Setor</span>
+            <select data-user-id="${escapeAttribute(user.id)}" data-user-field="setor">
+              ${buildSetorOptions(setor)}
+            </select>
+          </label>
           <span class="settings-user__badge ${isAdmin ? "is-admin" : "is-viewer"}">${isAdmin ? "Admin" : "Visualização"}</span>
           <button class="secondary-button secondary-button--mini settings-user__action" type="button" data-user-id="${escapeAttribute(user.id)}" data-role="${isAdmin ? "user" : "admin"}">
             ${isAdmin ? "Remover admin" : "Tornar admin"}
@@ -1084,6 +1223,56 @@ function renderSettingsPage() {
       `;
     })
     .join("") || emptyState("Sem usuários", "Os perfis do Supabase aparecerão aqui.");
+  renderAuditLogs();
+}
+
+function renderAuditLogs() {
+  if (!el.settingsAuditList) return;
+  if (!canEdit()) {
+    el.settingsAuditList.innerHTML = emptyState("Acesso restrito", "Somente administradores podem visualizar a auditoria.");
+    return;
+  }
+  if (!auditLogs.length) {
+    el.settingsAuditList.innerHTML = emptyState("Sem auditoria", "As ações registradas aparecerão aqui.");
+    return;
+  }
+  el.settingsAuditList.innerHTML = `
+    <div class="audit-table" role="table" aria-label="Auditoria do dashboard">
+      <div class="audit-table__row audit-table__row--head" role="row">
+        <span>Data/Hora</span>
+        <span>Usuário</span>
+        <span>Ação</span>
+        <span>Entidade</span>
+        <span>Detalhes</span>
+      </div>
+      ${auditLogs
+        .map((entry) => `
+          <div class="audit-table__row" role="row">
+            <span>${escapeHtml(formatDateTime(entry.created_at))}</span>
+            <span>${escapeHtml(entry.user_email || "Sistema")}</span>
+            <span>${escapeHtml(auditActionLabels[entry.action] || entry.action || "Ação")}</span>
+            <span>${escapeHtml(formatAuditEntity(entry))}</span>
+            <span>${escapeHtml(formatAuditDetails(entry.details))}</span>
+          </div>
+        `)
+        .join("")}
+    </div>
+  `;
+}
+
+function formatAuditEntity(entry) {
+  const type = entry?.entity_type || "—";
+  const id = entry?.entity_id ? ` · ${entry.entity_id}` : "";
+  return `${type}${id}`;
+}
+
+function formatAuditDetails(details) {
+  if (!details || typeof details !== "object") return "—";
+  const readable = Object.entries(details)
+    .filter(([, value]) => value !== null && value !== undefined && value !== "")
+    .slice(0, 5)
+    .map(([key, value]) => `${key}: ${Array.isArray(value) ? value.join(", ") : String(value)}`);
+  return readable.join(" · ") || "—";
 }
 
 function getProfileDisplayName() {
@@ -1102,34 +1291,183 @@ function getProfileInitials(value) {
   );
 }
 
+function buildSetorOptions(currentSetor) {
+  const normalized = String(currentSetor || "").trim();
+  const options = SETOR_OPTIONS.includes(normalized) ? SETOR_OPTIONS : [normalized || "LOSS", ...SETOR_OPTIONS];
+  return [...new Set(options)]
+    .map((setor) => `<option value="${escapeAttribute(setor)}" ${setor === normalized ? "selected" : ""}>${escapeHtml(formatSetorLabel(setor))}</option>`)
+    .join("");
+}
+
+function formatSetorLabel(value) {
+  const raw = String(value || "").trim();
+  if (!raw) return "Não informado";
+  if (raw.toUpperCase() === "LOSS") return "Loss";
+  if (raw === raw.toUpperCase()) {
+    return raw.charAt(0).toUpperCase() + raw.slice(1).toLowerCase();
+  }
+  return raw;
+}
+
+function handleAvatarSelection(event) {
+  const file = event.target.files?.[0] || null;
+  if (!file) return;
+  if (!["image/jpeg", "image/png", "image/webp"].includes(file.type)) {
+    showToast("Use uma imagem JPG, PNG ou WEBP.", "warn", 5200);
+    event.target.value = "";
+    return;
+  }
+  if (file.size > 5 * 1024 * 1024) {
+    showToast("A foto deve ter no máximo 5 MB.", "warn", 5200);
+    event.target.value = "";
+    return;
+  }
+  if (pendingAvatarSourceUrl) URL.revokeObjectURL(pendingAvatarSourceUrl);
+  pendingAvatarSourceUrl = URL.createObjectURL(file);
+  pendingAvatarFile = null;
+  if (el.profileCropImage) el.profileCropImage.src = pendingAvatarSourceUrl;
+  if (el.profileCropZoom) el.profileCropZoom.value = "1";
+  if (el.profileCropX) el.profileCropX.value = "0";
+  if (el.profileCropY) el.profileCropY.value = "0";
+  if (el.profileCropPanel) el.profileCropPanel.hidden = false;
+  updateAvatarCropPreview();
+  showToast("Ajuste o enquadramento e confirme a foto antes de salvar.", "info", 4200);
+}
+
+function updateAvatarCropPreview() {
+  if (!el.profileCropImage) return;
+  const zoom = Number(el.profileCropZoom?.value || 1);
+  const x = Number(el.profileCropX?.value || 0);
+  const y = Number(el.profileCropY?.value || 0);
+  el.profileCropImage.style.transform = `translate(${x}%, ${y}%) scale(${zoom})`;
+}
+
+function cancelAvatarCrop() {
+  if (pendingAvatarSourceUrl) URL.revokeObjectURL(pendingAvatarSourceUrl);
+  pendingAvatarSourceUrl = "";
+  pendingAvatarFile = null;
+  if (el.profileCropPanel) el.profileCropPanel.hidden = true;
+  if (el.profileAvatarFile) el.profileAvatarFile.value = "";
+}
+
+async function applyAvatarCrop() {
+  if (!pendingAvatarSourceUrl) return;
+  try {
+    const image = await loadImage(pendingAvatarSourceUrl);
+    const size = 512;
+    const zoom = Number(el.profileCropZoom?.value || 1);
+    const offsetX = Number(el.profileCropX?.value || 0) / 100;
+    const offsetY = Number(el.profileCropY?.value || 0) / 100;
+    const sourceSize = Math.min(image.naturalWidth, image.naturalHeight) / zoom;
+    const centerX = image.naturalWidth / 2 - offsetX * sourceSize;
+    const centerY = image.naturalHeight / 2 - offsetY * sourceSize;
+    const sx = Math.max(0, Math.min(image.naturalWidth - sourceSize, centerX - sourceSize / 2));
+    const sy = Math.max(0, Math.min(image.naturalHeight - sourceSize, centerY - sourceSize / 2));
+    const canvas = document.createElement("canvas");
+    canvas.width = size;
+    canvas.height = size;
+    const context = canvas.getContext("2d");
+    context.drawImage(image, sx, sy, sourceSize, sourceSize, 0, 0, size, size);
+    const blob = await new Promise((resolve) => canvas.toBlob(resolve, "image/webp", 0.9));
+    if (!blob) throw new Error("Não foi possível recortar a imagem.");
+    if (pendingAvatarPreviewUrl) URL.revokeObjectURL(pendingAvatarPreviewUrl);
+    pendingAvatarFile = new File([blob], "avatar.webp", { type: "image/webp" });
+    pendingAvatarPreviewUrl = URL.createObjectURL(blob);
+    if (pendingAvatarSourceUrl) URL.revokeObjectURL(pendingAvatarSourceUrl);
+    pendingAvatarSourceUrl = "";
+    if (el.profileCropPanel) el.profileCropPanel.hidden = true;
+    if (el.profileAvatarFile) el.profileAvatarFile.value = "";
+    renderProfilePage();
+    showToast("Foto ajustada. Salve o perfil para aplicar.", "good", 4200);
+  } catch (error) {
+    console.error("Erro ao recortar avatar:", error);
+    showToast("Não foi possível ajustar a foto.", "error", 5200);
+  }
+}
+
+function loadImage(src) {
+  return new Promise((resolve, reject) => {
+    const image = new Image();
+    image.onload = () => resolve(image);
+    image.onerror = reject;
+    image.src = src;
+  });
+}
+
 async function saveProfile() {
   if (!currentUser || !window.authService) {
     showToast("Faça login para acessar esta função.", "warn", 5200);
     return;
   }
   const name = String(el.profileName?.value || "").trim() || "Usuário";
-  const cargo = String(el.profileRoleTitle?.value || "").trim();
   const newPassword = String(el.profilePassword?.value || "");
+  const confirmPassword = String(el.profilePasswordConfirm?.value || "");
   if (newPassword && newPassword.length < 6) {
     showToast("A nova senha precisa ter pelo menos 6 caracteres.", "warn", 5200);
     return;
   }
+  if (newPassword && newPassword !== confirmPassword) {
+    showToast("A confirmação da senha não confere.", "warn", 5200);
+    return;
+  }
   try {
+    let avatarUrl = currentProfile?.avatar_url || "";
+    if (pendingAvatarFile) {
+      avatarUrl = await uploadProfileAvatar(pendingAvatarFile);
+      if (!avatarUrl) return;
+    }
     currentProfile = await window.authService.updateProfile(currentUser.id, {
       name,
-      cargo,
-      email: currentUser.email,
+      avatar_url: avatarUrl,
     });
     if (newPassword) {
       await window.authService.updatePassword(newPassword);
       if (el.profilePassword) el.profilePassword.value = "";
+      if (el.profilePasswordConfirm) el.profilePasswordConfirm.value = "";
     }
+    if (pendingAvatarPreviewUrl) {
+      URL.revokeObjectURL(pendingAvatarPreviewUrl);
+    }
+    if (pendingAvatarSourceUrl) {
+      URL.revokeObjectURL(pendingAvatarSourceUrl);
+    }
+    pendingAvatarFile = null;
+    pendingAvatarPreviewUrl = "";
+    pendingAvatarSourceUrl = "";
     await loadCurrentSession();
+    await logAudit("update_profile", "profile", currentUser.id, {
+      fields: ["name", "avatar_url"],
+    });
     showToast("Perfil atualizado.", "good", 4200);
   } catch (error) {
     console.error("Erro ao salvar perfil:", error);
     showToast("Não foi possível salvar o perfil.", "error", 5200);
   }
+}
+
+async function uploadProfileAvatar(file) {
+  if (!currentUser || !window.supabaseClient) {
+    showToast("Faça login para alterar sua foto.", "warn", 5200);
+    return "";
+  }
+  const ext = String(file.name || "").split(".").pop()?.toLowerCase() || "jpg";
+  const safeExt = ["jpg", "jpeg", "png", "webp"].includes(ext) ? ext : "jpg";
+  const path = `${currentUser.id}/profile-${Date.now()}.${safeExt}`;
+  const { error } = await window.supabaseClient.storage
+    .from("avatars")
+    .upload(path, file, {
+      cacheControl: "3600",
+      upsert: true,
+    });
+
+  if (error) {
+    console.error("Erro ao enviar avatar:", error);
+    showToast("Erro ao enviar foto de perfil.", "error", 5200);
+    return "";
+  }
+
+  const { data } = window.supabaseClient.storage.from("avatars").getPublicUrl(path);
+  return data?.publicUrl || "";
 }
 
 function toggleDashboardView(monthlyView) {
@@ -1143,13 +1481,44 @@ function hasLoadedDashboardData() {
   return activeDataset && activeDataset.id !== EMPTY_DATASET_ID && Array.isArray(allRows) && allRows.length > 0;
 }
 
-function getDashboardEmptyMessage() {
-  if (dashboardFilesLoading) return "Carregando arquivo ativo...";
-  if (!currentUser) return "Faça login para carregar o arquivo ativo salvo.";
-  return "Nenhum arquivo carregado. Faça upload de um arquivo para iniciar.";
+function getDashboardState(filteredRows = null) {
+  if (dashboardVisualState) return getDashboardStateConfig(dashboardVisualState);
+  if (!currentUser) return getDashboardStateConfig("not-authenticated");
+  if (!hasLoadedDashboardData()) {
+    const config = getDashboardStateConfig("no-active-file");
+    if (!canEdit()) {
+      return {
+        ...config,
+        description: "Nenhum arquivo foi encontrado. Solicite a um administrador o envio de um arquivo.",
+        action: "",
+        actionLabel: "",
+      };
+    }
+    return config;
+  }
+  if (Array.isArray(filteredRows) && !filteredRows.length) return getDashboardStateConfig("no-filter-results");
+  return null;
 }
 
-function renderDashboardEmptyState(message) {
+function getDashboardStateConfig(type) {
+  return DASHBOARD_STATE_CONFIG[type] || DASHBOARD_STATE_CONFIG["no-active-file"];
+}
+
+function setDashboardVisualState(type, options = {}) {
+  dashboardVisualState = type || "";
+  if (options.render === false) {
+    updateDatasetMeta();
+    return;
+  }
+  if (state.appView === "dashboard") {
+    renderAll();
+  } else {
+    updateDatasetMeta();
+  }
+}
+
+function renderDashboardState(status) {
+  const emptyStatus = typeof status === "string" ? getDashboardStateConfig(status) : status;
   if (el.monthlyBaseView) el.monthlyBaseView.hidden = true;
   [document.querySelector(".insight-grid"), document.querySelector(".comparison-panel"), document.querySelector(".table-panel")].forEach((node) => {
     if (node) node.hidden = true;
@@ -1157,12 +1526,66 @@ function renderDashboardEmptyState(message) {
   if (el.kpiGrid) {
     el.kpiGrid.hidden = false;
     el.kpiGrid.innerHTML = `
-      <article class="kpi-card dashboard-empty-card">
-        <span>Nenhum arquivo ativo</span>
-        <strong>${escapeHtml(message)}</strong>
-        <small>Os indicadores serão calculados assim que um arquivo ativo for carregado do Supabase.</small>
+      <article class="dashboard-wait-card dashboard-wait-card--${escapeAttribute(emptyStatus.state)}">
+        <div class="dashboard-wait-card__visual" aria-hidden="true">
+          <span></span>
+          <span></span>
+          <span></span>
+        </div>
+        <div class="dashboard-wait-card__copy">
+          <strong>${escapeHtml(emptyStatus.title)}</strong>
+          <p>${escapeHtml(emptyStatus.description)}</p>
+          ${
+            emptyStatus.action
+              ? `<button class="secondary-button" type="button" data-empty-action="${escapeAttribute(emptyStatus.action)}">${escapeHtml(emptyStatus.actionLabel || "Continuar")}</button>`
+                : ""
+          }
+        </div>
       </article>
     `;
+  }
+}
+
+function showPermissionDeniedState() {
+  setDashboardVisualState("permission-denied");
+  window.clearTimeout(dashboardPermissionTimer);
+  dashboardPermissionTimer = window.setTimeout(() => {
+    if (dashboardVisualState !== "permission-denied") return;
+    setDashboardVisualState("");
+  }, 5200);
+}
+
+function resetDashboardFilters() {
+  Object.assign(state, {
+    query: "",
+    sheet: "Todos",
+    tipo: "Todos",
+    base: "Todos",
+    motorista: "Todos",
+    period: "month",
+    monthFilter: "",
+    appView: "dashboard",
+    sortKey: "valor_numerico",
+    sortDir: "desc",
+    page: 1,
+    pageSize: Number(el.pageSize?.value || state.pageSize || 15),
+  });
+  if (dashboardVisualState === "no-filter-results" || dashboardVisualState === "permission-denied") {
+    dashboardVisualState = "";
+  }
+  hydrateControls();
+  persistState();
+  renderAll();
+  showToast("Filtros limpos.", "info");
+}
+
+async function retryDashboardLoad() {
+  setDashboardVisualState(currentUser ? "loading-files" : "loading-session");
+  try {
+    await loadCurrentSession({ showSessionWarning: true });
+  } catch (error) {
+    console.error("Erro ao tentar recarregar dashboard:", error);
+    setDashboardVisualState("supabase-error");
   }
 }
 
@@ -1715,7 +2138,7 @@ function parseCurrencyInput(value) {
   return Number.isFinite(parsed) ? parsed : 0;
 }
 
-function downloadMonthlyReport() {
+async function downloadMonthlyReport() {
   if (!ensureReportPermission()) {
     return;
   }
@@ -1725,6 +2148,11 @@ function downloadMonthlyReport() {
   const analysis = buildReportAnalysis({ rows: allMonthlyRows, filteredRows, summary });
   const pdf = buildReportPdfBlob({ analysis, filteredRows, summary });
   downloadBlob(pdf, analysis.fileName);
+  await logAudit("generate_report", "report", null, {
+    selected_month: state.monthFilter || "all",
+    selected_period: state.period,
+    records_count: filteredRows?.length || 0,
+  });
   showToast("Relatório de performance baixado.", "good", 4200);
 }
 
@@ -3204,6 +3632,7 @@ async function handleUpload(event) {
     showToast(error.message || "Não foi possível salvar esse Excel.", "error", 6200);
   } finally {
     dashboardFilesLoading = false;
+    if (dashboardVisualState === "processing-file") setDashboardVisualState("", { render: false });
     updateDatasetMeta();
     event.target.value = "";
   }
@@ -3235,6 +3664,7 @@ async function uploadDashboardFile(file) {
 
   if (!permissions.canUploadFile) {
     showToast(permissions.isLoggedIn ? "Apenas administradores podem realizar esta ação." : "Faça login para acessar esta função.", "warn", 5200);
+    if (permissions.isLoggedIn) showPermissionDeniedState();
     return;
   }
   if (!window.supabaseClient || !currentUser) {
@@ -3243,10 +3673,12 @@ async function uploadDashboardFile(file) {
   }
 
   dashboardFilesLoading = true;
+  setDashboardVisualState("processing-file");
   updateDatasetMeta();
   const previewDataset = await processDashboardFile(file);
   if (!previewDataset.rows.length) {
     dashboardFilesLoading = false;
+    setDashboardVisualState("");
     updateDatasetMeta();
     throw new Error("O arquivo não possui registros válidos para carregar.");
   }
@@ -3319,6 +3751,14 @@ async function uploadDashboardFile(file) {
   persistState();
   await loadDashboardFilesFromSupabase({ loadActive: false, render: false });
   await loadDashboardDataByFilters({ files: dashboardFileRecords, render: true, silent: true });
+  setDashboardVisualState("");
+  await logAudit("upload_file", "dashboard_file", data.id, {
+    file_name: data.file_name,
+    reference_month: data.reference_month,
+    reference_year: data.reference_year,
+    period_label: data.period_label,
+    parsed_rows: data.metadata?.parsed_rows,
+  });
 }
 
 async function loadDashboardFilesFromSupabase(options = {}) {
@@ -3330,6 +3770,7 @@ async function loadDashboardFilesFromSupabase(options = {}) {
   }
 
   dashboardFilesLoading = true;
+  setDashboardVisualState("loading-files");
   updateDatasetMeta();
   try {
     const { data, error } = await window.supabaseClient
@@ -3340,6 +3781,7 @@ async function loadDashboardFilesFromSupabase(options = {}) {
     if (error) {
       console.error("Erro ao buscar arquivos:", error);
       showToast("Erro ao carregar arquivos salvos.", "warn", 5200);
+      setDashboardVisualState("supabase-error", { render: false });
       clearDashboardData({ render: false, preserveRecords: false });
       return [];
     }
@@ -3351,6 +3793,7 @@ async function loadDashboardFilesFromSupabase(options = {}) {
     }
     if (!dashboardFileRecords.length) {
       clearDashboardData({ render: false, preserveRecords: false });
+      setDashboardVisualState("", { render: false });
       return [];
     }
 
@@ -3384,6 +3827,7 @@ async function loadDashboardFilesFromSupabase(options = {}) {
     } else {
       syncActiveDataset();
     }
+    if (dashboardVisualState !== "supabase-error") setDashboardVisualState("", { render: false });
     return dashboardFileRecords;
   } finally {
     dashboardFilesLoading = false;
@@ -3534,6 +3978,7 @@ async function loadDashboardDataByFilters(options = {}) {
   }
   const shouldRender = options.render !== false;
   dashboardFilesLoading = true;
+  setDashboardVisualState("processing-file", { render: shouldRender });
   updateDatasetMeta();
   try {
     const files = Array.isArray(options.files) ? options.files : await loadDashboardFilesFromSupabase({ loadActive: false, render: false, validateStorage: false });
@@ -3541,6 +3986,7 @@ async function loadDashboardDataByFilters(options = {}) {
     dashboardFileRecords = files.filter(isUsableDashboardFileRecord);
     if (!dashboardFileRecords.length) {
       dashboardFilesLoading = false;
+      setDashboardVisualState("", { render: false });
       clearDashboardData({ render: shouldRender, preserveRecords: false });
       return;
     }
@@ -3554,6 +4000,7 @@ async function loadDashboardDataByFilters(options = {}) {
     const selectedFiles = getFilesByMonthAndPeriod(dashboardFileRecords, state.monthFilter || "all", state.period);
     if (!selectedFiles.length) {
       dashboardFilesLoading = false;
+      setDashboardVisualState("no-filter-results", { render: false });
       clearDashboardData({ render: shouldRender, preserveRecords: true });
       showToast("Nenhum arquivo encontrado para o mês/período selecionado.", "warn", 5200);
       return;
@@ -3568,6 +4015,7 @@ async function loadDashboardDataByFilters(options = {}) {
     const rows = selectedDatasets.flatMap((dataset) => dataset.rows);
     if (!rows.length) {
       dashboardFilesLoading = false;
+      setDashboardVisualState("no-filter-results", { render: false });
       clearDashboardData({ render: shouldRender, preserveRecords: true });
       showToast("Nenhum registro válido encontrado para o mês/período selecionado.", "warn", 5200);
       return;
@@ -3579,6 +4027,7 @@ async function loadDashboardDataByFilters(options = {}) {
       selectedMonth: state.monthFilter || "all",
       selectedPeriod: state.period,
     });
+    setDashboardVisualState("", { render: false });
     if (shouldRender) {
       hydrateControls();
       renderAll();
@@ -3589,6 +4038,7 @@ async function loadDashboardDataByFilters(options = {}) {
     if (!options.silent) showToast("Dados do período carregados.", "good", 3200);
   } finally {
     dashboardFilesLoading = false;
+    if (dashboardVisualState === "processing-file") setDashboardVisualState("", { render: false });
     updateDatasetMeta();
   }
 }
@@ -3733,6 +4183,7 @@ async function loadActiveDashboardFile() {
   }
 
   dashboardFilesLoading = true;
+  setDashboardVisualState("loading-files");
   updateDatasetMeta();
   try {
     const { data: activeFile, error } = await window.supabaseClient
@@ -3747,12 +4198,14 @@ async function loadActiveDashboardFile() {
       console.error("Erro ao buscar arquivo ativo:", error);
       showToast("Erro ao carregar arquivo ativo.", "warn", 5200);
       dashboardFilesLoading = false;
+      setDashboardVisualState("supabase-error", { render: false });
       clearDashboardData({ render: true, preserveRecords: false });
       return;
     }
 
     if (!activeFile) {
       dashboardFilesLoading = false;
+      setDashboardVisualState("", { render: false });
       clearDashboardData({ render: true, preserveRecords: false });
       showToast("Nenhum arquivo ativo encontrado.", "info", 4200);
       return;
@@ -3813,6 +4266,7 @@ async function loadFileFromStorage(fileRecord, options = {}) {
 
   clearDashboardData({ render: false, preserveRecords: true });
   dashboardFilesLoading = true;
+  setDashboardVisualState("processing-file", { render });
   updateDatasetMeta();
   let dataset = skipDownloadDataset;
   try {
@@ -3836,6 +4290,7 @@ async function loadFileFromStorage(fileRecord, options = {}) {
             await loadFileFromStorage(nextFile);
           }
         } else {
+          setDashboardVisualState("", { render: false });
           clearDashboardData({ render, preserveRecords: false });
         }
         return;
@@ -3881,6 +4336,7 @@ async function loadFileFromStorage(fileRecord, options = {}) {
           .eq("id", fileRecord.id);
       }
       dashboardFilesLoading = false;
+      setDashboardVisualState("", { render: false });
       clearDashboardData({ render, preserveRecords: true });
       showToast("Arquivo carregado, mas nenhum registro válido foi encontrado.", "warn", 6200);
       return;
@@ -3955,15 +4411,18 @@ async function loadFileFromStorage(fileRecord, options = {}) {
     state.page = 1;
     syncActiveDataset();
     hydrateControls();
+    setDashboardVisualState("", { render: false });
     if (render) renderAll();
     if (!silent) showToast("Arquivo carregado com sucesso.", "good", 4200);
   } catch (error) {
     console.error("Erro ao processar arquivo do Storage:", error);
     showToast("Não foi possível processar o arquivo salvo.", "error", 6200);
     dashboardFilesLoading = false;
+    setDashboardVisualState("supabase-error", { render: false });
     clearDashboardData({ render });
   } finally {
     dashboardFilesLoading = false;
+    if (dashboardVisualState === "processing-file") setDashboardVisualState("", { render: false });
     updateDatasetMeta();
   }
 }
@@ -3972,6 +4431,7 @@ async function setActiveDashboardFile(fileId) {
   const permissions = getActionPermissions();
   if (!permissions.isAdmin) {
     showToast("Apenas administradores podem alterar o arquivo ativo.", "warn", 5200);
+    showPermissionDeniedState();
     return;
   }
 
@@ -4016,6 +4476,9 @@ async function setActiveDashboardFile(fileId) {
   state.monthFilter = period.key;
   state.period = period.periodType;
   persistState();
+  await logAudit("set_active_file", "dashboard_file", data.id, {
+    file_name: data.file_name,
+  });
   await loadDashboardDataByFilters({ files: dashboardFileRecords, render: true, silent: true });
   showToast("Arquivo ativo atualizado.", "good", 4200);
 }
@@ -4024,6 +4487,7 @@ async function deleteDashboardFile(fileRecord) {
   const permissions = getActionPermissions();
   if (!permissions.canDeleteFile) {
     showToast(permissions.isLoggedIn ? "Apenas administradores podem realizar esta ação." : "Faça login para acessar esta função.", "warn", 5200);
+    if (permissions.isLoggedIn) showPermissionDeniedState();
     return;
   }
   const wasActive = fileRecord.is_active === true || currentActiveFile?.id === fileRecord.id;
@@ -4047,6 +4511,11 @@ async function deleteDashboardFile(fileRecord) {
     showToast("Erro ao remover registro do arquivo.", "error", 5200);
     return;
   }
+
+  await logAudit("delete_file", "dashboard_file", fileRecord.id, {
+    file_name: fileRecord.file_name,
+    storage_path: fileRecord.storage_path,
+  });
 
   const files = await loadDashboardFilesFromSupabase({ loadActive: false, render: false, validateStorage: true });
   if (!files.length) {
@@ -4156,6 +4625,7 @@ function ensureUploadPermission() {
   const permissions = getActionPermissions();
   if (permissions.canUploadFile) return true;
   showToast(permissions.isLoggedIn ? "Apenas administradores podem realizar esta ação." : "Faça login para acessar esta função.", "warn", 5200);
+  if (permissions.isLoggedIn) showPermissionDeniedState();
   return false;
 }
 
@@ -4163,6 +4633,7 @@ function ensureDeletePermission() {
   const permissions = getActionPermissions();
   if (permissions.canDeleteFile) return true;
   showToast(permissions.isLoggedIn ? "Apenas administradores podem realizar esta ação." : "Faça login para acessar esta função.", "warn", 5200);
+  if (permissions.isLoggedIn) showPermissionDeniedState();
   return false;
 }
 
@@ -4176,6 +4647,15 @@ function setActionButtonState(button, allowed, title) {
     button.setAttribute("title", title);
     button.setAttribute("aria-label", title);
   }
+}
+
+function renderAvatarMarkup(profile, fallbackText, className = "account-avatar") {
+  const name = profile?.name || fallbackText || "Usuário";
+  const avatarUrl = profile?.avatar_url || "";
+  if (avatarUrl) {
+    return `<span class="${className}"><img src="${escapeAttribute(avatarUrl)}" alt="${escapeAttribute(name)}" /></span>`;
+  }
+  return `<span class="${className}">${escapeHtml(getProfileInitials(name))}</span>`;
 }
 
 function updateAccessControls() {
@@ -4201,7 +4681,7 @@ function updateAccessControls() {
   if (el.accountIdentity) {
     el.accountIdentity.hidden = !currentUser;
     el.accountIdentity.innerHTML = currentUser
-      ? `<strong>${escapeHtml(accountName)}</strong><span>${escapeHtml(accountEmail)}</span>`
+      ? `${renderAvatarMarkup(currentProfile, accountName)}<div><strong>${escapeHtml(accountName)}</strong><span>${escapeHtml(accountEmail)}</span></div>`
       : "";
   }
   setActionButtonState(el.reportButton, permissions.canDownloadReport, permissions.canDownloadReport ? "Baixar relatório." : "Faça login para usar esta função.");
@@ -4242,6 +4722,16 @@ function updateAccessControls() {
   if (el.accountToggle) {
     el.accountToggle.dataset.state = currentUser ? (permissions.isAdmin ? "admin" : "user") : "required";
     el.accountToggle.classList.toggle("is-active", accountMenuOpen);
+    el.accountToggle.classList.toggle("has-avatar", Boolean(currentUser));
+    if (currentUser) {
+      el.accountToggle.innerHTML = renderAvatarMarkup(currentProfile, accountName, "account-toggle-avatar");
+    } else {
+      el.accountToggle.innerHTML = `
+        <svg viewBox="0 0 24 24" aria-hidden="true">
+          <path d="M12 12a4 4 0 1 0-4-4 4 4 0 0 0 4 4Zm0 2c-4.42 0-8 1.79-8 4v2h16v-2c0-2.21-3.58-4-8-4Z" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8"></path>
+        </svg>
+      `;
+    }
     el.accountToggle.setAttribute("aria-expanded", accountMenuOpen ? "true" : "false");
   }
   if (el.accountMenu) {
@@ -4266,6 +4756,7 @@ function bindSupabaseAuthState() {
       currentUser = null;
       currentProfile = null;
       knownUsers = [];
+      auditLogs = [];
       clearDashboardData({ render: false, preserveRecords: false });
       updateAccessControls();
       renderAccountPage();
@@ -4281,12 +4772,16 @@ function bindSupabaseAuthState() {
 }
 
 async function loadCurrentSession(options = {}) {
+  setDashboardVisualState("loading-session");
   if (!window.supabaseClient?.auth) {
     currentUser = null;
     currentProfile = null;
     knownUsers = [];
+    auditLogs = [];
+    setDashboardVisualState("supabase-error", { render: false });
     updateAccessControls();
     renderAccountPage();
+    renderAll();
     return;
   }
   try {
@@ -4301,7 +4796,9 @@ async function loadCurrentSession(options = {}) {
       currentUser = null;
       currentProfile = null;
       knownUsers = [];
+      auditLogs = [];
       clearDashboardData({ render: false, preserveRecords: false });
+      setDashboardVisualState("", { render: false });
       updateAccessControls();
       renderAccountPage();
       renderAll();
@@ -4314,7 +4811,9 @@ async function loadCurrentSession(options = {}) {
     currentUser = null;
     currentProfile = null;
     knownUsers = [];
+    auditLogs = [];
     clearDashboardData({ render: false, preserveRecords: false });
+    setDashboardVisualState("supabase-error", { render: false });
     updateAccessControls();
     renderAccountPage();
     renderAll();
@@ -4343,8 +4842,10 @@ async function applyAuthenticatedUser(user, options = {}) {
 
   if (canEdit()) {
     await loadUsers();
+    await loadAuditLogs();
   } else {
     knownUsers = [];
+    auditLogs = [];
   }
 
   await loadDashboardFilesFromSupabase({ loadActive: true, render: false });
@@ -4363,6 +4864,9 @@ function buildFallbackProfile(user) {
     name: user.user_metadata?.name || user.email || "Usuário",
     role: "user",
     is_admin: false,
+    cargo: "",
+    setor: "LOSS",
+    avatar_url: "",
   };
 }
 
@@ -4459,6 +4963,10 @@ async function loginUser(event) {
     }
 
     if (el.authPassword) el.authPassword.value = "";
+    await logAudit("login", "auth", currentUser.id, {
+      email: currentUser.email,
+    });
+    if (canEdit()) void loadAuditLogs();
     showToast("Login realizado com sucesso.", "good", 4200);
     setAccountMenuOpen(false);
   } catch (error) {
@@ -4501,6 +5009,13 @@ async function signupUser() {
 
 async function logoutUser() {
   try {
+    const logoutUserId = currentUser?.id;
+    const logoutEmail = currentUser?.email;
+    if (logoutUserId) {
+      await logAudit("logout", "auth", logoutUserId, {
+        email: logoutEmail,
+      });
+    }
     if (window.supabaseClient?.auth) {
       await window.supabaseClient.auth.signOut();
     } else if (window.authService) {
@@ -4514,6 +5029,12 @@ async function logoutUser() {
   currentUser = null;
   currentProfile = null;
   knownUsers = [];
+  auditLogs = [];
+  if (pendingAvatarPreviewUrl) URL.revokeObjectURL(pendingAvatarPreviewUrl);
+  if (pendingAvatarSourceUrl) URL.revokeObjectURL(pendingAvatarSourceUrl);
+  pendingAvatarFile = null;
+  pendingAvatarPreviewUrl = "";
+  pendingAvatarSourceUrl = "";
   state.appView = "dashboard";
   state.accountPanelOpen = true;
   clearDashboardData({ render: false, preserveRecords: false });
@@ -4535,6 +5056,57 @@ async function loadUsers() {
   }
 }
 
+async function logAudit(action, entityType, entityId, details = {}) {
+  try {
+    if (!currentUser || !window.supabaseClient) return;
+
+    await window.supabaseClient
+      .from("audit_logs")
+      .insert({
+        user_id: currentUser.id,
+        user_email: currentUser.email,
+        action,
+        entity_type: entityType,
+        entity_id: entityId ? String(entityId) : null,
+        details,
+      });
+  } catch (error) {
+    console.warn("[AUDIT] Falha ao registrar auditoria:", error);
+  }
+}
+
+async function loadAuditLogs() {
+  if (!canEdit() || !window.supabaseClient) {
+    auditLogs = [];
+    renderAuditLogs();
+    return [];
+  }
+  try {
+    const { data, error } = await window.supabaseClient
+      .from("audit_logs")
+      .select("*")
+      .order("created_at", { ascending: false })
+      .limit(100);
+
+    if (error) {
+      console.error("Erro ao carregar auditoria:", error);
+      showToast("Erro ao carregar auditoria.", "warn", 5200);
+      auditLogs = [];
+      renderAuditLogs();
+      return [];
+    }
+
+    auditLogs = data || [];
+    renderAuditLogs();
+    return auditLogs;
+  } catch (error) {
+    console.error("Erro ao carregar auditoria:", error);
+    auditLogs = [];
+    renderAuditLogs();
+    return [];
+  }
+}
+
 async function updateUserRole(userId, role) {
   if (!userId || !canEdit() || !window.authService) return;
   try {
@@ -4548,7 +5120,11 @@ async function updateUserRole(userId, role) {
       return;
     }
     await window.authService.updateUserAdmin(userId, nextIsAdmin);
+    await logAudit("update_user_admin", "profile", userId, {
+      is_admin: nextIsAdmin,
+    });
     await loadUsers();
+    if (canEdit()) void loadAuditLogs();
     if (currentUser?.id === userId) {
       const current = await window.authService.getCurrentProfile();
       currentUser = current?.user || currentUser;
@@ -4559,6 +5135,39 @@ async function updateUserRole(userId, role) {
   } catch (error) {
     console.error(error);
     showToast("Não foi possível atualizar permissão.", "error", 5200);
+  }
+}
+
+async function updateUserProfileField(userId, field, value) {
+  if (!userId || !canEdit() || !window.authService) {
+    showToast("Apenas administradores podem alterar dados dos usuários.", "warn", 5200);
+    return;
+  }
+  if (field !== "setor" && field !== "cargo") return;
+  try {
+    const updates = {
+      [field]: String(value || "").trim(),
+    };
+    const updated = field === "setor"
+      ? await window.authService.updateUserSetor(userId, updates[field])
+      : await window.authService.updateUserProfileFields(userId, updates);
+    if (field === "setor") {
+      await logAudit("update_user_setor", "profile", userId, {
+        setor: updates[field],
+      });
+      if (canEdit()) void loadAuditLogs();
+    }
+    knownUsers = knownUsers.map((user) => (String(user.id) === String(userId) ? { ...user, ...updated } : user));
+    if (currentUser?.id === userId) {
+      currentProfile = { ...currentProfile, ...updated };
+    }
+    renderSettingsPage();
+    renderProfilePage();
+    updateAccessControls();
+    showToast(field === "setor" ? "Setor atualizado." : "Cargo atualizado.", "good", 3600);
+  } catch (error) {
+    console.error("Erro ao atualizar usuário:", error);
+    showToast(field === "setor" ? "Erro ao atualizar setor." : "Erro ao atualizar cargo.", "error", 5200);
   }
 }
 
@@ -4743,6 +5352,13 @@ function formatDate(value) {
   const parsed = value instanceof Date ? value : new Date(value);
   if (Number.isNaN(parsed.getTime())) return String(value);
   return new Intl.DateTimeFormat("pt-BR", { timeZone: "UTC" }).format(parsed);
+}
+
+function formatDateTime(value) {
+  if (!value) return "—";
+  const parsed = value instanceof Date ? value : new Date(value);
+  if (Number.isNaN(parsed.getTime())) return String(value);
+  return liveClockFormatter.format(parsed);
 }
 
 function emptyState(title, description) {

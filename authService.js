@@ -77,6 +77,7 @@
             name: user.user_metadata?.name || "Usuário",
             role: "user",
             is_admin: false,
+            setor: "LOSS",
           })
           .select()
           .single();
@@ -123,6 +124,36 @@
         .update({
           is_admin: isAdmin,
           role: isAdmin ? "admin" : "user",
+          updated_at: new Date().toISOString(),
+        })
+        .eq("id", userId)
+        .select()
+        .single();
+
+      if (error) throw error;
+      return data;
+    },
+
+    async updateUserSetor(userId, setor) {
+      const { data, error } = await getClient()
+        .from("profiles")
+        .update({
+          setor,
+          updated_at: new Date().toISOString(),
+        })
+        .eq("id", userId)
+        .select()
+        .single();
+
+      if (error) throw error;
+      return data;
+    },
+
+    async updateUserProfileFields(userId, updates) {
+      const { data, error } = await getClient()
+        .from("profiles")
+        .update({
+          ...updates,
           updated_at: new Date().toISOString(),
         })
         .eq("id", userId)
