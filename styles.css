@@ -788,8 +788,8 @@ body[data-theme="light"] #theme-toggle::before {
   border: 1px solid var(--line);
   border-radius: var(--radius-lg);
   background:
-    radial-gradient(circle at 50% 12%, rgba(59, 166, 255, 0.14), transparent 32%),
-    linear-gradient(145deg, rgba(17, 28, 41, 0.94), rgba(9, 17, 27, 0.9));
+    radial-gradient(circle at 50% 12%, color-mix(in srgb, var(--accent) 12%, transparent), transparent 34%),
+    linear-gradient(145deg, var(--surface-strong), var(--surface-soft));
   box-shadow: var(--panel-shadow);
   text-align: center;
 }
@@ -801,8 +801,8 @@ body[data-theme="light"] #theme-toggle::before {
   display: grid;
   place-items: center;
   border-radius: 50%;
-  background: rgba(59, 166, 255, 0.08);
-  border: 1px solid rgba(59, 166, 255, 0.18);
+  background: color-mix(in srgb, var(--accent) 9%, var(--surface));
+  border: 1px solid color-mix(in srgb, var(--accent) 20%, var(--line));
 }
 
 .dashboard-wait-card__visual::before {
@@ -810,7 +810,7 @@ body[data-theme="light"] #theme-toggle::before {
   width: 3.7rem;
   height: 3.7rem;
   border-radius: 50%;
-  border: 3px solid rgba(59, 166, 255, 0.2);
+  border: 3px solid color-mix(in srgb, var(--accent) 18%, var(--line));
   border-top-color: var(--accent);
   animation: waitSpin 1.4s linear infinite;
 }
@@ -819,7 +819,7 @@ body[data-theme="light"] #theme-toggle::before {
   position: absolute;
   inset: 1.2rem;
   border-radius: 50%;
-  border: 1px solid rgba(255, 255, 255, 0.08);
+  border: 1px solid color-mix(in srgb, var(--text) 8%, transparent);
   animation: waitPulse 2.4s ease-in-out infinite;
 }
 
@@ -856,11 +856,14 @@ body[data-theme="light"] #theme-toggle::before {
   margin-top: 0.3rem;
   min-width: 11rem;
   justify-content: center;
+  color: var(--text);
+  background: color-mix(in srgb, var(--accent) 12%, var(--surface));
+  border-color: color-mix(in srgb, var(--accent) 28%, var(--line));
 }
 
 .dashboard-wait-card--supabase-error .dashboard-wait-card__visual {
-  background: rgba(255, 107, 107, 0.1);
-  border-color: rgba(255, 107, 107, 0.24);
+  background: color-mix(in srgb, var(--critical) 10%, var(--surface));
+  border-color: color-mix(in srgb, var(--critical) 24%, var(--line));
 }
 
 .dashboard-wait-card--supabase-error .dashboard-wait-card__visual::before,
@@ -869,8 +872,8 @@ body[data-theme="light"] #theme-toggle::before {
 }
 
 .dashboard-wait-card--permission-denied .dashboard-wait-card__visual {
-  background: rgba(255, 159, 67, 0.1);
-  border-color: rgba(255, 159, 67, 0.24);
+  background: color-mix(in srgb, var(--warm) 10%, var(--surface));
+  border-color: color-mix(in srgb, var(--warm) 24%, var(--line));
 }
 
 .dashboard-wait-card--permission-denied .dashboard-wait-card__visual::before {
