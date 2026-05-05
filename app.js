@@ -3,6 +3,7 @@
 const STORAGE_KEY = "alc-pre-fatura-dashboard-state-v1";
 const THEME_STORAGE_KEY = "alc-pre-fatura-dashboard-theme-v1";
 const SIDEBAR_STORAGE_KEY = "filtersSidebarOpen";
+const EVOLUTION_PERIOD_VIEW_STORAGE_KEY = "evolutionPeriodView";
 const PDF_LOGO_IMAGE = {
   name: "ImLogo",
   width: 1080,
@@ -100,6 +101,7 @@ let supabaseAuthListenerBound = false;
 let pendingAvatarFile = null;
 let pendingAvatarPreviewUrl = "";
 let pendingAvatarSourceUrl = "";
+let evolutionPeriodView = loadEvolutionPeriodView();
 
 const DASHBOARD_STATE_CONFIG = {
   "loading-session": {
@@ -657,6 +659,17 @@ function bindEvents() {
     });
   }
 
+  if (el.monthlyBaseView) {
+    el.monthlyBaseView.addEventListener("click", (event) => {
+      const button = event.target.closest("[data-evolution-view]");
+      if (!button) return;
+      const nextView = button.dataset.evolutionView === "biweekly" ? "biweekly" : "monthly";
+      if (nextView === evolutionPeriodView) return;
+      setEvolutionPeriodView(nextView);
+      renderMonthlyBaseEvolution();
+    });
+  }
+
   document.querySelector("table thead").addEventListener("click", (event) => {
     const th = event.target.closest("th[data-sort]");
     if (!th) return;
@@ -774,6 +787,24 @@ function persistSidebarOpen(isOpen) {
   try {
     window.localStorage.setItem(SIDEBAR_STORAGE_KEY, String(isOpen));
   } catch (error) {
+    // localStorage can be unavailable in restrictive browser modes.
+  }
+}
+
+function loadEvolutionPeriodView() {
+  try {
+    const saved = window.localStorage.getItem(EVOLUTION_PERIOD_VIEW_STORAGE_KEY);
+    return saved === "biweekly" ? "biweekly" : "monthly";
+  } catch {
+    return "monthly";
+  }
+}
+
+function setEvolutionPeriodView(value) {
+  evolutionPeriodView = value === "biweekly" ? "biweekly" : "monthly";
+  try {
+    window.localStorage.setItem(EVOLUTION_PERIOD_VIEW_STORAGE_KEY, evolutionPeriodView);
+  } catch {
     // localStorage can be unavailable in restrictive browser modes.
   }
 }
@@ -1915,7 +1946,24 @@ function renderMonthlyBaseEvolution() {
       <div>
         <h2>EVOLUÇÃO</h2>
       </div>
-      <span class="panel__meta">${integer.format(datasets.length)} competências</span>
+      <div class="evolution-view-control" aria-label="Visualização da evolução">
+        <span>Visualização</span>
+        <div class="evolution-view-toggle" role="group" aria-label="Período da evolução">
+          <button
+            type="button"
+            class="${evolutionPeriodView === "monthly" ? "is-active" : ""}"
+            data-evolution-view="monthly"
+            aria-pressed="${evolutionPeriodView === "monthly" ? "true" : "false"}"
+          >Mensal</button>
+          <button
+            type="button"
+            class="${evolutionPeriodView === "biweekly" ? "is-active" : ""}"
+            data-evolution-view="biweekly"
+            aria-pressed="${evolutionPeriodView === "biweekly" ? "true" : "false"}"
+          >Quinzenal</button>
+        </div>
+        <span class="panel__meta">${integer.format(datasets.length)} competências</span>
+      </div>
     </div>
     <div class="monthly-tower-grid">
       ${sheets.map((sheet, index) => renderSheetEvolutionCard(sheet, datasets, index)).join("")}
@@ -1924,9 +1972,60 @@ function renderMonthlyBaseEvolution() {
 }
 
 function getComparableDatasets() {
+  const sourceDatasets = getEvolutionSourceDatasets();
+  if (evolutionPeriodView === "monthly") {
+    return buildMonthlyEvolutionDatasets(sourceDatasets);
+  }
+  return sourceDatasets
+    .map((dataset) => ({
+      dataset,
+      period: getDatasetPeriod(dataset),
+      label: formatEvolutionPeriodLabel(dataset, "biweekly"),
+    }))
+    .sort((a, b) => a.period.sort - b.period.sort || getDatasetQuarterOrder(a.dataset) - getDatasetQuarterOrder(b.dataset) || a.label.localeCompare(b.label, "pt-BR"));
+}
+
+function getEvolutionSourceDatasets() {
   return library.datasets
-    .filter((dataset) => dataset && dataset.id !== EMPTY_DATASET_ID && Array.isArray(dataset.rows) && dataset.rows.length)
-    .map((dataset) => ({ dataset, period: getDatasetPeriod(dataset), label: formatEvolutionPeriodLabel(dataset) }))
+    .filter((dataset) => dataset && dataset.id !== EMPTY_DATASET_ID && dataset.source !== "filtered" && Array.isArray(dataset.rows) && dataset.rows.length);
+}
+
+function buildMonthlyEvolutionDatasets(sourceDatasets) {
+  const groups = new Map();
+  sourceDatasets.forEach((dataset) => {
+    const period = getDatasetPeriod(dataset);
+    const key = period.key || "periodo";
+    if (!groups.has(key)) {
+      groups.set(key, {
+        period,
+        rows: [],
+        datasets: [],
+      });
+    }
+    const group = groups.get(key);
+    group.rows.push(...dataset.rows);
+    group.datasets.push(dataset);
+  });
+
+  return Array.from(groups.values())
+    .map((group) => {
+      const [year, month] = String(group.period.key || "").split("-");
+      const label = formatEvolutionLabel({ month, year, viewMode: "monthly" });
+      return {
+        dataset: {
+          id: `evolution-month-${group.period.key}`,
+          fileName: label,
+          label,
+          source: "evolution-month",
+          importedAt: new Date().toISOString(),
+          remoteRecord: null,
+          rows: group.rows.map(normalizeStoredRow),
+          scopedDatasets: group.datasets,
+        },
+        period: group.period,
+        label,
+      };
+    })
     .sort((a, b) => a.period.sort - b.period.sort || a.label.localeCompare(b.label, "pt-BR"));
 }
 
@@ -5648,18 +5747,34 @@ function getDatasetPeriodLabel(dataset) {
   return isInvalidEvolutionPeriodLabel(label) ? "Período" : label;
 }
 
-function formatEvolutionPeriodLabel(datasetOrFile) {
+function formatEvolutionPeriodLabel(datasetOrFile, viewMode = "biweekly") {
   const file = datasetOrFile?.remoteRecord || datasetOrFile || {};
   const period = getDatasetPeriod(datasetOrFile);
   const monthKey = normalizeReferenceMonth(file.reference_month || file.metadata?.reference_month || String(period.key || "").slice(5, 7));
-  const month =
-    getMonthAbbr(monthKey) ||
-    getMonthAbbr(detectMonth(file.file_name || datasetOrFile?.label || datasetOrFile?.fileName || "")) ||
-    getMonthAbbr(detectMonthFromRows(datasetOrFile?.rows || []));
-  const periodType = normalizePeriodMode(file.period_type || file.metadata?.period_type || getPeriodModeFromLabel(`${file.period_label || ""} ${file.metadata?.period_label || ""} ${file.file_name || ""}`) || getDatasetQuarterMode(datasetOrFile));
-  const prefix = periodType === "q1" ? "1Q" : periodType === "q2" ? "2Q" : "";
-  const label = `${prefix} ${month}`.trim();
+  const month = monthKey || detectMonth(file.file_name || datasetOrFile?.label || datasetOrFile?.fileName || "") || detectMonthFromRows(datasetOrFile?.rows || []);
+  const rawPeriodType = file.period_type || file.metadata?.period_type || "";
+  const periodText = `${file.period_label || ""} ${file.metadata?.period_label || ""} ${rawPeriodType} ${file.file_name || ""}`;
+  const periodType = normalizePeriodMode(rawPeriodType || getPeriodModeFromLabel(periodText) || getDatasetQuarterMode(datasetOrFile));
+  const label = formatEvolutionLabel({
+    month,
+    year: file.reference_year || file.metadata?.reference_year || String(period.key || "").slice(0, 4),
+    periodLabel: periodText || datasetOrFile?.label || datasetOrFile?.fileName || "",
+    periodType,
+    viewMode,
+  });
   return isInvalidEvolutionPeriodLabel(label) ? "Período" : label;
+}
+
+function formatEvolutionLabel({ month, periodLabel = "", periodType = "", viewMode = "monthly" }) {
+  const monthLabel = getMonthAbbr(month) || "MÊS";
+  if (viewMode === "monthly") return monthLabel;
+  const periodFromLabel = getPeriodModeFromLabel(periodLabel);
+  const normalizedType = normalizePeriodMode(periodType || periodFromLabel);
+  if (normalizedType === "q1") return `1Q ${monthLabel}`;
+  if (normalizedType === "q2") return `2Q ${monthLabel}`;
+  if (periodFromLabel === "q1") return `1Q ${monthLabel}`;
+  if (periodFromLabel === "q2") return `2Q ${monthLabel}`;
+  return monthLabel;
 }
 
 function getMonthAbbr(value) {
