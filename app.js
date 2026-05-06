@@ -1091,10 +1091,10 @@ function renderFileDeleteMenu() {
 }
 
 function renderTabs() {
-  const counts = countBySheet(allRows);
+  const counts = calcularContadoresAbas(allRows);
   el.sheetTabs.innerHTML = SHEET_TABS.map((sheet) => {
     const isActive = state.sheet === sheet ? "is-active" : "";
-    const count = sheet === "Todos" ? allRows.length : counts[sheet] || 0;
+    const count = counts[sheet] || 0;
     if (sheet === MONTHLY_BASE_VIEW) {
       return `
         <button type="button" class="sheet-tab ${isActive}" data-sheet="${sheet}">
@@ -1113,6 +1113,7 @@ function renderTabs() {
 
 function renderAll() {
   syncActiveDataset();
+  renderTabs();
   const filtered = getFilteredRows();
   const sorted = sortRows(filtered);
   const paged = paginateRows(sorted);
@@ -2063,7 +2064,7 @@ function renderSheetEvolutionCard(sheet, datasets, index) {
   const baseTotals = new Map();
   for (const period of rowsByDataset) {
     for (const row of period.rows) {
-      const base = row.base || "Sem base";
+      const base = getBaseIdentity(row) || "Sem base";
       baseTotals.set(base, (baseTotals.get(base) || 0) + 1);
     }
   }
@@ -2071,7 +2072,7 @@ function renderSheetEvolutionCard(sheet, datasets, index) {
     .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0], "pt-BR"))
     .map(([base]) => base);
   const totals = bases.flatMap((base) =>
-    rowsByDataset.map((period) => period.rows.filter((row) => row.base === base).length),
+    rowsByDataset.map((period) => period.rows.filter((row) => getBaseIdentity(row) === base).length),
   );
   const max = Math.max(...totals, 1);
   const sheetTotal = rowsByDataset.reduce((acc, period) => acc + period.rows.reduce((sum, row) => sum + Number(row.valor_numerico || 0), 0), 0);
@@ -2111,7 +2112,7 @@ function renderSheetEvolutionCard(sheet, datasets, index) {
 
 function renderBaseHorizontalGroup(base, rowsByDataset, max, metricLabel) {
   const values = rowsByDataset.map((period) => {
-    const rows = period.rows.filter((row) => row.base === base);
+    const rows = period.rows.filter((row) => getBaseIdentity(row) === base);
     const total = rows.length;
     const value = rows.reduce((acc, row) => acc + Number(row.valor_numerico || 0), 0);
     return { label: period.label, total, value };
@@ -2490,7 +2491,7 @@ function buildReportPdfBlob({ analysis, summary }) {
     const h = 64;
     const metrics = [
       ["Impacto financeiro", currency.format(summary.totalValue), "", colors.orange, colors.warm],
-      ["Ticket médio", currency.format(analysis.ticketAverage), "por ocorrência válida", colors.teal, colors.white],
+      ["Ticket médio", currency.format(analysis.ticketAverage), "por registro válido", colors.teal, colors.white],
       ["PNR", integer.format(summary.pnrCount), `${analysis.pnrShare}% dos registros`, colors.red, colors.dangerSoft],
       ["Pacotes perdidos", integer.format(summary.packageCount), `${analysis.packageShare}% dos registros`, colors.blue, colors.blueSoft],
       ["Registros", integer.format(summary.count), `${integer.format(summary.baseCount)} bases e ${integer.format(summary.driverCount)} drivers`, colors.blue, colors.white],
@@ -2562,7 +2563,7 @@ function buildReportPdfBlob({ analysis, summary }) {
       formatCurrencyShort(row.totalValue),
       index === 0 || !row.previous ? "—" : formatSignedPct(row.deltaPct),
     ]);
-    drawTable(page.margin, y, contentW, "Evolução por competência", ["Mês", "Ocorrências", "Descontos", "Variação"], rows, [110, 100, 150, 120], 48 + rows.length * 18, colors.blue, ["left", "right", "right", "right"]);
+    drawTable(page.margin, y, contentW, "Evolução por competência", ["Mês", "Registros", "Descontos", "Variação"], rows, [110, 100, 150, 120], 48 + rows.length * 18, colors.blue, ["left", "right", "right", "right"]);
     y -= 68 + rows.length * 18;
   };
   const drawAlertCards = () => {
@@ -2748,6 +2749,7 @@ function buildReportAnalysis({ rows, filteredRows, summary, scope: providedScope
   });
   const conclusion = buildReportConclusionText({
     scope,
+    summary,
     topBase,
     topDriver,
     dominantCategory,
@@ -2785,6 +2787,7 @@ function buildReportAnalysis({ rows, filteredRows, summary, scope: providedScope
     conclusion,
     conclusionItems: buildReportConclusionItems({
       scope,
+      summary,
       topBase,
       topDriver,
       dominantCategory,
@@ -2891,7 +2894,7 @@ function buildIntelligentSummary({ scope, summary, criticalMonth, volumeMonth, d
   const impactSentence =
     scope.mode === "annual"
       ? `${shortMonthYear(criticalMonth.label)} teve o maior impacto financeiro, com ${currency.format(criticalMonth.totalValue)} em descontos.`
-      : `o recorte registra ${currency.format(summary.totalValue)} em descontos e ticket médio de ${currency.format(ticketAverage)} por ocorrência.`;
+      : `o recorte registra ${currency.format(summary.totalValue)} em descontos e ticket médio de ${currency.format(ticketAverage)} por registro válido.`;
   return [
     `${period}, ${impactSentence}`,
     `A categoria ${reportCategoryLabel(dominantCategory.label)} concentra ${currency.format(dominantCategory.total)} e lidera a pressão operacional.`,
@@ -2912,7 +2915,7 @@ function buildReportDiagnostics({ scope, summary, criticalMonth, volumeMonth, do
     },
     {
       title: "Volume operacional",
-      text: `${shortMonthYear(volumeMonth.label)} teve ${integer.format(volumeMonth.count)} ocorrências; a categoria ${reportCategoryLabel(dominantCategory.label)} foi a mais relevante.`,
+      text: `${shortMonthYear(volumeMonth.label)} teve ${integer.format(volumeMonth.count)} registros; a categoria ${reportCategoryLabel(dominantCategory.label)} foi a mais relevante.`,
     },
     {
       title: "Prioridade",
@@ -2960,16 +2963,18 @@ function buildReportRecommendations({ topBase, topDriver, dominantCategory, miss
   return recommendations;
 }
 
-function buildReportConclusionText({ scope, topBase, topDriver, dominantCategory, criticalMonth, trend, recommendations }) {
+function buildReportConclusionText({ scope, summary, topBase, topDriver, dominantCategory, criticalMonth, trend, recommendations }) {
   const periodText = scope.mode === "annual" ? `O período anual ${scope.year}` : `O recorte ${scope.label}`;
-  const criticalText = scope.mode === "annual" ? `O mês de maior impacto foi ${shortMonthYear(criticalMonth.label)}.` : "A leitura está concentrada no recorte selecionado.";
-  return `${periodText} mostra que o principal problema está em ${reportCategoryLabel(dominantCategory.label)}, com maior impacto financeiro na base ${topBase.label} e prioridade de acompanhamento para o driver ${topDriver.label}. ${criticalText} A tendência indica: ${trend.text} A primeira ação recomendada é: ${recommendations[0]}`;
+  const periodImpact = `O impacto financeiro do período foi ${currency.format(summary.totalValue)}.`;
+  const criticalText = `O mês de maior impacto financeiro foi ${shortMonthYear(criticalMonth.label)}, com ${currency.format(criticalMonth.totalValue)}.`;
+  return `${periodText} mostra que o principal problema está em ${reportCategoryLabel(dominantCategory.label)}, com maior impacto financeiro na base ${topBase.label} e prioridade de acompanhamento para o driver ${topDriver.label}. ${periodImpact} ${criticalText} A tendência indica: ${trend.text} A primeira ação recomendada é: ${recommendations[0]}`;
 }
 
-function buildReportConclusionItems({ scope, topBase, topDriver, dominantCategory, criticalMonth, trend, recommendations }) {
+function buildReportConclusionItems({ scope, summary, topBase, topDriver, dominantCategory, criticalMonth, trend, recommendations }) {
   return [
     { label: "Principal problema", text: reportCategoryLabel(dominantCategory.label) },
-    { label: "Maior impacto financeiro", text: scope.mode === "annual" ? `${shortMonthYear(criticalMonth.label)} com ${currency.format(criticalMonth.totalValue)}` : `${scope.label} com ${currency.format(criticalMonth.totalValue)}` },
+    { label: "Impacto financeiro do período", text: `${scope.label} com ${currency.format(summary.totalValue)}` },
+    { label: "Mês de maior impacto financeiro", text: `${shortMonthYear(criticalMonth.label)} com ${currency.format(criticalMonth.totalValue)}` },
     { label: "Prioridade operacional", text: `Base ${topBase.label}; driver ${topDriver.label}.` },
     { label: "Tendência", text: trend.text },
     { label: "Primeira ação recomendada", text: recommendations[0] },
@@ -2979,7 +2984,7 @@ function buildReportConclusionItems({ scope, topBase, topDriver, dominantCategor
 function reportTopBy(rows, key, metric, limit) {
   const map = new Map();
   for (const row of rows) {
-    const label = reportLabel(row[key]);
+    const label = reportLabel(key === "base" ? getBaseIdentity(row) : row[key]);
     if (!map.has(label)) map.set(label, { label, total: 0, count: 0 });
     const item = map.get(label);
     item.total += metric ? Number(row[metric] || 0) : 1;
@@ -3306,7 +3311,7 @@ function renderTable(rows, summary) {
 
   el.resultCount.textContent = integer.format(totalRows);
   el.tableRange.textContent = `${integer.format(start)}-${integer.format(end)} de ${integer.format(totalRows)}`;
-  el.pageIndicator.textContent = `${integer.format(state.page)}/${integer.format(pageCount)}`;
+  el.pageIndicator.textContent = `Página ${integer.format(state.page)} de ${integer.format(pageCount)}`;
   el.prevPage.disabled = state.page <= 1;
   el.nextPage.disabled = state.page >= pageCount;
 
@@ -3407,7 +3412,7 @@ function updateTopbar(summary = buildSummary(getFilteredRows())) {
 function buildSummary(rows) {
   const count = rows.length;
   const totalValue = rows.reduce((acc, row) => acc + Number(row.valor_numerico || 0), 0);
-  const baseCount = uniqueCount(rows, "base");
+  const baseCount = uniqueBaseCount(rows);
   const driverCount = uniqueDriverCount(rows);
   const routeCount = uniqueCount(rows, "n_rota");
   const packageCount = rows.filter((row) => row.tipo_registro === "PACOTE PERDIDO").length;
@@ -3653,9 +3658,9 @@ function getFilteredRows() {
   const query = normalize(state.query);
 
   return allRows.filter((row) => {
-    if (SHEET_ORDER.includes(state.sheet) && state.sheet !== "Todos" && row.aba_origem !== state.sheet) return false;
+    if (SHEET_ORDER.includes(state.sheet) && state.sheet !== "Todos" && getRowDivision(row) !== state.sheet) return false;
     if (state.tipo !== "Todos" && row.tipo_desconto !== state.tipo) return false;
-    if (state.base !== "Todos" && row.base !== state.base) return false;
+    if (state.base !== "Todos" && getBaseIdentity(row) !== state.base) return false;
     if (state.motorista !== "Todos" && row.motorista !== state.motorista) return false;
 
     if (!query) return true;
@@ -3709,16 +3714,26 @@ function buildOptions(rows) {
     ).sort((a, b) => a.localeCompare(b, "pt-BR", { sensitivity: "base" }));
   return {
     tipos: normalizeSort(rows.map((row) => row.tipo_desconto)),
-    bases: normalizeSort(rows.map((row) => row.base)),
+    bases: normalizeSort(rows.map((row) => getBaseIdentity(row))),
     motoristas: normalizeSort(rows.map((row) => row.motorista)),
   };
 }
 
 function countBySheet(rows) {
-  return rows.reduce((acc, row) => {
-    acc[row.aba_origem] = (acc[row.aba_origem] || 0) + 1;
+  return calcularContadoresAbas(rows);
+}
+
+function calcularContadoresAbas(dados) {
+  const base = Array.isArray(dados) ? dados : [];
+  return SHEET_ORDER.reduce((acc, sheet) => {
+    acc[sheet] = sheet === "Todos" ? base.length : base.filter((item) => getRowDivision(item) === sheet).length;
     return acc;
   }, {});
+}
+
+function getRowDivision(item) {
+  if (!item || typeof item !== "object") return "";
+  return normalizeSheetLabel(item.divisao || item.aba_origem || item.aba || item.sheetName, item.tipo_desconto || item.tipo_registro);
 }
 
 function buildMixRows(rows) {
@@ -3816,7 +3831,7 @@ function formatPercent(value) {
 function topBy(rows, key, metric, limit) {
   const map = new Map();
   for (const row of rows) {
-    const label = row[key] == null || row[key] === "" ? "Sem valor" : String(row[key]);
+    const label = getGroupLabel(row, key);
     if (!map.has(label)) {
       map.set(label, { label, total: 0, count: 0 });
     }
@@ -3832,7 +3847,7 @@ function topBy(rows, key, metric, limit) {
 function bottomBy(rows, key, metric, limit) {
   const map = new Map();
   for (const row of rows) {
-    const label = row[key] == null || row[key] === "" ? "Sem valor" : String(row[key]);
+    const label = getGroupLabel(row, key);
     if (!map.has(label)) {
       map.set(label, { label, total: 0, count: 0 });
     }
@@ -3845,8 +3860,23 @@ function bottomBy(rows, key, metric, limit) {
     .slice(0, limit);
 }
 
+function getGroupLabel(row, key) {
+  if (key === "base") return getBaseIdentity(row) || "Sem valor";
+  const value = row[key];
+  return value == null || value === "" ? "Sem valor" : String(value);
+}
+
 function uniqueCount(rows, key) {
   return new Set(rows.map((row) => row[key]).filter(Boolean)).size;
+}
+
+function uniqueBaseCount(rows) {
+  const bases = new Set();
+  rows.forEach((row) => {
+    const base = getBaseIdentity(row);
+    if (base) bases.add(base);
+  });
+  return bases.size;
 }
 
 function uniqueDriverCount(rows) {
@@ -3888,23 +3918,33 @@ function findHeaderIndex(headers, aliases) {
 }
 
 function normalizeSheetLabel(value, type = "") {
-  const raw = normalize(`${value || ""} ${type || ""}`);
-  if (raw.includes("pnr")) return "PNR";
-  if (raw.includes("xpt")) return "XPT PERDIDOS";
-  if (raw.includes("svc") || raw.includes("service") || raw.includes("servico")) return "SVC PERDIDOS";
+  const raw = normalizeText(`${value || ""} ${type || ""}`);
+  const compact = raw.replace(/\s+/g, "");
+  const hasLost = /\bPERDID[OA]S?\b/.test(raw);
+  const hasSvc = /\bSVC\b/.test(raw) || /\bSERVICE\b/.test(raw) || /\bSERVICO\b/.test(raw);
+  const hasXpt = /\bXPT\b/.test(raw);
+  const hasPnr = /\bPNRS?\b/.test(raw) || compact.includes("PNR");
+
+  if (hasSvc && hasLost) return "SVC PERDIDOS";
+  if (hasXpt && hasLost) return "XPT PERDIDOS";
+  if (hasPnr) return "PNR";
   return String(value || "").trim() || "Sem aba";
 }
 
 function normalizeStoredRow(row) {
   if (!row || typeof row !== "object") return row;
   const sheet = normalizeSheetLabel(row.aba_origem || row.aba || row.sheetName, row.tipo_desconto || row.tipo_registro);
-  const baseParts = splitBase(row.base);
+  const baseValue = row.base || row.svc || row.estacao || row.station || row.unidade || "";
+  const baseParts = splitBase(baseValue);
   const linkedIds = getLinkedPackageIds(row);
   const normalized = {
     ...row,
     aba_origem: sheet,
+    divisao: sheet,
+    base: baseValue,
     cidade_base: row.cidade_base || baseParts.cidade_base,
     sigla_base: row.sigla_base || baseParts.sigla_base,
+    base_normalizada: normalizeBase(baseValue),
     tipo_registro: sheet === "PNR" ? "PNR" : "PACOTE PERDIDO",
     ids_vinculados: linkedIds,
     quantidade_ids: linkedIds.length || 0,
@@ -3967,7 +4007,7 @@ function normalizeOccurrenceCurrency(value) {
 
 function buildOccurrenceKey(row) {
   return [
-    row.base,
+    getBaseIdentity(row),
     row.cidade_base,
     row.motorista,
     row.n_rota,
@@ -4082,13 +4122,16 @@ function normalizeWorkbook(workbook) {
       const valor = readCell(row, idx.valor);
       const descricao = readCell(row, idx.descricao);
       const parsedDate = parseDateValue(dataValue);
+      const baseParts = splitBase(base);
 
       const normalized = {
         aba_origem: canonicalSheet,
+        divisao: canonicalSheet,
         tipo_desconto: tipoDesc,
         base,
-        cidade_base: splitBase(base).cidade_base,
-        sigla_base: splitBase(base).sigla_base,
+        cidade_base: baseParts.cidade_base,
+        sigla_base: baseParts.sigla_base,
+        base_normalizada: normalizeBase(base),
         motorista: motorista || "",
         placa: placa || "",
         descricao: descricao || "",
@@ -5843,13 +5886,15 @@ function parseMoney(value) {
 }
 
 function splitBase(base) {
-  const parts = String(base || "")
-    .split(" - ")
+  const raw = String(base || "").trim();
+  const parts = raw
+    .split(/\s+-\s+/)
     .map((part) => part.trim())
     .filter(Boolean);
+  const baseCode = normalizeBase(raw);
   return {
     cidade_base: parts[0] || "",
-    sigla_base: parts[1] || "",
+    sigla_base: parts[1] || baseCode,
   };
 }
 
@@ -5875,6 +5920,40 @@ function normalize(value) {
     .replace(/\s+/g, " ")
     .trim()
     .toLowerCase();
+}
+
+function normalizeText(value) {
+  return String(value || "")
+    .trim()
+    .toUpperCase()
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/[_\-/.]+/g, " ")
+    .replace(/[^A-Z0-9]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function normalizeBase(value) {
+  const text = normalizeText(value);
+  if (!text) return "";
+
+  const baseCodes = text.match(/\b[A-Z]{2,4}\d{1,3}\b/g);
+  if (baseCodes && baseCodes.length) return baseCodes.join("/");
+
+  const usefulCodes = text
+    .split(" ")
+    .filter((part) => /^[A-Z]{2,4}\d{0,3}$/.test(part));
+  if (usefulCodes.length) return usefulCodes.join("/");
+
+  return text;
+}
+
+function getBaseIdentity(rowOrValue) {
+  if (rowOrValue && typeof rowOrValue === "object") {
+    return rowOrValue.base_normalizada || normalizeBase(rowOrValue.base || rowOrValue.svc || rowOrValue.estacao || rowOrValue.station || rowOrValue.unidade || rowOrValue.sigla_base);
+  }
+  return normalizeBase(rowOrValue);
 }
 
 function escapeHtml(value) {
@@ -5954,6 +6033,7 @@ function normalizeLoadedState(loadedState) {
   delete loadedState.metaMensal;
   delete loadedState.metaAnual;
   delete loadedState.metaAnualEditada;
+  loadedState.base = loadedState.base && loadedState.base !== "Todos" ? normalizeBase(loadedState.base) || "Todos" : "Todos";
   loadedState.accountPanelOpen = false;
   loadedState.fileName = "";
   loadedState.activeDatasetId = EMPTY_DATASET_ID;
