@@ -3408,7 +3408,7 @@ function buildSummary(rows) {
   const count = rows.length;
   const totalValue = rows.reduce((acc, row) => acc + Number(row.valor_numerico || 0), 0);
   const baseCount = uniqueCount(rows, "base");
-  const driverCount = uniqueCount(rows, "motorista");
+  const driverCount = uniqueDriverCount(rows);
   const routeCount = uniqueCount(rows, "n_rota");
   const packageCount = rows.filter((row) => row.tipo_registro === "PACOTE PERDIDO").length;
   const pnrCount = rows.filter((row) => row.tipo_registro === "PNR").length;
@@ -3847,6 +3847,16 @@ function bottomBy(rows, key, metric, limit) {
 
 function uniqueCount(rows, key) {
   return new Set(rows.map((row) => row[key]).filter(Boolean)).size;
+}
+
+function uniqueDriverCount(rows) {
+  const drivers = new Set();
+  rows.forEach((row) => {
+    const name = row?.driver || row?.motorista || row?.nomeMotorista || row?.nome_driver || "";
+    const normalizedName = normalize(name);
+    if (normalizedName) drivers.add(normalizedName);
+  });
+  return drivers.size;
 }
 
 function maxDate(rows) {
