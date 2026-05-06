@@ -372,7 +372,16 @@
               <div>
                 <h2>Comparação mensal</h2>
               </div>
-              <span class="panel__meta" id="comparison-meta">histórico</span>
+              <div class="comparison-header-actions">
+                <div class="evolution-view-control comparison-view-control" id="comparison-view-control" aria-label="Visualização da comparação mensal">
+                  <span>Visualização</span>
+                  <div class="evolution-view-toggle" role="group" aria-label="Período da comparação mensal">
+                    <button type="button" data-comparison-view="monthly" aria-pressed="true">Mensal</button>
+                    <button type="button" data-comparison-view="biweekly" aria-pressed="false">Quinzenal</button>
+                  </div>
+                </div>
+                <span class="panel__meta" id="comparison-meta">histórico</span>
+              </div>
             </div>
             <div class="comparison-list" id="monthly-comparison"></div>
           </section>

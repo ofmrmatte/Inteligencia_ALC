@@ -4,6 +4,7 @@ const STORAGE_KEY = "alc-pre-fatura-dashboard-state-v1";
 const THEME_STORAGE_KEY = "alc-pre-fatura-dashboard-theme-v1";
 const SIDEBAR_STORAGE_KEY = "filtersSidebarOpen";
 const EVOLUTION_PERIOD_VIEW_STORAGE_KEY = "evolutionPeriodView";
+const COMPARISON_PERIOD_VIEW_STORAGE_KEY = "comparisonPeriodView";
 const PDF_LOGO_IMAGE = {
   name: "ImLogo",
   width: 1080,
@@ -105,6 +106,7 @@ let pendingAvatarFile = null;
 let pendingAvatarPreviewUrl = "";
 let pendingAvatarSourceUrl = "";
 let evolutionPeriodView = loadEvolutionPeriodView();
+let comparisonPeriodView = loadComparisonPeriodView();
 let totalDiscountComparisonRequest = 0;
 let globalGoalSettings = getDefaultGoalSettings();
 
@@ -247,6 +249,7 @@ function cacheDom() {
   el.viewToolbar = document.querySelector(".view-toolbar");
   el.sheetTabs = document.getElementById("sheet-tabs");
   el.monthlyBaseView = document.getElementById("monthly-base-view");
+  el.comparisonViewControl = document.getElementById("comparison-view-control");
   el.profileView = document.getElementById("profile-view");
   el.settingsView = document.getElementById("settings-view");
   el.settingsUsersList = document.getElementById("settings-users-list");
@@ -662,6 +665,30 @@ function bindEvents() {
       hydrateControls();
       renderAll();
     });
+
+    el.monthlyComparison.addEventListener("pointermove", (event) => {
+      const column = event.target.closest(".month-column");
+      if (!column || !el.monthlyComparison.contains(column)) return;
+      positionComparisonTooltip(event, column);
+    });
+
+    el.monthlyComparison.addEventListener("pointerout", (event) => {
+      const column = event.target.closest(".month-column");
+      if (!column || column.contains(event.relatedTarget)) return;
+      column.style.removeProperty("--tooltip-x");
+      column.style.removeProperty("--tooltip-y");
+    });
+  }
+
+  if (el.comparisonViewControl) {
+    el.comparisonViewControl.addEventListener("click", (event) => {
+      const button = event.target.closest("[data-comparison-view]");
+      if (!button) return;
+      const nextView = button.dataset.comparisonView === "biweekly" ? "biweekly" : "monthly";
+      if (nextView === comparisonPeriodView) return;
+      setComparisonPeriodView(nextView);
+      renderMonthlyComparison();
+    });
   }
 
   if (el.monthlyBaseView) {
@@ -805,6 +832,24 @@ function setEvolutionPeriodView(value) {
   evolutionPeriodView = value === "biweekly" ? "biweekly" : "monthly";
   try {
     window.localStorage.setItem(EVOLUTION_PERIOD_VIEW_STORAGE_KEY, evolutionPeriodView);
+  } catch {
+    // localStorage can be unavailable in restrictive browser modes.
+  }
+}
+
+function loadComparisonPeriodView() {
+  try {
+    const saved = window.localStorage.getItem(COMPARISON_PERIOD_VIEW_STORAGE_KEY);
+    return saved === "biweekly" ? "biweekly" : "monthly";
+  } catch {
+    return "monthly";
+  }
+}
+
+function setComparisonPeriodView(value) {
+  comparisonPeriodView = value === "biweekly" ? "biweekly" : "monthly";
+  try {
+    window.localStorage.setItem(COMPARISON_PERIOD_VIEW_STORAGE_KEY, comparisonPeriodView);
   } catch {
     // localStorage can be unavailable in restrictive browser modes.
   }
@@ -1908,6 +1953,7 @@ function renderMonthlyComparison() {
   if (!el.monthlyComparison) return;
   const rows = buildMonthlyComparison();
   const scopeLabel = state.sheet === "Todos" ? "geral" : state.sheet;
+  syncComparisonViewControl();
   if (el.comparisonMeta) {
     el.comparisonMeta.textContent = rows.length ? `${integer.format(rows.length)} competências · ${scopeLabel}` : `sem histórico · ${scopeLabel}`;
   }
@@ -1931,8 +1977,24 @@ function renderMonthlyComparison() {
         ? `${deltaOffense > 0 ? "+" : ""}${deltaOffensePct.toFixed(1)}% ${deltaOffense > 0 ? "mais ofensivo" : deltaOffense < 0 ? "menos ofensivo" : "estável"}`
         : "Base";
       const monthTone = getOffenseColor(offenseTotal, maxCount);
+      const displayPeriod = shortMonthYear(row.label);
+      const tooltipLines = [
+        displayPeriod,
+        `Valor total: ${currency.format(row.totalValue)}`,
+        `Quantidade total: ${integer.format(row.count)}`,
+        `PNR: ${integer.format(row.pnrCount)}`,
+        `Perdidos: ${integer.format(row.packageCount)}`,
+        `Variação: ${trendLabel}`,
+      ].join("\n");
       return `
-        <button class="month-column ${row.datasetId === state.activeDatasetId ? "is-active" : ""}" type="button" data-dataset-id="${escapeAttribute(row.datasetId)}" style="--reveal-index:${index}">
+        <button
+          class="month-column ${row.datasetId === state.activeDatasetId ? "is-active" : ""}"
+          type="button"
+          data-dataset-id="${escapeAttribute(row.datasetId)}"
+          data-tooltip="${escapeAttribute(tooltipLines)}"
+          aria-label="${escapeAttribute(tooltipLines.replace(/\n/g, ". "))}"
+          style="--reveal-index:${index}"
+        >
           <div class="month-column__plot">
             <span class="month-column__fill" style="height:${Math.max(12, pct).toFixed(1)}%; background:${monthTone}">
               <span class="month-column__stats">
@@ -1943,7 +2005,7 @@ function renderMonthlyComparison() {
             </span>
           </div>
           <div class="month-column__meta">
-            <strong>${escapeHtml(shortMonthYear(row.label))}</strong>
+            <strong>${escapeHtml(displayPeriod)}</strong>
             <strong>${currency.format(row.totalValue)}</strong>
             <span class="${trendClass}">${escapeHtml(trendLabel)}</span>
           </div>
@@ -1952,6 +2014,35 @@ function renderMonthlyComparison() {
     })
     .join("")}
     </div>`;
+}
+
+function positionComparisonTooltip(event, column) {
+  const offset = 16;
+  const tooltipWidth = Math.min(288, Math.max(220, window.innerWidth - 32));
+  const tooltipHeight = 132;
+  const viewportPadding = 12;
+  let x = event.clientX + offset;
+  let y = event.clientY + offset;
+
+  if (x + tooltipWidth > window.innerWidth - viewportPadding) {
+    x = event.clientX - tooltipWidth - offset;
+  }
+
+  if (y + tooltipHeight > window.innerHeight - viewportPadding) {
+    y = event.clientY - tooltipHeight - offset;
+  }
+
+  column.style.setProperty("--tooltip-x", `${Math.max(viewportPadding, x)}px`);
+  column.style.setProperty("--tooltip-y", `${Math.max(viewportPadding, y)}px`);
+}
+
+function syncComparisonViewControl() {
+  if (!el.comparisonViewControl) return;
+  el.comparisonViewControl.querySelectorAll("[data-comparison-view]").forEach((button) => {
+    const isActive = button.dataset.comparisonView === comparisonPeriodView;
+    button.classList.toggle("is-active", isActive);
+    button.setAttribute("aria-pressed", isActive ? "true" : "false");
+  });
 }
 
 function renderMonthlyBaseEvolution() {
@@ -3451,23 +3542,26 @@ function buildSummary(rows) {
 }
 
 function buildMonthlyComparison() {
-  return buildMonthlyComparisonFromDatasets(library.datasets, { sheet: state.sheet });
+  return buildMonthlyComparisonFromDatasets(library.datasets, { sheet: state.sheet, viewMode: comparisonPeriodView });
 }
 
 function buildMonthlyComparisonFromDatasets(datasets, options = {}) {
   const sheet = options.sheet || state.sheet;
+  const viewMode = options.viewMode === "biweekly" ? "biweekly" : "monthly";
   const map = new Map();
   for (const dataset of Array.isArray(datasets) ? datasets : []) {
     if (!dataset || dataset.source === "filtered" || dataset.id === EMPTY_DATASET_ID || !Array.isArray(dataset.rows) || !dataset.rows.length) continue;
     const scopedRows = getMonthlyComparisonRows(dataset.rows, sheet);
     if (!scopedRows.length) continue;
     const period = getDatasetPeriod({ ...dataset, rows: scopedRows });
-    const key = period.key;
+    const periodType = normalizePeriodMode(dataset.remoteRecord?.period_type || dataset.remoteRecord?.metadata?.period_type || period.periodType || getDatasetQuarterMode({ ...dataset, rows: scopedRows }));
+    const quarterOrder = periodType === "q1" ? 1 : periodType === "q2" ? 2 : 3;
+    const key = viewMode === "biweekly" ? `${period.key}-${periodType}` : period.key;
     if (!map.has(key)) {
       map.set(key, {
         key,
-        sort: period.sort,
-        label: period.monthLabel,
+        sort: viewMode === "biweekly" ? period.sort * 10 + quarterOrder : period.sort,
+        label: viewMode === "biweekly" ? formatEvolutionPeriodLabel({ ...dataset, rows: scopedRows }, "biweekly") : period.monthLabel,
         datasetId: dataset.id,
         count: 0,
         totalValue: 0,
@@ -3499,7 +3593,7 @@ function getMonthlyComparisonRows(rows, sheet = state.sheet) {
 
 async function buildReportHistoricalComparisonRows(scope) {
   const files = await getReportAvailableFileRecords();
-  if (!files.length) return buildMonthlyComparison();
+  if (!files.length) return buildMonthlyComparisonFromDatasets(library.datasets, { sheet: state.sheet, viewMode: "monthly" });
 
   if (scope.mode === "annual") {
     const annualFiles = getFilesByMonthAndPeriod(files, "all", scope.periodMode)
