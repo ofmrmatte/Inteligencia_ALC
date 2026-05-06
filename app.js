@@ -3336,7 +3336,11 @@ function renderTable(rows, summary) {
       const linkedIdsCount = linkedIds.length || Number(row.linked_ids_count || row.quantidade_ids || 0);
       const linkedIdsLabel = linkedIdsCount > 1 ? `${linkedIds[0]} +${linkedIdsCount - 1}` : row.id_pacote || "—";
       const linkedIdsTitle = linkedIds.length ? linkedIds.join(", ") : row.id_pacote || "";
-      const occurrenceDetail = linkedIdsCount > 1 ? `1 ocorrência · ${integer.format(linkedIdsCount)} IDs vinculados · ${currency.format(row.valor_numerico || 0)}` : "";
+      const linkedValues = getLinkedValues(row);
+      const linkedValuesLabel = linkedValues.length > 1 ? linkedValues.map((value) => currency.format(value)).join(" + ") : "";
+      const occurrenceCount = getOccurrenceCount(row);
+      const occurrenceLabel = `${integer.format(occurrenceCount)} ocorrência${occurrenceCount === 1 ? "" : "s"} financeira${occurrenceCount === 1 ? "" : "s"}`;
+      const occurrenceDetail = linkedIdsCount > 1 ? `${occurrenceLabel} · ${integer.format(linkedIdsCount)} IDs vinculados · ${currency.format(row.valor_numerico || 0)}` : "";
       return `
         <tr style="--reveal-index:${index}">
           <td>
@@ -3358,6 +3362,7 @@ function renderTable(rows, summary) {
           <td>${escapeHtml(row.n_rota || "—")}</td>
           <td class="is-right">
             <strong>${currency.format(row.valor_numerico || 0)}</strong>
+            ${linkedValuesLabel ? `<span class="cell-subtle">${escapeHtml(linkedValuesLabel)}</span>` : ""}
             ${occurrenceDetail ? `<span class="cell-subtle">${escapeHtml(occurrenceDetail)}</span>` : ""}
           </td>
         </tr>
@@ -3409,14 +3414,19 @@ function updateTopbar(summary = buildSummary(getFilteredRows())) {
   updateLiveClock();
 }
 
+function getOccurrenceCount(row) {
+  const count = Number(row?.ocorrencias || 1);
+  return Number.isFinite(count) && count > 0 ? count : 1;
+}
+
 function buildSummary(rows) {
-  const count = rows.length;
+  const count = rows.reduce((acc, row) => acc + getOccurrenceCount(row), 0);
   const totalValue = rows.reduce((acc, row) => acc + Number(row.valor_numerico || 0), 0);
   const baseCount = uniqueBaseCount(rows);
   const driverCount = uniqueDriverCount(rows);
   const routeCount = uniqueCount(rows, "n_rota");
-  const packageCount = rows.filter((row) => row.tipo_registro === "PACOTE PERDIDO").length;
-  const pnrCount = rows.filter((row) => row.tipo_registro === "PNR").length;
+  const packageCount = rows.filter((row) => row.tipo_registro === "PACOTE PERDIDO").reduce((acc, row) => acc + getOccurrenceCount(row), 0);
+  const pnrCount = rows.filter((row) => row.tipo_registro === "PNR").reduce((acc, row) => acc + getOccurrenceCount(row), 0);
   const topBase = topBy(rows, "base", "valor_numerico", 1)[0] || null;
   const topDriver = topBy(rows, "motorista", "valor_numerico", 1)[0] || null;
   const packageShare = count ? ((packageCount / count) * 100).toFixed(1) : "0.0";
@@ -3467,10 +3477,10 @@ function buildMonthlyComparisonFromDatasets(datasets, options = {}) {
     }
     const bucket = map.get(key);
     bucket.datasetId = dataset.id;
-    bucket.count += scopedRows.length;
+    bucket.count += scopedRows.reduce((acc, row) => acc + getOccurrenceCount(row), 0);
     bucket.totalValue += scopedRows.reduce((acc, row) => acc + Number(row.valor_numerico || 0), 0);
-    bucket.pnrCount += scopedRows.filter((row) => row.tipo_registro === "PNR").length;
-    bucket.packageCount += scopedRows.filter((row) => row.tipo_registro === "PACOTE PERDIDO").length;
+    bucket.pnrCount += scopedRows.filter((row) => row.tipo_registro === "PNR").reduce((acc, row) => acc + getOccurrenceCount(row), 0);
+    bucket.packageCount += scopedRows.filter((row) => row.tipo_registro === "PACOTE PERDIDO").reduce((acc, row) => acc + getOccurrenceCount(row), 0);
   }
 
   const rows = Array.from(map.values()).sort((a, b) => a.sort - b.sort || a.label.localeCompare(b.label, "pt-BR"));
@@ -4005,6 +4015,15 @@ function normalizeOccurrenceCurrency(value) {
   return Number.isFinite(numeric) ? numeric.toFixed(2) : normalize(value);
 }
 
+function normalizeOccurrenceAmount(value) {
+  if (typeof value === "number") {
+    return Number.isFinite(value) ? Number(value.toFixed(2)) : 0;
+  }
+
+  const parsed = parseMoney(value);
+  return Number.isFinite(parsed) ? Number(parsed.toFixed(2)) : 0;
+}
+
 function buildOccurrenceKey(row) {
   return [
     getBaseIdentity(row),
@@ -4021,6 +4040,42 @@ function buildOccurrenceKey(row) {
     .join("|");
 }
 
+function isPnrRow(row) {
+  return normalizeSheetLabel(row?.aba_origem || row?.divisao || row?.sheetName, row?.tipo_desconto || row?.tipo_registro) === "PNR";
+}
+
+function buildPnrLinkedOccurrenceKey(row) {
+  return [
+    row.motorista || row.driver,
+    row.n_rota || row.numeroRota || row.rota,
+    getBaseIdentity(row),
+    row.tipo_desconto || row.tipo,
+    row.aba_origem || row.tipo_registro || row.categoria,
+  ]
+    .map((value) => normalize(value))
+    .join("|");
+}
+
+function getLinkedValues(row) {
+  if (Array.isArray(row?.valores_vinculados) && row.valores_vinculados.length) {
+    return row.valores_vinculados.map(normalizeOccurrenceAmount).filter((value) => value > 0);
+  }
+  const value = normalizeOccurrenceAmount(row?.valor_numerico);
+  return value > 0 ? [value] : [];
+}
+
+function addUniqueAmount(amounts, value) {
+  const amount = normalizeOccurrenceAmount(value);
+  if (!amount) return;
+  if (!amounts.some((current) => normalizeOccurrenceAmount(current) === amount)) {
+    amounts.push(amount);
+  }
+}
+
+function sumUniqueAmounts(amounts) {
+  return amounts.reduce((total, amount) => total + normalizeOccurrenceAmount(amount), 0);
+}
+
 function consolidateLinkedOccurrences(rows) {
   const map = new Map();
   let linkedOccurrences = 0;
@@ -4028,8 +4083,11 @@ function consolidateLinkedOccurrences(rows) {
 
   rows.forEach((sourceRow) => {
     const row = normalizeStoredRow(sourceRow);
-    const occurrenceKey = buildOccurrenceKey(row);
+    const shouldConsolidatePnrByRoute = isPnrRow(row);
+    const occurrenceKey = shouldConsolidatePnrByRoute ? buildPnrLinkedOccurrenceKey(row) : buildOccurrenceKey(row);
     const ids = getLinkedPackageIds(row);
+    const linkedValues = getLinkedValues(row);
+    if (!linkedValues.length) addUniqueAmount(linkedValues, row.valor_numerico);
 
     if (!map.has(occurrenceKey)) {
       map.set(occurrenceKey, {
@@ -4038,7 +4096,9 @@ function consolidateLinkedOccurrences(rows) {
         ids_vinculados: ids,
         quantidade_ids: ids.length,
         linked_ids_count: ids.length,
-        ocorrencias: 1,
+        ocorrencias: shouldConsolidatePnrByRoute ? Math.max(1, linkedValues.length) : 1,
+        valores_vinculados: shouldConsolidatePnrByRoute ? linkedValues : getLinkedValues(row),
+        valor_numerico: shouldConsolidatePnrByRoute ? sumUniqueAmounts(linkedValues) : row.valor_numerico,
       });
       return;
     }
@@ -4055,11 +4115,22 @@ function consolidateLinkedOccurrences(rows) {
     existing.quantidade_ids = existing.ids_vinculados.length;
     existing.linked_ids_count = existing.ids_vinculados.length;
     existing.ocorrencias = 1;
+
+    if (shouldConsolidatePnrByRoute) {
+      const existingValues = getLinkedValues(existing);
+      linkedValues.forEach((value) => addUniqueAmount(existingValues, value));
+      existing.valores_vinculados = existingValues;
+      existing.valor_numerico = sumUniqueAmounts(existingValues);
+      existing.ocorrencias = Math.max(1, existingValues.length);
+    }
+
     existing._search = buildRowSearchText(existing);
   });
 
   const consolidated = Array.from(map.values()).map((row) => {
     const linkedCount = row.ids_vinculados?.length || 0;
+    const linkedValues = getLinkedValues(row);
+    const occurrenceCount = isPnrRow(row) ? Math.max(1, linkedValues.length) : 1;
     if (linkedCount > 1) {
       linkedOccurrences += 1;
       linkedIds += linkedCount;
@@ -4068,7 +4139,9 @@ function consolidateLinkedOccurrences(rows) {
       ...row,
       quantidade_ids: linkedCount,
       linked_ids_count: linkedCount,
-      ocorrencias: 1,
+      ocorrencias: occurrenceCount,
+      valores_vinculados: linkedValues,
+      valores_vinculados_texto: linkedValues.map((value) => currency.format(value)).join(" + "),
       _search: buildRowSearchText(row),
     };
   });
