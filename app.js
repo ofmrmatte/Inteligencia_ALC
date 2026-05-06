@@ -3327,6 +3327,11 @@ function renderTable(rows, summary) {
   el.tableBody.innerHTML = rows
     .map((row, index) => {
       const badgeClass = row.tipo_registro === "PNR" ? "badge--pnr" : row.aba_origem === "XPT PERDIDOS" ? "badge--xpt" : "badge--svc";
+      const linkedIds = getLinkedPackageIds(row);
+      const linkedIdsCount = linkedIds.length || Number(row.linked_ids_count || row.quantidade_ids || 0);
+      const linkedIdsLabel = linkedIdsCount > 1 ? `${linkedIds[0]} +${linkedIdsCount - 1}` : row.id_pacote || "—";
+      const linkedIdsTitle = linkedIds.length ? linkedIds.join(", ") : row.id_pacote || "";
+      const occurrenceDetail = linkedIdsCount > 1 ? `1 ocorrência · ${integer.format(linkedIdsCount)} IDs vinculados · ${currency.format(row.valor_numerico || 0)}` : "";
       return `
         <tr style="--reveal-index:${index}">
           <td>
@@ -3341,9 +3346,15 @@ function renderTable(rows, summary) {
           <td><span class="badge ${badgeClass}">${escapeHtml(row.tipo_desconto || row.tipo_registro)}</span></td>
           <td><span class="badge badge--sheet">${escapeHtml(row.aba_origem)}</span></td>
           <td>${formatDate(row.data_normalizada)}</td>
-          <td>${escapeHtml(row.id_pacote || "—")}</td>
+          <td title="${escapeAttribute(linkedIdsTitle)}">
+            ${escapeHtml(linkedIdsLabel)}
+            ${linkedIdsCount > 1 ? `<span class="cell-subtle">${integer.format(linkedIdsCount)} IDs vinculados</span>` : ""}
+          </td>
           <td>${escapeHtml(row.n_rota || "—")}</td>
-          <td class="is-right"><strong>${currency.format(row.valor_numerico || 0)}</strong></td>
+          <td class="is-right">
+            <strong>${currency.format(row.valor_numerico || 0)}</strong>
+            ${occurrenceDetail ? `<span class="cell-subtle">${escapeHtml(occurrenceDetail)}</span>` : ""}
+          </td>
         </tr>
       `;
     })
@@ -3878,40 +3889,153 @@ function normalizeStoredRow(row) {
   if (!row || typeof row !== "object") return row;
   const sheet = normalizeSheetLabel(row.aba_origem || row.aba || row.sheetName, row.tipo_desconto || row.tipo_registro);
   const baseParts = splitBase(row.base);
+  const linkedIds = getLinkedPackageIds(row);
   const normalized = {
     ...row,
     aba_origem: sheet,
     cidade_base: row.cidade_base || baseParts.cidade_base,
     sigla_base: row.sigla_base || baseParts.sigla_base,
     tipo_registro: sheet === "PNR" ? "PNR" : "PACOTE PERDIDO",
+    ids_vinculados: linkedIds,
+    quantidade_ids: linkedIds.length || 0,
+    linked_ids_count: linkedIds.length || 0,
+    ocorrencias: Number(row.ocorrencias || 1),
   };
 
-  normalized._search = normalize(
-    [
-      normalized.aba_origem,
-      normalized.tipo_desconto,
-      normalized.tipo_registro,
-      normalized.base,
-      normalized.cidade_base,
-      normalized.sigla_base,
-      normalized.motorista,
-      normalized.placa,
-      normalized.descricao,
-      normalized.id_pacote,
-      normalized.n_rota,
-      normalized.data_normalizada,
-    ]
-      .filter(Boolean)
-      .join(" "),
-  );
+  normalized._search = buildRowSearchText(normalized);
 
   return normalized;
 }
 
+function buildRowSearchText(row) {
+  return normalize(
+    [
+      row.aba_origem,
+      row.tipo_desconto,
+      row.tipo_registro,
+      row.base,
+      row.cidade_base,
+      row.sigla_base,
+      row.motorista,
+      row.placa,
+      row.descricao,
+      row.id_pacote,
+      ...(Array.isArray(row.ids_vinculados) ? row.ids_vinculados : []),
+      row.n_rota,
+      row.data_normalizada,
+    ]
+      .filter(Boolean)
+      .join(" "),
+  );
+}
+
+function getLinkedPackageIds(row) {
+  const rawIds = [
+    ...(Array.isArray(row?.ids_vinculados) ? row.ids_vinculados : []),
+    ...(Array.isArray(row?.linked_ids) ? row.linked_ids : []),
+    row?.id_pacote,
+  ];
+  const ids = [];
+  const seen = new Set();
+  rawIds
+    .flatMap((value) => String(value || "").split(/[;,|\n]+/))
+    .map((value) => value.trim())
+    .filter(Boolean)
+    .forEach((id) => {
+      const key = normalize(id);
+      if (seen.has(key)) return;
+      seen.add(key);
+      ids.push(id);
+    });
+  return ids;
+}
+
+function normalizeOccurrenceCurrency(value) {
+  const numeric = Number(value);
+  return Number.isFinite(numeric) ? numeric.toFixed(2) : normalize(value);
+}
+
+function buildOccurrenceKey(row) {
+  return [
+    row.base,
+    row.cidade_base,
+    row.motorista,
+    row.n_rota,
+    row.placa,
+    row.tipo_desconto,
+    row.aba_origem || row.tipo_registro,
+    row.data_normalizada,
+    normalizeOccurrenceCurrency(row.valor_numerico),
+  ]
+    .map((value) => normalize(value))
+    .join("|");
+}
+
+function consolidateLinkedOccurrences(rows) {
+  const map = new Map();
+  let linkedOccurrences = 0;
+  let linkedIds = 0;
+
+  rows.forEach((sourceRow) => {
+    const row = normalizeStoredRow(sourceRow);
+    const occurrenceKey = buildOccurrenceKey(row);
+    const ids = getLinkedPackageIds(row);
+
+    if (!map.has(occurrenceKey)) {
+      map.set(occurrenceKey, {
+        ...row,
+        occurrence_key: occurrenceKey,
+        ids_vinculados: ids,
+        quantidade_ids: ids.length,
+        linked_ids_count: ids.length,
+        ocorrencias: 1,
+      });
+      return;
+    }
+
+    const existing = map.get(occurrenceKey);
+    const currentIds = new Set((existing.ids_vinculados || []).map((id) => normalize(id)));
+    ids.forEach((id) => {
+      const key = normalize(id);
+      if (currentIds.has(key)) return;
+      currentIds.add(key);
+      existing.ids_vinculados.push(id);
+    });
+
+    existing.quantidade_ids = existing.ids_vinculados.length;
+    existing.linked_ids_count = existing.ids_vinculados.length;
+    existing.ocorrencias = 1;
+    existing._search = buildRowSearchText(existing);
+  });
+
+  const consolidated = Array.from(map.values()).map((row) => {
+    const linkedCount = row.ids_vinculados?.length || 0;
+    if (linkedCount > 1) {
+      linkedOccurrences += 1;
+      linkedIds += linkedCount;
+    }
+    return {
+      ...row,
+      quantidade_ids: linkedCount,
+      linked_ids_count: linkedCount,
+      ocorrencias: 1,
+      _search: buildRowSearchText(row),
+    };
+  });
+
+  consolidateLinkedOccurrences.lastStats = {
+    originalRows: rows.length,
+    consolidatedRows: consolidated.length,
+    duplicatesSkipped: Math.max(rows.length - consolidated.length, 0),
+    linkedOccurrences,
+    linkedIds,
+  };
+
+  return consolidated;
+}
+
 function normalizeWorkbook(workbook) {
   const records = [];
-  const seen = new Set();
-  let duplicatesSkipped = 0;
 
   workbook.SheetNames.forEach((sheetName) => {
     const sheet = workbook.Sheets[sheetName];
@@ -3966,48 +4090,18 @@ function normalizeWorkbook(workbook) {
       };
 
       normalized.tipo_registro = canonicalSheet === "PNR" ? "PNR" : "PACOTE PERDIDO";
-      normalized._search = normalize(
-        [
-          normalized.aba_origem,
-          normalized.tipo_desconto,
-          normalized.base,
-          normalized.cidade_base,
-          normalized.sigla_base,
-          normalized.motorista,
-          normalized.placa,
-          normalized.descricao,
-          normalized.id_pacote,
-          normalized.n_rota,
-          normalized.data_normalizada,
-        ]
-          .filter(Boolean)
-          .join(" "),
-      );
-
-      const signature = [
-        normalized.base,
-        normalized.motorista,
-        normalized.placa,
-        normalized.tipo_desconto,
-        normalized.data_normalizada,
-        normalized.id_pacote,
-        normalized.n_rota,
-        normalized.valor_numerico,
-      ]
-        .map((value) => normalize(value))
-        .join("|");
-
-      if (seen.has(signature)) {
-        duplicatesSkipped += 1;
-        continue;
-      }
-      seen.add(signature);
+      normalized.ids_vinculados = getLinkedPackageIds(normalized);
+      normalized.quantidade_ids = normalized.ids_vinculados.length;
+      normalized.linked_ids_count = normalized.ids_vinculados.length;
+      normalized.ocorrencias = 1;
+      normalized._search = buildRowSearchText(normalized);
       records.push(normalized);
     }
   });
 
-  normalizeWorkbook.lastStats = { duplicatesSkipped };
-  return records;
+  const consolidated = consolidateLinkedOccurrences(records);
+  normalizeWorkbook.lastStats = consolidateLinkedOccurrences.lastStats;
+  return consolidated;
 }
 
 async function handleUpload(event) {
@@ -4073,6 +4167,7 @@ async function uploadDashboardFile(file) {
   setDashboardVisualState("processing-file");
   updateDatasetMeta();
   const previewDataset = await processDashboardFile(file);
+  const previewStats = normalizeWorkbook.lastStats || {};
   if (!previewDataset.rows.length) {
     dashboardFilesLoading = false;
     setDashboardVisualState("");
@@ -4131,7 +4226,11 @@ async function uploadDashboardFile(file) {
         period_label: periodLabel,
         period_type: periodType,
         uploaded_at: new Date().toISOString(),
-        duplicatesSkipped: normalizeWorkbook.lastStats?.duplicatesSkipped || 0,
+        original_rows: previewStats.originalRows || previewDataset.rows.length,
+        consolidated_rows: previewStats.consolidatedRows || previewDataset.rows.length,
+        duplicatesSkipped: previewStats.duplicatesSkipped || 0,
+        linked_occurrences: previewStats.linkedOccurrences || 0,
+        linked_ids_count: previewStats.linkedIds || 0,
       },
     })
     .select()
@@ -4155,6 +4254,8 @@ async function uploadDashboardFile(file) {
     reference_year: data.reference_year,
     period_label: data.period_label,
     parsed_rows: data.metadata?.parsed_rows,
+    linked_occurrences: data.metadata?.linked_occurrences || 0,
+    linked_ids_count: data.metadata?.linked_ids_count || 0,
   });
 }
 
@@ -4470,6 +4571,7 @@ async function loadRowsFromStorage(fileRecord) {
     type: fileRecord.file_type || blob.type,
   });
   const dataset = await processDashboardFile(file, fileRecord);
+  const workbookStats = normalizeWorkbook.lastStats || {};
   const normalized = normalizeDatasetRecord({
     ...dataset,
     id: fileRecord.id,
@@ -4487,7 +4589,7 @@ async function loadRowsFromStorage(fileRecord) {
     return null;
   }
 
-  await updateDashboardFileParsedRows(fileRecord, parsedRows);
+  await updateDashboardFileParsedRows(fileRecord, parsedRows, workbookStats);
   return normalized;
 }
 
@@ -4495,6 +4597,7 @@ function replaceDashboardData(rows, context = {}) {
   const selectedFiles = Array.isArray(context.selectedFiles) ? context.selectedFiles : [];
   const selectedDatasets = Array.isArray(context.selectedDatasets) ? context.selectedDatasets : [];
   const label = buildActivePeriodLabel(context.selectedMonth || "all", context.selectedPeriod || "month", selectedFiles);
+  const consolidatedRows = consolidateLinkedOccurrences(rows);
   const scopeDataset = {
     id: "__filtered_scope",
     fileName: label,
@@ -4502,7 +4605,7 @@ function replaceDashboardData(rows, context = {}) {
     source: "filtered",
     importedAt: new Date().toISOString(),
     remoteRecord: null,
-    rows: rows.map(normalizeStoredRow),
+    rows: consolidatedRows,
     scopedDatasets: selectedDatasets,
   };
 
@@ -4526,7 +4629,7 @@ function replaceDashboardData(rows, context = {}) {
     file_name: label,
     is_active: false,
     files_count: selectedFiles.length,
-    rows_count: rows.length,
+    rows_count: consolidatedRows.length,
   };
   library = {
     activeDatasetId: scopeDataset.id,
@@ -4538,10 +4641,15 @@ function replaceDashboardData(rows, context = {}) {
   syncActiveDataset();
 }
 
-async function updateDashboardFileParsedRows(fileRecord, parsedRows) {
+async function updateDashboardFileParsedRows(fileRecord, parsedRows, stats = {}) {
   const metadata = {
     ...(fileRecord.metadata || {}),
     parsed_rows: parsedRows,
+    original_rows: stats.originalRows || fileRecord.metadata?.original_rows || parsedRows,
+    consolidated_rows: stats.consolidatedRows || parsedRows,
+    duplicatesSkipped: stats.duplicatesSkipped ?? fileRecord.metadata?.duplicatesSkipped ?? 0,
+    linked_occurrences: stats.linkedOccurrences ?? fileRecord.metadata?.linked_occurrences ?? 0,
+    linked_ids_count: stats.linkedIds ?? fileRecord.metadata?.linked_ids_count ?? 0,
     last_loaded_at: new Date().toISOString(),
     period_label: fileRecord.period_label || fileRecord.metadata?.period_label || getFileRecordPeriod(fileRecord).periodLabel,
     period_type: fileRecord.period_type || fileRecord.metadata?.period_type || getFileRecordPeriod(fileRecord).periodType,
@@ -5879,6 +5987,7 @@ function persistLibrary() {
 function normalizeDatasetRecord(dataset) {
   if (!dataset || !Array.isArray(dataset.rows)) return null;
   if (dataset.id === EMPTY_DATASET_ID || dataset.source === "empty") return buildEmptyDataset();
+  const rows = consolidateLinkedOccurrences(dataset.rows);
   return {
     id: String(dataset.id || makeDatasetId(dataset.fileName || "arquivo")),
     fileName: String(dataset.fileName || "arquivo.xlsx"),
@@ -5887,7 +5996,7 @@ function normalizeDatasetRecord(dataset) {
     importedAt: dataset.importedAt || new Date().toISOString(),
     remoteRecord: dataset.remoteRecord || null,
     storagePath: dataset.storagePath || dataset.remoteRecord?.storage_path || "",
-    rows: dataset.rows.map(normalizeStoredRow),
+    rows,
   };
 }
 
