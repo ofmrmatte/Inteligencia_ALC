@@ -3423,7 +3423,7 @@ function buildSummary(rows) {
   const count = rows.reduce((acc, row) => acc + getOccurrenceCount(row), 0);
   const totalValue = rows.reduce((acc, row) => acc + Number(row.valor_numerico || 0), 0);
   const baseCount = uniqueBaseCount(rows);
-  const driverCount = uniqueDriverCount(rows);
+  const driverCount = calcularTotalDriversUnicos(rows);
   const routeCount = uniqueCount(rows, "n_rota");
   const packageCount = rows.filter((row) => row.tipo_registro === "PACOTE PERDIDO").reduce((acc, row) => acc + getOccurrenceCount(row), 0);
   const pnrCount = rows.filter((row) => row.tipo_registro === "PNR").reduce((acc, row) => acc + getOccurrenceCount(row), 0);
@@ -3889,11 +3889,20 @@ function uniqueBaseCount(rows) {
   return bases.size;
 }
 
-function uniqueDriverCount(rows) {
+function normalizeDriverName(value) {
+  return String(value || "")
+    .trim()
+    .toUpperCase()
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/\s+/g, " ");
+}
+
+function calcularTotalDriversUnicos(rows) {
   const drivers = new Set();
   rows.forEach((row) => {
     const name = row?.driver || row?.motorista || row?.nomeMotorista || row?.nome_driver || "";
-    const normalizedName = normalize(name);
+    const normalizedName = normalizeDriverName(name);
     if (normalizedName) drivers.add(normalizedName);
   });
   return drivers.size;
