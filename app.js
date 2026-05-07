@@ -103,6 +103,10 @@ let liveClockTimer = null;
 let accountMenuCloseTimer = null;
 let comparisonTooltipHideTimer = null;
 let activeComparisonTooltipColumn = null;
+let evolutionTooltipHideTimer = null;
+let activeEvolutionTooltipBar = null;
+let chartViewportObserver = null;
+let evolutionScrollObservers = [];
 let supabaseAuthListenerBound = false;
 let pendingAvatarFile = null;
 let pendingAvatarPreviewUrl = "";
@@ -698,6 +702,7 @@ function bindEvents() {
       hideComparisonTooltip();
       setComparisonPeriodView(nextView);
       renderMonthlyComparison();
+      scheduleChartAnimations();
     });
   }
 
@@ -707,8 +712,30 @@ function bindEvents() {
       if (!button) return;
       const nextView = button.dataset.evolutionView === "biweekly" ? "biweekly" : "monthly";
       if (nextView === evolutionPeriodView) return;
+      hideEvolutionTooltip();
       setEvolutionPeriodView(nextView);
       renderMonthlyBaseEvolution();
+      scheduleChartAnimations();
+    });
+
+    el.monthlyBaseView.addEventListener("pointerover", (event) => {
+      const bar = event.target.closest(".tower-bar--horizontal");
+      if (!bar || !el.monthlyBaseView.contains(bar)) return;
+      showEvolutionTooltip(bar);
+      positionEvolutionTooltip(event);
+    });
+
+    el.monthlyBaseView.addEventListener("pointermove", (event) => {
+      const bar = event.target.closest(".tower-bar--horizontal");
+      if (!bar || !el.monthlyBaseView.contains(bar)) return;
+      showEvolutionTooltip(bar);
+      positionEvolutionTooltip(event);
+    });
+
+    el.monthlyBaseView.addEventListener("pointerout", (event) => {
+      const bar = event.target.closest(".tower-bar--horizontal");
+      if (!bar || (event.relatedTarget && bar.contains(event.relatedTarget))) return;
+      hideEvolutionTooltip();
     });
   }
 
@@ -1167,6 +1194,7 @@ function renderTabs() {
 }
 
 function renderAll() {
+  resetChartAnimationObservers();
   syncActiveDataset();
   renderTabs();
   const filtered = getFilteredRows();
@@ -1214,6 +1242,7 @@ function renderAll() {
   updateAccessControls();
   persistState();
   persistLibrary();
+  scheduleChartAnimations();
 }
 
 function toggleAccountView(accountView) {
@@ -1998,12 +2027,12 @@ function renderMonthlyComparison() {
       ].join("\n");
       return `
         <button
-          class="month-column ${row.datasetId === state.activeDatasetId ? "is-active" : ""}"
+          class="month-column is-awaiting-animation ${row.datasetId === state.activeDatasetId ? "is-active" : ""}"
           type="button"
           data-dataset-id="${escapeAttribute(row.datasetId)}"
           data-tooltip="${escapeAttribute(tooltipLines)}"
           aria-label="${escapeAttribute(tooltipLines.replace(/\n/g, ". "))}"
-          style="--reveal-index:${index}"
+          style="--reveal-index:${index}; --stagger-index:${index}"
         >
           <div class="month-column__plot">
             <span class="month-column__fill" style="height:${Math.max(12, pct).toFixed(1)}%; background:${monthTone}">
@@ -2096,6 +2125,165 @@ function hideComparisonTooltip() {
   }, 180);
 }
 
+function getEvolutionTooltip() {
+  let tooltip = document.getElementById("evolution-chart-tooltip");
+  if (tooltip) return tooltip;
+  tooltip = document.createElement("div");
+  tooltip.id = "evolution-chart-tooltip";
+  tooltip.className = "comparison-chart-tooltip evolution-chart-tooltip";
+  tooltip.setAttribute("role", "tooltip");
+  tooltip.hidden = true;
+  document.body.appendChild(tooltip);
+  return tooltip;
+}
+
+function showEvolutionTooltip(bar) {
+  const text = bar?.dataset?.tooltip || "";
+  if (!text) return;
+  const tooltip = getEvolutionTooltip();
+  window.clearTimeout(evolutionTooltipHideTimer);
+  if (activeEvolutionTooltipBar !== bar || tooltip.hidden) {
+    tooltip.innerHTML = renderComparisonTooltipContent(text);
+    activeEvolutionTooltipBar = bar;
+  }
+  tooltip.hidden = false;
+  requestAnimationFrame(() => {
+    tooltip.classList.add("is-visible");
+  });
+}
+
+function positionEvolutionTooltip(event) {
+  const tooltip = getEvolutionTooltip();
+  if (tooltip.hidden) return;
+  const offset = 14;
+  const viewportPadding = 12;
+  const rect = tooltip.getBoundingClientRect();
+  const tooltipWidth = rect.width || Math.min(288, Math.max(220, window.innerWidth - 32));
+  const tooltipHeight = rect.height || 132;
+  let x = event.clientX + offset;
+  let y = event.clientY + offset;
+
+  if (x + tooltipWidth > window.innerWidth - viewportPadding) {
+    x = event.clientX - tooltipWidth - offset;
+  }
+
+  if (y + tooltipHeight > window.innerHeight - viewportPadding) {
+    y = event.clientY - tooltipHeight - offset;
+  }
+
+  tooltip.style.left = `${Math.max(viewportPadding, x)}px`;
+  tooltip.style.top = `${Math.max(viewportPadding, y)}px`;
+}
+
+function hideEvolutionTooltip() {
+  const tooltip = document.getElementById("evolution-chart-tooltip");
+  if (!tooltip) return;
+  tooltip.classList.remove("is-visible");
+  activeEvolutionTooltipBar = null;
+  window.clearTimeout(evolutionTooltipHideTimer);
+  evolutionTooltipHideTimer = window.setTimeout(() => {
+    tooltip.hidden = true;
+  }, 180);
+}
+
+function resetChartAnimationObservers() {
+  if (chartViewportObserver) {
+    chartViewportObserver.disconnect();
+    chartViewportObserver = null;
+  }
+  evolutionScrollObservers.forEach((observer) => observer.disconnect());
+  evolutionScrollObservers = [];
+}
+
+function scheduleChartAnimations() {
+  resetChartAnimationObservers();
+  requestAnimationFrame(() => {
+    requestAnimationFrame(() => {
+      setupChartAnimationObservers();
+    });
+  });
+}
+
+function setupChartAnimationObservers() {
+  const animatedItems = Array.from(document.querySelectorAll(".month-column, .tower-bar--horizontal"));
+  animatedItems.forEach((item) => {
+    item.classList.remove("animate-in");
+    item.classList.add("is-awaiting-animation");
+  });
+
+  if (!animatedItems.length || !("IntersectionObserver" in window)) {
+    animatedItems.forEach(animateChartElement);
+    return;
+  }
+
+  chartViewportObserver = new IntersectionObserver(
+    (entries) => {
+      let visibleIndex = 0;
+      entries.forEach((entry) => {
+        if (!entry.isIntersecting) return;
+        animateChartElement(entry.target, visibleIndex);
+        visibleIndex += 1;
+        chartViewportObserver?.unobserve(entry.target);
+      });
+    },
+    {
+      root: null,
+      threshold: 0.22,
+      rootMargin: "0px 0px -6% 0px",
+    },
+  );
+
+  animatedItems.forEach((item) => chartViewportObserver.observe(item));
+  setupEvolutionScrollAnimationObservers();
+}
+
+function setupEvolutionScrollAnimationObservers() {
+  document.querySelectorAll(".tower-chart--horizontal").forEach((container) => {
+    const containerObserver = new IntersectionObserver(
+      (entries) => {
+        entries.forEach((entry) => {
+          if (!entry.isIntersecting) return;
+          const barObserver = new IntersectionObserver(
+            (barEntries) => {
+              let visibleIndex = 0;
+              barEntries.forEach((barEntry) => {
+                if (!barEntry.isIntersecting) return;
+                animateChartElement(barEntry.target, visibleIndex);
+                visibleIndex += 1;
+                barObserver.unobserve(barEntry.target);
+              });
+            },
+            {
+              root: container,
+              threshold: 0.25,
+              rootMargin: "0px 0px -4% 0px",
+            },
+          );
+          container.querySelectorAll(".tower-bar--horizontal").forEach((bar) => barObserver.observe(bar));
+          evolutionScrollObservers.push(barObserver);
+          containerObserver.unobserve(container);
+        });
+      },
+      {
+        root: null,
+        threshold: 0.08,
+      },
+    );
+    containerObserver.observe(container);
+    evolutionScrollObservers.push(containerObserver);
+  });
+}
+
+function animateChartElement(element, visibleIndex = 0) {
+  if (!element || element.classList.contains("animate-in")) return;
+  const staggerIndex = Number.isFinite(visibleIndex) ? visibleIndex : 0;
+  element.style.setProperty("--visible-stagger", String(staggerIndex));
+  requestAnimationFrame(() => {
+    element.classList.add("animate-in");
+    element.classList.remove("is-awaiting-animation");
+  });
+}
+
 function syncComparisonViewControl() {
   if (!el.comparisonViewControl) return;
   el.comparisonViewControl.querySelectorAll("[data-comparison-view]").forEach((button) => {
@@ -2107,6 +2295,7 @@ function syncComparisonViewControl() {
 
 function renderMonthlyBaseEvolution() {
   if (!el.monthlyBaseView) return;
+  hideEvolutionTooltip();
   const sheets = ["SVC PERDIDOS", "XPT PERDIDOS", "PNR"];
   const datasets = getComparableDatasets();
   if (!datasets.length) {
@@ -2269,18 +2458,32 @@ function renderBaseHorizontalGroup(base, rowsByDataset, max, metricLabel) {
     return { label: period.label, total, value };
   });
   const evolution = getBaseEvolution(values);
-  const bars = values.map((period) => {
+  const bars = values.map((period, index) => {
     const width = period.total ? Math.max(0.8, (period.total / max) * 100) : 0;
     const color = getOffenseColor(period.total, max);
     const canShowValue = period.total && width >= 7;
+    const previous = index > 0 ? values[index - 1] : null;
+    const delta = previous?.total ? ((period.total - previous.total) / previous.total) * 100 : 0;
+    const trendLabel = previous
+      ? `${delta > 0 ? "+" : ""}${delta.toFixed(1)}% ${delta > 0 ? "mais ofensiva" : delta < 0 ? "menos ofensiva" : "estável"}`
+      : "Base";
+    const tooltipLines = [
+      `Base: ${formatBaseCode(base)}`,
+      `Período: ${period.label}`,
+      `Qtd.: ${integer.format(period.total)} ${metricLabel}`,
+      `Categoria: ${metricLabel}`,
+      `Valor: ${currency.format(period.value)}`,
+      `Variação: ${trendLabel}`,
+    ].join("\n");
     return `
       <span class="timeline-period timeline-period--horizontal">
         <span class="timeline-period__label">${escapeHtml(shortPeriodLabel(period.label))}</span>
         <span class="tower-bar-rail">
           <span
-            class="tower-bar tower-bar--horizontal${canShowValue ? "" : " is-tiny"}"
-            style="width:${width.toFixed(1)}%; background:${color}"
-            title="${escapeAttribute(`${formatBaseCode(base)} · ${period.label}: ${integer.format(period.total)} ${metricLabel} · ${currency.format(period.value)}`)}"
+            class="tower-bar tower-bar--horizontal is-awaiting-animation${canShowValue ? "" : " is-tiny"}"
+            style="width:${width.toFixed(1)}%; background:${color}; --bar-index:${index}; --stagger-index:${index}"
+            data-tooltip="${escapeAttribute(tooltipLines)}"
+            aria-label="${escapeAttribute(tooltipLines.replace(/\n/g, ". "))}"
           ><em>${canShowValue ? integer.format(period.total) : ""}</em></span>
         </span>
       </span>
