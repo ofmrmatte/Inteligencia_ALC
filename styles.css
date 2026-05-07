@@ -1680,13 +1680,13 @@ body[data-theme="light"] #theme-toggle::before {
   will-change: opacity;
 }
 
-.month-column::after {
-  content: attr(data-tooltip);
+.comparison-chart-tooltip {
   position: fixed;
-  left: var(--tooltip-x, -9999px);
-  top: var(--tooltip-y, -9999px);
-  z-index: 10;
-  width: max-content;
+  left: -9999px;
+  top: -9999px;
+  z-index: 9999;
+  display: grid;
+  gap: 0.24rem;
   max-width: min(18rem, calc(100vw - 1.5rem));
   padding: 0.68rem 0.78rem;
   border: 1px solid var(--line);
@@ -1701,8 +1701,26 @@ body[data-theme="light"] #theme-toggle::before {
   pointer-events: none;
   text-align: left;
   transform: translate3d(0, 0.28rem, 0) scale(0.98);
-  transition: opacity 160ms ease, transform 160ms ease;
-  white-space: pre-line;
+  transition: opacity 170ms ease, transform 170ms ease;
+}
+
+.comparison-chart-tooltip[hidden] {
+  display: none;
+}
+
+.comparison-chart-tooltip.is-visible {
+  opacity: 1;
+  transform: translate3d(0, 0, 0) scale(1);
+}
+
+.comparison-chart-tooltip strong {
+  color: #ffffff;
+  font-size: 0.8rem;
+}
+
+.comparison-chart-tooltip span {
+  color: rgba(255, 255, 255, 0.86);
+  font-weight: 760;
 }
 
 .month-column.is-active {
@@ -1715,12 +1733,6 @@ body[data-theme="light"] #theme-toggle::before {
   z-index: 4;
   background: transparent;
   filter: none;
-}
-
-.month-column:hover::after,
-.month-column:focus-visible::after {
-  opacity: 1;
-  transform: translate3d(0, 0, 0) scale(1);
 }
 
 .month-column__plot {
@@ -1749,19 +1761,32 @@ body[data-theme="light"] #theme-toggle::before {
   animation: comparisonBarGrow 940ms cubic-bezier(0.16, 0.84, 0.2, 1) both;
   animation-delay: calc(130ms + (var(--reveal-index, 0) * 78ms));
   transition:
-    box-shadow 180ms ease,
-    filter 180ms ease,
-    transform 180ms ease;
-  will-change: transform;
+    box-shadow 230ms cubic-bezier(0.16, 0.84, 0.2, 1),
+    filter 230ms cubic-bezier(0.16, 0.84, 0.2, 1),
+    opacity 230ms ease,
+    transform 230ms cubic-bezier(0.16, 0.84, 0.2, 1);
+  will-change: transform, filter;
+}
+
+.month-columns:has(.month-column:hover) .month-column:not(:hover) .month-column__fill,
+.month-columns:has(.month-column:focus-visible) .month-column:not(:focus-visible) .month-column__fill {
+  opacity: 0.82;
+  filter: saturate(0.9) brightness(0.94);
 }
 
 .month-column:hover .month-column__fill,
 .month-column:focus-visible .month-column__fill {
   box-shadow:
-    0 16px 28px rgba(8, 16, 25, 0.2),
-    0 0 0 1px rgba(255, 255, 255, 0.2) inset;
-  filter: brightness(1.06) saturate(1.1);
-  transform: translateY(-3px) scaleX(1.035) scaleY(1.025);
+    0 24px 42px rgba(8, 16, 25, 0.3),
+    0 0 22px rgba(59, 166, 255, 0.22),
+    0 0 0 1px rgba(255, 255, 255, 0.34) inset;
+  filter: brightness(1.14) saturate(1.22) contrast(1.04);
+  transform: translateY(-6px) scaleX(1.07) scaleY(1.055);
+}
+
+.month-column:hover .month-column__stats,
+.month-column:focus-visible .month-column__stats {
+  transform: translateY(-1px);
 }
 
 .month-column__stats {
@@ -1772,6 +1797,7 @@ body[data-theme="light"] #theme-toggle::before {
   color: #ffffff;
   text-shadow: 0 1px 2px rgba(0, 0, 0, 0.35);
   font-variant-numeric: tabular-nums;
+  transition: transform 230ms cubic-bezier(0.16, 0.84, 0.2, 1);
 }
 
 .month-column__stats strong {
@@ -2346,11 +2372,19 @@ body[data-theme="light"] .month-column {
   background: transparent;
 }
 
-body[data-theme="light"] .month-column::after {
+body[data-theme="light"] .comparison-chart-tooltip {
   border-color: rgba(137, 167, 198, 0.42);
   background: rgba(255, 255, 255, 0.96);
   color: #132235;
   box-shadow: 0 18px 42px rgba(15, 23, 42, 0.16);
+}
+
+body[data-theme="light"] .comparison-chart-tooltip strong {
+  color: #132235;
+}
+
+body[data-theme="light"] .comparison-chart-tooltip span {
+  color: #52647a;
 }
 
 body[data-theme="light"] .monthly-view__header h2,

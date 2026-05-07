@@ -101,6 +101,8 @@ let dashboardPermissionTimer = null;
 let sidebarAnimationTimer = null;
 let liveClockTimer = null;
 let accountMenuCloseTimer = null;
+let comparisonTooltipHideTimer = null;
+let activeComparisonTooltipColumn = null;
 let supabaseAuthListenerBound = false;
 let pendingAvatarFile = null;
 let pendingAvatarPreviewUrl = "";
@@ -666,17 +668,24 @@ function bindEvents() {
       renderAll();
     });
 
+    el.monthlyComparison.addEventListener("pointerover", (event) => {
+      const column = event.target.closest(".month-column");
+      if (!column || !el.monthlyComparison.contains(column)) return;
+      showComparisonTooltip(column);
+      positionComparisonTooltip(event);
+    });
+
     el.monthlyComparison.addEventListener("pointermove", (event) => {
       const column = event.target.closest(".month-column");
       if (!column || !el.monthlyComparison.contains(column)) return;
-      positionComparisonTooltip(event, column);
+      showComparisonTooltip(column);
+      positionComparisonTooltip(event);
     });
 
     el.monthlyComparison.addEventListener("pointerout", (event) => {
       const column = event.target.closest(".month-column");
-      if (!column || column.contains(event.relatedTarget)) return;
-      column.style.removeProperty("--tooltip-x");
-      column.style.removeProperty("--tooltip-y");
+      if (!column || (event.relatedTarget && column.contains(event.relatedTarget))) return;
+      hideComparisonTooltip();
     });
   }
 
@@ -686,6 +695,7 @@ function bindEvents() {
       if (!button) return;
       const nextView = button.dataset.comparisonView === "biweekly" ? "biweekly" : "monthly";
       if (nextView === comparisonPeriodView) return;
+      hideComparisonTooltip();
       setComparisonPeriodView(nextView);
       renderMonthlyComparison();
     });
@@ -1980,10 +1990,10 @@ function renderMonthlyComparison() {
       const displayPeriod = shortMonthYear(row.label);
       const tooltipLines = [
         displayPeriod,
-        `Valor total: ${currency.format(row.totalValue)}`,
-        `Quantidade total: ${integer.format(row.count)}`,
+        `Total: ${integer.format(row.count)}`,
         `PNR: ${integer.format(row.pnrCount)}`,
         `Perdidos: ${integer.format(row.packageCount)}`,
+        `Valor: ${currency.format(row.totalValue)}`,
         `Variação: ${trendLabel}`,
       ].join("\n");
       return `
@@ -2016,11 +2026,50 @@ function renderMonthlyComparison() {
     </div>`;
 }
 
-function positionComparisonTooltip(event, column) {
-  const offset = 16;
-  const tooltipWidth = Math.min(288, Math.max(220, window.innerWidth - 32));
-  const tooltipHeight = 132;
+function getComparisonTooltip() {
+  let tooltip = document.getElementById("comparison-chart-tooltip");
+  if (tooltip) return tooltip;
+  tooltip = document.createElement("div");
+  tooltip.id = "comparison-chart-tooltip";
+  tooltip.className = "comparison-chart-tooltip";
+  tooltip.setAttribute("role", "tooltip");
+  tooltip.hidden = true;
+  document.body.appendChild(tooltip);
+  return tooltip;
+}
+
+function renderComparisonTooltipContent(text) {
+  const lines = String(text || "").split("\n").filter(Boolean);
+  const [period, ...details] = lines;
+  return `
+    <strong>${escapeHtml(period || "Período")}</strong>
+    ${details.map((line) => `<span>${escapeHtml(line)}</span>`).join("")}
+  `;
+}
+
+function showComparisonTooltip(column) {
+  const text = column?.dataset?.tooltip || "";
+  if (!text) return;
+  const tooltip = getComparisonTooltip();
+  window.clearTimeout(comparisonTooltipHideTimer);
+  if (activeComparisonTooltipColumn !== column || tooltip.hidden) {
+    tooltip.innerHTML = renderComparisonTooltipContent(text);
+    activeComparisonTooltipColumn = column;
+  }
+  tooltip.hidden = false;
+  requestAnimationFrame(() => {
+    tooltip.classList.add("is-visible");
+  });
+}
+
+function positionComparisonTooltip(event) {
+  const tooltip = getComparisonTooltip();
+  if (tooltip.hidden) return;
+  const offset = 14;
   const viewportPadding = 12;
+  const rect = tooltip.getBoundingClientRect();
+  const tooltipWidth = rect.width || Math.min(288, Math.max(220, window.innerWidth - 32));
+  const tooltipHeight = rect.height || 132;
   let x = event.clientX + offset;
   let y = event.clientY + offset;
 
@@ -2032,8 +2081,19 @@ function positionComparisonTooltip(event, column) {
     y = event.clientY - tooltipHeight - offset;
   }
 
-  column.style.setProperty("--tooltip-x", `${Math.max(viewportPadding, x)}px`);
-  column.style.setProperty("--tooltip-y", `${Math.max(viewportPadding, y)}px`);
+  tooltip.style.left = `${Math.max(viewportPadding, x)}px`;
+  tooltip.style.top = `${Math.max(viewportPadding, y)}px`;
+}
+
+function hideComparisonTooltip() {
+  const tooltip = document.getElementById("comparison-chart-tooltip");
+  if (!tooltip) return;
+  tooltip.classList.remove("is-visible");
+  activeComparisonTooltipColumn = null;
+  window.clearTimeout(comparisonTooltipHideTimer);
+  comparisonTooltipHideTimer = window.setTimeout(() => {
+    tooltip.hidden = true;
+  }, 180);
 }
 
 function syncComparisonViewControl() {
