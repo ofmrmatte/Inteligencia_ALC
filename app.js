@@ -2352,6 +2352,30 @@ function getEvolutionSourceDatasets() {
     .filter((dataset) => dataset && dataset.id !== EMPTY_DATASET_ID && dataset.source !== "filtered" && Array.isArray(dataset.rows) && dataset.rows.length);
 }
 
+function getAnnualPnrRowsForEvolution() {
+  const datasets = getEvolutionSourceDatasets();
+  const referenceYear = getEvolutionReferenceYear(datasets);
+  return datasets
+    .filter((dataset) => {
+      const key = getDatasetPeriod(dataset).key;
+      return referenceYear ? String(key || "").startsWith(`${referenceYear}-`) : true;
+    })
+    .flatMap((dataset) => Array.isArray(dataset.rows) ? dataset.rows : [])
+    .filter((row) => normalizeDonutSheet(row) === "PNR");
+}
+
+function getEvolutionReferenceYear(datasets) {
+  const selectedMonth = state.monthFilter && state.monthFilter !== "all" ? state.monthFilter : "";
+  if (/^\d{4}-\d{2}$/.test(selectedMonth)) return selectedMonth.slice(0, 4);
+  const activeKey = getDatasetPeriod(getActiveDataset()).key;
+  if (/^\d{4}-\d{2}$/.test(activeKey)) return activeKey.slice(0, 4);
+  const years = (Array.isArray(datasets) ? datasets : [])
+    .map((dataset) => String(getDatasetPeriod(dataset).key || "").slice(0, 4))
+    .filter((year) => /^\d{4}$/.test(year))
+    .sort();
+  return years[years.length - 1] || String(new Date().getFullYear());
+}
+
 function buildMonthlyEvolutionDatasets(sourceDatasets) {
   const groups = new Map();
   sourceDatasets.forEach((dataset) => {
@@ -2417,9 +2441,9 @@ function renderSheetEvolutionCard(sheet, datasets, index) {
   const max = Math.max(...totals, 1);
   const sheetTotal = rowsByDataset.reduce((acc, period) => acc + period.rows.reduce((sum, row) => sum + Number(row.valor_numerico || 0), 0), 0);
   const sheetCount = rowsByDataset.reduce((acc, period) => acc + period.rows.length, 0);
-  const currentPnrRows = sheet === "PNR" ? getRowsByMonthlyEvolutionSheet(getFilteredRows(), "PNR") : [];
-  const currentPnrValue = currentPnrRows.reduce((acc, row) => acc + Number(row.valor_numerico || 0), 0);
-  const pnrGoal = sheet === "PNR" ? getPnrGoalStatus(currentPnrValue) : null;
+  const annualPnrRows = sheet === "PNR" ? getAnnualPnrRowsForEvolution() : [];
+  const annualPnrValue = annualPnrRows.reduce((acc, row) => acc + Number(row.valor_numerico || 0), 0);
+  const pnrGoal = sheet === "PNR" ? getPnrGoalStatus(annualPnrValue, getAnnualPnrGoalLimit()) : null;
 
   return `
     <article class="panel tower-card" style="--reveal-index:${index}">
@@ -5010,11 +5034,23 @@ async function loadDashboardDataByFilters(options = {}) {
       return;
     }
 
-    const selectedDatasets = [];
-    for (const fileRecord of selectedFiles) {
+    const cachedDatasets = new Map(
+      (Array.isArray(library.datasets) ? library.datasets : [])
+        .filter((dataset) => dataset?.source !== "filtered" && Array.isArray(dataset.rows) && dataset.rows.length)
+        .map((dataset) => [dataset.id, dataset]),
+    );
+    const allHistoricalDatasets = [];
+    for (const fileRecord of dashboardFileRecords) {
+      const cached = cachedDatasets.get(fileRecord.id);
+      if (cached?.rows?.length) {
+        allHistoricalDatasets.push(cached);
+        continue;
+      }
       const dataset = await loadRowsFromStorage(fileRecord);
-      if (dataset?.rows?.length) selectedDatasets.push(dataset);
+      if (dataset?.rows?.length) allHistoricalDatasets.push(dataset);
     }
+    const selectedFileIds = new Set(selectedFiles.map((file) => file.id));
+    const selectedDatasets = allHistoricalDatasets.filter((dataset) => selectedFileIds.has(dataset.id));
 
     const rows = selectedDatasets.flatMap((dataset) => dataset.rows);
     if (!rows.length) {
@@ -5028,6 +5064,7 @@ async function loadDashboardDataByFilters(options = {}) {
     replaceDashboardData(rows, {
       selectedFiles,
       selectedDatasets,
+      allHistoricalDatasets,
       selectedMonth: state.monthFilter || "all",
       selectedPeriod: state.period,
     });
@@ -5088,6 +5125,7 @@ async function loadRowsFromStorage(fileRecord) {
 function replaceDashboardData(rows, context = {}) {
   const selectedFiles = Array.isArray(context.selectedFiles) ? context.selectedFiles : [];
   const selectedDatasets = Array.isArray(context.selectedDatasets) ? context.selectedDatasets : [];
+  const allHistoricalDatasets = Array.isArray(context.allHistoricalDatasets) ? context.allHistoricalDatasets : selectedDatasets;
   const label = buildActivePeriodLabel(context.selectedMonth || "all", context.selectedPeriod || "month", selectedFiles);
   const consolidatedRows = consolidateLinkedOccurrences(rows);
   const scopeDataset = {
@@ -5101,7 +5139,7 @@ function replaceDashboardData(rows, context = {}) {
     scopedDatasets: selectedDatasets,
   };
 
-  const datasetById = new Map(selectedDatasets.map((dataset) => [dataset.id, dataset]));
+  const datasetById = new Map(allHistoricalDatasets.map((dataset) => [dataset.id, dataset]));
   const fileDatasets = dashboardFileRecords.map((record) => {
     const loaded = datasetById.get(record.id);
     return loaded || normalizeDatasetRecord({
