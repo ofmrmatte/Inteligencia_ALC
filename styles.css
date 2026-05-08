@@ -1123,7 +1123,9 @@ body[data-theme="light"] #theme-toggle::before {
 }
 
 .timeline-period--horizontal .tower-bar-rail {
-  display: block;
+  display: flex;
+  align-items: stretch;
+  justify-content: flex-start;
   height: 1.02rem;
   border-bottom: 0;
   background: transparent;
@@ -1140,6 +1142,7 @@ body[data-theme="light"] #theme-toggle::before {
   min-height: 100%;
   border-radius: 2px;
   min-width: 0.22rem;
+  margin-inline: 0 auto;
   box-shadow: 0 6px 14px rgba(8, 16, 25, 0.1);
   transform-origin: 0 50%;
   transition:
@@ -1166,6 +1169,8 @@ body[data-theme="light"] #theme-toggle::before {
   overflow: hidden;
   color: #fff;
   font-size: 0.68rem;
+  font-style: normal;
+  font-weight: 800;
   line-height: 1;
   text-align: center;
   transform: none;
@@ -1270,59 +1275,6 @@ body[data-theme="light"] #theme-toggle::before {
   transform: translateY(-4px) scaleX(1.18);
   box-shadow: 0 12px 24px rgba(59, 166, 255, 0.24), 0 0 0 3px rgba(59, 166, 255, 0.18);
   z-index: 2;
-}
-
-.tower-chart--horizontal .tower-bar-rail {
-  display: flex;
-  align-items: stretch;
-  justify-content: flex-start;
-  height: 1.02rem;
-  border-bottom: 0;
-  background: transparent;
-  border-radius: 0;
-  overflow: visible;
-}
-
-.tower-chart--horizontal .tower-bar--horizontal {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  width: auto;
-  height: 100%;
-  min-height: 100%;
-  min-width: 0.22rem;
-  margin-inline: 0 auto;
-  border-radius: 2px;
-  transform-origin: 0 50%;
-  box-shadow: 0 6px 14px rgba(8, 16, 25, 0.1);
-}
-
-.tower-chart--horizontal .tower-bar--horizontal em {
-  position: static;
-  max-width: 100%;
-  overflow: hidden;
-  color: #fff;
-  font-size: 0.68rem;
-  font-style: normal;
-  font-weight: 800;
-  line-height: 1;
-  text-align: center;
-  transform: none;
-  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.35);
-}
-
-.tower-chart--horizontal .tower-bar--horizontal.is-tiny em {
-  display: none;
-}
-
-.tower-chart--horizontal .tower-bar--horizontal:hover {
-  transform: translateX(4px) scaleX(1.035) scaleY(1.18);
-  filter: brightness(1.14) saturate(1.18) contrast(1.04);
-  box-shadow:
-    0 14px 26px rgba(8, 16, 25, 0.24),
-    0 0 18px rgba(59, 166, 255, 0.2),
-    0 0 0 2px rgba(255, 255, 255, 0.24) inset;
-  z-index: 3;
 }
 
 .tower-chart--horizontal:has(.tower-bar--horizontal:hover) .tower-bar--horizontal:not(:hover),
