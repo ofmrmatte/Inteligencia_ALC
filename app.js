@@ -15,6 +15,9 @@ const PDF_LOGO_IMAGE = {
 const DEBUG_AUTH_FLOW = false;
 const EMPTY_DATASET_ID = "__empty";
 const MONTHLY_BASE_VIEW = "Evolução mensal";
+const PACKAGE_MANAGEMENT_VIEW = "Gestão de Pacotes";
+const PRE_FATURA_FILE_CATEGORY = "PRE_FATURA";
+const PACKAGE_MANAGEMENT_FILE_CATEGORY = "GESTAO_PACOTES";
 const PNR_GOAL_SETTINGS_KEY = "pnr_goal";
 const DEFAULT_PNR_GOAL_SETTINGS = {
   monthly_goal: 40000,
@@ -25,6 +28,21 @@ const DEFAULT_PNR_GOAL_SETTINGS = {
 const DEFAULT_PNR_GOAL_LIMIT = DEFAULT_PNR_GOAL_SETTINGS.monthly_goal;
 const SHEET_ORDER = ["Todos", "SVC PERDIDOS", "XPT PERDIDOS", "PNR"];
 const SHEET_TABS = [...SHEET_ORDER, MONTHLY_BASE_VIEW];
+const SHEET_DISPLAY_LABELS = {
+  Todos: "Todos",
+  "SVC PERDIDOS": "SVC Perdidos",
+  "XPT PERDIDOS": "XPT Perdidos",
+  PNR: "PNR",
+  [MONTHLY_BASE_VIEW]: "Evolução mensal",
+  [PACKAGE_MANAGEMENT_VIEW]: "Gestão de Pacotes",
+};
+const PACKAGE_CATEGORY_LABELS = {
+  ALC: "ALC",
+  DRIVER: "Driver",
+  DISPATCHER: "Dispatcher",
+  MERCADO_LIVRE: "Mercado Livre",
+  INDEFINIDO: "Indefinido",
+};
 const SHEET_COLORS = {
   "SVC PERDIDOS": "#ff9f43",
   "XPT PERDIDOS": "#58d68d",
@@ -86,6 +104,7 @@ state.period = normalizePeriodMode(state.period);
 let library = loadLibrary();
 let activeDataset = getActiveDataset();
 let allRows = activeDataset.rows.slice();
+let packageManagementRows = [];
 let fileMeta = activeDataset;
 let workbookEnginePromise = null;
 let currentUser = null;
@@ -260,6 +279,9 @@ function cacheDom() {
   el.viewToolbar = document.querySelector(".view-toolbar");
   el.sheetTabs = document.getElementById("sheet-tabs");
   el.monthlyBaseView = document.getElementById("monthly-base-view");
+  el.insightGrid = document.querySelector(".insight-grid");
+  el.comparisonPanel = document.querySelector(".comparison-panel");
+  el.tablePanel = document.querySelector(".table-panel");
   el.comparisonViewControl = document.getElementById("comparison-view-control");
   el.profileView = document.getElementById("profile-view");
   el.settingsView = document.getElementById("settings-view");
@@ -296,6 +318,9 @@ function cacheDom() {
   el.monthlyComparison = document.getElementById("monthly-comparison");
   el.comparisonMeta = document.getElementById("comparison-meta");
   el.tableBody = document.getElementById("table-body");
+  el.tableHead = document.querySelector("table thead");
+  el.tableTitle = document.querySelector(".table-panel__header h2");
+  el.tableDescription = document.querySelector(".table-panel__header p");
   el.tableRange = document.getElementById("table-range");
   el.pageIndicator = document.getElementById("page-indicator");
   el.prevPage = document.getElementById("prev-page");
@@ -594,11 +619,16 @@ function bindEvents() {
   el.sheetTabs.addEventListener("click", (event) => {
     const button = event.target.closest("button[data-sheet]");
     if (!button) return;
+    const previousCategory = getCurrentFileCategory();
     state.appView = "dashboard";
     state.sheet = button.dataset.sheet;
     state.page = 1;
     persistState();
     hydrateControls();
+    if (getCurrentFileCategory() !== previousCategory) {
+      void loadDashboardDataByFilters({ force: true, showLoading: false });
+      return;
+    }
     renderAll();
   });
 
@@ -758,6 +788,89 @@ function bindEvents() {
     hydrateValueSortControls();
     renderAll();
   });
+}
+
+function getSheetDisplayLabel(sheet) {
+  return SHEET_DISPLAY_LABELS[sheet] || String(sheet || "");
+}
+
+function getSelectDisplayLabel(value) {
+  return SHEET_DISPLAY_LABELS[value] || String(value || "");
+}
+
+function getCurrentFileCategory(sheet = state.sheet) {
+  return PRE_FATURA_FILE_CATEGORY;
+}
+
+function isDashboardFileCategory(value) {
+  return value === PRE_FATURA_FILE_CATEGORY || value === PACKAGE_MANAGEMENT_FILE_CATEGORY;
+}
+
+function identificarTipoArquivo(nomeArquivo) {
+  const nome = normalizeText(nomeArquivo);
+  return nome.includes("GESTAO DE PACOTES") ? PACKAGE_MANAGEMENT_FILE_CATEGORY : PRE_FATURA_FILE_CATEGORY;
+}
+
+function getFileRecordCategory(fileRecord) {
+  const directCandidates = [
+    fileRecord?.file_category,
+    fileRecord?.fileCategory,
+    fileRecord?.file_type,
+    fileRecord?.metadata?.file_category,
+    fileRecord?.metadata?.semantic_file_type,
+    fileRecord?.metadata?.file_type,
+    fileRecord?.metadata?.tipo_arquivo,
+  ];
+  const storedCategory = directCandidates.find(isDashboardFileCategory);
+  if (storedCategory) return storedCategory;
+
+  const nameCategory = identificarTipoArquivo(fileRecord?.metadata?.original_name || fileRecord?.file_name || fileRecord?.fileName || "");
+  if (nameCategory === PACKAGE_MANAGEMENT_FILE_CATEGORY) return PACKAGE_MANAGEMENT_FILE_CATEGORY;
+
+  const storagePath = String(fileRecord?.storage_path || fileRecord?.storagePath || "");
+  if (storagePath.startsWith("gestao-pacotes/")) return PACKAGE_MANAGEMENT_FILE_CATEGORY;
+  if (storagePath.startsWith("pre-fatura/")) return PRE_FATURA_FILE_CATEGORY;
+
+  return nameCategory;
+}
+
+function getFileRecordMimeType(fileRecord, fallback = "") {
+  const legacyType = fileRecord?.file_type;
+  return fileRecord?.metadata?.mime_type || (isDashboardFileCategory(legacyType) ? "" : legacyType) || fallback || "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
+}
+
+function inferRowsFileCategory(rows) {
+  return Array.isArray(rows) && rows.some((row) => row?.file_category === PACKAGE_MANAGEMENT_FILE_CATEGORY) ? PACKAGE_MANAGEMENT_FILE_CATEGORY : PRE_FATURA_FILE_CATEGORY;
+}
+
+function formatPackageQuinzena(value) {
+  const normalized = String(value || "").trim();
+  if (!normalized) return "";
+  return normalized.replace("quinzena", "Quinzena");
+}
+
+function buildPackageManagementDisplayName(fileName, metadata = {}) {
+  const period = identificarPeriodoGestaoPacotes(fileName);
+  const quinzena = formatPackageQuinzena(metadata.quinzena || period.quinzena);
+  const competencia = metadata.competencia || period.competencia || "";
+  const parts = ["Gestão de Pacotes"];
+  if (quinzena) parts.push(quinzena);
+  if (competencia) parts.push(competencia);
+  return parts.length > 1 ? parts.join(" · ") : `[Gestão de Pacotes] ${String(fileName || "arquivo").replace(/\.[^.]+$/, "")}`;
+}
+
+function getDashboardFileDisplayName(fileOrDataset) {
+  if (!fileOrDataset) return "Arquivo";
+  if (fileOrDataset.files_count != null && fileOrDataset.file_name) return fileOrDataset.file_name;
+  const metadata = fileOrDataset.metadata || fileOrDataset.remoteRecord?.metadata || {};
+  if (metadata.display_name) return metadata.display_name;
+  const fileName = fileOrDataset.file_name || fileOrDataset.fileName || fileOrDataset.label || "arquivo.xlsx";
+  const category = fileOrDataset.fileCategory || getFileRecordCategory(fileOrDataset.remoteRecord || fileOrDataset);
+  if (category === PACKAGE_MANAGEMENT_FILE_CATEGORY) {
+    return buildPackageManagementDisplayName(fileName, metadata);
+  }
+  const humanized = humanizeWorkbookName(fileName);
+  return humanized.startsWith("Pré-fatura ·") ? humanized : `Pré-fatura · ${humanized}`;
 }
 
 async function handlePnrGoalConfig(event) {
@@ -929,11 +1042,12 @@ function markDashboardReady() {
 function hydrateControls() {
   syncActiveDataset();
   const options = buildOptions(allRows);
+  sanitizeCurrentFilters(options);
   renderDatasetSelect();
   renderMonthSelect();
   renderPeriodSelect();
   renderFileDeleteMenu();
-  populateSelect(el.sheetSelect, SHEET_ORDER, state.sheet);
+  populateSelect(el.sheetSelect, SHEET_TABS, state.sheet);
   populateSelect(el.typeSelect, options.tipos, state.tipo);
   populateSelect(el.baseSelect, options.bases, state.base);
   populateSelect(el.driverSelect, options.motoristas, state.motorista);
@@ -994,6 +1108,7 @@ function getAvailableMonthOptions() {
   const months = new Map();
   dashboardFileRecords
     .filter(isUsableDashboardFileRecord)
+    .filter((record) => getFileRecordCategory(record) === getCurrentFileCategory())
     .forEach((record) => {
       const period = getFileRecordPeriod(record);
       if (!months.has(period.key)) {
@@ -1004,7 +1119,7 @@ function getAvailableMonthOptions() {
 }
 
 function buildPeriodOptions() {
-  const files = getFilesForMonth(dashboardFileRecords, state.monthFilter || "all");
+  const files = getFilesForMonth(dashboardFileRecords, state.monthFilter || "all", getCurrentFileCategory());
   if (!files.length) return [["month", "Mês completo"]];
   const modes = new Set(files.map((file) => getFileRecordPeriod(file).periodType));
   const options = [["month", "Mês completo"]];
@@ -1035,7 +1150,7 @@ function renderDatasetSelect() {
       const selected = dataset.id === state.activeDatasetId ? "selected" : "";
       const count = dataset.id === EMPTY_DATASET_ID ? "" : ` (${getFileRowsLabel(dataset.remoteRecord, dataset)})`;
       const active = dataset.remoteRecord?.is_active ? " · ativo" : "";
-      return `<option value="${escapeAttribute(dataset.id)}" ${selected}>${escapeHtml(dataset.label)}${count}${active}</option>`;
+      return `<option value="${escapeAttribute(dataset.id)}" ${selected}>${escapeHtml(getDashboardFileDisplayName(dataset.remoteRecord || dataset))}${count}${active}</option>`;
     })
     .join("");
 }
@@ -1043,6 +1158,12 @@ function renderDatasetSelect() {
 async function handleDatasetSelection(datasetId) {
   const dataset = library.datasets.find((entry) => entry.id === datasetId);
   if (!dataset) {
+    renderDatasetSelect();
+    return;
+  }
+
+  if ((dataset.fileCategory || getFileRecordCategory(dataset.remoteRecord)) === PACKAGE_MANAGEMENT_FILE_CATEGORY) {
+    showToast("Arquivos de Gestão de Pacotes alimentam apenas os cards resumidos.", "info", 4200);
     renderDatasetSelect();
     return;
   }
@@ -1074,7 +1195,7 @@ function updateDatasetMeta() {
     if (dashboardFilesLoading) {
       el.datasetNote.textContent = "Carregando arquivo ativo...";
     } else if (active && active.id !== EMPTY_DATASET_ID) {
-      const source = currentActiveFile ? `Arquivo salvo no Supabase: ${currentActiveFile.file_name}.` : "O mês completo é consolidado automaticamente.";
+      const source = currentActiveFile ? `Arquivo salvo no Supabase: ${getDashboardFileDisplayName(currentActiveFile)}.` : "O mês completo é consolidado automaticamente.";
       el.datasetNote.textContent = `${integer.format(allRows.length)} registros no recorte atual. ${source}`;
     } else {
       el.datasetNote.textContent = currentUser ? "Nenhum arquivo carregado. Faça upload de um arquivo para iniciar." : "Faça login para carregar o arquivo ativo salvo.";
@@ -1136,16 +1257,17 @@ function getFileRowsLabel(fileRecord, dataset = null) {
   return "Registros não calculados";
 }
 
-function getFilesForMonth(files, monthKey) {
+function getFilesForMonth(files, monthKey, fileCategory = getCurrentFileCategory()) {
   return (Array.isArray(files) ? files : [])
     .filter(isUsableDashboardFileRecord)
+    .filter((file) => !fileCategory || getFileRecordCategory(file) === fileCategory)
     .filter((file) => monthKey === "all" || getFileRecordPeriod(file).key === monthKey);
 }
 
-function getFilesByMonthAndPeriod(files, monthKey, periodMode) {
+function getFilesByMonthAndPeriod(files, monthKey, periodMode, fileCategory = getCurrentFileCategory()) {
   const normalizedMonth = monthKey || "all";
   const normalizedPeriod = normalizePeriodMode(periodMode);
-  return getFilesForMonth(files, normalizedMonth).filter((file) => {
+  return getFilesForMonth(files, normalizedMonth, fileCategory).filter((file) => {
     if (normalizedPeriod === "month") return true;
     return getFileRecordPeriod(file).periodType === normalizedPeriod;
   });
@@ -1169,7 +1291,7 @@ function renderFileDeleteMenu() {
       const uploaded = dataset.remoteRecord?.uploaded_by_email ? ` · ${dataset.remoteRecord.uploaded_by_email}` : "";
       return `
         <button type="button" class="${selected}" data-delete-dataset-id="${escapeAttribute(dataset.id)}">
-          <span>${escapeHtml(dataset.label)}</span>
+          <span>${escapeHtml(getDashboardFileDisplayName(dataset.remoteRecord || dataset))}</span>
           <small>${escapeHtml(getFileRowsLabel(dataset.remoteRecord, dataset))}${escapeHtml(active)}${escapeHtml(uploaded)}</small>
         </button>
       `;
@@ -1182,16 +1304,17 @@ function renderTabs() {
   el.sheetTabs.innerHTML = SHEET_TABS.map((sheet) => {
     const isActive = state.sheet === sheet ? "is-active" : "";
     const count = counts[sheet] || 0;
+    const label = getSheetDisplayLabel(sheet);
     if (sheet === MONTHLY_BASE_VIEW) {
       return `
-        <button type="button" class="sheet-tab ${isActive}" data-sheet="${sheet}">
-          ${sheet}
+        <button type="button" class="sheet-tab ${isActive}" data-sheet="${escapeAttribute(sheet)}">
+          ${escapeHtml(label)}
         </button>
       `;
     }
     return `
-      <button type="button" class="sheet-tab ${isActive}" data-sheet="${sheet}">
-        ${sheet}
+      <button type="button" class="sheet-tab ${isActive}" data-sheet="${escapeAttribute(sheet)}">
+        ${escapeHtml(label)}
         <span class="sheet-tab__count">${integer.format(count)}</span>
       </button>
     `;
@@ -1400,18 +1523,18 @@ function renderAuditLogs() {
 }
 
 function formatAuditEntity(entry) {
-  const type = entry?.entity_type || "—";
+  const type = entry?.entity_type || "â€”";
   const id = entry?.entity_id ? ` · ${entry.entity_id}` : "";
   return `${type}${id}`;
 }
 
 function formatAuditDetails(details) {
-  if (!details || typeof details !== "object") return "—";
+  if (!details || typeof details !== "object") return "â€”";
   const readable = Object.entries(details)
     .filter(([, value]) => value !== null && value !== undefined && value !== "")
     .slice(0, 5)
     .map(([key, value]) => `${key}: ${Array.isArray(value) ? value.join(", ") : String(value)}`);
-  return readable.join(" · ") || "—";
+  return readable.join(" · ") || "â€”";
 }
 
 function getProfileDisplayName() {
@@ -1611,7 +1734,9 @@ async function uploadProfileAvatar(file) {
 
 function toggleDashboardView(monthlyView) {
   if (el.monthlyBaseView) el.monthlyBaseView.hidden = !monthlyView;
-  [el.kpiGrid, document.querySelector(".insight-grid"), document.querySelector(".comparison-panel"), document.querySelector(".table-panel")].forEach((node) => {
+  if (el.kpiGrid) el.kpiGrid.hidden = monthlyView;
+  if (el.tablePanel) el.tablePanel.hidden = monthlyView;
+  [el.insightGrid, el.comparisonPanel].forEach((node) => {
     if (node) node.hidden = monthlyView;
   });
 }
@@ -1659,7 +1784,7 @@ function setDashboardVisualState(type, options = {}) {
 function renderDashboardState(status) {
   const emptyStatus = typeof status === "string" ? getDashboardStateConfig(status) : status;
   if (el.monthlyBaseView) el.monthlyBaseView.hidden = true;
-  [document.querySelector(".insight-grid"), document.querySelector(".comparison-panel"), document.querySelector(".table-panel")].forEach((node) => {
+  [el.insightGrid, el.comparisonPanel, el.tablePanel].forEach((node) => {
     if (node) node.hidden = true;
   });
   if (el.kpiGrid) {
@@ -1728,9 +1853,328 @@ async function retryDashboardLoad() {
   }
 }
 
+function buildPackageManagementSummary(rows) {
+  const base = Array.isArray(rows) ? rows : [];
+  const byCategory = (category) => base.filter((row) => row.categoria_final === category);
+  const sumAbs = (items) => items.reduce((total, row) => total + Math.abs(Number(row.valor_numerico || 0)), 0);
+  const alcRows = byCategory("ALC");
+  const driverRows = byCategory("DRIVER");
+  const dispatcherRows = byCategory("DISPATCHER");
+  const mercadoLivreRows = byCategory("MERCADO_LIVRE");
+  const indefinidos = byCategory("INDEFINIDO");
+  return {
+    count: base.length,
+    alcValue: sumAbs(alcRows),
+    driverValue: sumAbs(driverRows),
+    dispatcherValue: sumAbs(dispatcherRows),
+    driverErrors: driverRows.length,
+    dispatcherErrors: dispatcherRows.length,
+    mercadoLivreErrors: mercadoLivreRows.length,
+    pendingCount: indefinidos.length,
+  };
+}
+
+function getMonthNumberFromAny(value) {
+  const normalizedReference = normalizeReferenceMonth(value);
+  if (normalizedReference) return normalizedReference;
+  const detected = monthNumber(value);
+  if (detected) return String(detected).padStart(2, "0");
+  const normalized = normalizeText(value);
+  const abbrIndex = MONTH_ABBR.findIndex((month) => normalizeText(month) === normalized || normalized.includes(normalizeText(month)));
+  return abbrIndex >= 0 ? String(abbrIndex + 1).padStart(2, "0") : "";
+}
+
+function getPackageManagementMonthKey(row) {
+  const text = `${row?.competencia || ""} ${row?.arquivo_origem || ""}`;
+  const year = normalizeReferenceYear(row?.ano || row?.reference_year || detectYear(text));
+  const month = getMonthNumberFromAny(row?.reference_month || row?.mes || row?.competencia || row?.arquivo_origem);
+  return year && month ? `${year}-${month}` : "";
+}
+
+function getPackageManagementPeriodType(row) {
+  const direct = normalizePeriodMode(row?.period_type || row?.periodType || "");
+  if (direct !== "month") return direct;
+  return getPeriodModeFromLabel(`${row?.quinzena || ""} ${row?.period_label || ""} ${row?.arquivo_origem || ""}`);
+}
+
+function filterPackageManagementRowsByPeriod(rows, monthKey = state.monthFilter || "all", periodMode = state.period) {
+  const normalizedMonth = monthKey || "all";
+  const normalizedPeriod = normalizePeriodMode(periodMode);
+  return (Array.isArray(rows) ? rows : []).filter((row) => {
+    const rowMonthKey = getPackageManagementMonthKey(row);
+    if (normalizedMonth !== "all" && rowMonthKey !== normalizedMonth) return false;
+    if (normalizedPeriod === "month") return true;
+    return getPackageManagementPeriodType(row) === normalizedPeriod;
+  });
+}
+
+function normalizeMatchId(value) {
+  return String(value || "")
+    .trim()
+    .replace(/[^\w\d]+/g, "")
+    .toUpperCase();
+}
+
+function getPackageMatchIds(row) {
+  const ids = [
+    ...(Array.isArray(row?.ids_vinculados) ? row.ids_vinculados : []),
+    ...(Array.isArray(row?.linked_ids) ? row.linked_ids : []),
+    row?.idPacote,
+    row?.id_pacote,
+    row?.id_do_pacote,
+    row?.idEnvio,
+    row?.id_envio,
+    row?.id_de_envio,
+    row?.envio,
+  ];
+  return [...new Set(ids.map(normalizeMatchId).filter(Boolean))];
+}
+
+function getCaseMatchId(row) {
+  return normalizeMatchId(row?.idCaso || row?.id_caso || row?.id_caso_adm || row?.caso);
+}
+
+function getMatchRoute(row) {
+  return normalizeText(row?.rota || row?.numeroRota || row?.numero_rota || row?.n_rota || row?.route);
+}
+
+function getMatchDriver(row) {
+  return normalizeDriver(row?.driver || row?.motorista || row?.nomeMotorista || row?.nome_driver);
+}
+
+function getMatchBase(row) {
+  return normalizeBase(row?.base || row?.base_normalizada || row?.svc || row?.estacao || row?.station || row?.unidade || row?.sigla_base);
+}
+
+function getMatchAmount(row) {
+  const value = row?.valor_numerico ?? row?.valor ?? row?.desconto;
+  const amount = normalizeOccurrenceAmount(value);
+  return amount ? amount.toFixed(2) : "";
+}
+
+function getMatchDate(row) {
+  const raw = row?.data_normalizada || row?.data || row?.data_sort || "";
+  if (!raw) return "";
+  const parsed = parseDateValue(raw);
+  return parsed.iso || "";
+}
+
+function buildMatchKey(parts) {
+  return parts.every(Boolean) ? parts.join("|") : "";
+}
+
+function buildPrefaturaMatchIndex(rows) {
+  const index = {
+    byPackageId: new Map(),
+    byCaseId: new Map(),
+    byRouteDriverBaseValue: new Map(),
+    byDriverBaseDateValue: new Map(),
+  };
+
+  (Array.isArray(rows) ? rows : []).forEach((row) => {
+    getPackageMatchIds(row).forEach((id) => {
+      if (!index.byPackageId.has(id)) index.byPackageId.set(id, row);
+    });
+
+    const caseId = getCaseMatchId(row);
+    if (caseId && !index.byCaseId.has(caseId)) index.byCaseId.set(caseId, row);
+
+    const routeDriverBaseValue = buildMatchKey([getMatchRoute(row), getMatchDriver(row), getMatchBase(row), getMatchAmount(row)]);
+    if (routeDriverBaseValue && !index.byRouteDriverBaseValue.has(routeDriverBaseValue)) {
+      index.byRouteDriverBaseValue.set(routeDriverBaseValue, row);
+    }
+
+    const driverBaseDateValue = buildMatchKey([getMatchDriver(row), getMatchBase(row), getMatchDate(row), getMatchAmount(row)]);
+    if (driverBaseDateValue && !index.byDriverBaseDateValue.has(driverBaseDateValue)) {
+      index.byDriverBaseDateValue.set(driverBaseDateValue, row);
+    }
+  });
+
+  return index;
+}
+
+function classifyPackagePrefaturaMatch(row, index) {
+  const packageIds = getPackageMatchIds(row);
+  for (const id of packageIds) {
+    if (index.byPackageId.has(id)) {
+      return { status: "LOCALIZADO_NA_PRE_FATURA", confidence: "ALTA", method: "ID do pacote/envio" };
+    }
+  }
+
+  const caseId = getCaseMatchId(row);
+  if (caseId && index.byCaseId.has(caseId)) {
+    return { status: "LOCALIZADO_NA_PRE_FATURA", confidence: "ALTA", method: "ID caso" };
+  }
+
+  const routeDriverBaseValue = buildMatchKey([getMatchRoute(row), getMatchDriver(row), getMatchBase(row), getMatchAmount(row)]);
+  if (routeDriverBaseValue && index.byRouteDriverBaseValue.has(routeDriverBaseValue)) {
+    return { status: "LOCALIZADO_NA_PRE_FATURA", confidence: "MEDIA", method: "Rota + driver + base + valor" };
+  }
+
+  const driverBaseDateValue = buildMatchKey([getMatchDriver(row), getMatchBase(row), getMatchDate(row), getMatchAmount(row)]);
+  if (driverBaseDateValue && index.byDriverBaseDateValue.has(driverBaseDateValue)) {
+    return { status: "CORRESPONDENCIA_PROVAVEL", confidence: "BAIXA", method: "Driver + base + data + valor" };
+  }
+
+  const hasPartialData = [getMatchRoute(row), getMatchDriver(row), getMatchBase(row), getMatchAmount(row), getMatchDate(row), getCaseMatchId(row), packageIds[0]].filter(Boolean).length >= 2;
+  return hasPartialData
+    ? { status: "NAO_LOCALIZADO_NA_PRE_FATURA", confidence: "NENHUMA", method: "" }
+    : { status: "SEM_DADOS_SUFICIENTES", confidence: "NENHUMA", method: "" };
+}
+
+function enrichPackageRowsWithPrefaturaMatch(packageRows, prefaturaRows) {
+  const index = buildPrefaturaMatchIndex(prefaturaRows);
+  return (Array.isArray(packageRows) ? packageRows : []).map((row) => ({
+    ...row,
+    prefatura_match: classifyPackagePrefaturaMatch(row, index),
+  }));
+}
+
+function isPackageLocatedInPrefatura(row) {
+  return row?.prefatura_match?.status === "LOCALIZADO_NA_PRE_FATURA" || row?.prefatura_match?.status === "CORRESPONDENCIA_PROVAVEL";
+}
+
+function formatPackageFinancialDelta(rows, prefaturaSummary) {
+  const total = Number(prefaturaSummary?.totalValue || 0);
+  const locatedRows = rows.filter(isPackageLocatedInPrefatura);
+  const located = locatedRows.length;
+  const locatedValue = locatedRows.reduce((sum, row) => sum + Math.abs(Number(row.valor_numerico || 0)), 0);
+  const pct = total ? formatNumberPt((locatedValue / total) * 100, 1) : "0,0";
+  return `${pct}% do total da pré-fatura · ${integer.format(located)} registros localizados`;
+}
+
+function formatPackageCountDelta(rows, prefaturaSummary) {
+  const total = Number(prefaturaSummary?.count || 0);
+  const located = rows.filter(isPackageLocatedInPrefatura).length;
+  const pct = total ? formatNumberPt((located / total) * 100, 1) : "0,0";
+  return `${pct}% dos registros da pré-fatura · ${integer.format(located)} localizados`;
+}
+
+function buildPackageManagementKpiCardsLegacy(rows = packageManagementRows, prefaturaRows = allRows, prefaturaSummary = buildSummary(prefaturaRows)) {
+  const enrichedRows = enrichPackageRowsWithPrefaturaMatch(rows, prefaturaRows);
+  const summary = buildPackageManagementSummary(enrichedRows);
+  const byCategory = (category) => enrichedRows.filter((row) => row.categoria_final === category);
+  const alcRows = byCategory("ALC");
+  const driverRows = byCategory("DRIVER");
+  const dispatcherRows = byCategory("DISPATCHER");
+  const mercadoLivreRows = byCategory("MERCADO_LIVRE");
+  return [
+    { label: "Absorvido pela ALC", value: currency.format(summary.alcValue), tone: "kpi-card--finance", delta: formatPackageFinancialDelta(alcRows, prefaturaSummary) },
+    { label: "Mantido com Driver", value: currency.format(summary.driverValue), tone: "kpi-card--problem", delta: formatPackageFinancialDelta(driverRows, prefaturaSummary) },
+    { label: "Direcionado ao Dispatcher", value: currency.format(summary.dispatcherValue), tone: "kpi-card--problem", delta: formatPackageFinancialDelta(dispatcherRows, prefaturaSummary) },
+    { label: "Erros do Driver", value: integer.format(summary.driverErrors), tone: "kpi-card--volume", delta: formatPackageCountDelta(driverRows, prefaturaSummary) },
+    { label: "Erros do Dispatcher", value: integer.format(summary.dispatcherErrors), tone: "kpi-card--volume", delta: formatPackageCountDelta(dispatcherRows, prefaturaSummary) },
+    { label: "Erros do Mercado Livre", value: integer.format(summary.mercadoLivreErrors), tone: "kpi-card--neutral", delta: formatPackageCountDelta(mercadoLivreRows, prefaturaSummary) },
+  ];
+}
+
+function buildPackageComparisonLine({ label, rows, value, kind, prefaturaSummary, hasPackageRows }) {
+  const located = rows.filter(isPackageLocatedInPrefatura).length;
+  const denominator = kind === "financial" ? Number(prefaturaSummary?.totalValue || 0) : Number(prefaturaSummary?.count || 0);
+  const hasComparisonBase = hasPackageRows && denominator > 0;
+  const percentage = hasComparisonBase ? formatNumberPt((Number(value || 0) / denominator) * 100, 1) : null;
+  const comparison = !hasComparisonBase
+    ? "Sem base de comparaÃ§Ã£o"
+    : kind === "financial"
+      ? `${percentage}% do total da prÃ©-fatura`
+      : `${percentage}% dos registros da prÃ©-fatura`;
+  const locatedLabel = kind === "financial"
+    ? `${integer.format(located)} registros localizados`
+    : `${integer.format(located)} localizados`;
+  return {
+    label,
+    rows,
+    value,
+    kind,
+    located,
+    comparison,
+    delta: hasComparisonBase ? `${comparison} Â· ${locatedLabel}` : comparison,
+  };
+}
+
+function buildPackageManagementComparison(rows = packageManagementRows, prefaturaRows = allRows) {
+  const scopedRows = Array.isArray(rows) ? rows : [];
+  const enrichedRows = enrichPackageRowsWithPrefaturaMatch(scopedRows, prefaturaRows);
+  const summary = buildPackageManagementSummary(enrichedRows);
+  const prefaturaSummary = buildSummary(Array.isArray(prefaturaRows) ? prefaturaRows : []);
+  const byCategory = (category) => enrichedRows.filter((row) => row.categoria_final === category);
+  const alcRows = byCategory("ALC");
+  const driverRows = byCategory("DRIVER");
+  const dispatcherRows = byCategory("DISPATCHER");
+  const mercadoLivreRows = byCategory("MERCADO_LIVRE");
+  const hasPackageRows = enrichedRows.length > 0;
+  const lines = [
+    buildPackageComparisonLine({ label: "Absorvido pela ALC", rows: alcRows, value: summary.alcValue, kind: "financial", prefaturaSummary, hasPackageRows }),
+    buildPackageComparisonLine({ label: "Mantido com Driver", rows: driverRows, value: summary.driverValue, kind: "financial", prefaturaSummary, hasPackageRows }),
+    buildPackageComparisonLine({ label: "Direcionado ao Dispatcher", rows: dispatcherRows, value: summary.dispatcherValue, kind: "financial", prefaturaSummary, hasPackageRows }),
+    buildPackageComparisonLine({ label: "Erros do Driver", rows: driverRows, value: summary.driverErrors, kind: "count", prefaturaSummary, hasPackageRows }),
+    buildPackageComparisonLine({ label: "Erros do Dispatcher", rows: dispatcherRows, value: summary.dispatcherErrors, kind: "count", prefaturaSummary, hasPackageRows }),
+    buildPackageComparisonLine({ label: "Erros do Mercado Livre", rows: mercadoLivreRows, value: summary.mercadoLivreErrors, kind: "count", prefaturaSummary, hasPackageRows }),
+  ];
+  return { rows: enrichedRows, summary, prefaturaSummary, lines, hasPackageRows, hasPrefaturaRows: prefaturaSummary.count > 0 };
+}
+
+function buildPackageManagementComparisonForScope(scope, prefaturaRows) {
+  const monthKey = scope?.mode === "annual" ? "all" : scope?.key || state.monthFilter || "all";
+  const periodMode = scope?.periodMode || state.period;
+  const scopedPackageRows = filterPackageManagementRowsByPeriod(packageManagementRows, monthKey, periodMode);
+  return buildPackageManagementComparison(scopedPackageRows, prefaturaRows);
+}
+
+function formatPackageComparisonResult(line) {
+  return line?.kind === "financial" ? currency.format(line.value || 0) : integer.format(line?.value || 0);
+}
+
+function buildPackageComparisonExecutiveText(comparison) {
+  if (!comparison?.hasPackageRows) {
+    return "NÃ£o foram encontrados registros de GestÃ£o de Pacotes para o recorte selecionado.";
+  }
+  if (!comparison?.hasPrefaturaRows) {
+    return "Foram encontrados registros de GestÃ£o de Pacotes, porÃ©m nÃ£o hÃ¡ base de PrÃ©-fatura correspondente para comparaÃ§Ã£o percentual.";
+  }
+  const alc = comparison.lines.find((line) => line.label === "Absorvido pela ALC") || { value: 0, comparison: "0,0% do total da prÃ©-fatura" };
+  const driver = comparison.lines.find((line) => line.label === "Erros do Driver") || { value: 0, comparison: "0,0% dos registros da prÃ©-fatura" };
+  return `No recorte selecionado, a GestÃ£o de Pacotes registrou ${currency.format(alc.value || 0)} absorvidos pela ALC, equivalente a ${alc.comparison}. Foram identificados ${integer.format(driver.value || 0)} erros classificados como Driver, representando ${driver.comparison}.`;
+}
+
+function buildPackageManagementKpiCards(rows = filterPackageManagementRowsByPeriod(packageManagementRows), prefaturaRows = allRows) {
+  const comparison = buildPackageManagementComparison(rows, prefaturaRows);
+  const byLabel = new Map(comparison.lines.map((line) => [line.label, line]));
+  const line = (label) => byLabel.get(label) || { value: 0, delta: "Sem base de comparaÃ§Ã£o" };
+  return [
+    { label: "Absorvido pela ALC", value: currency.format(line("Absorvido pela ALC").value || 0), tone: "kpi-card--finance", delta: line("Absorvido pela ALC").delta },
+    { label: "Mantido com Driver", value: currency.format(line("Mantido com Driver").value || 0), tone: "kpi-card--problem", delta: line("Mantido com Driver").delta },
+    { label: "Direcionado ao Dispatcher", value: currency.format(line("Direcionado ao Dispatcher").value || 0), tone: "kpi-card--problem", delta: line("Direcionado ao Dispatcher").delta },
+    { label: "Erros do Driver", value: integer.format(line("Erros do Driver").value || 0), tone: "kpi-card--volume", delta: line("Erros do Driver").delta },
+    { label: "Erros do Dispatcher", value: integer.format(line("Erros do Dispatcher").value || 0), tone: "kpi-card--volume", delta: line("Erros do Dispatcher").delta },
+    { label: "Erros do Mercado Livre", value: integer.format(line("Erros do Mercado Livre").value || 0), tone: "kpi-card--neutral", delta: line("Erros do Mercado Livre").delta },
+  ];
+}
+
+function restorePrefaturaTableHeader() {
+  if (el.tableTitle) el.tableTitle.textContent = "Detalhamento dos registros";
+  if (el.tableDescription) el.tableDescription.innerHTML = `<span id="result-count">0</span> registros visíveis após os filtros`;
+  el.resultCount = document.getElementById("result-count") || el.resultCount;
+  if (el.tableHead) {
+    el.tableHead.innerHTML = `
+      <tr>
+        <th data-sort="base">Base</th>
+        <th data-sort="motorista">Driver</th>
+        <th data-sort="placa">Placa</th>
+        <th data-sort="tipo_desconto">Tipo</th>
+        <th data-sort="aba_origem">Aba</th>
+        <th data-sort="data_sort">Data</th>
+        <th data-sort="id_pacote">ID do pacote</th>
+        <th data-sort="n_rota">Nº rota</th>
+        <th data-sort="valor_numerico" class="is-right">Desconto</th>
+      </tr>
+    `;
+  }
+}
+
 function renderKpis(summary) {
   const monthlyStatus = getTotalDiscountComparisonInitialText();
-  const cards = [
+  const mainCards = [
     {
       label: "Total de descontos",
       value: currency.format(summary.totalValue),
@@ -1769,21 +2213,26 @@ function renderKpis(summary) {
       delta: `${summary.topBase ? summary.topBase.label : "Sem base"} com maior desconto`,
     },
   ];
+  const packageCards = buildPackageManagementKpiCards();
+  const renderCard = (card, index) => `
+    <article class="kpi-card ${card.tone}"${card.key ? ` data-kpi="${escapeAttribute(card.key)}"` : ""} style="--reveal-index:${index}">
+      <div class="kpi-card__label">
+        <span>${card.label}</span>
+        <span class="kpi-card__icon">i</span>
+      </div>
+      <div class="kpi-card__value">${card.value}</div>
+      <div class="kpi-card__delta"${card.key === "total-discounts" ? " data-total-discounts-delta" : ""}>${card.delta}</div>
+    </article>
+  `;
 
-  el.kpiGrid.innerHTML = cards
-    .map(
-      (card, index) => `
-      <article class="kpi-card ${card.tone}"${card.key ? ` data-kpi="${escapeAttribute(card.key)}"` : ""} style="--reveal-index:${index}">
-        <div class="kpi-card__label">
-          <span>${card.label}</span>
-          <span class="kpi-card__icon">i</span>
-        </div>
-        <div class="kpi-card__value">${card.value}</div>
-        <div class="kpi-card__delta"${card.key === "total-discounts" ? " data-total-discounts-delta" : ""}>${card.delta}</div>
-      </article>
-    `,
-    )
-    .join("");
+  el.kpiGrid.innerHTML = `
+    <section class="kpi-grid__group kpi-grid__group--main" aria-label="Cards principais da Pré-fatura">
+      ${mainCards.map((card, index) => renderCard(card, index)).join("")}
+    </section>
+    <section class="kpi-grid__group kpi-grid__group--package" aria-label="Cards de Gestão de Pacotes">
+      ${packageCards.map((card, index) => renderCard(card, mainCards.length + index)).join("")}
+    </section>
+  `;
   void hydrateTotalDiscountComparison(summary);
 }
 
@@ -1952,7 +2401,7 @@ function renderPnrGoalSummary(filtered) {
       ${
         canConfigureGoal
           ? `<details class="goal-config" data-goal-mode="${goalMode}">
-        <summary title="${escapeAttribute(configTitle)}" aria-label="${escapeAttribute(configTitle)}">⚙</summary>
+        <summary title="${escapeAttribute(configTitle)}" aria-label="${escapeAttribute(configTitle)}">âš™</summary>
         <form class="goal-config__panel" data-goal-config-form>
           <strong>${escapeHtml(configTitle)}</strong>
           <label>
@@ -2541,14 +2990,14 @@ function getBaseEvolution(values) {
   const first = values[0]?.total || 0;
   const last = values[values.length - 1]?.total || 0;
   if (!values.length || values.length < 2) {
-    return { arrow: "→", label: "sem histórico", tone: "is-flat", status: "Histórico curto" };
+    return { arrow: "â†’", label: "sem histórico", tone: "is-flat", status: "Histórico curto" };
   }
-  if (!first && !last) return { arrow: "→", label: "0.0%", tone: "is-flat", status: "estável" };
+  if (!first && !last) return { arrow: "â†’", label: "0.0%", tone: "is-flat", status: "estável" };
   const delta = first ? ((last - first) / first) * 100 : 100;
   const label = `${delta > 0 ? "+" : ""}${delta.toFixed(1)}%`;
-  if (delta < 0) return { arrow: "↓", label, tone: "is-good", status: "menos ofensiva" };
-  if (delta > 0) return { arrow: "↑", label, tone: "is-bad", status: "mais ofensiva" };
-  return { arrow: "→", label, tone: "is-flat", status: "estável" };
+  if (delta < 0) return { arrow: "â†“", label, tone: "is-good", status: "menos ofensiva" };
+  if (delta > 0) return { arrow: "â†‘", label, tone: "is-bad", status: "mais ofensiva" };
+  return { arrow: "â†’", label, tone: "is-flat", status: "estável" };
 }
 
 function getPnrGoalStatus(totalValue, limitOverride) {
@@ -2747,7 +3196,7 @@ function shortPeriodLabel(label) {
 }
 
 function shortMonthYear(label) {
-  const match = String(label || "").match(/([A-Za-zÀ-ÿ]+)\s*\/\s*(\d{4})/);
+  const match = String(label || "").match(/([^\s/]+)\s*\/\s*(\d{4})/);
   if (!match) return String(label || "");
   return `${match[1].slice(0, 3)}/${String(match[2]).slice(2)}`.replace(/^mar/i, "Mar");
 }
@@ -2767,6 +3216,7 @@ async function downloadMonthlyReport() {
   }
   const reportScope = getReportScope();
   const allMonthlyRows = await buildReportHistoricalComparisonRows(reportScope);
+  await ensurePackageManagementRowsForReport();
   const filteredRows = getFilteredRows();
   const summary = buildSummary(filteredRows);
   const analysis = buildReportAnalysis({ rows: allMonthlyRows, filteredRows, summary, scope: reportScope });
@@ -2797,6 +3247,20 @@ async function ensurePdfLogoImage() {
       });
   }
   await pdfLogoLoadPromise;
+}
+
+async function ensurePackageManagementRowsForReport() {
+  if (!currentUser || !window.supabaseClient) return packageManagementRows;
+  const files = dashboardFileRecords.length
+    ? dashboardFileRecords
+    : await loadDashboardFilesFromSupabase({ loadActive: false, render: false, validateStorage: false, showLoading: false });
+  const cachedDatasets = new Map(
+    (Array.isArray(library.datasets) ? library.datasets : [])
+      .filter((dataset) => dataset?.source !== "filtered" && Array.isArray(dataset.rows) && dataset.rows.length)
+      .map((dataset) => [dataset.id, dataset]),
+  );
+  await loadPackageManagementRowsForCards(files, cachedDatasets);
+  return packageManagementRows;
 }
 
 function arrayBufferToBase64(buffer) {
@@ -2883,7 +3347,7 @@ function buildReportPdfBlob({ analysis, summary }) {
   };
   const sectionTitle = (title, meta = "") => {
     ensure(38);
-    addText(meta ? `${title} — ${meta}` : title, page.margin, y, 13, colors.ink, "left", "F2");
+    addText(meta ? `${title} â€” ${meta}` : title, page.margin, y, 13, colors.ink, "left", "F2");
     y -= 10;
     addLine(page.margin, y, page.width - page.margin, y, colors.line, 0.6);
     y -= 16;
@@ -2983,7 +3447,7 @@ function buildReportPdfBlob({ analysis, summary }) {
       shortMonthYear(row.label),
       integer.format(row.count || 0),
       formatCurrencyShort(row.totalValue),
-      index === 0 || !row.previous ? "—" : formatSignedPct(row.deltaPct),
+      index === 0 || !row.previous ? "â€”" : formatSignedPct(row.deltaPct),
     ]);
     drawTable(page.margin, y, contentW, "Evolução por competência", ["Mês", "Registros", "Descontos", "Variação"], rows, [110, 100, 150, 120], 48 + rows.length * 18, colors.blue, ["left", "right", "right", "right"]);
     y -= 68 + rows.length * 18;
@@ -3022,6 +3486,35 @@ function buildReportPdfBlob({ analysis, summary }) {
     drawTable(page.margin, y, contentW, "Composição financeira por categoria", ["Categoria", "Percentual", "Valor"], rows, [230, 120, 150], 104, colors.teal, ["left", "right", "right"]);
     y -= 130;
   };
+  const drawPackageManagementComparison = () => {
+    const comparison = analysis.packageComparison;
+    if (!comparison) return;
+    const rows = comparison.lines.map((line) => [
+      line.label,
+      formatPackageComparisonResult(line),
+      line.comparison,
+      integer.format(line.located || 0),
+    ]);
+    ensure(210);
+    sectionTitle("GestÃ£o de Pacotes", "comparaÃ§Ã£o com PrÃ©-fatura");
+    drawTable(
+      page.margin,
+      y,
+      contentW,
+      "GestÃ£o de Pacotes Ã¢â‚¬â€ comparaÃ§Ã£o com PrÃ©-fatura",
+      ["Indicador", "Resultado", "ComparaÃ§Ã£o", "Localizados"],
+      rows,
+      [150, 92, 210, 70],
+      48 + rows.length * 18,
+      colors.teal,
+      ["left", "right", "left", "right"],
+    );
+    y -= 68 + rows.length * 18;
+    ensure(58);
+    card(page.margin, y, contentW, 54, colors.greenSoft, colors.teal);
+    addWrappedText(buildPackageComparisonExecutiveText(comparison), page.margin + 14, y - 17, contentW - 28, 8.6, colors.ink, 10.8, 3);
+    y -= 78;
+  };
   const drawNumberedList = (title, meta, items, accent = colors.green) => {
     ensure(128);
     sectionTitle(title, meta);
@@ -3059,6 +3552,7 @@ function buildReportPdfBlob({ analysis, summary }) {
   drawRankings();
   addPage();
   drawCategoryTable();
+  drawPackageManagementComparison();
   drawNumberedList("Recomendações de ação", "próximos passos", analysis.recommendations);
   drawConclusion();
 
@@ -3121,6 +3615,7 @@ function buildReportAnalysis({ rows, filteredRows, summary, scope: providedScope
   const volumeMonth = comparisonRows.reduce((best, row) => (Number(row.count || 0) > Number(best.count || 0) ? row : best), comparisonRows[0] || fallbackRow);
   const topBase = topBases[0] || { label: "Não identificado", total: 0, count: 0 };
   const topDriver = topDrivers[0] || { label: "Não identificado", total: 0, count: 0 };
+  const packageComparison = buildPackageManagementComparisonForScope(scope, filteredRows);
   const topBaseShareNumber = summary.totalValue ? (topBase.total / summary.totalValue) * 100 : 0;
   const topDriverShareNumber = summary.totalValue ? (topDriver.total / summary.totalValue) * 100 : 0;
   const topBaseShare = formatNumberPt(topBaseShareNumber, 1);
@@ -3203,6 +3698,7 @@ function buildReportAnalysis({ rows, filteredRows, summary, scope: providedScope
     topDrivers: topDriversWithShare,
     topBaseShare,
     topDriverShare,
+    packageComparison,
     diagnostics,
     alerts,
     recommendations,
@@ -3250,15 +3746,15 @@ function getReportScope() {
       year,
       periodMode,
       periodLabel,
-      label: `Anual ${year} — ${annualPeriodLabel}`,
-      title: `Relatório Executivo de Performance Operacional — Anual ${year}`,
+      label: `Anual ${year} â€” ${annualPeriodLabel}`,
+      title: `Relatório Executivo de Performance Operacional â€” Anual ${year}`,
       fileName: `relatorio-performance-operacional-anual-${year}.pdf`,
     };
   }
   const monthIndex = Number(String(key).slice(5, 7)) || 1;
   const monthName = MONTHS[monthIndex - 1] || "período";
   const monthLabel = `${capitalize(monthName)}/${year}`;
-  const label = `${monthLabel} — ${periodLabel.toLowerCase()}`;
+  const label = `${monthLabel} â€” ${periodLabel.toLowerCase()}`;
   return {
     mode: "monthly",
     key,
@@ -3267,7 +3763,7 @@ function getReportScope() {
     periodLabel,
     monthLabel,
     label,
-    title: `Relatório Executivo de Performance Operacional — ${label}`,
+    title: `Relatório Executivo de Performance Operacional â€” ${label}`,
     fileName: `relatorio-performance-operacional-${slugify(`${monthName}-${year}-${periodLabel}`)}.pdf`,
   };
 }
@@ -3508,9 +4004,9 @@ function pdfEscape(value) {
   return String(value ?? "")
     .normalize("NFD")
     .replace(/[\u0300-\u036f]/g, "")
-    .replace(/[–—]/g, "-")
-    .replace(/[“”]/g, '"')
-    .replace(/[‘’]/g, "'")
+    .replace(/[â€“â€”]/g, "-")
+    .replace(/[â€œâ€]/g, '"')
+    .replace(/[â€˜â€™]/g, "'")
     .replace(/[^\x20-\x7E]/g, " ")
     .replace(/\\/g, "\\\\")
     .replace(/\(/g, "\\(")
@@ -3519,30 +4015,30 @@ function pdfEscape(value) {
 
 function pdfTextHex(value) {
   const winAnsi = {
-    "€": 0x80,
-    "‚": 0x82,
-    "ƒ": 0x83,
-    "„": 0x84,
-    "…": 0x85,
-    "†": 0x86,
-    "‡": 0x87,
-    "ˆ": 0x88,
-    "‰": 0x89,
+    "â‚¬": 0x80,
+    "â€š": 0x82,
+    "Æ’": 0x83,
+    "â€ž": 0x84,
+    "â€¦": 0x85,
+    "â€ ": 0x86,
+    "â€¡": 0x87,
+    "Ë†": 0x88,
+    "â€°": 0x89,
     "Š": 0x8a,
-    "‹": 0x8b,
+    "â€¹": 0x8b,
     "Œ": 0x8c,
     "Ž": 0x8e,
-    "‘": 0x91,
-    "’": 0x92,
-    "“": 0x93,
-    "”": 0x94,
-    "•": 0x95,
-    "–": 0x96,
-    "—": 0x97,
-    "˜": 0x98,
-    "™": 0x99,
+    "â€˜": 0x91,
+    "â€™": 0x92,
+    "â€œ": 0x93,
+    "â€": 0x94,
+    "â€¢": 0x95,
+    "â€“": 0x96,
+    "â€”": 0x97,
+    "Ëœ": 0x98,
+    "â„¢": 0x99,
     "š": 0x9a,
-    "›": 0x9b,
+    "â€º": 0x9b,
     "œ": 0x9c,
     "ž": 0x9e,
     "Ÿ": 0x9f,
@@ -3725,6 +4221,8 @@ function renderDriverRankingGroup(title, items, offset) {
 }
 
 function renderTable(rows, summary) {
+
+  restorePrefaturaTableHeader();
   const totalRows = getFilteredRows().length;
   const pageCount = Math.max(1, Math.ceil(totalRows / state.pageSize));
   state.page = Math.min(state.page, pageCount);
@@ -3756,7 +4254,7 @@ function renderTable(rows, summary) {
       const badgeClass = row.tipo_registro === "PNR" ? "badge--pnr" : row.aba_origem === "XPT PERDIDOS" ? "badge--xpt" : "badge--svc";
       const linkedIds = getLinkedPackageIds(row);
       const linkedIdsCount = linkedIds.length || Number(row.linked_ids_count || row.quantidade_ids || 0);
-      const linkedIdsLabel = linkedIdsCount > 1 ? `${linkedIds[0]} +${linkedIdsCount - 1}` : row.id_pacote || "—";
+      const linkedIdsLabel = linkedIdsCount > 1 ? `${linkedIds[0]} +${linkedIdsCount - 1}` : row.id_pacote || "â€”";
       const linkedIdsTitle = linkedIds.length ? linkedIds.join(", ") : row.id_pacote || "";
       const linkedValues = getLinkedValues(row);
       const linkedValuesLabel = linkedValues.length > 1 ? linkedValues.map((value) => currency.format(value)).join(" + ") : "";
@@ -3775,13 +4273,13 @@ function renderTable(rows, summary) {
           </td>
           <td>${escapeHtml(row.placa || "Sem placa")}</td>
           <td><span class="badge ${badgeClass}">${escapeHtml(row.tipo_desconto || row.tipo_registro)}</span></td>
-          <td><span class="badge badge--sheet">${escapeHtml(row.aba_origem)}</span></td>
+          <td><span class="badge badge--sheet">${escapeHtml(getSheetDisplayLabel(row.aba_origem))}</span></td>
           <td>${formatDate(row.data_normalizada)}</td>
           <td title="${escapeAttribute(linkedIdsTitle)}">
             ${escapeHtml(linkedIdsLabel)}
             ${linkedIdsCount > 1 ? `<span class="cell-subtle">${integer.format(linkedIdsCount)} IDs vinculados</span>` : ""}
           </td>
-          <td>${escapeHtml(row.n_rota || "—")}</td>
+          <td>${escapeHtml(row.n_rota || "â€”")}</td>
           <td class="is-right">
             <strong>${currency.format(row.valor_numerico || 0)}</strong>
             ${linkedValuesLabel ? `<span class="cell-subtle">${escapeHtml(linkedValuesLabel)}</span>` : ""}
@@ -3799,7 +4297,7 @@ function renderFilterSummary() {
     if (value && value !== "Todos") applied.push({ label, value });
   };
 
-  push("Aba", state.sheet);
+  push("Aba", getSheetDisplayLabel(state.sheet));
   push("Tipo", state.tipo);
   push("Base", state.base);
   push("Driver", state.motorista);
@@ -3884,6 +4382,7 @@ function buildMonthlyComparisonFromDatasets(datasets, options = {}) {
     if (!dataset || dataset.source === "filtered" || dataset.id === EMPTY_DATASET_ID || !Array.isArray(dataset.rows) || !dataset.rows.length) continue;
     const scopedRows = getMonthlyComparisonRows(dataset.rows, sheet);
     if (!scopedRows.length) continue;
+    if ((dataset.fileCategory || inferRowsFileCategory(dataset.rows)) === PACKAGE_MANAGEMENT_FILE_CATEGORY) continue;
     const period = getDatasetPeriod({ ...dataset, rows: scopedRows });
     const periodType = normalizePeriodMode(dataset.remoteRecord?.period_type || dataset.remoteRecord?.metadata?.period_type || period.periodType || getDatasetQuarterMode({ ...dataset, rows: scopedRows }));
     const quarterOrder = periodType === "q1" ? 1 : periodType === "q2" ? 2 : 3;
@@ -3970,7 +4469,7 @@ async function getReportAvailableFileRecords() {
     }
   }
   if (!files?.length) files = dashboardFileRecords.filter(isUsableDashboardFileRecord);
-  return (files || []).filter(isUsableDashboardFileRecord);
+  return (files || []).filter(isUsableDashboardFileRecord).filter((file) => getFileRecordCategory(file) === PRE_FATURA_FILE_CATEGORY);
 }
 
 async function buildReportMonthlyComparisonForFiles(files) {
@@ -4004,7 +4503,7 @@ function calculateVariation(currentValue, previousValue) {
 
 function getDatasetPeriod(dataset) {
   if (dataset?.remoteRecord) return getFileRecordPeriod(dataset.remoteRecord);
-  const fromName = String(dataset.label || dataset.fileName || "");
+  const fromName = `${dataset.label || ""} ${dataset.fileName || ""}`;
   const month = detectMonth(fromName) || detectMonthFromRows(dataset.rows);
   const year = detectYear(fromName) || detectYearFromRows(dataset.rows) || String(new Date().getFullYear());
   const monthIndex = monthNumber(month) || 1;
@@ -4093,6 +4592,8 @@ function getFilteredRows() {
   const query = normalize(state.query);
 
   return allRows.filter((row) => {
+    const rowCategory = row.file_category || PRE_FATURA_FILE_CATEGORY;
+    if (rowCategory === PACKAGE_MANAGEMENT_FILE_CATEGORY) return false;
     if (SHEET_ORDER.includes(state.sheet) && state.sheet !== "Todos" && getRowDivision(row) !== state.sheet) return false;
     if (state.tipo !== "Todos" && row.tipo_desconto !== state.tipo) return false;
     if (state.base !== "Todos" && getBaseIdentity(row) !== state.base) return false;
@@ -4133,9 +4634,29 @@ function populateSelect(select, values, current) {
   const unique = Array.from(new Set(values.filter(Boolean).filter((value) => value !== "Todos")));
   const opts = ["Todos", ...unique];
   select.innerHTML = opts
-    .map((value) => `<option value="${escapeAttribute(value)}">${escapeHtml(value)}</option>`)
+    .map((value) => `<option value="${escapeAttribute(value)}">${escapeHtml(getSelectDisplayLabel(value))}</option>`)
     .join("");
   select.value = current && opts.includes(current) ? current : "Todos";
+}
+
+function sanitizeCurrentFilters(options) {
+  const optionMap = {
+    tipo: options?.tipos || [],
+    base: options?.bases || [],
+    motorista: options?.motoristas || [],
+  };
+
+  Object.entries(optionMap).forEach(([key, values]) => {
+    const current = state[key];
+    if (!current || current === "Todos") {
+      state[key] = "Todos";
+      return;
+    }
+    if (!values.includes(current)) {
+      state[key] = "Todos";
+      state.page = 1;
+    }
+  });
 }
 
 function buildOptions(rows) {
@@ -4160,14 +4681,18 @@ function countBySheet(rows) {
 
 function calcularContadoresAbas(dados) {
   const base = Array.isArray(dados) ? dados : [];
-  return SHEET_ORDER.reduce((acc, sheet) => {
-    acc[sheet] = sheet === "Todos" ? base.length : base.filter((item) => getRowDivision(item) === sheet).length;
+  const preRows = base.filter((item) => (item.file_category || PRE_FATURA_FILE_CATEGORY) !== PACKAGE_MANAGEMENT_FILE_CATEGORY);
+  return SHEET_TABS.reduce((acc, sheet) => {
+    if (sheet === "Todos") acc[sheet] = preRows.length;
+    else if (sheet === MONTHLY_BASE_VIEW) acc[sheet] = 0;
+    else acc[sheet] = preRows.filter((item) => getRowDivision(item) === sheet).length;
     return acc;
   }, {});
 }
 
 function getRowDivision(item) {
   if (!item || typeof item !== "object") return "";
+  if (item.file_category === PACKAGE_MANAGEMENT_FILE_CATEGORY) return PACKAGE_MANAGEMENT_VIEW;
   return normalizeSheetLabel(item.divisao || item.aba_origem || item.aba || item.sheetName, item.tipo_desconto || item.tipo_registro);
 }
 
@@ -4321,6 +4846,10 @@ function normalizeDriverName(value) {
     .normalize("NFD")
     .replace(/[\u0300-\u036f]/g, "")
     .replace(/\s+/g, " ");
+}
+
+function normalizeDriver(value) {
+  return normalizeDriverName(value);
 }
 
 function calcularTotalDriversUnicos(rows) {
@@ -4591,6 +5120,230 @@ function consolidateLinkedOccurrences(rows) {
   return consolidated;
 }
 
+function identificarPeriodoGestaoPacotes(nomeArquivo) {
+  const nome = normalizeText(nomeArquivo);
+  const quinzena = /\b1\s*Q\b/.test(nome) ? "1ª quinzena" : /\b2\s*Q\b/.test(nome) ? "2ª quinzena" : null;
+  const meses = {
+    JANEIRO: "Jan", FEVEREIRO: "Fev", MARCO: "Mar", MARÇO: "Mar", ABRIL: "Abr", MAIO: "Mai", JUNHO: "Jun",
+    JULHO: "Jul", AGOSTO: "Ago", SETEMBRO: "Set", OUTUBRO: "Out", NOVEMBRO: "Nov", DEZEMBRO: "Dez",
+  };
+  let mes = null;
+  for (const [nomeMes, sigla] of Object.entries(meses)) {
+    if (nome.includes(normalizeText(nomeMes))) {
+      mes = sigla;
+      break;
+    }
+  }
+  const anoMatch = nome.match(/\b20\d{2}\b/);
+  const ano = anoMatch ? anoMatch[0] : null;
+  return { mes, ano, quinzena, competencia: mes && ano ? `${mes}/${String(ano).slice(-2)}` : null };
+}
+
+function identificarAbaGestao(nomeAba) {
+  const aba = normalizeText(nomeAba);
+  if (aba.includes("ALINHAMENTO")) return "ALINHAMENTO";
+  if (aba.includes("ABSORVID") || /\bALC\b/.test(aba)) return "ALC";
+  if (aba.includes("MERCADO LIVRE") || aba.includes("MELI") || /\bML\b/.test(aba)) return "MERCADO_LIVRE";
+  return null;
+}
+
+function isDecisionColumn(header) {
+  const h = normalizeText(header);
+  return h.includes("DECISAO") || h.includes("ADM") || h.includes("RETORNO") || h.includes("ACAO");
+}
+
+function classifyPackageDecision(value, sheetType) {
+  if (sheetType === "ALC") return "ALC";
+  if (sheetType === "MERCADO_LIVRE") return "MERCADO_LIVRE";
+  const decision = normalizeText(value);
+  if (!decision) return "INDEFINIDO";
+  const hasDispatcher = decision.includes("DISPATCHER") || decision.includes("DISPATHCER");
+  const hasDriver = decision.includes("DRIVER") || decision.includes("MOTORISTA");
+  const removesDriver = decision.includes("RETIRAR") && hasDriver;
+  const keepsDriver = decision.includes("MANTER") || decision.includes("MANTIDO") || decision.includes("DIRECIONADO");
+  if (hasDispatcher && (removesDriver || decision.includes("DESCONTO") || !hasDriver)) return "DISPATCHER";
+  if (removesDriver) return "INDEFINIDO";
+  if (hasDriver && !hasDispatcher && (keepsDriver || decision.includes("DESCONTO"))) return "DRIVER";
+  return "INDEFINIDO";
+}
+
+function findDecisionInfo(headers, row, sheetType) {
+  if (sheetType === "ALC" || sheetType === "MERCADO_LIVRE") return { value: "", category: classifyPackageDecision("", sheetType) };
+  const decisionIndexes = headers.map((header, index) => (isDecisionColumn(header) ? index : -1)).filter((index) => index >= 0).reverse();
+  let fallbackValue = "";
+  for (const index of decisionIndexes) {
+    const value = readCell(row, index);
+    if (!value) continue;
+    if (!fallbackValue) fallbackValue = value;
+    const category = classifyPackageDecision(value, sheetType);
+    if (category !== "INDEFINIDO") return { value, category };
+  }
+  return { value: fallbackValue, category: "INDEFINIDO" };
+}
+
+function findPackageHeaderRow(matrix) {
+  const limit = Math.min(matrix.length, 20);
+  for (let index = 0; index < limit; index += 1) {
+    const headers = (matrix[index] || []).map((value) => String(value || "").trim());
+    const hasValue = findHeaderIndex(headers, ["VALOR", "VALOR DESCONTO", "DESCONTO"]) >= 0;
+    const hasPerson = findHeaderIndex(headers, ["MOTORISTA", "DRIVER", "NOME MOTORISTA"]) >= 0;
+    const hasDecision = headers.some(isDecisionColumn);
+    if (hasValue && (hasPerson || hasDecision)) return index;
+  }
+  return 0;
+}
+
+function isPackageTotalRow(row) {
+  const values = (Array.isArray(row) ? row : Object.values(row || {}))
+    .map(normalizeText)
+    .filter(Boolean);
+
+  return values.some((value) =>
+    value === "TOTAL" ||
+    value === "TOTAIS" ||
+    value === "TOTAL GERAL" ||
+    value === "RESUMO" ||
+    value.includes("SUBTOTAL") ||
+    value.includes("SOMA") ||
+    value.includes("SOMATORIA") ||
+    value.includes("VALOR TOTAL") ||
+    value.includes("TOTAL DESCONTO") ||
+    value.includes("TOTAL DE DESCONTO") ||
+    value.includes("TOTAL ABSORVIDO") ||
+    value.includes("TOTAL DRIVER") ||
+    value.includes("TOTAL DISPATCHER") ||
+    value.includes("TOTAL MERCADO LIVRE") ||
+    value.includes("QTD TOTAL") ||
+    value.includes("QUANTIDADE TOTAL")
+  );
+}
+
+function hasPackageRecordMinimum({ valor, base, motorista, dataValue, rota, id, decision }) {
+  const numericValue = parseMoney(valor);
+  if (!Number.isFinite(numericValue) || numericValue === 0) return false;
+  return [base, motorista, dataValue, rota, id, decision?.value].some((value) => String(value || "").trim());
+}
+
+function normalizePackageManagementWorkbook(workbook, fileName = "") {
+  const records = [];
+  const period = identificarPeriodoGestaoPacotes(fileName);
+  const ignoredSheets = [];
+  let totalRowsSkipped = 0;
+  workbook.SheetNames.forEach((sheetName) => {
+    const sheetType = identificarAbaGestao(sheetName);
+    if (!sheetType) {
+      ignoredSheets.push(sheetName);
+      return;
+    }
+    const sheet = workbook.Sheets[sheetName];
+    const matrix = XLSX.utils.sheet_to_json(sheet, { header: 1, raw: true, defval: null });
+    if (!matrix.length) return;
+    const headerIndex = findPackageHeaderRow(matrix);
+    const headers = (matrix[headerIndex] || []).map((value) => String(value || "").trim());
+    const idx = {
+      base: findHeaderIndex(headers, ["BASE", "SVC", "ESTACAO", "ESTAÇÃO", "UNIDADE"]),
+      motorista: findHeaderIndex(headers, ["MOTORISTA", "DRIVER", "NOME MOTORISTA", "NOME DO MOTORISTA"]),
+      valor: findHeaderIndex(headers, ["VALOR", "VALOR DESCONTO", "DESCONTO"]),
+      data: findHeaderIndex(headers, ["DATA", "DATA DA ROTA"]),
+      rota: findHeaderIndex(headers, ["ROTA", "N ROTA", "Nº ROTA", "NRO ROTA", "NUMERO ROTA", "NÚMERO ROTA"]),
+      id: findHeaderIndex(headers, ["ID CASO", "ID", "ID DO PACOTE", "ID PACOTE", "CASO"]),
+      evidencia1: findHeaderIndex(headers, ["EVIDENCIA 1", "EVIDÊNCIA 1", "EVIDENCIA", "EVIDÊNCIA"]),
+      evidencia2: findHeaderIndex(headers, ["EVIDENCIA 2", "EVIDÊNCIA 2"]),
+      canal: findHeaderIndex(headers, ["CANAL"]),
+    };
+    for (let i = headerIndex + 1; i < matrix.length; i += 1) {
+      const row = matrix[i];
+      if (!row || row.every((cell) => cell == null || String(cell).trim() === "")) continue;
+      if (isPackageTotalRow(row)) {
+        totalRowsSkipped += 1;
+        continue;
+      }
+      const decision = findDecisionInfo(headers, row, sheetType);
+      const valor = readCell(row, idx.valor);
+      const base = readCell(row, idx.base);
+      const motorista = readCell(row, idx.motorista);
+      const dataValue = readCell(row, idx.data);
+      const rota = readCell(row, idx.rota);
+      const id = readCell(row, idx.id);
+      if (!hasPackageRecordMinimum({ valor, base, motorista, dataValue, rota, id, decision })) continue;
+      const parsedDate = parseDateValue(dataValue);
+      const category = decision.category;
+      const normalized = {
+        file_category: PACKAGE_MANAGEMENT_FILE_CATEGORY,
+        aba_origem: PACKAGE_MANAGEMENT_VIEW,
+        divisao: PACKAGE_MANAGEMENT_VIEW,
+        aba_gestao: sheetType,
+        aba_gestao_label: sheetName,
+        tipo_registro: "GESTAO_PACOTES",
+        tipo_desconto: PACKAGE_CATEGORY_LABELS[category] || "Indefinido",
+        categoria_final: category,
+        categoria_label: PACKAGE_CATEGORY_LABELS[category] || "Indefinido",
+        base: base || "",
+        base_normalizada: normalizeBase(base),
+        motorista: motorista || "",
+        driver: motorista || "",
+        valor_numerico: parseMoney(valor),
+        data_normalizada: parsedDate.iso,
+        data_sort: parsedDate.ts,
+        n_rota: formatId(rota),
+        id_caso: formatId(id),
+        id_pacote: formatId(id),
+        evidencia_1: readCell(row, idx.evidencia1),
+        evidencia_2: readCell(row, idx.evidencia2),
+        canal: readCell(row, idx.canal),
+        decisao_adm: decision.value || "",
+        mes: period.mes || "",
+        ano: period.ano || "",
+        quinzena: period.quinzena || "",
+        competencia: period.competencia || "",
+        reference_month: getMonthNumberFromAny(period.mes),
+        reference_year: period.ano || "",
+        period_type: getPeriodModeFromLabel(period.quinzena),
+        arquivo_origem: fileName,
+        ocorrencias: 1,
+      };
+      normalized._search = buildPackageManagementSearchText(normalized);
+      records.push(normalized);
+    }
+  });
+  if (ignoredSheets.length) console.warn("[GESTAO PACOTES] Abas ignoradas:", ignoredSheets);
+  normalizePackageManagementWorkbook.lastStats = { originalRows: records.length + totalRowsSkipped, consolidatedRows: records.length, duplicatesSkipped: 0, ignoredSheets, totalRowsSkipped };
+  return records;
+}
+
+function normalizePackageManagementStoredRow(row) {
+  if (!row || typeof row !== "object") return null;
+  const category = row.categoria_final || row.categoria || "INDEFINIDO";
+  const normalized = {
+    ...row,
+    file_category: PACKAGE_MANAGEMENT_FILE_CATEGORY,
+    aba_origem: PACKAGE_MANAGEMENT_VIEW,
+    divisao: PACKAGE_MANAGEMENT_VIEW,
+    tipo_registro: "GESTAO_PACOTES",
+    tipo_desconto: PACKAGE_CATEGORY_LABELS[category] || row.tipo_desconto || "Indefinido",
+    categoria_final: category,
+    categoria_label: PACKAGE_CATEGORY_LABELS[category] || row.categoria_label || "Indefinido",
+    base_normalizada: normalizeBase(row.base || row.base_normalizada),
+    motorista: row.motorista || row.driver || "",
+    driver: row.driver || row.motorista || "",
+    valor_numerico: Number.isFinite(Number(row.valor_numerico)) ? Number(row.valor_numerico) : parseMoney(row.valor),
+    id_pacote: row.id_pacote || row.id_caso || row.id || "",
+    reference_month: row.reference_month || getMonthNumberFromAny(row.mes || row.competencia || row.arquivo_origem),
+    reference_year: row.reference_year || normalizeReferenceYear(row.ano || detectYear(`${row.competencia || ""} ${row.arquivo_origem || ""}`)),
+    period_type: row.period_type || getPeriodModeFromLabel(`${row.quinzena || ""} ${row.arquivo_origem || ""}`),
+    ocorrencias: 1,
+  };
+  normalized._search = buildPackageManagementSearchText(normalized);
+  return normalized;
+}
+
+function buildPackageManagementSearchText(row) {
+  return normalize([
+    row.competencia, row.quinzena, row.categoria_label, row.categoria_final, row.base, row.base_normalizada, row.motorista,
+    row.n_rota, row.id_caso, row.id_pacote, row.decisao_adm, row.aba_gestao_label, row.arquivo_origem, row.canal,
+  ].filter(Boolean).join(" "));
+}
+
 function normalizeWorkbook(workbook) {
   const records = [];
 
@@ -4697,11 +5450,16 @@ async function processDashboardFile(file, fileRecord = null) {
 
   const buffer = await file.arrayBuffer();
   const workbook = XLSX.read(buffer, { type: "array", cellDates: true });
-  const rows = normalizeWorkbook(workbook);
+  const fileName = fileRecord?.file_name || file.name;
+  const fileCategory = getFileRecordCategory(fileRecord || { file_name: fileName });
+  const rows = fileCategory === PACKAGE_MANAGEMENT_FILE_CATEGORY
+    ? normalizePackageManagementWorkbook(workbook, fileName)
+    : normalizeWorkbook(workbook);
   return {
     id: fileRecord?.id || makeDatasetId(file.name),
-    fileName: fileRecord?.file_name || file.name,
-    label: humanizeWorkbookName(fileRecord?.file_name || file.name),
+    fileName,
+    label: getDashboardFileDisplayName({ fileName, fileCategory }),
+    fileCategory,
     source: fileRecord ? "supabase" : "upload",
     importedAt: fileRecord?.created_at || new Date().toISOString(),
     remoteRecord: fileRecord,
@@ -4727,7 +5485,7 @@ async function uploadDashboardFile(file) {
   setDashboardVisualState("processing-file");
   updateDatasetMeta();
   const previewDataset = await processDashboardFile(file);
-  const previewStats = normalizeWorkbook.lastStats || {};
+  const previewStats = previewDataset.fileCategory === PACKAGE_MANAGEMENT_FILE_CATEGORY ? (normalizePackageManagementWorkbook.lastStats || {}) : (normalizeWorkbook.lastStats || {});
   if (!previewDataset.rows.length) {
     dashboardFilesLoading = false;
     setDashboardVisualState("");
@@ -4738,11 +5496,23 @@ async function uploadDashboardFile(file) {
   const [referenceYear, referenceMonth] = String(period.key || "").split("-");
   const periodType = getDatasetQuarterMode(previewDataset);
   const periodLabel = getPeriodModeLabel(periodType);
+  const packagePeriod = previewDataset.fileCategory === PACKAGE_MANAGEMENT_FILE_CATEGORY
+    ? identificarPeriodoGestaoPacotes(file.name)
+    : null;
+  const displayName = getDashboardFileDisplayName({
+    fileName: file.name,
+    fileCategory: previewDataset.fileCategory,
+    metadata: packagePeriod ? {
+      quinzena: packagePeriod.quinzena,
+      competencia: packagePeriod.competencia,
+    } : {},
+  });
   const safeName = file.name
     .normalize("NFD")
     .replace(/[\u0300-\u036f]/g, "")
     .replace(/[^\w.-]+/g, "_");
-  const storagePath = `${referenceYear || "sem-ano"}/${referenceMonth || "sem-mes"}/${Date.now()}_${safeName}`;
+  const storageFolder = previewDataset.fileCategory === PACKAGE_MANAGEMENT_FILE_CATEGORY ? "gestao-pacotes" : "pre-fatura";
+  const storagePath = `${storageFolder}/${referenceYear || "sem-ano"}/${referenceMonth || "sem-mes"}/${Date.now()}_${safeName}`;
 
   const { error: uploadError } = await window.supabaseClient.storage
     .from("dashboard-files")
@@ -4756,14 +5526,16 @@ async function uploadDashboardFile(file) {
     throw new Error("Erro ao salvar arquivo no Supabase Storage.");
   }
 
-  const { error: deactivateError } = await window.supabaseClient
-    .from("dashboard_files")
-    .update({ is_active: false, updated_at: new Date().toISOString() })
-    .eq("is_active", true);
+  if (previewDataset.fileCategory === PRE_FATURA_FILE_CATEGORY) {
+    const { error: deactivateError } = await window.supabaseClient
+      .from("dashboard_files")
+      .update({ is_active: false, updated_at: new Date().toISOString() })
+      .eq("is_active", true);
 
-  if (deactivateError) {
-    console.error("Erro ao desativar arquivos:", deactivateError);
-    throw new Error("Arquivo enviado, mas houve erro ao atualizar o arquivo ativo.");
+    if (deactivateError) {
+      console.error("Erro ao desativar arquivos:", deactivateError);
+      throw new Error("Arquivo enviado, mas houve erro ao atualizar o arquivo ativo.");
+    }
   }
 
   const { data, error } = await window.supabaseClient
@@ -4771,7 +5543,7 @@ async function uploadDashboardFile(file) {
     .insert({
       file_name: file.name,
       storage_path: storagePath,
-      file_type: file.type || "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+      file_type: previewDataset.fileCategory,
       file_size: file.size,
       uploaded_by: currentUser.id,
       uploaded_by_email: currentUser.email,
@@ -4779,18 +5551,29 @@ async function uploadDashboardFile(file) {
       reference_year: referenceYear || "",
       period_label: periodLabel,
       period_type: periodType,
-      is_active: true,
+      is_active: previewDataset.fileCategory === PRE_FATURA_FILE_CATEGORY,
       status: "loaded",
       metadata: {
         parsed_rows: previewDataset.rows.length,
         period_label: periodLabel,
         period_type: periodType,
+        file_category: previewDataset.fileCategory,
+        semantic_file_type: previewDataset.fileCategory,
+        file_type: previewDataset.fileCategory,
+        mime_type: file.type || "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        original_name: file.name,
+        display_name: displayName,
+        competencia: packagePeriod?.competencia || "",
+        quinzena: packagePeriod?.quinzena || periodLabel,
+        mes: packagePeriod?.mes || "",
+        ano: packagePeriod?.ano || referenceYear || "",
         uploaded_at: new Date().toISOString(),
         original_rows: previewStats.originalRows || previewDataset.rows.length,
         consolidated_rows: previewStats.consolidatedRows || previewDataset.rows.length,
         duplicatesSkipped: previewStats.duplicatesSkipped || 0,
         linked_occurrences: previewStats.linkedOccurrences || 0,
         linked_ids_count: previewStats.linkedIds || 0,
+        total_rows_skipped: previewStats.totalRowsSkipped || 0,
       },
     })
     .select()
@@ -4802,8 +5585,11 @@ async function uploadDashboardFile(file) {
   }
 
   const uploadedPeriod = getFileRecordPeriod(data);
-  state.monthFilter = uploadedPeriod.key;
-  state.period = uploadedPeriod.periodType;
+  state.sheet = "Todos";
+  if (previewDataset.fileCategory === PRE_FATURA_FILE_CATEGORY) {
+    state.monthFilter = uploadedPeriod.key;
+    state.period = uploadedPeriod.periodType;
+  }
   persistState();
   await loadDashboardFilesFromSupabase({ loadActive: false, render: false });
   await loadDashboardDataByFilters({ files: dashboardFileRecords, render: true, silent: true });
@@ -4859,7 +5645,8 @@ async function loadDashboardFilesFromSupabase(options = {}) {
       return [];
     }
 
-    const activeFile = dashboardFileRecords.find((record) => record.is_active) || dashboardFileRecords[0] || null;
+    const preFaturaRecords = dashboardFileRecords.filter((record) => getFileRecordCategory(record) === PRE_FATURA_FILE_CATEGORY);
+    const activeFile = preFaturaRecords.find((record) => record.is_active) || preFaturaRecords[0] || null;
     currentActiveFile = activeFile;
 
     const previousDatasets = Array.isArray(library.datasets) ? library.datasets : [];
@@ -4868,7 +5655,7 @@ async function loadDashboardFilesFromSupabase(options = {}) {
       return normalizeDatasetRecord({
         id: record.id,
         fileName: record.file_name,
-        label: humanizeWorkbookName(record.file_name),
+        label: getDashboardFileDisplayName(record),
         source: "supabase",
         importedAt: record.created_at,
         remoteRecord: record,
@@ -4879,13 +5666,22 @@ async function loadDashboardFilesFromSupabase(options = {}) {
 
     const currentScope = activeDataset?.source === "filtered" ? activeDataset : null;
     library = {
-      activeDatasetId: loadActive ? activeFile?.id || datasets[0]?.id || EMPTY_DATASET_ID : currentScope?.id || activeFile?.id || datasets[0]?.id || EMPTY_DATASET_ID,
+      activeDatasetId: loadActive ? activeFile?.id || EMPTY_DATASET_ID : currentScope?.id || activeFile?.id || EMPTY_DATASET_ID,
       datasets: currentScope ? [currentScope, ...datasets] : datasets.length ? datasets : [buildEmptyDataset()],
     };
     state.activeDatasetId = library.activeDatasetId;
 
     if (loadActive && activeFile) {
       await loadDashboardDataByFilters({ files: dashboardFileRecords, render: false, silent: true, showLoading: shouldShowLoading });
+    } else if (loadActive) {
+      const cachedDatasets = new Map(
+        (Array.isArray(library.datasets) ? library.datasets : [])
+          .filter((dataset) => dataset?.source !== "filtered" && Array.isArray(dataset.rows) && dataset.rows.length)
+          .map((dataset) => [dataset.id, dataset]),
+      );
+      await loadPackageManagementRowsForCards(dashboardFileRecords, cachedDatasets);
+      activeDataset = buildEmptyDataset();
+      allRows = [];
     } else {
       syncActiveDataset();
     }
@@ -4957,12 +5753,18 @@ async function hydrateDashboardFileMetadata(records) {
     });
     const next = {
       ...record,
+      file_type: getFileRecordCategory(record),
       reference_month: month || String(inferred.key).slice(5, 7),
       reference_year: year || String(inferred.key).slice(0, 4),
       period_label: original.period_label || original.metadataPeriodLabel || getPeriodModeLabel(periodType),
       period_type: periodType,
       metadata: {
         ...(record.metadata || {}),
+        file_category: getFileRecordCategory(record),
+        semantic_file_type: getFileRecordCategory(record),
+        file_type: getFileRecordCategory(record),
+        original_name: record.metadata?.original_name || record.file_name,
+        display_name: record.metadata?.display_name || getDashboardFileDisplayName(record),
         reference_month: record.metadata?.reference_month || month || String(inferred.key).slice(5, 7),
         reference_year: record.metadata?.reference_year || year || String(inferred.key).slice(0, 4),
         period_label: original.metadataPeriodLabel || original.period_label || getPeriodModeLabel(periodType),
@@ -4971,6 +5773,10 @@ async function hydrateDashboardFileMetadata(records) {
     };
     Object.assign(record, next);
     const needsUpdate =
+      !isDashboardFileCategory(record.file_type) ||
+      !record.metadata?.file_category ||
+      !record.metadata?.semantic_file_type ||
+      !record.metadata?.display_name ||
       !original.reference_month ||
       !original.reference_year ||
       !original.period_label ||
@@ -4987,6 +5793,7 @@ async function hydrateDashboardFileMetadata(records) {
       await window.supabaseClient
         .from("dashboard_files")
         .update({
+          file_type: record.file_type,
           reference_month: record.reference_month,
           reference_year: record.reference_year,
           period_label: record.period_label,
@@ -5040,6 +5847,26 @@ async function markDashboardFileMissing(fileRecord, error) {
   }
 }
 
+async function loadPackageManagementRowsForCards(records, cachedDatasets = new Map()) {
+  const packageFiles = (Array.isArray(records) ? records : [])
+    .filter(isUsableDashboardFileRecord)
+    .filter((record) => getFileRecordCategory(record) === PACKAGE_MANAGEMENT_FILE_CATEGORY);
+  const datasets = [];
+
+  for (const fileRecord of packageFiles) {
+    const cached = cachedDatasets.get(fileRecord.id);
+    if (cached?.rows?.length) {
+      datasets.push(cached);
+      continue;
+    }
+    const dataset = await loadRowsFromStorage(fileRecord);
+    if (dataset?.rows?.length) datasets.push(dataset);
+  }
+
+  packageManagementRows = datasets.flatMap((dataset) => dataset.rows.map(normalizePackageManagementStoredRow).filter(Boolean));
+  return datasets;
+}
+
 async function loadDashboardDataByFilters(options = {}) {
   if (!currentUser || !window.supabaseClient) {
     clearDashboardData({ render: options.render !== false, preserveRecords: false });
@@ -5069,7 +5896,22 @@ async function loadDashboardDataByFilters(options = {}) {
     }
     ensureCurrentPeriodIsAvailable();
 
-    const selectedFiles = getFilesByMonthAndPeriod(dashboardFileRecords, state.monthFilter || "all", state.period);
+    const cachedDatasets = new Map(
+      (Array.isArray(library.datasets) ? library.datasets : [])
+        .filter((dataset) => dataset?.source !== "filtered" && Array.isArray(dataset.rows) && dataset.rows.length)
+        .map((dataset) => [dataset.id, dataset]),
+    );
+    const packageDatasets = await loadPackageManagementRowsForCards(dashboardFileRecords, cachedDatasets);
+    const currentFileCategory = getCurrentFileCategory();
+    const categoryFiles = dashboardFileRecords.filter((record) => getFileRecordCategory(record) === currentFileCategory);
+    if (!categoryFiles.length) {
+      dashboardFilesLoading = false;
+      setDashboardVisualState("", { render: false });
+      clearDashboardData({ render: shouldRender, preserveRecords: true });
+      return;
+    }
+
+    const selectedFiles = getFilesByMonthAndPeriod(categoryFiles, state.monthFilter || "all", state.period, currentFileCategory);
     if (!selectedFiles.length) {
       dashboardFilesLoading = false;
       setDashboardVisualState("no-filter-results", { render: false });
@@ -5078,13 +5920,8 @@ async function loadDashboardDataByFilters(options = {}) {
       return;
     }
 
-    const cachedDatasets = new Map(
-      (Array.isArray(library.datasets) ? library.datasets : [])
-        .filter((dataset) => dataset?.source !== "filtered" && Array.isArray(dataset.rows) && dataset.rows.length)
-        .map((dataset) => [dataset.id, dataset]),
-    );
     const allHistoricalDatasets = [];
-    for (const fileRecord of dashboardFileRecords) {
+    for (const fileRecord of categoryFiles) {
       const cached = cachedDatasets.get(fileRecord.id);
       if (cached?.rows?.length) {
         allHistoricalDatasets.push(cached);
@@ -5108,9 +5945,10 @@ async function loadDashboardDataByFilters(options = {}) {
     replaceDashboardData(rows, {
       selectedFiles,
       selectedDatasets,
-      allHistoricalDatasets,
+      allHistoricalDatasets: [...allHistoricalDatasets, ...packageDatasets],
       selectedMonth: state.monthFilter || "all",
       selectedPeriod: state.period,
+      fileCategory: currentFileCategory,
     });
     setDashboardVisualState("", { render: false });
     if (shouldRender) {
@@ -5141,15 +5979,15 @@ async function loadRowsFromStorage(fileRecord) {
   }
 
   const file = new File([blob], fileRecord.file_name, {
-    type: fileRecord.file_type || blob.type,
+    type: getFileRecordMimeType(fileRecord, blob.type),
   });
   const dataset = await processDashboardFile(file, fileRecord);
-  const workbookStats = normalizeWorkbook.lastStats || {};
+  const workbookStats = dataset.fileCategory === PACKAGE_MANAGEMENT_FILE_CATEGORY ? (normalizePackageManagementWorkbook.lastStats || {}) : (normalizeWorkbook.lastStats || {});
   const normalized = normalizeDatasetRecord({
     ...dataset,
     id: fileRecord.id,
     fileName: fileRecord.file_name,
-    label: humanizeWorkbookName(fileRecord.file_name),
+    label: getDashboardFileDisplayName(fileRecord),
     source: "supabase",
     importedAt: fileRecord.created_at,
     remoteRecord: fileRecord,
@@ -5171,7 +6009,10 @@ function replaceDashboardData(rows, context = {}) {
   const selectedDatasets = Array.isArray(context.selectedDatasets) ? context.selectedDatasets : [];
   const allHistoricalDatasets = Array.isArray(context.allHistoricalDatasets) ? context.allHistoricalDatasets : selectedDatasets;
   const label = buildActivePeriodLabel(context.selectedMonth || "all", context.selectedPeriod || "month", selectedFiles);
-  const consolidatedRows = consolidateLinkedOccurrences(rows);
+  const fileCategory = context.fileCategory || getCurrentFileCategory();
+  const consolidatedRows = fileCategory === PACKAGE_MANAGEMENT_FILE_CATEGORY
+    ? rows.map(normalizePackageManagementStoredRow).filter(Boolean)
+    : consolidateLinkedOccurrences(rows);
   const scopeDataset = {
     id: "__filtered_scope",
     fileName: label,
@@ -5180,6 +6021,7 @@ function replaceDashboardData(rows, context = {}) {
     importedAt: new Date().toISOString(),
     remoteRecord: null,
     rows: consolidatedRows,
+    fileCategory,
     scopedDatasets: selectedDatasets,
   };
 
@@ -5189,7 +6031,7 @@ function replaceDashboardData(rows, context = {}) {
     return loaded || normalizeDatasetRecord({
       id: record.id,
       fileName: record.file_name,
-      label: humanizeWorkbookName(record.file_name),
+      label: getDashboardFileDisplayName(record),
       source: "supabase",
       importedAt: record.created_at,
       remoteRecord: record,
@@ -5201,6 +6043,7 @@ function replaceDashboardData(rows, context = {}) {
   currentActiveFile = {
     id: scopeDataset.id,
     file_name: label,
+    file_category: fileCategory,
     is_active: false,
     files_count: selectedFiles.length,
     rows_count: consolidatedRows.length,
@@ -5216,6 +6059,10 @@ function replaceDashboardData(rows, context = {}) {
 }
 
 async function updateDashboardFileParsedRows(fileRecord, parsedRows, stats = {}) {
+  const fileCategory = getFileRecordCategory(fileRecord);
+  const packagePeriod = fileCategory === PACKAGE_MANAGEMENT_FILE_CATEGORY
+    ? identificarPeriodoGestaoPacotes(fileRecord.file_name)
+    : null;
   const metadata = {
     ...(fileRecord.metadata || {}),
     parsed_rows: parsedRows,
@@ -5224,11 +6071,23 @@ async function updateDashboardFileParsedRows(fileRecord, parsedRows, stats = {})
     duplicatesSkipped: stats.duplicatesSkipped ?? fileRecord.metadata?.duplicatesSkipped ?? 0,
     linked_occurrences: stats.linkedOccurrences ?? fileRecord.metadata?.linked_occurrences ?? 0,
     linked_ids_count: stats.linkedIds ?? fileRecord.metadata?.linked_ids_count ?? 0,
+    total_rows_skipped: stats.totalRowsSkipped ?? fileRecord.metadata?.total_rows_skipped ?? 0,
     last_loaded_at: new Date().toISOString(),
     period_label: fileRecord.period_label || fileRecord.metadata?.period_label || getFileRecordPeriod(fileRecord).periodLabel,
     period_type: fileRecord.period_type || fileRecord.metadata?.period_type || getFileRecordPeriod(fileRecord).periodType,
+    file_category: fileCategory,
+    semantic_file_type: fileCategory,
+    file_type: fileCategory,
+    mime_type: getFileRecordMimeType(fileRecord),
+    original_name: fileRecord.metadata?.original_name || fileRecord.file_name,
+    display_name: fileRecord.metadata?.display_name || getDashboardFileDisplayName(fileRecord),
+    competencia: fileRecord.metadata?.competencia || packagePeriod?.competencia || "",
+    quinzena: fileRecord.metadata?.quinzena || packagePeriod?.quinzena || "",
+    mes: fileRecord.metadata?.mes || packagePeriod?.mes || "",
+    ano: fileRecord.metadata?.ano || packagePeriod?.ano || fileRecord.reference_year || "",
   };
   Object.assign(fileRecord, {
+    file_type: fileCategory,
     status: "loaded",
     metadata,
   });
@@ -5237,6 +6096,7 @@ async function updateDashboardFileParsedRows(fileRecord, parsedRows, stats = {})
     await window.supabaseClient
       .from("dashboard_files")
       .update({
+        file_type: fileCategory,
         status: "loaded",
         metadata,
         updated_at: new Date().toISOString(),
@@ -5314,14 +6174,17 @@ async function loadActiveDashboardFile() {
 
 function clearDashboardData(options = {}) {
   const { render = true, preserveRecords = true } = options;
-  if (!preserveRecords) dashboardFileRecords = [];
+  if (!preserveRecords) {
+    dashboardFileRecords = [];
+    packageManagementRows = [];
+  }
   currentActiveFile = null;
   const preservedDatasets = preserveRecords
     ? dashboardFileRecords.filter(isUsableDashboardFileRecord).map((record) =>
         normalizeDatasetRecord({
           id: record.id,
           fileName: record.file_name,
-          label: humanizeWorkbookName(record.file_name),
+          label: getDashboardFileDisplayName(record),
           source: "supabase",
           importedAt: record.created_at,
           remoteRecord: record,
@@ -5391,7 +6254,7 @@ async function loadFileFromStorage(fileRecord, options = {}) {
       }
 
       const file = new File([blob], fileRecord.file_name, {
-        type: fileRecord.file_type || blob.type,
+        type: getFileRecordMimeType(fileRecord, blob.type),
       });
       dataset = await processDashboardFile(file, fileRecord);
     }
@@ -5400,7 +6263,7 @@ async function loadFileFromStorage(fileRecord, options = {}) {
       ...dataset,
       id: fileRecord.id,
       fileName: fileRecord.file_name,
-      label: humanizeWorkbookName(fileRecord.file_name),
+      label: getDashboardFileDisplayName(fileRecord),
       source: "supabase",
       importedAt: fileRecord.created_at,
       remoteRecord: fileRecord,
@@ -5486,7 +6349,7 @@ async function loadFileFromStorage(fileRecord, options = {}) {
       return normalizeDatasetRecord({
         id: record.id,
         fileName: record.file_name,
-        label: humanizeWorkbookName(record.file_name),
+        label: getDashboardFileDisplayName(record),
         source: "supabase",
         importedAt: record.created_at,
         remoteRecord: record,
@@ -6491,7 +7354,7 @@ function escapeAttribute(value) {
 }
 
 function formatDate(value) {
-  if (!value) return "—";
+  if (!value) return "â€”";
   if (typeof value === "string") {
     const iso = value.match(/^(\d{4})-(\d{2})-(\d{2})$/);
     if (iso) {
@@ -6512,7 +7375,7 @@ function formatDate(value) {
 }
 
 function formatDateTime(value) {
-  if (!value) return "—";
+  if (!value) return "â€”";
   const parsed = value instanceof Date ? value : new Date(value);
   if (Number.isNaN(parsed.getTime())) return String(value);
   return liveClockFormatter.format(parsed);
@@ -6563,6 +7426,7 @@ function normalizeLoadedState(loadedState) {
   loadedState.fileName = "";
   loadedState.activeDatasetId = EMPTY_DATASET_ID;
   loadedState.deleteDatasetId = "";
+  if (!SHEET_TABS.includes(loadedState.sheet)) loadedState.sheet = "Todos";
   return loadedState;
 }
 
@@ -6602,15 +7466,19 @@ function persistLibrary() {
 function normalizeDatasetRecord(dataset) {
   if (!dataset || !Array.isArray(dataset.rows)) return null;
   if (dataset.id === EMPTY_DATASET_ID || dataset.source === "empty") return buildEmptyDataset();
-  const rows = consolidateLinkedOccurrences(dataset.rows);
+  const fileCategory = dataset.fileCategory || getFileRecordCategory(dataset.remoteRecord) || inferRowsFileCategory(dataset.rows);
+  const rows = fileCategory === PACKAGE_MANAGEMENT_FILE_CATEGORY
+    ? dataset.rows.map(normalizePackageManagementStoredRow).filter(Boolean)
+    : consolidateLinkedOccurrences(dataset.rows);
   return {
     id: String(dataset.id || makeDatasetId(dataset.fileName || "arquivo")),
     fileName: String(dataset.fileName || "arquivo.xlsx"),
-    label: String(dataset.label || humanizeWorkbookName(dataset.fileName || "arquivo.xlsx")),
+    label: String(getDashboardFileDisplayName({ ...dataset, fileCategory })),
     source: String(dataset.source || "upload"),
     importedAt: dataset.importedAt || new Date().toISOString(),
     remoteRecord: dataset.remoteRecord || null,
     storagePath: dataset.storagePath || dataset.remoteRecord?.storage_path || "",
+    fileCategory,
     rows,
   };
 }
@@ -6749,6 +7617,9 @@ function makeDatasetId(fileName) {
 }
 
 function humanizeWorkbookName(fileName) {
+  if (identificarTipoArquivo(fileName) === PACKAGE_MANAGEMENT_FILE_CATEGORY) {
+    return buildPackageManagementDisplayName(fileName);
+  }
   const raw = String(fileName || "arquivo")
     .replace(/\.[^.]+$/, "")
     .replace(/[_-]+/g, " ")
@@ -6873,24 +7744,3 @@ function capitalize(text) {
   if (!value) return "";
   return value.charAt(0).toUpperCase() + value.slice(1);
 }
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-

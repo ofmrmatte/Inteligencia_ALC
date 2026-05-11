@@ -4960,3 +4960,46 @@ body:not([data-theme="light"]) #next-page:hover:not(:disabled) {
     scrollbar-width: thin;
   }
 }
+
+/* Keep pre-fatura metrics and Gestao de Pacotes metrics in separate rows. */
+.kpi-grid,
+.layout.is-sidebar-collapsed .kpi-grid {
+  display: grid;
+  grid-template-columns: 1fr !important;
+  gap: 1rem;
+  align-items: stretch;
+}
+
+.kpi-grid__group,
+.layout.is-sidebar-collapsed .kpi-grid__group {
+  display: grid;
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+  gap: 1rem;
+  grid-column: 1 / -1;
+  align-items: stretch;
+}
+
+.kpi-grid__group--package {
+  margin-top: 0.1rem;
+}
+
+@media (max-width: 1440px) {
+  .kpi-grid__group,
+  .layout.is-sidebar-collapsed .kpi-grid__group {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 900px) {
+  .kpi-grid__group,
+  .layout.is-sidebar-collapsed .kpi-grid__group {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 600px) {
+  .kpi-grid__group,
+  .layout.is-sidebar-collapsed .kpi-grid__group {
+    grid-template-columns: 1fr;
+  }
+}
