@@ -26,6 +26,9 @@ const DEFAULT_PNR_GOAL_SETTINGS = {
   goal_type: "loss_limit",
 };
 const DEFAULT_PNR_GOAL_LIMIT = DEFAULT_PNR_GOAL_SETTINGS.monthly_goal;
+const SUPABASE_QUERY_TIMEOUT_MS = 25000;
+const STORAGE_DOWNLOAD_TIMEOUT_MS = 45000;
+const XLSX_PROCESS_TIMEOUT_MS = 60000;
 const SHEET_ORDER = ["SVC PERDIDOS", "XPT PERDIDOS", "PNR"];
 const SHEET_TABS = [PRE_FATURA_VIEW, MONTHLY_BASE_VIEW, PACKAGE_MANAGEMENT_VIEW];
 const SHEET_DISPLAY_LABELS = {
@@ -1031,6 +1034,16 @@ function isDashboardFileCategory(value) {
   return value === PRE_FATURA_FILE_CATEGORY || value === PACKAGE_MANAGEMENT_FILE_CATEGORY;
 }
 
+function withTimeout(promise, timeoutMs, message) {
+  let timeoutId = null;
+  const timeout = new Promise((_, reject) => {
+    timeoutId = window.setTimeout(() => reject(new Error(message)), timeoutMs);
+  });
+  return Promise.race([promise, timeout]).finally(() => {
+    if (timeoutId) window.clearTimeout(timeoutId);
+  });
+}
+
 function identificarTipoArquivo(nomeArquivo) {
   const nome = normalizeText(nomeArquivo);
   return nome.includes("GESTAO DE PACOTES") ? PACKAGE_MANAGEMENT_FILE_CATEGORY : PRE_FATURA_FILE_CATEGORY;
@@ -1447,6 +1460,14 @@ function getDeletableDatasets() {
 
 function isUsableDashboardFileRecord(record) {
   return Boolean(record && record.id && record.storage_path && record.status !== "missing_storage");
+}
+
+function isDashboardFileActive(file) {
+  if (!file) return false;
+  const status = normalizeText(file.status || file.metadata?.status || "");
+  if (file.deleted_at || file.deletedAt) return false;
+  if (["DELETED", "REMOVIDO", "MISSING STORAGE", "MISSING_STORAGE", "EMPTY OR PARSE ERROR", "EMPTY_OR_PARSE_ERROR"].includes(status)) return false;
+  return Boolean(file.id && file.storage_path);
 }
 
 function getFileRowsCount(fileRecord, dataset = null) {
@@ -6281,18 +6302,29 @@ async function handleUpload(event) {
     return;
   }
 
+  const failures = [];
+  let successCount = 0;
   try {
     for (const file of files) {
-      await uploadDashboardFile(file);
+      try {
+        await uploadDashboardFile(file);
+        successCount += 1;
+      } catch (error) {
+        console.error("[UPLOAD] Falha ao processar arquivo:", file?.name, error);
+        failures.push({ file, error });
+      }
     }
 
-    showToast(files.length === 1 ? "Arquivo salvo e carregado com sucesso." : `${files.length} arquivos salvos no Supabase.`, "good", 5200);
-  } catch (error) {
-    console.error(error);
-    showToast(error.message || "Não foi possível salvar esse Excel.", "error", 6200);
+    if (successCount) {
+      showToast(successCount === 1 ? "Arquivo salvo e carregado com sucesso." : `${successCount} arquivos salvos no Supabase.`, "good", 5200);
+    }
+    if (failures.length) {
+      const firstError = failures[0].error?.message || "Nao foi possivel salvar esse Excel.";
+      showToast(failures.length === files.length ? firstError : `${failures.length} arquivo(s) falharam. Os demais foram carregados.`, "error", 7200);
+    }
   } finally {
     dashboardFilesLoading = false;
-    if (dashboardVisualState === "processing-file") setDashboardVisualState("", { render: false });
+    if (dashboardVisualState === "processing-file" || dashboardVisualState === "loading-files") setDashboardVisualState("", { render: false });
     updateDatasetMeta();
     event.target.value = "";
   }
@@ -6304,7 +6336,11 @@ async function processDashboardFile(file, fileRecord = null) {
     throw new Error("Não foi possível ler o Excel porque o parser local não carregou.");
   }
 
-  const buffer = await file.arrayBuffer();
+  const buffer = await withTimeout(
+    file.arrayBuffer(),
+    XLSX_PROCESS_TIMEOUT_MS,
+    "Tempo limite excedido ao ler o arquivo Excel.",
+  );
   const workbook = XLSX.read(buffer, { type: "array", cellDates: true });
   const fileName = fileRecord?.file_name || file.name;
   const fileCategory = getFileRecordCategory(fileRecord || { file_name: fileName });
@@ -6447,8 +6483,10 @@ async function uploadDashboardFile(file) {
     state.period = uploadedPeriod.periodType;
   }
   persistState();
-  await loadDashboardFilesFromSupabase({ loadActive: false, render: false });
-  await loadDashboardDataByFilters({ files: dashboardFileRecords, render: true, silent: true });
+  mergeUploadedDatasetIntoMemory(data, previewDataset);
+  setDashboardVisualState("", { render: false });
+  hydrateControls();
+  renderAll();
   setDashboardVisualState("");
   await logAudit("upload_file", "dashboard_file", data.id, {
     file_name: data.file_name,
@@ -6459,6 +6497,72 @@ async function uploadDashboardFile(file) {
     linked_occurrences: data.metadata?.linked_occurrences || 0,
     linked_ids_count: data.metadata?.linked_ids_count || 0,
   });
+}
+
+function mergeUploadedDatasetIntoMemory(fileRecord, previewDataset) {
+  if (!fileRecord || !previewDataset) return;
+  const fileCategory = getFileRecordCategory(fileRecord);
+  const normalizedRecord = {
+    ...fileRecord,
+    file_type: fileCategory,
+    metadata: {
+      ...(fileRecord.metadata || {}),
+      file_category: fileCategory,
+      semantic_file_type: fileCategory,
+      file_type: fileCategory,
+    },
+  };
+  if (fileCategory === PRE_FATURA_FILE_CATEGORY) {
+    dashboardFileRecords = dashboardFileRecords.map((record) =>
+      getFileRecordCategory(record) === PRE_FATURA_FILE_CATEGORY
+        ? { ...record, is_active: false }
+        : record,
+    );
+    library.datasets = (Array.isArray(library.datasets) ? library.datasets : []).map((dataset) =>
+      getFileRecordCategory(dataset.remoteRecord || dataset) === PRE_FATURA_FILE_CATEGORY
+        ? { ...dataset, remoteRecord: { ...(dataset.remoteRecord || {}), is_active: false } }
+        : dataset,
+    );
+    currentActiveFile = normalizedRecord;
+  }
+
+  dashboardFileRecords = [
+    normalizedRecord,
+    ...dashboardFileRecords.filter((record) => record.id !== normalizedRecord.id),
+  ].filter(isUsableDashboardFileRecord);
+
+  const dataset = normalizeDatasetRecord({
+    ...previewDataset,
+    id: normalizedRecord.id,
+    fileName: normalizedRecord.file_name,
+    label: getDashboardFileDisplayName(normalizedRecord),
+    source: "supabase",
+    importedAt: normalizedRecord.created_at,
+    remoteRecord: normalizedRecord,
+    storagePath: normalizedRecord.storage_path,
+    rows: previewDataset.rows,
+  });
+  if (!dataset) return;
+  upsertDataset(dataset);
+  if (fileCategory === PRE_FATURA_FILE_CATEGORY) {
+    library.activeDatasetId = dataset.id;
+    state.activeDatasetId = dataset.id;
+  }
+  rebuildPackageManagementRowsFromLibrary();
+  resetDerivedDataCache();
+  syncActiveDataset();
+  updateDatasetMeta();
+}
+
+function rebuildPackageManagementRowsFromLibrary() {
+  const datasets = (Array.isArray(library.datasets) ? library.datasets : [])
+    .filter((dataset) => getFileRecordCategory(dataset.remoteRecord || dataset) === PACKAGE_MANAGEMENT_FILE_CATEGORY)
+    .filter((dataset) => Array.isArray(dataset.rows) && dataset.rows.length);
+  packageManagementRows = datasets.flatMap((dataset) => dataset.rows.map(normalizePackageManagementStoredRow).filter(Boolean));
+  const packageFiles = dashboardFileRecords
+    .filter(isUsableDashboardFileRecord)
+    .filter((record) => getFileRecordCategory(record) === PACKAGE_MANAGEMENT_FILE_CATEGORY);
+  packageManagementRowsLoadedKey = packageFiles.map((record) => `${record.id || record.file_name}:${record.updated_at || record.metadata?.last_loaded_at || ""}`).join("|") || "__empty";
 }
 
 async function loadDashboardFilesFromSupabase(options = {}) {
@@ -6475,10 +6579,14 @@ async function loadDashboardFilesFromSupabase(options = {}) {
   if (didSetLoadingState) setDashboardVisualState("loading-files");
   updateDatasetMeta();
   try {
-    const { data, error } = await window.supabaseClient
-      .from("dashboard_files")
-      .select("*")
-      .order("created_at", { ascending: false });
+    const { data, error } = await withTimeout(
+      window.supabaseClient
+        .from("dashboard_files")
+        .select("*")
+        .order("created_at", { ascending: false }),
+      SUPABASE_QUERY_TIMEOUT_MS,
+      "Tempo limite excedido ao buscar arquivos salvos.",
+    );
 
     if (error) {
       console.error("Erro ao buscar arquivos:", error);
@@ -6490,8 +6598,10 @@ async function loadDashboardFilesFromSupabase(options = {}) {
       return dashboardFileRecords;
     }
 
-    dashboardFileRecords = (Array.isArray(data) ? data : []).filter(isUsableDashboardFileRecord);
-    await hydrateDashboardFileMetadata(dashboardFileRecords);
+    dashboardFileRecords = (Array.isArray(data) ? data : [])
+      .filter(isUsableDashboardFileRecord)
+      .filter(isDashboardFileActive);
+    await hydrateDashboardFileMetadata(dashboardFileRecords, { inferFromFile: options.inferMissingMetadataFromFile === true });
     if (validateStorage && dashboardFileRecords.length) {
       dashboardFileRecords = await validateDashboardFileRecords(dashboardFileRecords);
     }
@@ -6543,6 +6653,11 @@ async function loadDashboardFilesFromSupabase(options = {}) {
     }
     if (didSetLoadingState && dashboardVisualState !== "supabase-error") setDashboardVisualState("", { render: false });
     return dashboardFileRecords;
+  } catch (error) {
+    console.error("[FILES] Falha ao carregar arquivos salvos:", error);
+    showToast(error.message || "Não foi possível carregar os arquivos. Tente atualizar novamente.", "error", 6200);
+    if (didSetLoadingState || !hasLoadedDashboardData()) setDashboardVisualState("supabase-error", { render: false });
+    return dashboardFileRecords;
   } finally {
     dashboardFilesLoading = false;
     if (render) {
@@ -6561,7 +6676,7 @@ async function reloadDashboardFilesList(options = {}) {
     return await loadDashboardFilesFromSupabase({
       loadActive: false,
       render: options.render === true,
-      validateStorage: options.validateStorage !== false,
+      validateStorage: options.validateStorage === true,
       showLoading: options.showLoading === true,
     });
   } finally {
@@ -6569,8 +6684,9 @@ async function reloadDashboardFilesList(options = {}) {
   }
 }
 
-async function hydrateDashboardFileMetadata(records) {
+async function hydrateDashboardFileMetadata(records, options = {}) {
   if (!Array.isArray(records) || !records.length) return records;
+  const inferFromFile = options.inferFromFile === true;
   const updates = [];
   for (const record of records) {
     const original = {
@@ -6587,7 +6703,7 @@ async function hydrateDashboardFileMetadata(records) {
     let year = normalizeReferenceYear(record.reference_year) || normalizeReferenceYear(record.metadata?.reference_year) || detectYear(nameText);
     let periodType = normalizePeriodMode(record.period_type || record.metadata?.period_type || getPeriodModeFromLabel(nameText));
 
-    if ((!month || !year) && record.storage_path && window.supabaseClient) {
+    if (inferFromFile && (!month || !year) && record.storage_path && window.supabaseClient) {
       try {
         const dataset = await loadRowsFromStorage(record);
         const rows = Array.isArray(dataset?.rows) ? dataset.rows : [];
@@ -6719,8 +6835,13 @@ async function loadPackageManagementRowsForCards(records, cachedDatasets = new M
       datasets.push(cached);
       continue;
     }
-    const dataset = await loadRowsFromStorage(fileRecord);
-    if (dataset?.rows?.length) datasets.push(dataset);
+    try {
+      const dataset = await loadRowsFromStorage(fileRecord);
+      if (dataset?.rows?.length) datasets.push(dataset);
+    } catch (error) {
+      console.error("[GESTAO PACOTES] Falha ao carregar arquivo:", fileRecord?.file_name, error);
+      showToast(`Falha ao carregar ${fileRecord?.file_name || "arquivo de Gestão"}. Os demais arquivos continuarão.`, "warn", 6200);
+    }
   }
 
   packageManagementRows = datasets.flatMap((dataset) => dataset.rows.map(normalizePackageManagementStoredRow).filter(Boolean));
@@ -6784,7 +6905,7 @@ async function loadDashboardDataByFilters(options = {}) {
   try {
     const files = Array.isArray(options.files) ? options.files : await loadDashboardFilesFromSupabase({ loadActive: false, render: false, validateStorage: false, showLoading: false });
     await hydrateDashboardFileMetadata(files);
-    dashboardFileRecords = files.filter(isUsableDashboardFileRecord);
+    dashboardFileRecords = files.filter(isUsableDashboardFileRecord).filter(isDashboardFileActive);
     if (!dashboardFileRecords.length) {
       dashboardFilesLoading = false;
       setDashboardVisualState("", { render: false });
@@ -6829,8 +6950,13 @@ async function loadDashboardDataByFilters(options = {}) {
         allHistoricalDatasets.push(cached);
         continue;
       }
-      const dataset = await loadRowsFromStorage(fileRecord);
-      if (dataset?.rows?.length) allHistoricalDatasets.push(dataset);
+      try {
+        const dataset = await loadRowsFromStorage(fileRecord);
+        if (dataset?.rows?.length) allHistoricalDatasets.push(dataset);
+      } catch (error) {
+        console.error("[PRE-FATURA] Falha ao carregar arquivo:", fileRecord?.file_name, error);
+        showToast(`Falha ao carregar ${fileRecord?.file_name || "arquivo"}. Os demais arquivos continuarão.`, "warn", 6200);
+      }
     }
     const selectedFileIds = new Set(selectedFiles.map((file) => file.id));
     const selectedDatasets = allHistoricalDatasets.filter((dataset) => selectedFileIds.has(dataset.id));
@@ -6861,6 +6987,10 @@ async function loadDashboardDataByFilters(options = {}) {
       updateDatasetMeta();
     }
     if (!options.silent) showToast("Dados do período carregados.", "good", 3200);
+  } catch (error) {
+    console.error("[DASHBOARD] Falha ao carregar dados processados:", error);
+    showToast(error.message || "Não foi possível carregar os dados. Tente atualizar novamente.", "error", 6200);
+    setDashboardVisualState("supabase-error", { render: false });
   } finally {
     dashboardFilesLoading = false;
     isLoadingDashboardData = false;
@@ -6870,9 +7000,13 @@ async function loadDashboardDataByFilters(options = {}) {
 }
 
 async function loadRowsFromStorage(fileRecord) {
-  const { data: blob, error } = await window.supabaseClient.storage
-    .from("dashboard-files")
-    .download(fileRecord.storage_path);
+  const { data: blob, error } = await withTimeout(
+    window.supabaseClient.storage
+      .from("dashboard-files")
+      .download(fileRecord.storage_path),
+    STORAGE_DOWNLOAD_TIMEOUT_MS,
+    `Tempo limite excedido ao baixar ${fileRecord.file_name || "arquivo"}.`,
+  );
 
   if (error) {
     console.error("[STORAGE] Arquivo não encontrado ou erro no download:", error);
