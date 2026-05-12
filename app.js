@@ -27,7 +27,7 @@ const DEFAULT_PNR_GOAL_SETTINGS = {
 };
 const DEFAULT_PNR_GOAL_LIMIT = DEFAULT_PNR_GOAL_SETTINGS.monthly_goal;
 const SHEET_ORDER = ["Todos", "SVC PERDIDOS", "XPT PERDIDOS", "PNR"];
-const SHEET_TABS = [...SHEET_ORDER, MONTHLY_BASE_VIEW];
+const SHEET_TABS = [...SHEET_ORDER, MONTHLY_BASE_VIEW, PACKAGE_MANAGEMENT_VIEW];
 const SHEET_DISPLAY_LABELS = {
   Todos: "Todos",
   "SVC PERDIDOS": "SVC Perdidos",
@@ -563,9 +563,22 @@ function bindEvents() {
   ].forEach(([key, prop]) => {
     if (!el[key]) return;
     el[key].addEventListener("input", (event) => {
+      const previousCategory = prop === "sheet" ? getCurrentFileCategory() : null;
       state[prop] = event.target.value;
       state.page = 1;
       persistState();
+      if (prop === "sheet" && getCurrentFileCategory() !== previousCategory) {
+        hydrateControls();
+        if (getCurrentFileCategory() === PACKAGE_MANAGEMENT_FILE_CATEGORY) {
+          void loadPackageManagementRowsForCards(dashboardFileRecords).finally(() => {
+            hydrateControls();
+            renderAll();
+          });
+          return;
+        }
+        void loadDashboardDataByFilters({ force: true, showLoading: false });
+        return;
+      }
       renderAll();
     });
   });
@@ -575,6 +588,11 @@ function bindEvents() {
       state.period = normalizePeriodMode(event.target.value);
       state.page = 1;
       persistState();
+      if (state.sheet === PACKAGE_MANAGEMENT_VIEW) {
+        hydrateControls();
+        renderAll();
+        return;
+      }
       await loadDashboardDataByFilters();
     });
   }
@@ -584,6 +602,11 @@ function bindEvents() {
       state.page = 1;
       ensureCurrentPeriodIsAvailable();
       persistState();
+      if (state.sheet === PACKAGE_MANAGEMENT_VIEW) {
+        hydrateControls();
+        renderAll();
+        return;
+      }
       await loadDashboardDataByFilters();
     });
   }
@@ -610,7 +633,8 @@ function bindEvents() {
   });
 
   el.nextPage.addEventListener("click", () => {
-    const totalPages = Math.max(1, Math.ceil(getFilteredRows().length / state.pageSize));
+    const totalRows = state.sheet === PACKAGE_MANAGEMENT_VIEW ? getPackageManagementRowsForView().length : getFilteredRows().length;
+    const totalPages = Math.max(1, Math.ceil(totalRows / state.pageSize));
     state.page = Math.min(totalPages, state.page + 1);
     persistState();
     renderAll();
@@ -626,6 +650,13 @@ function bindEvents() {
     persistState();
     hydrateControls();
     if (getCurrentFileCategory() !== previousCategory) {
+      if (getCurrentFileCategory() === PACKAGE_MANAGEMENT_FILE_CATEGORY) {
+        void loadPackageManagementRowsForCards(dashboardFileRecords).finally(() => {
+          hydrateControls();
+          renderAll();
+        });
+        return;
+      }
       void loadDashboardDataByFilters({ force: true, showLoading: false });
       return;
     }
@@ -799,7 +830,7 @@ function getSelectDisplayLabel(value) {
 }
 
 function getCurrentFileCategory(sheet = state.sheet) {
-  return PRE_FATURA_FILE_CATEGORY;
+  return sheet === PACKAGE_MANAGEMENT_VIEW ? PACKAGE_MANAGEMENT_FILE_CATEGORY : PRE_FATURA_FILE_CATEGORY;
 }
 
 function isDashboardFileCategory(value) {
@@ -1041,7 +1072,7 @@ function markDashboardReady() {
 
 function hydrateControls() {
   syncActiveDataset();
-  const options = buildOptions(allRows);
+  const options = state.sheet === PACKAGE_MANAGEMENT_VIEW ? buildPackageManagementOptions() : buildOptions(allRows);
   sanitizeCurrentFilters(options);
   renderDatasetSelect();
   renderMonthSelect();
@@ -1061,8 +1092,19 @@ function hydrateControls() {
   updateDatasetMeta();
   hydrateThemeControls();
   updateGlobalPeriodFiltersVisibility();
+  updateSidebarFiltersForCurrentView();
 
   renderTabs();
+}
+
+function updateSidebarFiltersForCurrentView() {
+  const packageView = state.sheet === PACKAGE_MANAGEMENT_VIEW;
+  const searchCard = el.searchInput?.closest(".sidebar-card");
+  const baseLabel = el.baseSelect?.closest("label");
+  const driverLabel = el.driverSelect?.closest("label");
+  if (searchCard) searchCard.hidden = packageView;
+  if (baseLabel) baseLabel.hidden = packageView;
+  if (driverLabel) driverLabel.hidden = packageView;
 }
 
 function updateGlobalPeriodFiltersVisibility(isEvolutionView = state.sheet === MONTHLY_BASE_VIEW) {
@@ -1325,11 +1367,13 @@ function renderAll() {
   resetChartAnimationObservers();
   syncActiveDataset();
   renderTabs();
+  const packageView = state.sheet === PACKAGE_MANAGEMENT_VIEW;
   const filtered = getFilteredRows();
   const sorted = sortRows(filtered);
   const paged = paginateRows(sorted);
   const summary = buildSummary(filtered);
   const monthlyView = state.sheet === MONTHLY_BASE_VIEW;
+  const packageRows = packageView ? getPackageManagementRowsForView() : [];
 
   if (state.appView === "settings" && !canEdit()) {
     state.appView = "dashboard";
@@ -1345,7 +1389,7 @@ function renderAll() {
     return;
   }
 
-  const dashboardState = getDashboardState(filtered);
+  const dashboardState = getDashboardState(packageView ? packageRows : filtered);
   if (dashboardState) {
     renderDashboardState(dashboardState);
     renderFilterSummary();
@@ -1356,9 +1400,12 @@ function renderAll() {
     return;
   }
 
-  toggleDashboardView(monthlyView);
+  toggleDashboardView(monthlyView, packageView);
   if (monthlyView) {
     renderMonthlyBaseEvolution();
+  } else if (packageView) {
+    const packageSorted = sortRows(packageRows);
+    renderPackageManagementView(paginateRows(packageSorted), packageSorted);
   } else {
     renderKpis(summary);
     renderInsights(filtered, summary);
@@ -1732,12 +1779,12 @@ async function uploadProfileAvatar(file) {
   return data?.publicUrl || "";
 }
 
-function toggleDashboardView(monthlyView) {
+function toggleDashboardView(monthlyView, packageView = false) {
   if (el.monthlyBaseView) el.monthlyBaseView.hidden = !monthlyView;
   if (el.kpiGrid) el.kpiGrid.hidden = monthlyView;
   if (el.tablePanel) el.tablePanel.hidden = monthlyView;
   [el.insightGrid, el.comparisonPanel].forEach((node) => {
-    if (node) node.hidden = monthlyView;
+    if (node) node.hidden = monthlyView || packageView;
   });
 }
 
@@ -1748,7 +1795,8 @@ function hasLoadedDashboardData() {
 function getDashboardState(filteredRows = null) {
   if (dashboardVisualState) return getDashboardStateConfig(dashboardVisualState);
   if (!currentUser) return getDashboardStateConfig("not-authenticated");
-  if (!hasLoadedDashboardData()) {
+  const hasData = state.sheet === PACKAGE_MANAGEMENT_VIEW ? packageManagementRows.length > 0 : hasLoadedDashboardData();
+  if (!hasData) {
     const config = getDashboardStateConfig("no-active-file");
     if (!canEdit()) {
       return {
@@ -1993,33 +2041,39 @@ function buildPrefaturaMatchIndex(rows) {
   return index;
 }
 
+function buildPackagePrefaturaMatchResult(status, confidence, method, matchedRow = null) {
+  const division = matchedRow ? getRowDivision(matchedRow) : "";
+  const tipo = division === "SVC PERDIDOS" ? "SVC" : division === "XPT PERDIDOS" ? "XPT" : division === "PNR" ? "PNR" : "";
+  return { status, confidence, method, matched_division: division, matched_tipo: tipo };
+}
+
 function classifyPackagePrefaturaMatch(row, index) {
   const packageIds = getPackageMatchIds(row);
   for (const id of packageIds) {
     if (index.byPackageId.has(id)) {
-      return { status: "LOCALIZADO_NA_PRE_FATURA", confidence: "ALTA", method: "ID do pacote/envio" };
+      return buildPackagePrefaturaMatchResult("LOCALIZADO_NA_PRE_FATURA", "ALTA", "ID do pacote/envio", index.byPackageId.get(id));
     }
   }
 
   const caseId = getCaseMatchId(row);
   if (caseId && index.byCaseId.has(caseId)) {
-    return { status: "LOCALIZADO_NA_PRE_FATURA", confidence: "ALTA", method: "ID caso" };
+    return buildPackagePrefaturaMatchResult("LOCALIZADO_NA_PRE_FATURA", "ALTA", "ID caso", index.byCaseId.get(caseId));
   }
 
   const routeDriverBaseValue = buildMatchKey([getMatchRoute(row), getMatchDriver(row), getMatchBase(row), getMatchAmount(row)]);
   if (routeDriverBaseValue && index.byRouteDriverBaseValue.has(routeDriverBaseValue)) {
-    return { status: "LOCALIZADO_NA_PRE_FATURA", confidence: "MEDIA", method: "Rota + driver + base + valor" };
+    return buildPackagePrefaturaMatchResult("LOCALIZADO_NA_PRE_FATURA", "MEDIA", "Rota + driver + base + valor", index.byRouteDriverBaseValue.get(routeDriverBaseValue));
   }
 
   const driverBaseDateValue = buildMatchKey([getMatchDriver(row), getMatchBase(row), getMatchDate(row), getMatchAmount(row)]);
   if (driverBaseDateValue && index.byDriverBaseDateValue.has(driverBaseDateValue)) {
-    return { status: "CORRESPONDENCIA_PROVAVEL", confidence: "BAIXA", method: "Driver + base + data + valor" };
+    return buildPackagePrefaturaMatchResult("CORRESPONDENCIA_PROVAVEL", "BAIXA", "Driver + base + data + valor", index.byDriverBaseDateValue.get(driverBaseDateValue));
   }
 
   const hasPartialData = [getMatchRoute(row), getMatchDriver(row), getMatchBase(row), getMatchAmount(row), getMatchDate(row), getCaseMatchId(row), packageIds[0]].filter(Boolean).length >= 2;
   return hasPartialData
-    ? { status: "NAO_LOCALIZADO_NA_PRE_FATURA", confidence: "NENHUMA", method: "" }
-    : { status: "SEM_DADOS_SUFICIENTES", confidence: "NENHUMA", method: "" };
+    ? buildPackagePrefaturaMatchResult("NAO_LOCALIZADO_NA_PRE_FATURA", "NENHUMA", "")
+    : buildPackagePrefaturaMatchResult("SEM_DADOS_SUFICIENTES", "NENHUMA", "");
 }
 
 function enrichPackageRowsWithPrefaturaMatch(packageRows, prefaturaRows) {
@@ -2151,6 +2205,27 @@ function buildPackageManagementKpiCards(rows = filterPackageManagementRowsByPeri
   ];
 }
 
+function getPackageOperationalType(row) {
+  const matchedType = row?.prefatura_match?.matched_tipo;
+  if (["SVC", "XPT", "PNR"].includes(matchedType)) return matchedType;
+  const base = normalizeText(row?.base_normalizada || row?.base || "");
+  if (base.startsWith("S")) return "SVC";
+  if (base.startsWith("E")) return "XPT";
+  return "Indefinido";
+}
+
+function getPackageManagementRowsForView() {
+  const periodRows = filterPackageManagementRowsByPeriod(packageManagementRows);
+  const enrichedRows = enrichPackageRowsWithPrefaturaMatch(periodRows, allRows).map((row) => ({
+    ...row,
+    tipo_operacional: getPackageOperationalType(row),
+  }));
+  if (state.tipo !== "Todos") {
+    return enrichedRows.filter((row) => row.tipo_operacional === state.tipo);
+  }
+  return enrichedRows;
+}
+
 function restorePrefaturaTableHeader() {
   if (el.tableTitle) el.tableTitle.textContent = "Detalhamento dos registros";
   if (el.tableDescription) el.tableDescription.innerHTML = `<span id="result-count">0</span> registros visíveis após os filtros`;
@@ -2234,6 +2309,29 @@ function renderKpis(summary) {
     </section>
   `;
   void hydrateTotalDiscountComparison(summary);
+}
+
+function renderKpiCard(card, index) {
+  return `
+    <article class="kpi-card ${card.tone}"${card.key ? ` data-kpi="${escapeAttribute(card.key)}"` : ""} style="--reveal-index:${index}">
+      <div class="kpi-card__label">
+        <span>${card.label}</span>
+        <span class="kpi-card__icon">i</span>
+      </div>
+      <div class="kpi-card__value">${card.value}</div>
+      <div class="kpi-card__delta"${card.key === "total-discounts" ? " data-total-discounts-delta" : ""}>${card.delta}</div>
+    </article>
+  `;
+}
+
+function renderPackageManagementView(pagedRows, allPackageRows) {
+  const cards = buildPackageManagementKpiCards(allPackageRows, allRows);
+  el.kpiGrid.innerHTML = `
+    <section class="kpi-grid__group kpi-grid__group--package" aria-label="Cards de Gestão de Pacotes">
+      ${cards.map((card, index) => renderKpiCard(card, index)).join("")}
+    </section>
+  `;
+  renderPackageManagementTable(pagedRows, allPackageRows);
 }
 
 function renderInsights(filtered, summary) {
@@ -4291,6 +4389,83 @@ function renderTable(rows, summary) {
     .join("");
 }
 
+function renderPackageManagementTableHeader() {
+  if (el.tableTitle) el.tableTitle.textContent = "Conferência da Gestão de Pacotes";
+  if (el.tableDescription) el.tableDescription.innerHTML = `<span id="result-count">0</span> registros processados no recorte`;
+  el.resultCount = document.getElementById("result-count") || el.resultCount;
+  if (el.tableHead) {
+    el.tableHead.innerHTML = `
+      <tr>
+        <th data-sort="competencia">Competência</th>
+        <th data-sort="period_type">Quinzena</th>
+        <th data-sort="tipo_operacional">Tipo</th>
+        <th data-sort="categoria_label">Desconto</th>
+        <th data-sort="base">Base</th>
+        <th data-sort="valor_numerico" class="is-right">Valor</th>
+        <th data-sort="data_sort">Data</th>
+        <th data-sort="id_caso">ID Caso</th>
+        <th data-sort="decisao_adm">Decisão ADM</th>
+      </tr>
+    `;
+  }
+}
+
+function getPackageTypeBadgeClass(type) {
+  if (type === "PNR") return "badge--pnr";
+  if (type === "XPT") return "badge--xpt";
+  if (type === "SVC") return "badge--svc";
+  return "badge--sheet";
+}
+
+function renderPackageManagementTable(rows, allPackageRows) {
+  renderPackageManagementTableHeader();
+  const totalRows = allPackageRows.length;
+  const pageCount = Math.max(1, Math.ceil(totalRows / state.pageSize));
+  state.page = Math.min(state.page, pageCount);
+  const start = totalRows === 0 ? 0 : (state.page - 1) * state.pageSize + 1;
+  const end = totalRows === 0 ? 0 : Math.min(start + rows.length - 1, totalRows);
+
+  el.resultCount.textContent = integer.format(totalRows);
+  el.tableRange.textContent = `${integer.format(start)}-${integer.format(end)} de ${integer.format(totalRows)}`;
+  el.pageIndicator.textContent = `Página ${integer.format(state.page)} de ${integer.format(pageCount)}`;
+  el.prevPage.disabled = state.page <= 1;
+  el.nextPage.disabled = state.page >= pageCount;
+
+  if (!rows.length) {
+    el.tableBody.innerHTML = `
+      <tr>
+        <td colspan="9">
+          <div class="empty-state">
+            <strong>Nenhum registro de Gestão de Pacotes</strong>
+            <span>Ajuste mês, período ou tipo para conferir outro recorte.</span>
+          </div>
+        </td>
+      </tr>
+    `;
+    return;
+  }
+
+  el.tableBody.innerHTML = rows
+    .map((row, index) => {
+      const type = row.tipo_operacional || "Indefinido";
+      const category = PACKAGE_CATEGORY_LABELS[row.categoria_final] || row.categoria_label || "Indefinido";
+      return `
+        <tr style="--reveal-index:${index}">
+          <td>${escapeHtml(row.competencia || "—")}</td>
+          <td>${escapeHtml(row.quinzena || "—")}</td>
+          <td><span class="badge ${getPackageTypeBadgeClass(type)}">${escapeHtml(type)}</span></td>
+          <td><span class="badge badge--sheet">${escapeHtml(category)}</span></td>
+          <td><strong>${escapeHtml(row.base || row.base_normalizada || "—")}</strong></td>
+          <td class="is-right"><strong>${currency.format(row.valor_numerico || 0)}</strong></td>
+          <td>${formatDate(row.data_normalizada || row.data_sort)}</td>
+          <td>${escapeHtml(row.id_caso || row.id_pacote || "—")}</td>
+          <td>${escapeHtml(row.decisao_adm || "—")}</td>
+        </tr>
+      `;
+    })
+    .join("");
+}
+
 function renderFilterSummary() {
   const applied = [];
   const push = (label, value) => {
@@ -4426,21 +4601,21 @@ async function buildReportHistoricalComparisonRows(scope) {
   if (!files.length) return buildMonthlyComparisonFromDatasets(library.datasets, { sheet: state.sheet, viewMode: "monthly" });
 
   if (scope.mode === "annual") {
-    const annualFiles = getFilesByMonthAndPeriod(files, "all", scope.periodMode)
+    const annualFiles = getFilesByMonthAndPeriod(files, "all", scope.periodMode, PRE_FATURA_FILE_CATEGORY)
       .filter((file) => getFileRecordPeriod(file).key.startsWith(`${scope.year}-`));
     return buildReportMonthlyComparisonForFiles(annualFiles.length ? annualFiles : files.filter((file) => getFileRecordPeriod(file).key.startsWith(`${scope.year}-`)));
   }
 
   const availableMonthKeys = Array.from(new Set(files.map((file) => getFileRecordPeriod(file).key))).sort();
   const previousKey = getPreviousMonthKey(scope.key, availableMonthKeys);
-  const selectedFiles = getFilesByMonthAndPeriod(files, scope.key, scope.periodMode);
+  const selectedFiles = getFilesByMonthAndPeriod(files, scope.key, scope.periodMode, PRE_FATURA_FILE_CATEGORY);
   let previousFiles = [];
   let previousPeriodMode = scope.periodMode;
 
   if (previousKey) {
-    previousFiles = getFilesByMonthAndPeriod(files, previousKey, scope.periodMode);
+    previousFiles = getFilesByMonthAndPeriod(files, previousKey, scope.periodMode, PRE_FATURA_FILE_CATEGORY);
     if (!previousFiles.length && scope.periodMode !== "month") {
-      previousFiles = getFilesByMonthAndPeriod(files, previousKey, "month");
+      previousFiles = getFilesByMonthAndPeriod(files, previousKey, "month", PRE_FATURA_FILE_CATEGORY);
       previousPeriodMode = "month";
     }
   }
@@ -4675,6 +4850,14 @@ function buildOptions(rows) {
   };
 }
 
+function buildPackageManagementOptions() {
+  return {
+    tipos: ["SVC", "XPT", "PNR"],
+    bases: [],
+    motoristas: [],
+  };
+}
+
 function countBySheet(rows) {
   return calcularContadoresAbas(rows);
 }
@@ -4685,6 +4868,7 @@ function calcularContadoresAbas(dados) {
   return SHEET_TABS.reduce((acc, sheet) => {
     if (sheet === "Todos") acc[sheet] = preRows.length;
     else if (sheet === MONTHLY_BASE_VIEW) acc[sheet] = 0;
+    else if (sheet === PACKAGE_MANAGEMENT_VIEW) acc[sheet] = packageManagementRows.length;
     else acc[sheet] = preRows.filter((item) => getRowDivision(item) === sheet).length;
     return acc;
   }, {});
@@ -5902,7 +6086,7 @@ async function loadDashboardDataByFilters(options = {}) {
         .map((dataset) => [dataset.id, dataset]),
     );
     const packageDatasets = await loadPackageManagementRowsForCards(dashboardFileRecords, cachedDatasets);
-    const currentFileCategory = getCurrentFileCategory();
+    const currentFileCategory = PRE_FATURA_FILE_CATEGORY;
     const categoryFiles = dashboardFileRecords.filter((record) => getFileRecordCategory(record) === currentFileCategory);
     if (!categoryFiles.length) {
       dashboardFilesLoading = false;
