@@ -5378,7 +5378,8 @@ body:not([data-theme="light"]) .global-search-filter {
 .top-filter-control,
 .global-period-filter,
 .global-search-filter,
-.type-filter {
+.type-filter,
+.custom-filter {
   display: inline-flex;
   align-items: center;
   gap: 0.48rem;
@@ -5500,6 +5501,12 @@ body:not([data-theme="light"]) .global-search-filter {
   min-width: 8.6rem;
 }
 
+.custom-filter {
+  position: relative;
+  z-index: 35;
+  min-width: 8.6rem;
+}
+
 .type-filter__button {
   display: inline-flex;
   align-items: center;
@@ -5588,13 +5595,26 @@ body:not([data-theme="light"]) .global-search-filter {
   background: var(--accent);
 }
 
-.type-filter__option input:checked + .type-filter__check::after {
+.type-filter__option input:checked + .type-filter__check::after,
+.custom-filter__option.is-selected .type-filter__check::after {
   content: "";
   width: 0.42rem;
   height: 0.68rem;
   border: solid #fff;
   border-width: 0 2px 2px 0;
   transform: rotate(45deg) translateY(-0.05rem);
+}
+
+.custom-filter__option--button {
+  width: 100%;
+  border: 0;
+  background: transparent;
+  text-align: left;
+}
+
+.custom-filter__option.is-selected .type-filter__check {
+  border-color: var(--accent);
+  background: var(--accent);
 }
 
 body:not([data-theme="light"]) .top-filter-control,
@@ -5681,7 +5701,8 @@ body:not([data-theme="light"]) .type-filter__menu {
 }
 
 .global-period-filter,
-.type-filter {
+.type-filter,
+.custom-filter {
   padding: 0 0.72rem !important;
   display: inline-flex !important;
   align-items: center !important;
@@ -5782,7 +5803,8 @@ body:not([data-theme="light"]) .type-filter__menu {
 }
 
 .global-period-filter select,
-.type-filter__button {
+.type-filter__button,
+.custom-filter__button {
   height: 38px !important;
   min-height: 38px !important;
   padding: 0 !important;
@@ -5810,7 +5832,8 @@ body:not([data-theme="light"]) .type-filter__menu {
 body:not([data-theme="light"]) .top-filter-control,
 body:not([data-theme="light"]) .global-period-filter,
 body:not([data-theme="light"]) .global-search-filter,
-body:not([data-theme="light"]) .type-filter {
+body:not([data-theme="light"]) .type-filter,
+body:not([data-theme="light"]) .custom-filter {
   border-color: rgba(164, 183, 202, 0.16) !important;
   background:
     linear-gradient(180deg, rgba(31, 48, 68, 0.9), rgba(16, 28, 42, 0.94)),
@@ -5819,7 +5842,72 @@ body:not([data-theme="light"]) .type-filter {
 }
 
 body:not([data-theme="light"]) .global-period-filter select,
-body:not([data-theme="light"]) .type-filter__button {
+body:not([data-theme="light"]) .type-filter__button,
+body:not([data-theme="light"]) .custom-filter__button {
   background: transparent !important;
   box-shadow: none !important;
+}
+
+/* Tipografia unificada dos cards principais. */
+.kpi-card__label {
+  min-width: 0;
+  color: var(--muted);
+  font-size: 0.82rem !important;
+  font-weight: 750 !important;
+  line-height: 1.22 !important;
+  letter-spacing: 0 !important;
+}
+
+.metric-card-value,
+.kpi-card__value,
+.kpi-card--finance .kpi-card__value,
+.kpi-card--volume .kpi-card__value,
+.kpi-card--neutral .kpi-card__value,
+.kpi-card--problem .kpi-card__value,
+.layout:not(.is-sidebar-collapsed) .kpi-card--finance .kpi-card__value,
+.kpi-grid__group--main .kpi-card__value,
+.kpi-grid__group--package .kpi-card__value {
+  display: block;
+  max-width: 100%;
+  margin-top: 0.74rem !important;
+  font-family: var(--font-display) !important;
+  font-size: clamp(1.72rem, 1.9vw, 2.18rem) !important;
+  font-weight: 800 !important;
+  line-height: 1.08 !important;
+  letter-spacing: 0 !important;
+  white-space: nowrap !important;
+  overflow-wrap: normal !important;
+  word-break: normal !important;
+}
+
+.kpi-card__delta,
+.kpi-grid__group--package .kpi-card__delta {
+  margin-top: 0.58rem !important;
+  color: var(--muted);
+  font-size: 0.78rem !important;
+  font-weight: 750 !important;
+  line-height: 1.32 !important;
+  letter-spacing: 0 !important;
+}
+
+@media (max-width: 1180px) {
+  .metric-card-value,
+  .kpi-card__value,
+  .kpi-card--finance .kpi-card__value,
+  .kpi-grid__group--main .kpi-card__value,
+  .kpi-grid__group--package .kpi-card__value {
+    font-size: clamp(1.56rem, 2.4vw, 2rem) !important;
+  }
+}
+
+@media (max-width: 760px) {
+  .metric-card-value,
+  .kpi-card__value,
+  .kpi-card--finance .kpi-card__value,
+  .kpi-grid__group--main .kpi-card__value,
+  .kpi-grid__group--package .kpi-card__value {
+    white-space: normal !important;
+    overflow-wrap: anywhere !important;
+    word-break: normal !important;
+  }
 }

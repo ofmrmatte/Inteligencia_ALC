@@ -79,6 +79,10 @@ const STATE_DEFAULT = {
   tipo: "Todos",
   prefaturaTipo: "Todos",
   packageTipo: "Todos",
+  prefaturaMonths: [],
+  packageMonths: [],
+  prefaturaPeriod: "month",
+  packagePeriod: "month",
   base: "Todos",
   motorista: "Todos",
   period: "month",
@@ -118,6 +122,8 @@ const state = loadState();
 const forcedTheme = new URLSearchParams(window.location.search).get("theme");
 state.theme = forcedTheme === "light" || forcedTheme === "dark" ? forcedTheme : state.theme === "light" ? "light" : "dark";
 state.period = normalizePeriodMode(state.period);
+state.prefaturaPeriod = normalizePeriodMode(state.prefaturaPeriod || state.period);
+state.packagePeriod = normalizePeriodMode(state.packagePeriod || "month");
 let library = loadLibrary();
 let activeDataset = getActiveDataset();
 let allRows = activeDataset.rows.slice();
@@ -363,6 +369,14 @@ function cacheDom() {
   el.searchFilter = document.getElementById("top-search-filter");
   el.monthSelect = document.getElementById("month-select");
   el.periodSelect = document.getElementById("period-select");
+  el.monthFilter = document.getElementById("month-filter");
+  el.monthFilterToggle = document.getElementById("month-filter-toggle");
+  el.monthFilterLabel = document.getElementById("month-filter-label");
+  el.monthFilterMenu = document.getElementById("month-filter-menu");
+  el.periodFilter = document.getElementById("period-filter");
+  el.periodFilterToggle = document.getElementById("period-filter-toggle");
+  el.periodFilterLabel = document.getElementById("period-filter-label");
+  el.periodFilterMenu = document.getElementById("period-filter-menu");
   el.typeFilter = document.getElementById("type-filter");
   el.typeFilterToggle = document.getElementById("type-filter-toggle");
   el.typeFilterLabel = document.getElementById("type-filter-label");
@@ -622,6 +636,30 @@ function bindEvents() {
       renderAll();
     });
   }
+  if (el.monthFilterToggle) {
+    el.monthFilterToggle.addEventListener("click", (event) => {
+      event.preventDefault();
+      toggleCustomFilterMenu("month");
+    });
+  }
+  if (el.periodFilterToggle) {
+    el.periodFilterToggle.addEventListener("click", (event) => {
+      event.preventDefault();
+      toggleCustomFilterMenu("period");
+    });
+  }
+  if (el.monthFilterMenu) {
+    el.monthFilterMenu.addEventListener("change", (event) => {
+      const input = event.target.closest("[data-month-option]");
+      if (input) applyMonthOptionChange(input);
+    });
+  }
+  if (el.periodFilterMenu) {
+    el.periodFilterMenu.addEventListener("click", (event) => {
+      const button = event.target.closest("[data-period-option]");
+      if (button) applyPeriodOptionChange(button.dataset.periodOption);
+    });
+  }
   if (el.monthSelect) {
     el.monthSelect.addEventListener("change", async (event) => {
       state.monthFilter = event.target.value;
@@ -655,9 +693,10 @@ function bindEvents() {
       });
     });
     document.addEventListener("click", (event) => {
-      if (!el.packageTypeMenu || el.packageTypeMenu.hidden) return;
-      if (event.target.closest("#type-filter")) return;
+      if (event.target.closest("#type-filter") || event.target.closest("#month-filter") || event.target.closest("#period-filter")) return;
       closePackageTypeMenu();
+      closeCustomFilterMenu("month");
+      closeCustomFilterMenu("period");
     });
   }
 
@@ -968,6 +1007,8 @@ function closePackageTypeMenu() {
 
 function openPackageTypeMenu() {
   if (!el.typeFilterMenu || !el.typeFilterToggle) return;
+  closeCustomFilterMenu("month");
+  closeCustomFilterMenu("period");
   el.typeFilterMenu.hidden = false;
   el.typeFilterToggle.setAttribute("aria-expanded", "true");
   syncPackageTypeFilterControl();
@@ -979,8 +1020,202 @@ function togglePackageTypeMenu() {
   else closePackageTypeMenu();
 }
 
+function getMonthLabelFromKey(key) {
+  const [year, month] = String(key || "").split("-");
+  const monthIndex = Number(month) - 1;
+  if (!year || !Number.isFinite(monthIndex) || monthIndex < 0 || monthIndex > 11) return key || "";
+  return `${MONTHS[monthIndex]} / ${year}`;
+}
+
+function getAvailablePackageMonthOptions() {
+  const months = new Map();
+  (Array.isArray(packageManagementRows) ? packageManagementRows : [])
+    .filter(isPackageManagementDetailRow)
+    .forEach((row) => {
+      const key = getPackageManagementMonthKey(row);
+      if (!key || months.has(key)) return;
+      months.set(key, { key, label: getMonthLabelFromKey(key), sort: key });
+    });
+  if (!months.size) {
+    dashboardFileRecords
+      .filter(isUsableDashboardFileRecord)
+      .filter((record) => getFileRecordCategory(record) === PACKAGE_MANAGEMENT_FILE_CATEGORY)
+      .forEach((record) => {
+        const period = getFileRecordPeriod(record);
+        if (!months.has(period.key)) months.set(period.key, { key: period.key, label: period.monthLabel, sort: period.key });
+      });
+  }
+  return Array.from(months.values()).sort((a, b) => String(a.sort).localeCompare(String(b.sort)));
+}
+
+function getActiveMonthOptions() {
+  return state.sheet === PACKAGE_MANAGEMENT_VIEW ? getAvailablePackageMonthOptions() : getAvailableMonthOptions(PRE_FATURA_FILE_CATEGORY);
+}
+
+function normalizeMonthSelection(value, options = getActiveMonthOptions()) {
+  const available = (Array.isArray(options) ? options : []).map((item) => item.key).filter(Boolean);
+  if (!available.length) return [];
+  const source = Array.isArray(value)
+    ? value
+    : String(value || "")
+      .split(/[,+;|]/)
+      .map((item) => item.replace(/\s*\+\s*/g, "+"))
+      .flatMap((item) => item.split("+"));
+  const requested = source.map((item) => String(item || "").trim()).filter(Boolean);
+  if (!requested.length || requested.some((item) => normalizeText(item) === "TODOS" || item === "all")) return available;
+  const selected = available.filter((key) => requested.includes(key));
+  return selected.length ? selected : available;
+}
+
+function getPrefaturaMonthSelectionValues() {
+  const options = getAvailableMonthOptions(PRE_FATURA_FILE_CATEGORY);
+  const source = Array.isArray(state.prefaturaMonths) && state.prefaturaMonths.length ? state.prefaturaMonths : state.monthFilter || "all";
+  return normalizeMonthSelection(source, options);
+}
+
+function getPackageMonthSelectionValues() {
+  const options = getAvailablePackageMonthOptions();
+  const source = Array.isArray(state.packageMonths) && state.packageMonths.length ? state.packageMonths : "all";
+  return normalizeMonthSelection(source, options);
+}
+
+function getActiveMonthSelectionValues() {
+  return state.sheet === PACKAGE_MANAGEMENT_VIEW ? getPackageMonthSelectionValues() : getPrefaturaMonthSelectionValues();
+}
+
+function getActivePeriodMode() {
+  return normalizePeriodMode(state.sheet === PACKAGE_MANAGEMENT_VIEW ? state.packagePeriod : state.prefaturaPeriod || state.period);
+}
+
+function setActivePeriodMode(value) {
+  const next = normalizePeriodMode(value);
+  if (state.sheet === PACKAGE_MANAGEMENT_VIEW) state.packagePeriod = next;
+  else {
+    state.prefaturaPeriod = next;
+    state.period = next;
+  }
+}
+
+function getMonthSelectionLabel(selection, options = getActiveMonthOptions()) {
+  const selected = normalizeMonthSelection(selection, options);
+  if (!options.length || selected.length === options.length) return "Todos";
+  const labels = selected.map((key) => shortMonthYear(options.find((item) => item.key === key)?.label || getMonthLabelFromKey(key)));
+  if (labels.length <= 2) return labels.join(" + ");
+  return `${labels.length} meses selecionados`;
+}
+
+function syncMonthFilterControl() {
+  if (!el.monthFilterLabel || !el.monthFilterMenu) return;
+  const options = getActiveMonthOptions();
+  const selection = getActiveMonthSelectionValues();
+  const selectedSet = new Set(selection);
+  const allSelected = options.length > 0 && selection.length === options.length;
+  el.monthFilterLabel.textContent = getMonthSelectionLabel(selection, options);
+  el.monthFilterToggle?.setAttribute("aria-expanded", el.monthFilterMenu.hidden ? "false" : "true");
+  el.monthFilterMenu.innerHTML = [
+    `<label class="type-filter__option custom-filter__option">
+      <input type="checkbox" value="all" data-month-option ${allSelected ? "checked" : ""}>
+      <span class="type-filter__check" aria-hidden="true"></span>
+      <span>Todos</span>
+    </label>`,
+    ...options.map((month) => `
+      <label class="type-filter__option custom-filter__option">
+        <input type="checkbox" value="${escapeAttribute(month.key)}" data-month-option ${!allSelected && selectedSet.has(month.key) ? "checked" : ""}>
+        <span class="type-filter__check" aria-hidden="true"></span>
+        <span>${escapeHtml(shortMonthYear(month.label))}</span>
+      </label>
+    `),
+  ].join("");
+}
+
+function syncPeriodFilterControl() {
+  if (!el.periodFilterLabel || !el.periodFilterMenu) return;
+  const active = getActivePeriodMode();
+  el.periodFilterLabel.textContent = getPeriodModeLabel(active);
+  el.periodFilterToggle?.setAttribute("aria-expanded", el.periodFilterMenu.hidden ? "false" : "true");
+  el.periodFilterMenu.innerHTML = getPeriodDropdownOptions()
+    .map(([value, label]) => `
+      <button class="type-filter__option custom-filter__option custom-filter__option--button ${active === value ? "is-selected" : ""}" type="button" data-period-option="${escapeAttribute(value)}">
+        <span class="type-filter__check" aria-hidden="true"></span>
+        <span>${escapeHtml(label)}</span>
+      </button>
+    `)
+    .join("");
+}
+
+function getPeriodDropdownOptions() {
+  return [
+    ["month", "Mês completo"],
+    ["q1", "1ª quinzena"],
+    ["q2", "2ª quinzena"],
+  ];
+}
+
+function closeCustomFilterMenu(kind) {
+  const menu = kind === "month" ? el.monthFilterMenu : el.periodFilterMenu;
+  const toggle = kind === "month" ? el.monthFilterToggle : el.periodFilterToggle;
+  if (!menu || !toggle) return;
+  menu.hidden = true;
+  toggle.setAttribute("aria-expanded", "false");
+}
+
+function openCustomFilterMenu(kind) {
+  const menu = kind === "month" ? el.monthFilterMenu : el.periodFilterMenu;
+  const toggle = kind === "month" ? el.monthFilterToggle : el.periodFilterToggle;
+  if (!menu || !toggle) return;
+  closePackageTypeMenu();
+  if (kind !== "month") closeCustomFilterMenu("month");
+  if (kind !== "period") closeCustomFilterMenu("period");
+  if (kind === "month") syncMonthFilterControl();
+  else syncPeriodFilterControl();
+  menu.hidden = false;
+  toggle.setAttribute("aria-expanded", "true");
+}
+
+function toggleCustomFilterMenu(kind) {
+  const menu = kind === "month" ? el.monthFilterMenu : el.periodFilterMenu;
+  if (!menu) return;
+  if (menu.hidden) openCustomFilterMenu(kind);
+  else closeCustomFilterMenu(kind);
+}
+
+function applyMonthOptionChange(changedInput) {
+  const options = getActiveMonthOptions();
+  const available = options.map((item) => item.key);
+  const checked = Array.from(el.monthFilterMenu.querySelectorAll("[data-month-option]"))
+    .filter((input) => input.checked)
+    .map((input) => input.value);
+  const next = changedInput?.value === "all" ? available : normalizeMonthSelection(checked.filter((value) => value !== "all"), options);
+  const storesAllMonths = next.length === available.length;
+  if (state.sheet === PACKAGE_MANAGEMENT_VIEW) {
+    state.packageMonths = storesAllMonths ? [] : next;
+  } else {
+    state.prefaturaMonths = storesAllMonths ? [] : next;
+    state.monthFilter = storesAllMonths ? "all" : next[0] || "all";
+  }
+  state.page = 1;
+  ensureCurrentPeriodIsAvailable();
+  persistState();
+  hydrateControls();
+  if (state.sheet !== PACKAGE_MANAGEMENT_VIEW) applyDashboardScopeFromLoadedDatasets();
+  renderAll();
+}
+
+function applyPeriodOptionChange(value) {
+  setActivePeriodMode(value);
+  state.page = 1;
+  ensureCurrentPeriodIsAvailable();
+  persistState();
+  closeCustomFilterMenu("period");
+  hydrateControls();
+  if (state.sheet !== PACKAGE_MANAGEMENT_VIEW) applyDashboardScopeFromLoadedDatasets();
+  renderAll();
+}
+
 function closeTopFilterOverlays() {
   closePackageTypeMenu();
+  closeCustomFilterMenu("month");
+  closeCustomFilterMenu("period");
   setSearchExpanded(false, { focus: false });
   if (el.searchInput && !state.query) el.searchInput.blur();
 }
@@ -1164,14 +1399,19 @@ function handleEscapeFilter(event) {
       return true;
     },
     "period-select": () => {
-      if (state.period === "month") return false;
-      state.period = "month";
+      if (getActivePeriodMode() === "month") return false;
+      setActivePeriodMode("month");
       return true;
     },
     "month-select": () => {
-      const activeMonth = getDatasetPeriod(getActiveDataset()).key;
-      if (!state.monthFilter || state.monthFilter === activeMonth) return false;
-      state.monthFilter = activeMonth;
+      const options = getActiveMonthOptions();
+      const current = getActiveMonthSelectionValues();
+      if (current.length === options.length) return false;
+      if (state.sheet === PACKAGE_MANAGEMENT_VIEW) state.packageMonths = [];
+      else {
+        state.prefaturaMonths = [];
+        state.monthFilter = "all";
+      }
       return true;
     },
   };
@@ -1283,8 +1523,8 @@ function hydrateControls() {
 
 function updateGlobalPeriodFiltersVisibility(isEvolutionView = state.sheet === MONTHLY_BASE_VIEW) {
   const searchFilter = el.searchInput?.closest(".global-search-filter");
-  const monthFilter = el.monthSelect?.closest(".global-period-filter");
-  const periodFilter = el.periodSelect?.closest(".global-period-filter");
+  const monthFilter = el.monthFilter || el.monthSelect?.closest(".global-period-filter");
+  const periodFilter = el.periodFilter || el.periodSelect?.closest(".global-period-filter");
   const typeFilter = el.typeFilter;
   [monthFilter, periodFilter].forEach((filter) => {
     if (filter) filter.hidden = isEvolutionView;
@@ -1298,38 +1538,47 @@ function updateGlobalPeriodFiltersVisibility(isEvolutionView = state.sheet === M
 }
 
 function renderPeriodSelect() {
-  if (!el.periodSelect) return;
-  state.period = normalizePeriodMode(state.period);
-  const options = buildPeriodOptions();
-  if (!options.some(([value]) => value === state.period)) {
-    state.period = options[0]?.[0] || "month";
+  state.prefaturaPeriod = normalizePeriodMode(state.prefaturaPeriod || state.period);
+  state.packagePeriod = normalizePeriodMode(state.packagePeriod || "month");
+  state.period = state.prefaturaPeriod;
+  if (el.periodSelect) {
+    const options = getPeriodDropdownOptions();
+    el.periodSelect.innerHTML = options
+      .map(([value, label]) => `<option value="${value}" ${state.period === value ? "selected" : ""}>${escapeHtml(label)}</option>`)
+      .join("");
   }
-  el.periodSelect.innerHTML = options
-    .map(([value, label]) => `<option value="${value}" ${state.period === value ? "selected" : ""}>${escapeHtml(label)}</option>`)
-    .join("");
+  syncPeriodFilterControl();
 }
 
 function renderMonthSelect() {
-  if (!el.monthSelect) return;
-  const months = getAvailableMonthOptions();
-  if (!state.monthFilter) state.monthFilter = "all";
-  if (state.monthFilter !== "all" && !months.some((month) => month.key === state.monthFilter)) {
-    state.monthFilter = "all";
+  const prefaturaMonths = getAvailableMonthOptions(PRE_FATURA_FILE_CATEGORY);
+  const packageMonths = getAvailablePackageMonthOptions();
+  const prefaturaSource = Array.isArray(state.prefaturaMonths) && state.prefaturaMonths.length ? state.prefaturaMonths : state.monthFilter || "all";
+  const packageSource = Array.isArray(state.packageMonths) && state.packageMonths.length ? state.packageMonths : "all";
+  const normalizedPrefaturaMonths = normalizeMonthSelection(prefaturaSource, prefaturaMonths);
+  const normalizedPackageMonths = normalizeMonthSelection(packageSource, packageMonths);
+  const prefaturaKeys = prefaturaMonths.map((month) => month.key);
+  const packageKeys = packageMonths.map((month) => month.key);
+  state.prefaturaMonths = normalizedPrefaturaMonths.length === prefaturaKeys.length ? [] : normalizedPrefaturaMonths;
+  state.packageMonths = normalizedPackageMonths.length === packageKeys.length ? [] : normalizedPackageMonths;
+  state.monthFilter = state.prefaturaMonths.length ? state.prefaturaMonths[0] : "all";
+  if (el.monthSelect) {
+    el.monthSelect.innerHTML = [
+      `<option value="all" ${state.monthFilter === "all" ? "selected" : ""}>Todos</option>`,
+      ...prefaturaMonths.map(
+        (month) =>
+          `<option value="${escapeAttribute(month.key)}" ${state.monthFilter === month.key ? "selected" : ""}>${escapeHtml(shortMonthYear(month.label))}</option>`,
+      ),
+    ].join("");
   }
-  el.monthSelect.innerHTML = [
-    `<option value="all" ${state.monthFilter === "all" ? "selected" : ""}>Todos</option>`,
-    ...months.map(
-      (month) =>
-        `<option value="${escapeAttribute(month.key)}" ${state.monthFilter === month.key ? "selected" : ""}>${escapeHtml(shortMonthYear(month.label))}</option>`,
-    ),
-  ].join("");
+  syncMonthFilterControl();
 }
 
-function getAvailableMonthOptions() {
+function getAvailableMonthOptions(fileCategory = getCurrentFileCategory()) {
   const months = new Map();
   dashboardFileRecords
     .filter(isUsableDashboardFileRecord)
-    .filter((record) => getFileRecordCategory(record) === getCurrentFileCategory())
+    .filter((record) => getFileRecordCategory(record) === fileCategory)
     .forEach((record) => {
       const period = getFileRecordPeriod(record);
       if (!months.has(period.key)) {
@@ -1340,19 +1589,14 @@ function getAvailableMonthOptions() {
 }
 
 function buildPeriodOptions() {
-  const files = getFilesForMonth(dashboardFileRecords, state.monthFilter || "all", getCurrentFileCategory());
-  if (!files.length) return [["month", "Mês completo"]];
-  const modes = new Set(files.map((file) => getFileRecordPeriod(file).periodType));
-  const options = [["month", "Mês completo"]];
-  if (modes.has("q1")) options.push(["q1", "1ª quinzena"]);
-  if (modes.has("q2")) options.push(["q2", "2ª quinzena"]);
-  return options;
+  return getPeriodDropdownOptions();
 }
 
 function ensureCurrentPeriodIsAvailable() {
   const options = buildPeriodOptions();
-  if (!options.some(([value]) => value === state.period)) {
-    state.period = options[0]?.[0] || "month";
+  const current = getActivePeriodMode();
+  if (!options.some(([value]) => value === current)) {
+    setActivePeriodMode(options[0]?.[0] || "month");
   }
 }
 
@@ -1500,6 +1744,22 @@ function getFilesByMonthAndPeriod(files, monthKey, periodMode, fileCategory = ge
     if (normalizedPeriod === "month") return true;
     return getFileRecordPeriod(file).periodType === normalizedPeriod;
   });
+}
+
+function getFilesByMonthsAndPeriod(files, monthSelection, periodMode, fileCategory = getCurrentFileCategory()) {
+  const monthOptions = fileCategory === PACKAGE_MANAGEMENT_FILE_CATEGORY ? getAvailablePackageMonthOptions() : getAvailableMonthOptions(fileCategory);
+  const selectedMonths = normalizeMonthSelection(monthSelection, monthOptions);
+  const allMonthsSelected = !monthOptions.length || selectedMonths.length === monthOptions.length;
+  const normalizedPeriod = normalizePeriodMode(periodMode);
+  return (Array.isArray(files) ? files : [])
+    .filter(isUsableDashboardFileRecord)
+    .filter((file) => !fileCategory || getFileRecordCategory(file) === fileCategory)
+    .filter((file) => {
+      const period = getFileRecordPeriod(file);
+      if (!allMonthsSelected && !selectedMonths.includes(period.key)) return false;
+      if (normalizedPeriod === "month") return true;
+      return period.periodType === normalizedPeriod;
+    });
 }
 
 function getSelectedDeleteDataset() {
@@ -2149,12 +2409,14 @@ function getPackageManagementPeriodType(row) {
   return getPeriodModeFromLabel(`${row?.quinzena || ""} ${row?.period_label || ""} ${row?.arquivo_origem || ""}`);
 }
 
-function filterPackageManagementRowsByPeriod(rows, monthKey = state.monthFilter || "all", periodMode = state.period) {
-  const normalizedMonth = monthKey || "all";
+function filterPackageManagementRowsByPeriod(rows, monthSelection = getPackageMonthSelectionValues(), periodMode = state.packagePeriod || "month") {
+  const options = getAvailablePackageMonthOptions();
+  const selectedMonths = normalizeMonthSelection(monthSelection, options);
+  const allMonthsSelected = !options.length || selectedMonths.length === options.length;
   const normalizedPeriod = normalizePeriodMode(periodMode);
   return (Array.isArray(rows) ? rows : []).filter((row) => {
     const rowMonthKey = getPackageManagementMonthKey(row);
-    if (normalizedMonth !== "all" && rowMonthKey !== normalizedMonth) return false;
+    if (!allMonthsSelected && !selectedMonths.includes(rowMonthKey)) return false;
     if (normalizedPeriod === "month") return true;
     return getPackageManagementPeriodType(row) === normalizedPeriod;
   });
@@ -2340,9 +2602,9 @@ function buildPackageManagementComparison(rows = packageManagementRows, prefatur
 }
 
 function buildPackageManagementComparisonForScope(scope, prefaturaRows, typeSelection = state.packageTipo) {
-  const monthKey = scope?.mode === "annual" ? "all" : scope?.key || state.monthFilter || "all";
-  const periodMode = scope?.periodMode || state.period;
-  const scopedPackageRows = filterPackageManagementRowsByPeriod(packageManagementRows, monthKey, periodMode).filter(isPackageManagementDetailRow);
+  const monthSelection = scope?.mode === "annual" ? getAvailablePackageMonthOptions().map((month) => month.key) : getPackageMonthSelectionValues();
+  const periodMode = state.packagePeriod || scope?.periodMode || "month";
+  const scopedPackageRows = filterPackageManagementRowsByPeriod(packageManagementRows, monthSelection, periodMode).filter(isPackageManagementDetailRow);
   const enrichedRows = enrichPackageRowsWithPrefaturaMatch(scopedPackageRows, prefaturaRows).map((row) => ({
     ...row,
     tipo_operacional: getPackageOperationalType(row),
@@ -2393,6 +2655,57 @@ function formatPackageTypeDistributionRows(distribution) {
     ]),
     ["Total", `${integer.format(total)} registro${total === 1 ? "" : "s"}`, total ? "100,0%" : "0,0%"],
   ];
+}
+
+function buildPackageMonthlyEvolutionRows(rows) {
+  const groups = new Map();
+  (Array.isArray(rows) ? rows : [])
+    .filter(isPackageManagementDetailRow)
+    .forEach((row) => {
+      const key = getPackageManagementMonthKey(row);
+      if (!key) return;
+      if (!groups.has(key)) {
+        groups.set(key, {
+          key,
+          label: shortMonthYear(getMonthLabelFromKey(key)),
+          fullLabel: getMonthLabelFromKey(key).replace(" / ", "/"),
+          rows: [],
+        });
+      }
+      groups.get(key).rows.push(row);
+    });
+
+  return Array.from(groups.values())
+    .sort((a, b) => String(a.key).localeCompare(String(b.key)))
+    .map((group) => {
+      const summary = buildPackageManagementSummary(group.rows);
+      return {
+        key: group.key,
+        label: group.label,
+        fullLabel: group.fullLabel,
+        alcValue: summary.alcValue,
+        driverValue: summary.driverValue,
+        dispatcherValue: summary.dispatcherValue,
+        driverErrors: summary.driverErrors,
+        dispatcherErrors: summary.dispatcherErrors,
+        mercadoLivreErrors: summary.mercadoLivreErrors,
+        count: summary.count,
+      };
+    });
+}
+
+function buildPackageMonthlyEvolutionText(rows) {
+  const evolutionRows = Array.isArray(rows) ? rows : [];
+  if (!evolutionRows.length) {
+    return "Não foram encontrados dados de Gestão de Pacotes para evolução no recorte selecionado.";
+  }
+  if (evolutionRows.length === 1) {
+    const row = evolutionRows[0];
+    return `No recorte selecionado, ${row.fullLabel || row.label} registrou ${currency.format(row.alcValue || 0)} absorvidos pela ALC, ${currency.format(row.driverValue || 0)} mantidos com Driver e ${integer.format(row.driverErrors || 0)} erro${Number(row.driverErrors || 0) === 1 ? "" : "s"} classificado${Number(row.driverErrors || 0) === 1 ? "" : "s"} como Driver.`;
+  }
+  const driverPeak = evolutionRows.reduce((best, row) => (Number(row.driverErrors || 0) > Number(best.driverErrors || 0) ? row : best), evolutionRows[0]);
+  const alcPeak = evolutionRows.reduce((best, row) => (Number(row.alcValue || 0) > Number(best.alcValue || 0) ? row : best), evolutionRows[0]);
+  return `Na evolução mensal da Gestão de Pacotes, ${driverPeak.label} concentrou o maior volume de erros do Driver, com ${integer.format(driverPeak.driverErrors || 0)} ocorrência${Number(driverPeak.driverErrors || 0) === 1 ? "" : "s"}. O maior valor absorvido pela ALC ocorreu em ${alcPeak.label}, com ${currency.format(alcPeak.alcValue || 0)}.`;
 }
 
 function buildPackageComparisonLine({ label, rows, value, kind, prefaturaSummary, hasPackageRows }) {
@@ -2507,8 +2820,8 @@ function getPackageManagementRowsCacheKey() {
     activePackageFiles,
     packageManagementRows.length,
     allRows.length,
-    state.monthFilter,
-    state.period,
+    getPackageMonthSelectionValues().join("|"),
+    normalizePeriodMode(state.packagePeriod || "month"),
     normalizeTypeSelection(state.packageTipo).join("|"),
     normalize(state.query),
   ].join("::");
@@ -2600,7 +2913,7 @@ function renderKpis(summary) {
         <span>${card.label}</span>
         <span class="kpi-card__icon">i</span>
       </div>
-      <div class="kpi-card__value">${card.value}</div>
+      <div class="kpi-card__value metric-card-value">${card.value}</div>
       <div class="kpi-card__delta"${card.key === "total-discounts" ? " data-total-discounts-delta" : ""}>${card.delta}</div>
     </article>
   `;
@@ -2620,7 +2933,7 @@ function renderKpiCard(card, index) {
         <span>${card.label}</span>
         <span class="kpi-card__icon">i</span>
       </div>
-      <div class="kpi-card__value">${card.value}</div>
+      <div class="kpi-card__value metric-card-value">${card.value}</div>
       <div class="kpi-card__delta"${card.key === "total-discounts" ? " data-total-discounts-delta" : ""}>${card.delta}</div>
     </article>
   `;
@@ -3794,12 +4107,16 @@ async function downloadMonthlyReport() {
   if (!ensureReportPermission()) {
     return;
   }
+  if (state.sheet === PACKAGE_MANAGEMENT_VIEW) {
+    await downloadPackageManagementReport();
+    return;
+  }
   const reportScope = getReportScope();
-  const allMonthlyRows = await buildReportHistoricalComparisonRows(reportScope);
+  const allMonthlyRows = await buildReportHistoricalComparisonRows(reportScope, state.prefaturaTipo);
   await ensurePackageManagementRowsForReport();
   const filteredRows = getFilteredRows();
   const summary = buildSummary(filteredRows);
-  const analysis = buildReportAnalysis({ rows: allMonthlyRows, filteredRows, summary, scope: reportScope });
+  const analysis = buildReportAnalysis({ rows: allMonthlyRows, filteredRows, summary, scope: reportScope, typeSelection: state.prefaturaTipo });
   await ensurePdfLogoImage();
   const pdf = buildReportPdfBlob({ analysis, filteredRows, summary });
   downloadBlob(pdf, analysis.fileName);
@@ -3809,6 +4126,41 @@ async function downloadMonthlyReport() {
     records_count: filteredRows?.length || 0,
   });
   showToast("Relatório de performance baixado.", "good", 4200);
+}
+
+async function downloadPackageManagementReport() {
+  const reportScope = getPackageReportScope();
+  await ensurePackageManagementRowsForReport();
+  const packageRows = getPackageManagementRowsForView();
+  const prefaturaRows = await loadPrefaturaRowsForReportScope(reportScope, {
+    monthSelection: getPackageMonthSelectionValues(),
+    periodMode: state.packagePeriod || "month",
+    typeSelection: state.packageTipo,
+  });
+  const packageComparison = buildPackageManagementComparison(packageRows, prefaturaRows);
+  const summary = buildPackageReportSummary(packageComparison, packageRows);
+  const allMonthlyRows = await buildReportHistoricalComparisonRows(reportScope, state.packageTipo);
+  const analysis = buildReportAnalysis({
+    rows: allMonthlyRows,
+    filteredRows: prefaturaRows,
+    summary,
+    scope: reportScope,
+    typeSelection: state.packageTipo,
+    reportMode: "package",
+    packageRows,
+    packageComparison,
+  });
+  await ensurePdfLogoImage();
+  const pdf = buildReportPdfBlob({ analysis, filteredRows: prefaturaRows, summary });
+  downloadBlob(pdf, analysis.fileName);
+  await logAudit("generate_report", "report", null, {
+    selected_months: getPackageMonthSelectionValues(),
+    selected_period: state.packagePeriod || "month",
+    selected_types: getPackageTypeSelectionValues(state.packageTipo),
+    records_count: packageRows.length,
+    report_tab: PACKAGE_MANAGEMENT_VIEW,
+  });
+  showToast("Relatório de Gestão de Pacotes baixado.", "good", 4200);
 }
 
 async function ensurePdfLogoImage() {
@@ -3893,7 +4245,7 @@ function buildReportPdfBlob({ analysis, summary }) {
     if (PDF_LOGO_IMAGE.base64) addPdfImage(PDF_LOGO_IMAGE.name, page.margin, 768, 60, 60);
     addText("Painel de Inteligência Operacional", page.margin + 74, 815, 8.2, "0.77 0.88 0.96", "left", "F2");
     addText("Relatório Executivo", page.margin + 74, 798, 14.1, colors.white, "left", "F2");
-    addText("Performance Operacional", page.margin + 74, 784, 10.5, "0.86 0.95 1", "left");
+    addText(analysis.reportSubtitle || "Performance Operacional", page.margin + 74, 784, 10.5, "0.86 0.95 1", "left");
     addText("Setor: Loss", infoX + 14, 810, 8.4, colors.white, "left", "F2");
     addText(`Período: ${analysis.scopeLabel}`, infoX + 14, 796, 8.1, "0.82 0.92 0.98", "left");
     addText(analysis.generatedAt, infoX + 14, 783, 8.1, "0.82 0.92 0.98", "left");
@@ -3969,6 +4321,34 @@ function buildReportPdfBlob({ analysis, summary }) {
       ["Média mensal", currency.format(analysis.monthlyAverage), "", colors.orange, colors.white],
       ["Mês crítico", analysis.criticalMonthLabel, formatCurrencyShort(analysis.criticalMonth.totalValue), colors.red, colors.dangerSoft],
       ["Categoria líder", analysis.dominantCategoryLabel, `${analysis.dominantCategoryShare}% do impacto`, colors.teal, colors.greenSoft],
+    ];
+    ensure(160);
+    for (let index = 0; index < metrics.length; index += 1) {
+      const row = Math.floor(index / cols);
+      const col = index % cols;
+      metricCard(page.margin + col * (w + gap), y - row * (h + 10), w, h, ...metrics[index]);
+    }
+    y -= h * 2 + 32;
+  };
+  const drawPackageKpiGrid = () => {
+    const comparison = analysis.packageComparison || buildPackageManagementComparison(analysis.packageRows || [], []);
+    const byLabel = new Map((comparison.lines || []).map((line) => [line.label, line]));
+    const result = (label) => byLabel.get(label) || { value: 0, comparison: "Sem base de comparação", kind: "count" };
+    const distribution = comparison.typeDistribution || buildPackageTypeDistribution(comparison.rows);
+    const totalGestaoValue = Number(comparison.summary?.alcValue || 0) + Number(comparison.summary?.driverValue || 0) + Number(comparison.summary?.dispatcherValue || 0);
+    const gap = 10;
+    const cols = 4;
+    const w = (contentW - gap * (cols - 1)) / cols;
+    const h = 64;
+    const metrics = [
+      ["Absorvido pela ALC", currency.format(result("Absorvido pela ALC").value || 0), result("Absorvido pela ALC").comparison, colors.green, colors.greenSoft],
+      ["Desconto com Driver", currency.format(result("Desconto mantido com Driver").value || 0), result("Desconto mantido com Driver").comparison, colors.orange, colors.warm],
+      ["Direcionado ao Dispatcher", currency.format(result("Direcionado ao Dispatcher").value || 0), result("Direcionado ao Dispatcher").comparison, colors.blue, colors.blueSoft],
+      ["Total Gestão", currency.format(totalGestaoValue), `${integer.format(distribution.total || 0)} registros válidos`, colors.teal, colors.white],
+      ["Erros do Driver", integer.format(result("Erros do Driver").value || 0), result("Erros do Driver").comparison, colors.orange, colors.warm],
+      ["Erros do Dispatcher", integer.format(result("Erros do Dispatcher").value || 0), result("Erros do Dispatcher").comparison, colors.blue, colors.blueSoft],
+      ["Erros do Mercado Livre", integer.format(result("Erros do Mercado Livre").value || 0), result("Erros do Mercado Livre").comparison, colors.red, colors.dangerSoft],
+      ["Base Pré-Fatura", currency.format(comparison.prefaturaSummary?.totalValue || 0), `${integer.format(comparison.prefaturaSummary?.count || 0)} registros no mesmo recorte`, colors.teal, colors.white],
     ];
     ensure(160);
     for (let index = 0; index < metrics.length; index += 1) {
@@ -4111,6 +4491,49 @@ function buildReportPdfBlob({ analysis, summary }) {
     drawTable(page.margin, y, contentW, "Composição financeira por categoria", ["Categoria", "Percentual", "Valor"], rows, [230, 120, 150], 104, colors.teal, ["left", "right", "right"]);
     y -= 130;
   };
+  const drawPackageMonthlyEvolution = () => {
+    const evolutionRows = Array.isArray(analysis.packageEvolutionRows) ? analysis.packageEvolutionRows : buildPackageMonthlyEvolutionRows(analysis.packageRows || []);
+    const summaryText = buildPackageMonthlyEvolutionText(evolutionRows);
+    ensure(86);
+    sectionTitle("Evolução mensal", "Gestão de Pacotes");
+    if (!evolutionRows.length) {
+      const h = 62;
+      card(page.margin, y, contentW, h, colors.white, colors.blue);
+      addText("Evolução mensal — Gestão de Pacotes", page.margin + 12, y - 18, 10.5, colors.ink);
+      addWrappedText(summaryText, page.margin + 12, y - 39, contentW - 24, 8.6, colors.muted, 10.5, 2);
+      y -= h + 14;
+      return;
+    }
+
+    const financialRows = evolutionRows.map((row) => [
+      row.label,
+      currency.format(row.alcValue || 0),
+      currency.format(row.driverValue || 0),
+      currency.format(row.dispatcherValue || 0),
+    ]);
+    const financialHeight = 48 + financialRows.length * 18;
+    ensure(financialHeight + 12);
+    drawTable(page.margin, y, contentW, "Valores financeiros por competência", ["Competência", "ALC", "Driver", "Dispatcher"], financialRows, [112, 130, 130, 130], financialHeight, colors.teal, ["left", "right", "right", "right"]);
+    y -= financialHeight + 12;
+
+    const errorRows = evolutionRows.map((row) => [
+      row.label,
+      integer.format(row.driverErrors || 0),
+      integer.format(row.dispatcherErrors || 0),
+      integer.format(row.mercadoLivreErrors || 0),
+    ]);
+    const errorHeight = 48 + errorRows.length * 18;
+    ensure(errorHeight + 12);
+    drawTable(page.margin, y, contentW, "Erros por competência", ["Competência", "Erros Driver", "Erros Dispatcher", "Erros Mercado Livre"], errorRows, [112, 126, 132, 132], errorHeight, colors.blue, ["left", "right", "right", "right"]);
+    y -= errorHeight + 12;
+
+    const summaryLines = wrapPdfText(summaryText, contentW - 28, 8.6, 4);
+    const h = Math.max(52, 24 + summaryLines.length * 11);
+    ensure(h + 14);
+    card(page.margin, y, contentW, h, colors.blueSoft, colors.blue);
+    addWrappedText(summaryText, page.margin + 14, y - 17, contentW - 28, 8.6, colors.ink, 10.8, 4);
+    y -= h + 14;
+  };
   const drawPackageManagementComparison = () => {
     const comparison = analysis.packageComparison;
     if (!comparison) return;
@@ -4165,6 +4588,7 @@ function buildReportPdfBlob({ analysis, summary }) {
       addText("Sem dados no recorte", page.margin + 12, y - 42, 8.8, colors.muted);
       y -= distributionHeight + 14;
     }
+    if (analysis.reportMode === "package") drawPackageMonthlyEvolution();
     ensure(summaryHeight + 16);
     card(page.margin, y, contentW, summaryHeight, colors.greenSoft, colors.teal);
     addWrappedText(summaryText, page.margin + 14, y - 17, contentW - 28, 8.6, colors.ink, 10.8, 6);
@@ -4199,7 +4623,15 @@ function buildReportPdfBlob({ analysis, summary }) {
   };
 
   addPage();
-  drawKpiGrid();
+  if (analysis.reportMode === "package") {
+    drawPackageKpiGrid();
+    drawParagraphCard("Análise da Gestão de Pacotes", analysis.intelligentSummary, 116);
+    drawMonthlyTable();
+    drawPackageManagementComparison();
+    drawNumberedList("Recomendações de ação", "próximos passos", analysis.recommendations);
+    drawConclusion();
+  } else {
+    drawKpiGrid();
   drawParagraphCard("Análise inteligente do período", analysis.intelligentSummary, 132);
   drawDiagnosticCards();
   drawMonthlyTable();
@@ -4211,6 +4643,8 @@ function buildReportPdfBlob({ analysis, summary }) {
   drawNumberedList("Recomendações de ação", "próximos passos", analysis.recommendations);
   drawConclusion();
 
+  }
+
   pages.push(commands.join("\n"));
   const totalPages = pages.length;
   const pagesWithFooter = pages.map((content, index) => {
@@ -4221,7 +4655,7 @@ function buildReportPdfBlob({ analysis, summary }) {
   return createPdfBlob(pagesWithFooter);
 }
 
-function buildReportAnalysis({ rows, filteredRows, summary, scope: providedScope = null }) {
+function buildReportAnalysis({ rows, filteredRows, summary, scope: providedScope = null, typeSelection = state.prefaturaTipo, reportMode = "prefatura", packageRows = [], packageComparison = null }) {
   const scope = providedScope || getReportScope();
   const yearRows = rows.filter((row) => String(row.key).startsWith(`${scope.year}-`));
   const activeMonth = scope.mode === "monthly" ? rows.find((row) => row.key === scope.key) || null : null;
@@ -4249,7 +4683,7 @@ function buildReportAnalysis({ rows, filteredRows, summary, scope: providedScope
   const topBases = reportTopBy(filteredRows, "base", "valor_numerico", 8);
   const topDrivers = reportTopBy(filteredRows, "motorista", "valor_numerico", 8);
   const topBaseByCount = reportTopBy(filteredRows, "base", null, 5);
-  const selectedReportDivisions = getPrefaturaDivisionsForTypes();
+  const selectedReportDivisions = getPrefaturaDivisionsForTypes(typeSelection);
   const reportSheets = selectedReportDivisions.length < MAIN_TYPE_OPTIONS.length ? selectedReportDivisions : DONUT_SHEETS;
   const categoryTotals = reportSheets.map((sheet) => {
     const rowsForSheet = filteredRows.filter((row) => normalizeDonutSheet(row) === sheet);
@@ -4272,8 +4706,8 @@ function buildReportAnalysis({ rows, filteredRows, summary, scope: providedScope
   const volumeMonth = comparisonRows.reduce((best, row) => (Number(row.count || 0) > Number(best.count || 0) ? row : best), comparisonRows[0] || fallbackRow);
   const topBase = topBases[0] || { label: "Não identificado", total: 0, count: 0 };
   const topDriver = topDrivers[0] || { label: "Não identificado", total: 0, count: 0 };
-  const packagePrefaturaRows = filterPrefaturaRowsByTypes(allRows, state.packageTipo);
-  const packageComparison = buildPackageManagementComparisonForScope(scope, packagePrefaturaRows, state.packageTipo);
+  const packagePrefaturaRows = filterPrefaturaRowsByTypes(filteredRows, state.sheet === PACKAGE_MANAGEMENT_VIEW ? typeSelection : state.packageTipo);
+  const packageComparisonData = packageComparison || buildPackageManagementComparisonForScope(scope, packagePrefaturaRows, state.packageTipo);
   const topBaseShareNumber = summary.totalValue ? (topBase.total / summary.totalValue) * 100 : 0;
   const topDriverShareNumber = summary.totalValue ? (topDriver.total / summary.totalValue) * 100 : 0;
   const topBaseShare = formatNumberPt(topBaseShareNumber, 1);
@@ -4337,6 +4771,8 @@ function buildReportAnalysis({ rows, filteredRows, summary, scope: providedScope
     title: scope.title,
     fileName: scope.fileName,
     scope,
+    reportMode,
+    reportSubtitle: reportMode === "package" ? "Gestão de Pacotes" : "Performance Operacional",
     scopeLabel: scope.label,
     generatedAt: `Gerado em: ${liveClockFormatter.format(new Date())}`,
     timelineRows: comparisonRows,
@@ -4356,7 +4792,9 @@ function buildReportAnalysis({ rows, filteredRows, summary, scope: providedScope
     topDrivers: topDriversWithShare,
     topBaseShare,
     topDriverShare,
-    packageComparison,
+    packageRows,
+    packageEvolutionRows: reportMode === "package" ? buildPackageMonthlyEvolutionRows(packageRows) : [],
+    packageComparison: packageComparisonData,
     diagnostics,
     alerts,
     recommendations,
@@ -4371,21 +4809,23 @@ function buildReportAnalysis({ rows, filteredRows, summary, scope: providedScope
       trend,
       recommendations,
     }),
-    intelligentSummary: buildIntelligentSummary({
-      scope,
-      summary,
-      criticalMonth,
-      volumeMonth,
-      dominantCategory,
-      topBase,
-      topDriver,
-      topBaseShare,
-      topDriverShare,
-      trend,
-      ticketAverage,
-      pnrShare,
-      packageShare,
-    }),
+    intelligentSummary: reportMode === "package"
+      ? buildPackageReportIntelligentSummary({ scope, comparison: packageComparisonData })
+      : buildIntelligentSummary({
+        scope,
+        summary,
+        criticalMonth,
+        volumeMonth,
+        dominantCategory,
+        topBase,
+        topDriver,
+        topBaseShare,
+        topDriverShare,
+        trend,
+        ticketAverage,
+        pnrShare,
+        packageShare,
+      }),
   };
 }
 
@@ -4424,6 +4864,137 @@ function getReportScope() {
     title: `Relatório Executivo de Performance Operacional — ${label}`,
     fileName: `relatorio-performance-operacional-${slugify(`${monthName}-${year}-${periodLabel}`)}.pdf`,
   };
+}
+
+function getPackageReportScope() {
+  const monthOptions = getAvailablePackageMonthOptions();
+  const selectedMonths = getPackageMonthSelectionValues();
+  const periodMode = normalizePeriodMode(state.packagePeriod || "month");
+  const periodLabel = getPeriodModeLabel(periodMode);
+  const allMonthsSelected = !monthOptions.length || selectedMonths.length === monthOptions.length;
+  const firstKey = selectedMonths[0] || monthOptions[0]?.key || getDatasetPeriod(getActiveDataset()).key;
+  const year = String(firstKey || "").slice(0, 4) || String(new Date().getFullYear());
+
+  if (selectedMonths.length === 1 && !allMonthsSelected) {
+    const monthIndex = Number(String(firstKey).slice(5, 7)) || 1;
+    const monthName = MONTHS[monthIndex - 1] || "período";
+    const monthLabel = `${capitalize(monthName)}/${year}`;
+    const label = `${monthLabel} — ${periodLabel.toLowerCase()}`;
+    return {
+      mode: "monthly",
+      key: firstKey,
+      year,
+      periodMode,
+      periodLabel,
+      monthLabel,
+      label,
+      title: `Relatório Executivo — Gestão de Pacotes — ${label}`,
+      fileName: `relatorio-gestao-pacotes-${slugify(`${monthName}-${year}-${periodLabel}`)}.pdf`,
+    };
+  }
+
+  const selectedLabel = allMonthsSelected
+    ? `Anual ${year}`
+    : getMonthSelectionLabel(selectedMonths, monthOptions);
+  const periodSuffix = periodMode === "month" ? "mês completo" : periodLabel.toLowerCase();
+  const label = `${selectedLabel} — ${periodSuffix}`;
+  return {
+    mode: "annual",
+    key: allMonthsSelected ? "all" : firstKey,
+    year,
+    periodMode,
+    periodLabel,
+    monthSelection: selectedMonths,
+    label,
+    title: `Relatório Executivo — Gestão de Pacotes — ${label}`,
+    fileName: `relatorio-gestao-pacotes-${slugify(`${selectedLabel}-${periodLabel}`)}.pdf`,
+  };
+}
+
+function filterReportFilesByMonthSelection(files, monthSelection, periodMode) {
+  const selectedMonths = Array.isArray(monthSelection) ? monthSelection.filter(Boolean) : [];
+  const allMonthsSelected = !selectedMonths.length;
+  const normalizedPeriod = normalizePeriodMode(periodMode);
+  return (Array.isArray(files) ? files : [])
+    .filter(isUsableDashboardFileRecord)
+    .filter((file) => {
+      const period = getFileRecordPeriod(file);
+      if (!allMonthsSelected && !selectedMonths.includes(period.key)) return false;
+      if (normalizedPeriod === "month") return true;
+      return period.periodType === normalizedPeriod;
+    });
+}
+
+async function loadPrefaturaRowsForReportScope(scope, options = {}) {
+  const typeSelection = options.typeSelection || state.prefaturaTipo;
+  const files = await getReportAvailableFileRecords();
+  const monthSelection = options.monthSelection || (scope.mode === "annual" ? [] : [scope.key]);
+  const selectedFiles = filterReportFilesByMonthSelection(files, monthSelection, options.periodMode || scope.periodMode);
+  const datasetById = new Map(
+    (Array.isArray(library.datasets) ? library.datasets : [])
+      .filter((dataset) => dataset?.source !== "filtered" && Array.isArray(dataset.rows) && dataset.rows.length)
+      .map((dataset) => [dataset.id, dataset]),
+  );
+  const datasets = [];
+  for (const file of uniqueDashboardFileRecords(selectedFiles)) {
+    const cached = datasetById.get(file.id);
+    if (cached?.rows?.length) {
+      datasets.push(cached);
+      continue;
+    }
+    try {
+      const dataset = await loadRowsFromStorage(file);
+      if (dataset?.rows?.length) datasets.push(dataset);
+    } catch (error) {
+      console.error("[REPORT] Falha ao carregar Pré-Fatura para comparação:", file?.file_name, error);
+    }
+  }
+  return filterPrefaturaRowsByTypes(datasets.flatMap((dataset) => dataset.rows), typeSelection);
+}
+
+function buildPackageReportSummary(comparison, packageRows = []) {
+  const summary = comparison?.summary || buildPackageManagementSummary(packageRows);
+  const baseRows = (Array.isArray(packageRows) ? packageRows : []).filter(isPackageManagementDetailRow);
+  const totalValue = Number(summary.alcValue || 0) + Number(summary.driverValue || 0) + Number(summary.dispatcherValue || 0);
+  const driverCount = uniqueCount(baseRows, "motorista");
+  const baseCount = uniqueCount(baseRows, "base");
+  return {
+    count: Number(summary.count || baseRows.length || 0),
+    totalValue,
+    baseCount,
+    driverCount,
+    routeCount: uniqueCount(baseRows, "rota"),
+    packageCount: Number(summary.dispatcherErrors || 0),
+    pnrCount: Number(summary.mercadoLivreErrors || 0),
+    topBase: topBy(baseRows, "base", "valor_numerico", 1)[0] || null,
+    topDriver: topBy(baseRows, "motorista", "valor_numerico", 1)[0] || null,
+    packageShare: summary.count ? ((Number(summary.dispatcherErrors || 0) / summary.count) * 100).toFixed(1) : "0.0",
+    pnrShare: summary.count ? ((Number(summary.mercadoLivreErrors || 0) / summary.count) * 100).toFixed(1) : "0.0",
+    fileName: "Gestão de Pacotes",
+    lastUpdate: baseRows.length ? formatDate(maxDate(baseRows)) : "--",
+  };
+}
+
+function buildPackageReportIntelligentSummary({ scope, comparison }) {
+  if (!comparison?.hasPackageRows) {
+    return `No recorte ${scope.label}, não há registros válidos de Gestão de Pacotes para análise executiva.`;
+  }
+  const summary = comparison.summary || {};
+  const distribution = comparison.typeDistribution || buildPackageTypeDistribution(comparison.rows);
+  const dominant = distribution.dominant || null;
+  const prefaturaBase = comparison.prefaturaSummary || {};
+  const totalGestaoValue = Number(summary.alcValue || 0) + Number(summary.driverValue || 0) + Number(summary.dispatcherValue || 0);
+  const dominantSentence = dominant
+    ? `O tipo ${dominant.type} concentrou ${integer.format(dominant.count)} registro${dominant.count === 1 ? "" : "s"}, equivalente a ${formatNumberPt(dominant.share, 1)}% da Gestão de Pacotes.`
+    : "Não houve distribuição por tipo disponível no recorte.";
+  const comparisonSentence = Number(prefaturaBase.totalValue || 0)
+    ? `A base de comparação da Pré-Fatura no mesmo recorte soma ${currency.format(prefaturaBase.totalValue)} em ${integer.format(prefaturaBase.count || 0)} registros.`
+    : "Não há Pré-Fatura no mesmo recorte para comparação percentual.";
+  return [
+    `No recorte ${scope.label}, a Gestão de Pacotes registrou ${integer.format(summary.count || 0)} ocorrência${Number(summary.count || 0) === 1 ? "" : "s"} válida${Number(summary.count || 0) === 1 ? "" : "s"} e ${currency.format(totalGestaoValue)} nos três grupos financeiros principais.`,
+    `${dominantSentence} Foram identificados ${integer.format(summary.driverErrors || 0)} erros do Driver, ${integer.format(summary.dispatcherErrors || 0)} erros do Dispatcher e ${integer.format(summary.mercadoLivreErrors || 0)} erros do Mercado Livre.`,
+    comparisonSentence,
+  ].join(" ");
 }
 
 function buildReportTrend(scope, activeMonth, previousMonth, comparisonRows) {
@@ -5049,7 +5620,11 @@ function renderFilterSummary() {
 
   if (state.sheet !== PRE_FATURA_VIEW) push("Aba", getSheetDisplayLabel(state.sheet));
   if (state.sheet !== MONTHLY_BASE_VIEW) push("Tipo", getActiveTypeFilter());
-  if (normalizePeriodMode(state.period) !== "month") push("Período", getPeriodModeLabel(state.period));
+  const monthOptions = getActiveMonthOptions();
+  const monthSelection = getActiveMonthSelectionValues();
+  if (monthOptions.length && monthSelection.length !== monthOptions.length) push("Mês", getMonthSelectionLabel(monthSelection, monthOptions));
+  const activePeriod = getActivePeriodMode();
+  if (activePeriod !== "month") push("Período", getPeriodModeLabel(activePeriod));
   if (state.query && state.sheet !== MONTHLY_BASE_VIEW) applied.push({ label: "Busca", value: state.query });
 
   if (el.activeFiltersCount) {
@@ -5173,14 +5748,14 @@ function getMonthlyComparisonRows(rows, sheet = state.sheet) {
   return rows.filter((row) => getRowDivision(row) === sheet);
 }
 
-async function buildReportHistoricalComparisonRows(scope) {
+async function buildReportHistoricalComparisonRows(scope, typeSelection = state.prefaturaTipo) {
   const files = await getReportAvailableFileRecords();
-  if (!files.length) return buildMonthlyComparisonFromDatasets(library.datasets, { sheet: getPrefaturaComparisonSheet(), viewMode: "monthly" });
+  if (!files.length) return buildMonthlyComparisonFromDatasets(library.datasets, { types: typeSelection, viewMode: "monthly" });
 
   if (scope.mode === "annual") {
     const annualFiles = getFilesByMonthAndPeriod(files, "all", scope.periodMode, PRE_FATURA_FILE_CATEGORY)
       .filter((file) => getFileRecordPeriod(file).key.startsWith(`${scope.year}-`));
-    return buildReportMonthlyComparisonForFiles(annualFiles.length ? annualFiles : files.filter((file) => getFileRecordPeriod(file).key.startsWith(`${scope.year}-`)));
+    return buildReportMonthlyComparisonForFiles(annualFiles.length ? annualFiles : files.filter((file) => getFileRecordPeriod(file).key.startsWith(`${scope.year}-`)), typeSelection);
   }
 
   const availableMonthKeys = Array.from(new Set(files.map((file) => getFileRecordPeriod(file).key))).sort();
@@ -5198,7 +5773,7 @@ async function buildReportHistoricalComparisonRows(scope) {
   }
 
   const comparisonFiles = uniqueDashboardFileRecords([...previousFiles, ...selectedFiles]);
-  const comparisonRows = await buildReportMonthlyComparisonForFiles(comparisonFiles);
+  const comparisonRows = await buildReportMonthlyComparisonForFiles(comparisonFiles, typeSelection);
   return comparisonRows.map((row) => ({
     ...row,
     periodMode: row.key === previousKey ? previousPeriodMode : row.key === scope.key ? scope.periodMode : row.periodMode,
@@ -5224,13 +5799,13 @@ async function getReportAvailableFileRecords() {
   return (files || []).filter(isUsableDashboardFileRecord).filter((file) => getFileRecordCategory(file) === PRE_FATURA_FILE_CATEGORY);
 }
 
-async function buildReportMonthlyComparisonForFiles(files) {
+async function buildReportMonthlyComparisonForFiles(files, typeSelection = state.prefaturaTipo) {
   const datasets = [];
   for (const file of uniqueDashboardFileRecords(files)) {
     const dataset = await loadRowsFromStorage(file);
     if (dataset?.rows?.length) datasets.push(dataset);
   }
-  return buildMonthlyComparisonFromDatasets(datasets, { sheet: getPrefaturaComparisonSheet() });
+  return buildMonthlyComparisonFromDatasets(datasets, { types: typeSelection });
 }
 
 function uniqueDashboardFileRecords(files) {
@@ -5345,8 +5920,8 @@ function getFilteredRowsCacheKey() {
   return [
     datasetId,
     allRows.length,
-    state.monthFilter,
-    state.period,
+    getPrefaturaMonthSelectionValues().join("|"),
+    normalizePeriodMode(state.prefaturaPeriod || state.period),
     normalizeTypeSelection(state.prefaturaTipo).join("|"),
     normalize(state.query),
   ].join("::");
@@ -6481,6 +7056,12 @@ async function uploadDashboardFile(file) {
   if (previewDataset.fileCategory === PRE_FATURA_FILE_CATEGORY) {
     state.monthFilter = uploadedPeriod.key;
     state.period = uploadedPeriod.periodType;
+    state.prefaturaMonths = [uploadedPeriod.key];
+    state.prefaturaPeriod = uploadedPeriod.periodType;
+  } else {
+    const packageKey = getPackageManagementMonthKey(previewDataset.rows?.[0] || {});
+    if (packageKey) state.packageMonths = [packageKey];
+    state.packagePeriod = getPackageManagementPeriodType(previewDataset.rows?.[0] || {}) || "month";
   }
   persistState();
   mergeUploadedDatasetIntoMemory(data, previewDataset);
@@ -6865,7 +7446,7 @@ function applyDashboardScopeFromLoadedDatasets() {
     .filter(isUsableDashboardFileRecord)
     .filter((record) => getFileRecordCategory(record) === PRE_FATURA_FILE_CATEGORY);
   if (!categoryFiles.length) return false;
-  const selectedFiles = getFilesByMonthAndPeriod(categoryFiles, state.monthFilter || "all", state.period, PRE_FATURA_FILE_CATEGORY);
+  const selectedFiles = getFilesByMonthsAndPeriod(categoryFiles, getPrefaturaMonthSelectionValues(), state.prefaturaPeriod || state.period, PRE_FATURA_FILE_CATEGORY);
   if (!selectedFiles.length) return false;
   const datasetById = new Map(
     library.datasets
@@ -6882,8 +7463,8 @@ function applyDashboardScopeFromLoadedDatasets() {
     selectedFiles,
     selectedDatasets,
     allHistoricalDatasets: [...allHistoricalDatasets, ...packageDatasets],
-    selectedMonth: state.monthFilter || "all",
-    selectedPeriod: state.period,
+    selectedMonth: state.prefaturaMonths.length === 1 ? state.prefaturaMonths[0] : "all",
+    selectedPeriod: state.prefaturaPeriod || state.period,
     fileCategory: PRE_FATURA_FILE_CATEGORY,
   });
   setDashboardVisualState("", { render: false });
@@ -6914,9 +7495,15 @@ async function loadDashboardDataByFilters(options = {}) {
     }
 
     if (!state.monthFilter) state.monthFilter = "all";
-    if (state.monthFilter !== "all" && !getAvailableMonthOptions().some((month) => month.key === state.monthFilter)) {
+    if (state.monthFilter !== "all" && !getAvailableMonthOptions(PRE_FATURA_FILE_CATEGORY).some((month) => month.key === state.monthFilter)) {
       state.monthFilter = "all";
     }
+    state.prefaturaMonths = normalizeMonthSelection(
+      Array.isArray(state.prefaturaMonths) && state.prefaturaMonths.length ? state.prefaturaMonths : state.monthFilter,
+      getAvailableMonthOptions(PRE_FATURA_FILE_CATEGORY),
+    );
+    state.prefaturaPeriod = normalizePeriodMode(state.prefaturaPeriod || state.period);
+    state.period = state.prefaturaPeriod;
     ensureCurrentPeriodIsAvailable();
 
     const cachedDatasets = new Map(
@@ -6934,7 +7521,7 @@ async function loadDashboardDataByFilters(options = {}) {
       return;
     }
 
-    const selectedFiles = getFilesByMonthAndPeriod(categoryFiles, state.monthFilter || "all", state.period, currentFileCategory);
+    const selectedFiles = getFilesByMonthsAndPeriod(categoryFiles, getPrefaturaMonthSelectionValues(), state.prefaturaPeriod || state.period, currentFileCategory);
     if (!selectedFiles.length) {
       dashboardFilesLoading = false;
       setDashboardVisualState("no-filter-results", { render: false });
@@ -6974,8 +7561,8 @@ async function loadDashboardDataByFilters(options = {}) {
       selectedFiles,
       selectedDatasets,
       allHistoricalDatasets: [...allHistoricalDatasets, ...packageDatasets],
-      selectedMonth: state.monthFilter || "all",
-      selectedPeriod: state.period,
+      selectedMonth: state.prefaturaMonths.length === 1 ? state.prefaturaMonths[0] : "all",
+      selectedPeriod: state.prefaturaPeriod || state.period,
       fileCategory: currentFileCategory,
     });
     setDashboardVisualState("", { render: false });
@@ -8491,6 +9078,11 @@ function normalizeLoadedState(loadedState) {
   }
   loadedState.prefaturaTipo = normalizeTypeSelection(loadedState.prefaturaTipo);
   loadedState.packageTipo = normalizeTypeSelection(loadedState.packageTipo);
+  loadedState.prefaturaMonths = Array.isArray(loadedState.prefaturaMonths) ? loadedState.prefaturaMonths : [];
+  loadedState.packageMonths = Array.isArray(loadedState.packageMonths) ? loadedState.packageMonths : [];
+  loadedState.prefaturaPeriod = normalizePeriodMode(loadedState.prefaturaPeriod || loadedState.period);
+  loadedState.packagePeriod = normalizePeriodMode(loadedState.packagePeriod || "month");
+  loadedState.period = loadedState.prefaturaPeriod;
   loadedState.tipo = "Todos";
   return loadedState;
 }

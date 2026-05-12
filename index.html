@@ -123,14 +123,26 @@
                 </button>
                 <input id="search-input" type="search" placeholder="Buscar" aria-label="Buscar registros" />
               </div>
-              <label class="global-period-filter global-period-filter--month top-filter-control">
+              <div class="global-period-filter global-period-filter--month top-filter-control custom-filter" id="month-filter">
                 <span>Mês</span>
-                <select id="month-select"></select>
-              </label>
-              <label class="global-period-filter top-filter-control">
+                <button class="type-filter__button custom-filter__button" id="month-filter-toggle" type="button" aria-haspopup="true" aria-expanded="false">
+                  <span id="month-filter-label">Todos</span>
+                  <svg viewBox="0 0 24 24" aria-hidden="true">
+                    <path d="m6 9 6 6 6-6" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2"></path>
+                  </svg>
+                </button>
+                <div class="type-filter__menu custom-filter__menu" id="month-filter-menu" role="menu" hidden></div>
+              </div>
+              <div class="global-period-filter top-filter-control custom-filter" id="period-filter">
                 <span>Período</span>
-                <select id="period-select"></select>
-              </label>
+                <button class="type-filter__button custom-filter__button" id="period-filter-toggle" type="button" aria-haspopup="true" aria-expanded="false">
+                  <span id="period-filter-label">Mês completo</span>
+                  <svg viewBox="0 0 24 24" aria-hidden="true">
+                    <path d="m6 9 6 6 6-6" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2"></path>
+                  </svg>
+                </button>
+                <div class="type-filter__menu custom-filter__menu" id="period-filter-menu" role="menu" hidden></div>
+              </div>
               <div class="global-period-filter global-period-filter--type type-filter top-filter-control" id="type-filter">
                 <span>Tipo</span>
                 <button class="type-filter__button" id="type-filter-toggle" type="button" aria-haspopup="true" aria-expanded="false">
