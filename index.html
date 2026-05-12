@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="pt-BR" data-filters-sidebar-open="false">
+<html lang="pt-BR">
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
@@ -12,16 +12,6 @@
     <link rel="icon" type="image/png" sizes="16x16" href="/favicon-16x16.png" />
     <link rel="shortcut icon" href="/favicon.ico" />
     <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
-    <script>
-      (function () {
-        try {
-          var saved = window.localStorage.getItem("filtersSidebarOpen");
-          document.documentElement.dataset.filtersSidebarOpen = saved === "true" ? "true" : "false";
-        } catch (error) {
-          document.documentElement.dataset.filtersSidebarOpen = "false";
-        }
-      })();
-    </script>
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link
@@ -34,18 +24,13 @@
     <div class="app-shell">
       <header class="topbar">
         <div class="topbar__left">
-          <button class="icon-button" id="sidebar-toggle" type="button" aria-label="Alternar filtros">
-            <span></span>
-            <span></span>
-            <span></span>
-          </button>
           <div class="brand-lockup">
             <div class="brand-logo" aria-label="ALC Pereira Filho Transportes">
               <img src="assets/logo-alc-dashboard.png" alt="ALC Pereira Filho Transportes" />
             </div>
             <div class="topbar__titles">
               <h1>Painel de Inteligência Operacional</h1>
-              <p>Setor: LOSS · Dashboard Pré-Fatura</p>
+              <p>Setor: Loss · Dashboard Pré-Fatura</p>
             </div>
           </div>
         </div>
@@ -126,83 +111,63 @@
       </header>
 
       <main class="layout" data-dashboard-ready="false">
-        <aside class="sidebar" id="sidebar">
-          <section class="sidebar-card sidebar-card--library" hidden>
-            <div class="sidebar-card__title">
-              <h2>Arquivos</h2>
-              <span id="dataset-count">1 arquivo</span>
-            </div>
-            <label>
-              <span>Arquivo ativo</span>
-              <select id="dataset-select"></select>
-            </label>
-            <p class="sidebar-note" id="dataset-note">Carregue meses anteriores e troque sem reimportar o workbook.</p>
-          </section>
-
-          <section class="sidebar-card sidebar-card--search">
-            <label for="search-input">Pesquisar</label>
-            <div class="search-box">
-              <svg viewBox="0 0 24 24" aria-hidden="true">
-                <path d="M10.5 4a6.5 6.5 0 1 0 4.13 11.52L20 21l1-1-5.38-5.38A6.5 6.5 0 0 0 10.5 4Z" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8"></path>
-              </svg>
-              <input id="search-input" type="search" placeholder="Base, driver, placa, rota..." />
-            </div>
-          </section>
-
-          <section class="sidebar-card">
-            <div class="sidebar-card__title">
-              <h2>Filtros</h2>
-              <div class="sidebar-card__title-actions">
-                <span id="active-filters-count">0 filtros ativos</span>
-                <button class="secondary-button secondary-button--mini" id="clear-filters" type="button">Limpar</button>
-              </div>
-            </div>
-
-            <div class="filter-list">
-              <label hidden>
-                <span>Aba de origem</span>
-                <select id="sheet-select"></select>
-              </label>
-              <label hidden>
-                <span>Tipo</span>
-                <select id="type-select"></select>
-              </label>
-              <label>
-                <span>Base</span>
-                <select id="base-select"></select>
-              </label>
-              <label>
-                <span>Driver</span>
-                <select id="driver-select"></select>
-              </label>
-            </div>
-          </section>
-
-          <section class="sidebar-card sidebar-card--status" hidden>
-            <div class="sidebar-card__title">
-              <h2>Filtragem atual</h2>
-            </div>
-            <div class="status-stack" id="filter-summary"></div>
-          </section>
-        </aside>
-
         <section class="content">
           <div class="view-toolbar">
             <nav class="sheet-tabs" id="sheet-tabs" aria-label="Selecionar aba de origem"></nav>
             <div class="global-period-filters" aria-label="Filtros de período e tipo">
-              <label class="global-period-filter global-period-filter--month">
+              <div class="global-search-filter top-filter-control" id="top-search-filter">
+                <button class="global-search-filter__button" id="search-toggle" type="button" aria-label="Pesquisar">
+                  <svg viewBox="0 0 24 24">
+                    <path d="M10.5 4a6.5 6.5 0 1 0 4.13 11.52L20 21l1-1-5.38-5.38A6.5 6.5 0 0 0 10.5 4Z" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8"></path>
+                  </svg>
+                </button>
+                <input id="search-input" type="search" placeholder="Buscar" aria-label="Buscar registros" />
+              </div>
+              <label class="global-period-filter global-period-filter--month top-filter-control">
                 <span>Mês</span>
                 <select id="month-select"></select>
               </label>
-              <label class="global-period-filter">
+              <label class="global-period-filter top-filter-control">
                 <span>Período</span>
                 <select id="period-select"></select>
               </label>
-              <label class="global-period-filter global-period-filter--package-type" hidden>
+              <div class="global-period-filter global-period-filter--type type-filter top-filter-control" id="type-filter">
                 <span>Tipo</span>
-                <select id="package-type-select"></select>
-              </label>
+                <button class="type-filter__button" id="type-filter-toggle" type="button" aria-haspopup="true" aria-expanded="false">
+                  <span id="type-filter-label">Todos</span>
+                  <svg viewBox="0 0 24 24" aria-hidden="true">
+                    <path d="m6 9 6 6 6-6" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2"></path>
+                  </svg>
+                </button>
+                <div class="type-filter__menu" id="type-filter-menu" role="menu" hidden>
+                  <label class="type-filter__option">
+                    <input type="checkbox" value="Todos" data-type-option>
+                    <span class="type-filter__check" aria-hidden="true"></span>
+                    <span>Todos</span>
+                  </label>
+                  <label class="type-filter__option">
+                    <input type="checkbox" value="SVC" data-type-option>
+                    <span class="type-filter__check" aria-hidden="true"></span>
+                    <span>SVC</span>
+                  </label>
+                  <label class="type-filter__option">
+                    <input type="checkbox" value="XPT" data-type-option>
+                    <span class="type-filter__check" aria-hidden="true"></span>
+                    <span>XPT</span>
+                  </label>
+                  <label class="type-filter__option">
+                    <input type="checkbox" value="PNR" data-type-option>
+                    <span class="type-filter__check" aria-hidden="true"></span>
+                    <span>PNR</span>
+                  </label>
+                </div>
+              </div>
             </div>
+          </div>
+          <div hidden>
+            <span id="active-filters-count">0 filtros ativos</span>
+            <div id="filter-summary"></div>
+            <button id="clear-filters" type="button">Limpar</button>
           </div>
 
           <section class="monthly-base-view" id="monthly-base-view" hidden></section>
@@ -212,7 +177,7 @@
               <svg viewBox="0 0 24 24" aria-hidden="true">
                 <path d="m15 6-6 6 6 6" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2"></path>
               </svg>
-              <span>Voltar para Home</span>
+              <span>Voltar ao início</span>
             </button>
             <div class="account-page__header">
               <div class="profile-avatar-stack">
@@ -301,7 +266,7 @@
               <svg viewBox="0 0 24 24" aria-hidden="true">
                 <path d="m15 6-6 6 6 6" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2"></path>
               </svg>
-              <span>Voltar para Home</span>
+              <span>Voltar ao início</span>
             </button>
             <div class="account-page__header">
               <div>
@@ -348,7 +313,7 @@
                   <div>
                     <h2>Mix por aba</h2>
                   </div>
-                  <button class="mix-share-button" type="button">share</button>
+                  <button class="mix-share-button" type="button">Compartilhar</button>
                 </div>
                 <div class="mix-card__body">
                   <div class="mix-chart" id="donut-chart">

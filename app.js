@@ -2,7 +2,6 @@
 
 const STORAGE_KEY = "alc-pre-fatura-dashboard-state-v1";
 const THEME_STORAGE_KEY = "alc-pre-fatura-dashboard-theme-v1";
-const SIDEBAR_STORAGE_KEY = "filtersSidebarOpen";
 const EVOLUTION_PERIOD_VIEW_STORAGE_KEY = "evolutionPeriodView";
 const COMPARISON_PERIOD_VIEW_STORAGE_KEY = "comparisonPeriodView";
 const PDF_LOGO_IMAGE = {
@@ -134,10 +133,10 @@ let hasInitialLoadCompleted = false;
 let isLoadingDashboardData = false;
 let isRefreshingFilesList = false;
 let dashboardPermissionTimer = null;
-let sidebarAnimationTimer = null;
 let liveClockTimer = null;
 let accountMenuCloseTimer = null;
 let comparisonTooltipHideTimer = null;
+let searchDebounceTimer = null;
 let activeComparisonTooltipColumn = null;
 let evolutionTooltipHideTimer = null;
 let activeEvolutionTooltipBar = null;
@@ -154,6 +153,20 @@ let evolutionPeriodView = loadEvolutionPeriodView();
 let comparisonPeriodView = loadComparisonPeriodView();
 let totalDiscountComparisonRequest = 0;
 let globalGoalSettings = getDefaultGoalSettings();
+let packageManagementRowsLoadedKey = "";
+const derivedDataCache = {
+  prefaturaKey: "",
+  prefaturaRows: [],
+  packageKey: "",
+  packageRows: [],
+};
+
+function resetDerivedDataCache() {
+  derivedDataCache.prefaturaKey = "";
+  derivedDataCache.prefaturaRows = [];
+  derivedDataCache.packageKey = "";
+  derivedDataCache.packageRows = [];
+}
 
 const DASHBOARD_STATE_CONFIG = {
   "loading-session": {
@@ -226,7 +239,6 @@ const el = {};
 
 async function bootstrapDashboard() {
   cacheDom();
-  hydrateSidebarState();
   startLiveClock();
   bindEvents();
   hydrateThemeControls();
@@ -258,8 +270,6 @@ if (document.readyState === "loading") {
 function cacheDom() {
   el.layout = document.querySelector(".layout");
   el.content = document.querySelector(".content");
-  el.sidebar = document.getElementById("sidebar");
-  el.sidebarToggle = document.getElementById("sidebar-toggle");
   el.uploadButton = document.getElementById("upload-button");
   el.refreshButton = document.getElementById("refresh-button");
   el.deleteActiveButton = document.getElementById("delete-active-button");
@@ -346,13 +356,20 @@ function cacheDom() {
   el.toast = document.getElementById("toast");
   el.clearFilters = document.getElementById("clear-filters");
   el.searchInput = document.getElementById("search-input");
+  el.searchToggle = document.getElementById("search-toggle");
+  el.searchFilter = document.getElementById("top-search-filter");
   el.monthSelect = document.getElementById("month-select");
   el.periodSelect = document.getElementById("period-select");
-  el.packageTypeSelect = document.getElementById("package-type-select");
-  el.sheetSelect = document.getElementById("sheet-select");
-  el.typeSelect = document.getElementById("type-select");
-  el.baseSelect = document.getElementById("base-select");
-  el.driverSelect = document.getElementById("driver-select");
+  el.typeFilter = document.getElementById("type-filter");
+  el.typeFilterToggle = document.getElementById("type-filter-toggle");
+  el.typeFilterLabel = document.getElementById("type-filter-label");
+  el.typeFilterMenu = document.getElementById("type-filter-menu");
+  el.typeFilterOptions = Array.from(document.querySelectorAll("[data-type-option]"));
+  el.packageTypeFilter = el.typeFilter;
+  el.packageTypeToggle = el.typeFilterToggle;
+  el.packageTypeLabel = el.typeFilterLabel;
+  el.packageTypeMenu = el.typeFilterMenu;
+  el.packageTypeOptions = el.typeFilterOptions;
   el.pageSize = document.getElementById("page-size");
   el.sortHigh = document.getElementById("sort-high");
   el.sortLow = document.getElementById("sort-low");
@@ -370,10 +387,6 @@ function updateLiveClock() {
 }
 
 function bindEvents() {
-  el.sidebarToggle.addEventListener("click", () => {
-    setSidebarCollapsed(!el.sidebar.classList.contains("is-collapsed"));
-  });
-
   if (el.uploadButton) {
     el.uploadButton.addEventListener("click", () => {
       if (!ensureUploadPermission()) {
@@ -566,38 +579,26 @@ function bindEvents() {
     await handleDatasetSelection(event.target.value);
   });
 
-  el.clearFilters.addEventListener("click", () => {
-    resetDashboardFilters();
-  });
+  if (el.clearFilters) {
+    el.clearFilters.addEventListener("click", () => {
+      resetDashboardFilters();
+    });
+  }
 
-  [
-    ["searchInput", "query"],
-    ["sheetSelect", "sheet"],
-    ["typeSelect", "tipo"],
-    ["baseSelect", "base"],
-    ["driverSelect", "motorista"],
-  ].forEach(([key, prop]) => {
-    if (!el[key]) return;
-    el[key].addEventListener("input", (event) => {
-      const previousCategory = prop === "sheet" ? getCurrentFileCategory() : null;
-      state[prop] = event.target.value;
+  if (el.searchToggle) {
+    el.searchToggle.addEventListener("click", () => {
+      setSearchExpanded(!el.searchFilter?.classList.contains("is-expanded"), { focus: true });
+    });
+  }
+  if (el.searchInput) {
+    el.searchInput.addEventListener("input", (event) => {
+      state.query = event.target.value;
       state.page = 1;
       persistState();
-      if (prop === "sheet" && getCurrentFileCategory() !== previousCategory) {
-        hydrateControls();
-        if (getCurrentFileCategory() === PACKAGE_MANAGEMENT_FILE_CATEGORY) {
-          void loadPackageManagementRowsForCards(dashboardFileRecords).finally(() => {
-            hydrateControls();
-            renderAll();
-          });
-          return;
-        }
-        void loadDashboardDataByFilters({ force: true, showLoading: false });
-        return;
-      }
-      renderAll();
+      setSearchExpanded(Boolean(state.query), { focus: false });
+      scheduleSearchRender();
     });
-  });
+  }
 
   if (el.periodSelect) {
     el.periodSelect.addEventListener("change", async (event) => {
@@ -609,7 +610,13 @@ function bindEvents() {
         renderAll();
         return;
       }
-      await loadDashboardDataByFilters();
+      if (applyDashboardScopeFromLoadedDatasets()) {
+        hydrateControls();
+        renderAll();
+        return;
+      }
+      hydrateControls();
+      renderAll();
     });
   }
   if (el.monthSelect) {
@@ -623,16 +630,31 @@ function bindEvents() {
         renderAll();
         return;
       }
-      await loadDashboardDataByFilters();
-    });
-  }
-  if (el.packageTypeSelect) {
-    el.packageTypeSelect.addEventListener("change", (event) => {
-      setActiveTypeFilter(event.target.value);
-      state.page = 1;
-      persistState();
+      if (applyDashboardScopeFromLoadedDatasets()) {
+        hydrateControls();
+        renderAll();
+        return;
+      }
       hydrateControls();
       renderAll();
+    });
+  }
+  if (el.packageTypeToggle) {
+    el.packageTypeToggle.addEventListener("click", (event) => {
+      event.preventDefault();
+      togglePackageTypeMenu();
+    });
+  }
+  if (el.packageTypeOptions?.length) {
+    el.packageTypeOptions.forEach((input) => {
+      input.addEventListener("change", (event) => {
+        applyPackageTypeOptionChange(event.target);
+      });
+    });
+    document.addEventListener("click", (event) => {
+      if (!el.packageTypeMenu || el.packageTypeMenu.hidden) return;
+      if (event.target.closest("#type-filter")) return;
+      closePackageTypeMenu();
     });
   }
 
@@ -648,13 +670,13 @@ function bindEvents() {
     state.page = 1;
     if (el.settingsPageSize) el.settingsPageSize.value = String(state.pageSize);
     persistState();
-    renderAll();
+    renderCurrentTablePageOnly();
   });
 
   el.prevPage.addEventListener("click", () => {
     state.page = Math.max(1, state.page - 1);
     persistState();
-    renderAll();
+    renderCurrentTablePageOnly();
   });
 
   el.nextPage.addEventListener("click", () => {
@@ -662,50 +684,47 @@ function bindEvents() {
     const totalPages = Math.max(1, Math.ceil(totalRows / state.pageSize));
     state.page = Math.min(totalPages, state.page + 1);
     persistState();
-    renderAll();
+    renderCurrentTablePageOnly();
   });
 
   el.sheetTabs.addEventListener("click", (event) => {
     const button = event.target.closest("button[data-sheet]");
     if (!button) return;
     const previousCategory = getCurrentFileCategory();
+    closeTopFilterOverlays();
+    clearTransientDashboardStateForNavigation();
     state.appView = "dashboard";
     state.sheet = button.dataset.sheet;
     state.page = 1;
     persistState();
     hydrateControls();
+    renderAll();
     if (getCurrentFileCategory() !== previousCategory) {
       if (getCurrentFileCategory() === PACKAGE_MANAGEMENT_FILE_CATEGORY) {
-        void loadPackageManagementRowsForCards(dashboardFileRecords).finally(() => {
+        void ensurePackageManagementRowsLoaded(dashboardFileRecords).finally(() => {
           hydrateControls();
           renderAll();
         });
         return;
       }
-      void loadDashboardDataByFilters({ force: true, showLoading: false });
+      if (applyDashboardScopeFromLoadedDatasets()) {
+        hydrateControls();
+        renderAll();
+      }
       return;
     }
-    renderAll();
   });
 
   el.baseBars.addEventListener("click", (event) => {
     const row = event.target.closest("[data-base]");
     if (!row) return;
-    state.base = row.dataset.base;
-    state.page = 1;
-    hydrateControls();
-    renderAll();
-    showToast(`Filtro aplicado: ${state.base}`, "info");
+    showToast(`Base em destaque: ${row.dataset.base}`, "info");
   });
 
   el.driverRank.addEventListener("click", (event) => {
     const row = event.target.closest("[data-driver]");
     if (!row) return;
-    state.motorista = row.dataset.driver;
-    state.page = 1;
-    hydrateControls();
-    renderAll();
-    showToast(`Driver filtrado: ${state.motorista}`, "info");
+    showToast(`Driver em destaque: ${row.dataset.driver}`, "info");
   });
 
   el.donutLegend.addEventListener("click", (event) => {
@@ -844,16 +863,12 @@ function bindEvents() {
     }
     persistState();
     hydrateValueSortControls();
-    renderAll();
+    renderCurrentTablePageOnly();
   });
 }
 
 function getSheetDisplayLabel(sheet) {
   return SHEET_DISPLAY_LABELS[sheet] || String(sheet || "");
-}
-
-function getSelectDisplayLabel(value) {
-  return SHEET_DISPLAY_LABELS[value] || String(value || "");
 }
 
 function getCurrentFileCategory(sheet = state.sheet) {
@@ -864,21 +879,143 @@ function normalizeMainTypeFilter(value) {
   return MAIN_TYPE_OPTIONS.includes(value) ? value : "Todos";
 }
 
+function normalizePackageTypeSelection(value) {
+  const source = Array.isArray(value)
+    ? value
+    : String(value || "")
+      .split(/[,+;|]/)
+      .map((item) => item.replace(/\s*\+\s*/g, "+"))
+      .flatMap((item) => item.split("+"));
+  const requested = source
+    .map((item) => String(item || "").trim().toUpperCase())
+    .filter(Boolean);
+  if (!requested.length || requested.includes("TODOS")) return MAIN_TYPE_OPTIONS.slice();
+  const selected = MAIN_TYPE_OPTIONS.filter((type) => requested.includes(type));
+  return selected.length ? selected : MAIN_TYPE_OPTIONS.slice();
+}
+
+function normalizeTypeSelection(value) {
+  return normalizePackageTypeSelection(value);
+}
+
+function getPackageTypeSelection(value = state.packageTipo) {
+  return normalizeTypeSelection(value);
+}
+
+function getPrefaturaTypeSelection(value = state.prefaturaTipo) {
+  return normalizeTypeSelection(value);
+}
+
+function getTypeSelectionValues(value) {
+  return normalizeTypeSelection(value);
+}
+
+function getPackageTypeSelectionValues(value = state.packageTipo) {
+  return getTypeSelectionValues(value);
+}
+
+function getPrefaturaTypeSelectionValues(value = state.prefaturaTipo) {
+  return getTypeSelectionValues(value);
+}
+
+function isPackageTypeSelectionAll(value = state.packageTipo) {
+  return normalizeTypeSelection(value).length === MAIN_TYPE_OPTIONS.length;
+}
+
+function getTypeFilterLabel(value) {
+  const selection = normalizeTypeSelection(value);
+  if (selection.length === MAIN_TYPE_OPTIONS.length) return "Todos";
+  return selection.join(" + ");
+}
+
+function getPackageTypeFilterLabel(value = state.packageTipo) {
+  return getTypeFilterLabel(value);
+}
+
 function getActiveTypeFilter() {
-  return state.sheet === PACKAGE_MANAGEMENT_VIEW ? normalizeMainTypeFilter(state.packageTipo) : normalizeMainTypeFilter(state.prefaturaTipo);
+  return state.sheet === PACKAGE_MANAGEMENT_VIEW ? getTypeFilterLabel(state.packageTipo) : getTypeFilterLabel(state.prefaturaTipo);
 }
 
 function setActiveTypeFilter(value) {
-  const normalized = normalizeMainTypeFilter(value);
   if (state.sheet === PACKAGE_MANAGEMENT_VIEW) {
-    state.packageTipo = normalized;
+    state.packageTipo = normalizeTypeSelection(value);
   } else {
-    state.prefaturaTipo = normalized;
+    state.prefaturaTipo = normalizeTypeSelection(value);
   }
 }
 
+function syncPackageTypeFilterControl() {
+  if (!el.typeFilterToggle || !el.typeFilterLabel || !el.typeFilterOptions?.length) return;
+  const activeValue = state.sheet === PACKAGE_MANAGEMENT_VIEW ? state.packageTipo : state.prefaturaTipo;
+  const selection = normalizeTypeSelection(activeValue);
+  const selectedValues = new Set(selection);
+  const allSelected = selection.length === MAIN_TYPE_OPTIONS.length;
+  el.typeFilterLabel.textContent = getTypeFilterLabel(selection);
+  el.typeFilterToggle.setAttribute("aria-expanded", el.typeFilterMenu && !el.typeFilterMenu.hidden ? "true" : "false");
+  el.typeFilterOptions.forEach((input) => {
+    input.checked = input.value === "Todos" ? allSelected : (!allSelected && selectedValues.has(input.value));
+  });
+}
+
+function closePackageTypeMenu() {
+  if (!el.typeFilterMenu || !el.typeFilterToggle) return;
+  el.typeFilterMenu.hidden = true;
+  el.typeFilterToggle.setAttribute("aria-expanded", "false");
+}
+
+function openPackageTypeMenu() {
+  if (!el.typeFilterMenu || !el.typeFilterToggle) return;
+  el.typeFilterMenu.hidden = false;
+  el.typeFilterToggle.setAttribute("aria-expanded", "true");
+  syncPackageTypeFilterControl();
+}
+
+function togglePackageTypeMenu() {
+  if (!el.typeFilterMenu) return;
+  if (el.typeFilterMenu.hidden) openPackageTypeMenu();
+  else closePackageTypeMenu();
+}
+
+function closeTopFilterOverlays() {
+  closePackageTypeMenu();
+  setSearchExpanded(false, { focus: false });
+  if (el.searchInput && !state.query) el.searchInput.blur();
+}
+
+function clearTransientDashboardStateForNavigation() {
+  if (dashboardVisualState === "no-filter-results" || dashboardVisualState === "permission-denied") {
+    setDashboardVisualState("", { render: false });
+  }
+}
+
+function applyPackageTypeOptionChange(changedInput) {
+  const checkedValues = el.typeFilterOptions
+    .filter((input) => input.checked)
+    .map((input) => input.value);
+  const checkedSpecificTypes = checkedValues.filter((value) => MAIN_TYPE_OPTIONS.includes(value));
+  const nextSelection = changedInput?.value === "Todos"
+    ? MAIN_TYPE_OPTIONS.slice()
+    : normalizeTypeSelection(checkedSpecificTypes);
+  if (state.sheet === PACKAGE_MANAGEMENT_VIEW) {
+    state.packageTipo = nextSelection;
+  } else {
+    state.prefaturaTipo = nextSelection;
+  }
+  state.page = 1;
+  persistState();
+  syncPackageTypeFilterControl();
+  renderAll();
+}
+
 function getPrefaturaDivisionForType(type = state.prefaturaTipo) {
-  return PREFATURA_TYPE_TO_DIVISION[normalizeMainTypeFilter(type)] || "";
+  const selection = getPrefaturaTypeSelectionValues(type);
+  return selection.length === 1 ? PREFATURA_TYPE_TO_DIVISION[selection[0]] || "" : "";
+}
+
+function getPrefaturaDivisionsForTypes(selection = state.prefaturaTipo) {
+  return getPrefaturaTypeSelectionValues(selection)
+    .map((type) => PREFATURA_TYPE_TO_DIVISION[type])
+    .filter(Boolean);
 }
 
 function getPrefaturaTypeForDivision(division) {
@@ -886,7 +1023,8 @@ function getPrefaturaTypeForDivision(division) {
 }
 
 function getPrefaturaComparisonSheet() {
-  return getPrefaturaDivisionForType() || "Todos";
+  const selected = getPrefaturaTypeSelectionValues(state.prefaturaTipo);
+  return selected.length === 1 ? getPrefaturaDivisionForType(selected[0]) || "Todos" : "Todos";
 }
 
 function isDashboardFileCategory(value) {
@@ -957,7 +1095,7 @@ function getDashboardFileDisplayName(fileOrDataset) {
     return buildPackageManagementDisplayName(fileName, metadata);
   }
   const humanized = humanizeWorkbookName(fileName);
-  return humanized.startsWith("Pré-fatura ·") ? humanized : `Pré-fatura · ${humanized}`;
+  return humanized.startsWith("Pré-Fatura ·") ? humanized : `Pré-Fatura · ${humanized}`;
 }
 
 async function handlePnrGoalConfig(event) {
@@ -986,10 +1124,30 @@ function handleEscapeFilter(event) {
   if (event.key !== "Escape") return;
   const target = event.target;
   if (!(target instanceof HTMLElement)) return;
+  if (target.closest("#type-filter")) {
+    if (el.typeFilterMenu && !el.typeFilterMenu.hidden) {
+      closePackageTypeMenu();
+      event.preventDefault();
+      return;
+    }
+    const activeTypeValue = state.sheet === PACKAGE_MANAGEMENT_VIEW ? state.packageTipo : state.prefaturaTipo;
+    if (normalizeTypeSelection(activeTypeValue).length !== MAIN_TYPE_OPTIONS.length) {
+      if (state.sheet === PACKAGE_MANAGEMENT_VIEW) state.packageTipo = MAIN_TYPE_OPTIONS.slice();
+      else state.prefaturaTipo = MAIN_TYPE_OPTIONS.slice();
+      state.page = 1;
+      hydrateControls();
+      persistState();
+      renderAll();
+      event.preventDefault();
+      showToast("Filtro removido.", "info");
+    }
+    return;
+  }
   const resetById = {
     "search-input": () => {
       if (!state.query) return false;
       state.query = "";
+      setSearchExpanded(false);
       return true;
     },
     "period-select": () => {
@@ -1001,31 +1159,6 @@ function handleEscapeFilter(event) {
       const activeMonth = getDatasetPeriod(getActiveDataset()).key;
       if (!state.monthFilter || state.monthFilter === activeMonth) return false;
       state.monthFilter = activeMonth;
-      return true;
-    },
-    "sheet-select": () => {
-      if (state.sheet === PRE_FATURA_VIEW) return false;
-      state.sheet = PRE_FATURA_VIEW;
-      return true;
-    },
-    "type-select": () => {
-      if (state.prefaturaTipo === "Todos") return false;
-      state.prefaturaTipo = "Todos";
-      return true;
-    },
-    "package-type-select": () => {
-      if (getActiveTypeFilter() === "Todos") return false;
-      setActiveTypeFilter("Todos");
-      return true;
-    },
-    "base-select": () => {
-      if (state.base === "Todos") return false;
-      state.base = "Todos";
-      return true;
-    },
-    "driver-select": () => {
-      if (state.motorista === "Todos") return false;
-      state.motorista = "Todos";
       return true;
     },
   };
@@ -1047,23 +1180,6 @@ function setValueSort(direction) {
   persistState();
   hydrateValueSortControls();
   renderAll();
-}
-
-function getSavedSidebarOpen() {
-  try {
-    const saved = window.localStorage.getItem(SIDEBAR_STORAGE_KEY);
-    return saved === null ? false : saved === "true";
-  } catch (error) {
-    return false;
-  }
-}
-
-function persistSidebarOpen(isOpen) {
-  try {
-    window.localStorage.setItem(SIDEBAR_STORAGE_KEY, String(isOpen));
-  } catch (error) {
-    // localStorage can be unavailable in restrictive browser modes.
-  }
 }
 
 function loadEvolutionPeriodView() {
@@ -1102,27 +1218,22 @@ function setComparisonPeriodView(value) {
   }
 }
 
-function syncSidebarDataset(isOpen) {
-  document.documentElement.dataset.filtersSidebarOpen = isOpen ? "true" : "false";
+function setSearchExpanded(expanded, options = {}) {
+  if (!el.searchFilter) return;
+  const shouldExpand = Boolean(expanded);
+  el.searchFilter.classList.toggle("is-expanded", shouldExpand);
+  el.searchToggle?.setAttribute("aria-expanded", shouldExpand ? "true" : "false");
+  if (shouldExpand && options.focus !== false) {
+    window.setTimeout(() => el.searchInput?.focus(), 20);
+  }
 }
 
-function hydrateSidebarState() {
-  setSidebarCollapsed(!getSavedSidebarOpen(), { persist: false });
-}
-
-function setSidebarCollapsed(collapsed, options = {}) {
-  const isOpen = !collapsed;
-  el.sidebar.classList.toggle("is-collapsed", collapsed);
-  if (el.layout) {
-    el.layout.classList.toggle("is-sidebar-collapsed", collapsed);
-    el.layout.classList.remove("is-layout-animating");
-    clearTimeout(sidebarAnimationTimer);
-  }
-  el.sidebarToggle.setAttribute("aria-expanded", collapsed ? "false" : "true");
-  syncSidebarDataset(isOpen);
-  if (options.persist !== false) {
-    persistSidebarOpen(isOpen);
-  }
+function scheduleSearchRender(delay = 320) {
+  clearTimeout(searchDebounceTimer);
+  searchDebounceTimer = window.setTimeout(() => {
+    hydrateControls();
+    renderAll();
+  }, delay);
 }
 
 function markDashboardReady() {
@@ -1133,21 +1244,18 @@ function markDashboardReady() {
 
 function hydrateControls() {
   syncActiveDataset();
-  state.prefaturaTipo = normalizeMainTypeFilter(state.prefaturaTipo);
-  state.packageTipo = normalizeMainTypeFilter(state.packageTipo);
-  const options = buildOptions(allRows);
-  sanitizeCurrentFilters(options);
+  state.prefaturaTipo = normalizeTypeSelection(state.prefaturaTipo);
+  state.packageTipo = normalizeTypeSelection(state.packageTipo);
+  state.base = "Todos";
+  state.motorista = "Todos";
   renderDatasetSelect();
   renderMonthSelect();
   renderPeriodSelect();
   renderFileDeleteMenu();
-  populateSelect(el.sheetSelect, SHEET_TABS, state.sheet);
-  populateSelect(el.typeSelect, [], "Todos");
-  if (el.packageTypeSelect) populateSelect(el.packageTypeSelect, buildMainTypeOptions().tipos, getActiveTypeFilter());
-  populateSelect(el.baseSelect, options.bases, state.base);
-  populateSelect(el.driverSelect, options.motoristas, state.motorista);
+  syncPackageTypeFilterControl();
 
-  el.searchInput.value = state.query;
+  if (el.searchInput) el.searchInput.value = state.query;
+  setSearchExpanded(Boolean(state.query), { focus: false });
   el.pageSize.value = String(state.pageSize || 15);
   if (el.settingsPageSize) el.settingsPageSize.value = String(state.pageSize || 15);
   if (el.settingsPnrGoal) el.settingsPnrGoal.value = String(getMonthlyPnrGoalLimit());
@@ -1156,33 +1264,20 @@ function hydrateControls() {
   updateDatasetMeta();
   hydrateThemeControls();
   updateGlobalPeriodFiltersVisibility();
-  updateSidebarFiltersForCurrentView();
 
   renderTabs();
 }
 
-function updateSidebarFiltersForCurrentView() {
-  const packageView = state.sheet === PACKAGE_MANAGEMENT_VIEW;
-  const searchCard = el.searchInput?.closest(".sidebar-card");
-  const sheetLabel = el.sheetSelect?.closest("label");
-  const typeLabel = el.typeSelect?.closest("label");
-  const baseLabel = el.baseSelect?.closest("label");
-  const driverLabel = el.driverSelect?.closest("label");
-  if (searchCard) searchCard.hidden = packageView;
-  if (sheetLabel) sheetLabel.hidden = true;
-  if (typeLabel) typeLabel.hidden = true;
-  if (baseLabel) baseLabel.hidden = packageView;
-  if (driverLabel) driverLabel.hidden = packageView;
-}
-
 function updateGlobalPeriodFiltersVisibility(isEvolutionView = state.sheet === MONTHLY_BASE_VIEW) {
+  const searchFilter = el.searchInput?.closest(".global-search-filter");
   const monthFilter = el.monthSelect?.closest(".global-period-filter");
   const periodFilter = el.periodSelect?.closest(".global-period-filter");
-  const packageTypeFilter = el.packageTypeSelect?.closest(".global-period-filter");
+  const typeFilter = el.typeFilter;
   [monthFilter, periodFilter].forEach((filter) => {
     if (filter) filter.hidden = isEvolutionView;
   });
-  if (packageTypeFilter) packageTypeFilter.hidden = isEvolutionView || state.sheet === MONTHLY_BASE_VIEW;
+  if (searchFilter) searchFilter.hidden = isEvolutionView;
+  if (typeFilter) typeFilter.hidden = isEvolutionView;
   if (el.viewToolbar) {
     el.viewToolbar.classList.toggle("is-evolution-view", isEvolutionView);
     el.viewToolbar.classList.toggle("is-package-view", state.sheet === PACKAGE_MANAGEMENT_VIEW);
@@ -1429,12 +1524,18 @@ function renderAll() {
   syncActiveDataset();
   renderTabs();
   const packageView = state.sheet === PACKAGE_MANAGEMENT_VIEW;
-  const filtered = getFilteredRows();
-  const sorted = sortRows(filtered);
-  const paged = paginateRows(sorted);
-  const summary = buildSummary(filtered);
   const monthlyView = state.sheet === MONTHLY_BASE_VIEW;
+  let filtered = [];
+  let sorted = [];
+  let paged = [];
+  let summary = null;
   const packageRows = packageView ? getPackageManagementRowsForView() : [];
+  if (!monthlyView && !packageView) {
+    filtered = getFilteredRows();
+    sorted = sortRows(filtered);
+    paged = paginateRows(sorted);
+    summary = buildSummary(filtered);
+  }
 
   if (state.appView === "settings" && !canEdit()) {
     state.appView = "dashboard";
@@ -1445,7 +1546,7 @@ function renderAll() {
   if (accountView) {
     renderAccountPage();
     renderFilterSummary();
-    updateTopbar(summary);
+    updateTopbar(summary || undefined);
     updateAccessControls();
     return;
   }
@@ -1454,7 +1555,7 @@ function renderAll() {
   if (dashboardState) {
     renderDashboardState(dashboardState);
     renderFilterSummary();
-    updateTopbar(summary);
+    updateTopbar(summary || undefined);
     updateAccessControls();
     persistState();
     persistLibrary();
@@ -1474,11 +1575,30 @@ function renderAll() {
     renderTable(paged, summary);
   }
   renderFilterSummary();
-  updateTopbar(summary);
+  updateTopbar(summary || undefined);
   updateAccessControls();
   persistState();
   persistLibrary();
   scheduleChartAnimations({ reset: false });
+}
+
+function renderCurrentTablePageOnly() {
+  if (state.sheet === MONTHLY_BASE_VIEW || state.appView !== "dashboard") {
+    renderAll();
+    return;
+  }
+  if (state.sheet === PACKAGE_MANAGEMENT_VIEW) {
+    const packageRows = sortRows(getPackageManagementRowsForView());
+    renderPackageManagementTable(paginateRows(packageRows), packageRows);
+    renderFilterSummary();
+    return;
+  }
+  const filtered = getFilteredRows();
+  const sorted = sortRows(filtered);
+  const summary = buildSummary(filtered);
+  renderTable(paginateRows(sorted), summary);
+  renderFilterSummary();
+  updateTopbar(summary);
 }
 
 function toggleAccountView(accountView) {
@@ -1631,18 +1751,18 @@ function renderAuditLogs() {
 }
 
 function formatAuditEntity(entry) {
-  const type = entry?.entity_type || "â€”";
+  const type = entry?.entity_type || "—";
   const id = entry?.entity_id ? ` · ${entry.entity_id}` : "";
   return `${type}${id}`;
 }
 
 function formatAuditDetails(details) {
-  if (!details || typeof details !== "object") return "â€”";
+  if (!details || typeof details !== "object") return "—";
   const readable = Object.entries(details)
     .filter(([, value]) => value !== null && value !== undefined && value !== "")
     .slice(0, 5)
     .map(([key, value]) => `${key}: ${Array.isArray(value) ? value.join(", ") : String(value)}`);
-  return readable.join(" · ") || "â€”";
+  return readable.join(" · ") || "—";
 }
 
 function getProfileDisplayName() {
@@ -1965,7 +2085,7 @@ async function retryDashboardLoad() {
 }
 
 function buildPackageManagementSummary(rows) {
-  const base = Array.isArray(rows) ? rows : [];
+  const base = (Array.isArray(rows) ? rows : []).filter(isPackageManagementDetailRow);
   const byCategory = (category) => base.filter((row) => row.categoria_final === category);
   const sumAbs = (items) => items.reduce((total, row) => total + Math.abs(Number(row.valor_numerico || 0)), 0);
   const alcRows = byCategory("ALC");
@@ -2026,6 +2146,10 @@ function normalizeMatchId(value) {
     .toUpperCase();
 }
 
+function normalizeEnvioId(value) {
+  return String(value || "").trim().replace(/\D/g, "");
+}
+
 function getPackageMatchIds(row) {
   const ids = [
     ...(Array.isArray(row?.ids_vinculados) ? row.ids_vinculados : []),
@@ -2039,6 +2163,26 @@ function getPackageMatchIds(row) {
     row?.envio,
   ];
   return [...new Set(ids.map(normalizeMatchId).filter(Boolean))];
+}
+
+function getPackageEnvioIds(row) {
+  const ids = [
+    ...(Array.isArray(row?.ids_vinculados) ? row.ids_vinculados : []),
+    ...(Array.isArray(row?.linked_ids) ? row.linked_ids : []),
+    row?.idEnvio,
+    row?.id_envio,
+    row?.id_de_envio,
+    row?.idDoPacote,
+    row?.id_do_pacote,
+    row?.idPacote,
+    row?.id_pacote,
+    row?.idCaso,
+    row?.id_caso,
+    row?.id,
+    row?.envio,
+    row?.caso,
+  ];
+  return [...new Set(ids.map(normalizeEnvioId).filter(Boolean))];
 }
 
 function getCaseMatchId(row) {
@@ -2152,9 +2296,10 @@ function isPackageLocatedInPrefatura(row) {
 }
 
 function buildPackageManagementComparison(rows = packageManagementRows, prefaturaRows = allRows) {
-  const scopedRows = Array.isArray(rows) ? rows : [];
+  const scopedRows = (Array.isArray(rows) ? rows : []).filter(isPackageManagementDetailRow);
   const enrichedRows = enrichPackageRowsWithPrefaturaMatch(scopedRows, prefaturaRows);
   const summary = buildPackageManagementSummary(enrichedRows);
+  const typeDistribution = buildPackageTypeDistribution(enrichedRows);
   const prefaturaSummary = buildSummary(Array.isArray(prefaturaRows) ? prefaturaRows : []);
   const byCategory = (category) => enrichedRows.filter((row) => row.categoria_final === category);
   const alcRows = byCategory("ALC");
@@ -2164,24 +2309,69 @@ function buildPackageManagementComparison(rows = packageManagementRows, prefatur
   const hasPackageRows = enrichedRows.length > 0;
   const lines = [
     buildPackageComparisonLine({ label: "Absorvido pela ALC", rows: alcRows, value: summary.alcValue, kind: "financial", prefaturaSummary, hasPackageRows }),
-    buildPackageComparisonLine({ label: "Mantido com Driver", rows: driverRows, value: summary.driverValue, kind: "financial", prefaturaSummary, hasPackageRows }),
+    buildPackageComparisonLine({ label: "Desconto mantido com Driver", rows: driverRows, value: summary.driverValue, kind: "financial", prefaturaSummary, hasPackageRows }),
     buildPackageComparisonLine({ label: "Direcionado ao Dispatcher", rows: dispatcherRows, value: summary.dispatcherValue, kind: "financial", prefaturaSummary, hasPackageRows }),
     buildPackageComparisonLine({ label: "Erros do Driver", rows: driverRows, value: summary.driverErrors, kind: "count", prefaturaSummary, hasPackageRows }),
     buildPackageComparisonLine({ label: "Erros do Dispatcher", rows: dispatcherRows, value: summary.dispatcherErrors, kind: "count", prefaturaSummary, hasPackageRows }),
     buildPackageComparisonLine({ label: "Erros do Mercado Livre", rows: mercadoLivreRows, value: summary.mercadoLivreErrors, kind: "count", prefaturaSummary, hasPackageRows }),
   ];
-  return { rows: enrichedRows, summary, prefaturaSummary, lines, hasPackageRows, hasPrefaturaRows: prefaturaSummary.count > 0 };
+  return { rows: enrichedRows, summary, prefaturaSummary, lines, typeDistribution, hasPackageRows, hasPrefaturaRows: prefaturaSummary.count > 0 };
 }
 
-function buildPackageManagementComparisonForScope(scope, prefaturaRows) {
+function buildPackageManagementComparisonForScope(scope, prefaturaRows, typeSelection = state.packageTipo) {
   const monthKey = scope?.mode === "annual" ? "all" : scope?.key || state.monthFilter || "all";
   const periodMode = scope?.periodMode || state.period;
-  const scopedPackageRows = filterPackageManagementRowsByPeriod(packageManagementRows, monthKey, periodMode);
-  return buildPackageManagementComparison(scopedPackageRows, prefaturaRows);
+  const scopedPackageRows = filterPackageManagementRowsByPeriod(packageManagementRows, monthKey, periodMode).filter(isPackageManagementDetailRow);
+  const enrichedRows = enrichPackageRowsWithPrefaturaMatch(scopedPackageRows, prefaturaRows).map((row) => ({
+    ...row,
+    tipo_operacional: getPackageOperationalType(row),
+  }));
+  return buildPackageManagementComparison(filterPackageRowsByTypeSelection(enrichedRows, typeSelection), prefaturaRows);
 }
 
 function formatPackageComparisonResult(line) {
   return line?.kind === "financial" ? currency.format(line.value || 0) : integer.format(line?.value || 0);
+}
+
+function buildPackageTypeDistribution(rows) {
+  const totals = MAIN_TYPE_OPTIONS.reduce((acc, type) => {
+    acc[type] = { type, count: 0, share: 0 };
+    return acc;
+  }, {});
+  const validRows = (Array.isArray(rows) ? rows : [])
+    .filter(isPackageManagementDetailRow)
+    .map((row) => ({
+      ...row,
+      tipo_operacional: row.tipo_operacional || getPackageOperationalType(row),
+    }))
+    .filter((row) => MAIN_TYPE_OPTIONS.includes(row.tipo_operacional));
+
+  validRows.forEach((row) => {
+    totals[row.tipo_operacional].count += 1;
+  });
+
+  const total = validRows.length;
+  const rowsByType = MAIN_TYPE_OPTIONS
+    .map((type) => ({
+      ...totals[type],
+      share: total ? (totals[type].count / total) * 100 : 0,
+    }))
+    .filter((item) => item.count > 0);
+  const dominant = rowsByType.reduce((best, item) => (item.count > best.count ? item : best), rowsByType[0] || { type: "", count: 0, share: 0 });
+  return { rows: rowsByType, total, dominant };
+}
+
+function formatPackageTypeDistributionRows(distribution) {
+  const rows = Array.isArray(distribution?.rows) ? distribution.rows : [];
+  const total = Number(distribution?.total || 0);
+  return [
+    ...rows.map((item) => [
+      item.type,
+      `${integer.format(item.count)} registro${item.count === 1 ? "" : "s"}`,
+      `${formatNumberPt(item.share, 1)}%`,
+    ]),
+    ["Total", `${integer.format(total)} registro${total === 1 ? "" : "s"}`, total ? "100,0%" : "0,0%"],
+  ];
 }
 
 function buildPackageComparisonLine({ label, rows, value, kind, prefaturaSummary, hasPackageRows }) {
@@ -2192,8 +2382,8 @@ function buildPackageComparisonLine({ label, rows, value, kind, prefaturaSummary
   const comparison = !hasComparisonBase
     ? "Sem base de compara\u00e7\u00e3o"
     : kind === "financial"
-      ? `${percentage}% do total da pr\u00e9-fatura`
-      : `${percentage}% dos registros da pr\u00e9-fatura`;
+      ? `${percentage}% do total da Pré-Fatura`
+      : `${percentage}% dos registros da Pré-Fatura`;
   const locatedLabel = kind === "financial"
     ? `${integer.format(located)} registros localizados`
     : `${integer.format(located)} localizados`;
@@ -2212,12 +2402,22 @@ function buildPackageComparisonExecutiveText(comparison) {
   if (!comparison?.hasPackageRows) {
     return "N\u00e3o foram encontrados registros de Gest\u00e3o de Pacotes para o recorte selecionado.";
   }
+  const distribution = comparison.typeDistribution || buildPackageTypeDistribution(comparison.rows);
+  const distributionRows = Array.isArray(distribution.rows) ? distribution.rows : [];
+  const totalValid = Number(distribution.total || 0);
+  const dominant = distribution.dominant || distributionRows[0] || null;
+  const typeText = distributionRows.map((item) => item.type).join(", ");
+  const distributionSentence = totalValid && distributionRows.length === 1
+    ? `No recorte selecionado, o relat\u00f3rio considera somente registros do tipo ${distributionRows[0].type}, totalizando ${integer.format(totalValid)} ocorr\u00eancia${totalValid === 1 ? "" : "s"} v\u00e1lida${totalValid === 1 ? "" : "s"} na Gest\u00e3o de Pacotes.`
+    : totalValid && dominant
+      ? `No recorte selecionado, a Gest\u00e3o de Pacotes registrou ${integer.format(totalValid)} ocorr\u00eancia${totalValid === 1 ? "" : "s"} v\u00e1lida${totalValid === 1 ? "" : "s"}, distribu\u00edda${totalValid === 1 ? "" : "s"} entre ${typeText}. O tipo ${dominant.type} concentrou ${integer.format(dominant.count)} registro${dominant.count === 1 ? "" : "s"}, representando ${formatNumberPt(dominant.share, 1)}% do total da Gest\u00e3o de Pacotes no per\u00edodo.`
+      : "";
   if (!comparison?.hasPrefaturaRows) {
-    return "Foram encontrados registros de Gest\u00e3o de Pacotes, por\u00e9m n\u00e3o h\u00e1 base de Pr\u00e9-fatura correspondente para compara\u00e7\u00e3o percentual.";
+    return `${distributionSentence} Foram encontrados registros de Gest\u00e3o de Pacotes, por\u00e9m n\u00e3o h\u00e1 base de Pr\u00e9-Fatura correspondente para compara\u00e7\u00e3o percentual.`.trim();
   }
-  const alc = comparison.lines.find((line) => line.label === "Absorvido pela ALC") || { value: 0, comparison: "0,0% do total da pr\u00e9-fatura" };
-  const driver = comparison.lines.find((line) => line.label === "Erros do Driver") || { value: 0, comparison: "0,0% dos registros da pr\u00e9-fatura" };
-  return `No recorte selecionado, a Gest\u00e3o de Pacotes registrou ${currency.format(alc.value || 0)} absorvidos pela ALC, equivalente a ${alc.comparison}. Foram identificados ${integer.format(driver.value || 0)} erros classificados como Driver, representando ${driver.comparison}.`;
+  const alc = comparison.lines.find((line) => line.label === "Absorvido pela ALC") || { value: 0, comparison: "0,0% do total da Pré-Fatura" };
+  const driver = comparison.lines.find((line) => line.label === "Erros do Driver") || { value: 0, comparison: "0,0% dos registros da Pré-Fatura" };
+  return `${distributionSentence} A Gest\u00e3o de Pacotes registrou ${currency.format(alc.value || 0)} absorvidos pela ALC, equivalente a ${alc.comparison}. Foram identificados ${integer.format(driver.value || 0)} erros classificados como Driver, representando ${driver.comparison}.`.trim();
 }
 
 function buildPackageManagementKpiCards(rows = filterPackageManagementRowsByPeriod(packageManagementRows), prefaturaRows = allRows) {
@@ -2226,7 +2426,7 @@ function buildPackageManagementKpiCards(rows = filterPackageManagementRowsByPeri
   const line = (label) => byLabel.get(label) || { value: 0, delta: "Sem base de comparação" };
   return [
     { label: "Absorvido pela ALC", value: currency.format(line("Absorvido pela ALC").value || 0), tone: "kpi-card--finance", delta: line("Absorvido pela ALC").delta },
-    { label: "Mantido com Driver", value: currency.format(line("Mantido com Driver").value || 0), tone: "kpi-card--problem", delta: line("Mantido com Driver").delta },
+    { label: "Desconto mantido com Driver", value: currency.format(line("Desconto mantido com Driver").value || 0), tone: "kpi-card--problem", delta: line("Desconto mantido com Driver").delta },
     { label: "Direcionado ao Dispatcher", value: currency.format(line("Direcionado ao Dispatcher").value || 0), tone: "kpi-card--problem", delta: line("Direcionado ao Dispatcher").delta },
     { label: "Erros do Driver", value: integer.format(line("Erros do Driver").value || 0), tone: "kpi-card--volume", delta: line("Erros do Driver").delta },
     { label: "Erros do Dispatcher", value: integer.format(line("Erros do Dispatcher").value || 0), tone: "kpi-card--volume", delta: line("Erros do Dispatcher").delta },
@@ -2235,25 +2435,80 @@ function buildPackageManagementKpiCards(rows = filterPackageManagementRowsByPeri
 }
 
 function getPackageOperationalType(row) {
-  const matchedType = row?.prefatura_match?.matched_tipo;
-  if (["SVC", "XPT", "PNR"].includes(matchedType)) return matchedType;
-  const base = normalizeText(row?.base_normalizada || row?.base || "");
-  if (base.startsWith("S")) return "SVC";
-  if (base.startsWith("E")) return "XPT";
+  const match = row?.prefatura_match || {};
+  const matchedType = match.matched_tipo;
+  if (isReliablePrefaturaTypeMatch(match)) return matchedType;
+
+  const baseType = identificarTipoPorBase(row?.base_normalizada || row?.base || "");
+  if (baseType) return baseType;
+
   return "Indefinido";
 }
 
+function isReliablePrefaturaTypeMatch(match) {
+  return (
+    match?.status === "LOCALIZADO_NA_PRE_FATURA" &&
+    match?.confidence === "ALTA" &&
+    ["SVC", "XPT", "PNR"].includes(match?.matched_tipo)
+  );
+}
+
+function identificarTipoPorBase(base) {
+  const codigo = normalizeBase(base);
+  const primeiroCodigo = String(codigo || "").split("/").find(Boolean) || "";
+
+  if (primeiroCodigo.startsWith("S")) return "SVC";
+  if (primeiroCodigo.startsWith("E")) return "XPT";
+
+  return null;
+}
+
+function filterPackageRowsByTypeSelection(rows, selection = state.packageTipo) {
+  const selectedTypes = getPackageTypeSelectionValues(selection);
+  const baseRows = (Array.isArray(rows) ? rows : []).filter(isPackageManagementDetailRow);
+  if (selectedTypes.length === MAIN_TYPE_OPTIONS.length) return baseRows;
+  const selected = new Set(selectedTypes);
+  return baseRows.filter((row) => {
+    const type = row.tipo_operacional || getPackageOperationalType(row);
+    return selected.has(type);
+  });
+}
+
+function getPackageManagementRowsCacheKey() {
+  const activePrefaturaId = getActiveDataset()?.id || fileMeta?.id || "";
+  const activePackageFiles = dashboardFileRecords
+    .filter((file) => getFileRecordCategory(file) === PACKAGE_MANAGEMENT_FILE_CATEGORY && isDashboardFileActive(file))
+    .map((file) => file.id || file.name || file.file_name || "")
+    .join("|");
+  return [
+    packageManagementRowsLoadedKey,
+    activePrefaturaId,
+    activePackageFiles,
+    packageManagementRows.length,
+    allRows.length,
+    state.monthFilter,
+    state.period,
+    normalizeTypeSelection(state.packageTipo).join("|"),
+    normalize(state.query),
+  ].join("::");
+}
+
 function getPackageManagementRowsForView() {
-  const periodRows = filterPackageManagementRowsByPeriod(packageManagementRows);
+  const cacheKey = getPackageManagementRowsCacheKey();
+  if (derivedDataCache.packageKey === cacheKey) {
+    return derivedDataCache.packageRows;
+  }
+  const periodRows = filterPackageManagementRowsByPeriod(packageManagementRows).filter(isPackageManagementDetailRow);
   const enrichedRows = enrichPackageRowsWithPrefaturaMatch(periodRows, allRows).map((row) => ({
     ...row,
     tipo_operacional: getPackageOperationalType(row),
   }));
-  const packageType = normalizeMainTypeFilter(state.packageTipo);
-  if (packageType !== "Todos") {
-    return enrichedRows.filter((row) => row.tipo_operacional === packageType);
-  }
-  return enrichedRows;
+  const typedRows = filterPackageRowsByTypeSelection(enrichedRows, state.packageTipo);
+  const query = normalize(state.query);
+  const rows = query ? typedRows.filter((row) => String(row._search || "").includes(query)) : typedRows;
+  derivedDataCache.packageKey = cacheKey;
+  derivedDataCache.packageRows = rows;
+  return rows;
 }
 
 function restorePrefaturaTableHeader() {
@@ -2330,7 +2585,7 @@ function renderKpis(summary) {
   `;
 
   el.kpiGrid.innerHTML = `
-    <section class="kpi-grid__group kpi-grid__group--main" aria-label="Cards principais da Pré-fatura">
+    <section class="kpi-grid__group kpi-grid__group--main" aria-label="Cards principais da Pré-Fatura">
       ${mainCards.map((card, index) => renderCard(card, index)).join("")}
     </section>
   `;
@@ -2350,11 +2605,193 @@ function renderKpiCard(card, index) {
   `;
 }
 
+function buildPackageMixRows(rows) {
+  const summary = buildPackageManagementSummary(rows);
+  const items = [
+    { key: "ALC", label: "ALC", value: summary.alcValue, color: "#58d68d" },
+    { key: "DRIVER", label: "Driver", value: summary.driverValue, color: "#ffb454" },
+    { key: "DISPATCHER", label: "Dispatcher", value: summary.dispatcherValue, color: "#3ba6ff" },
+  ];
+  const total = items.reduce((acc, item) => acc + Number(item.value || 0), 0);
+  return {
+    total,
+    items: items.map((item) => ({
+      ...item,
+      share: total ? (Number(item.value || 0) / total) * 100 : 0,
+    })),
+  };
+}
+
+function renderPackageMixDonut(items, total) {
+  const circumference = 2 * Math.PI * 42;
+  let offset = 0;
+  const segments = total > 0
+    ? items
+      .map((item) => {
+        const length = (item.share / 100) * circumference;
+        const dashOffset = -offset;
+        offset += length;
+        return `
+          <circle
+            class="mix-chart__segment"
+            cx="50"
+            cy="50"
+            r="42"
+            fill="none"
+            stroke="${item.color}"
+            stroke-width="18"
+            stroke-dasharray="${length.toFixed(3)} ${(circumference - length).toFixed(3)}"
+            stroke-dashoffset="${dashOffset.toFixed(3)}"
+          ></circle>
+        `;
+      })
+      .join("")
+    : "";
+
+  return `
+    <svg class="mix-chart__svg" viewBox="0 0 100 100" aria-hidden="true">
+      <g transform="rotate(-90 50 50)">
+        <circle class="mix-chart__track" cx="50" cy="50" r="42" fill="none" stroke-width="18"></circle>
+        ${segments}
+      </g>
+    </svg>
+    <div class="mix-chart__center">
+      <strong class="mix-center-value">${formatCurrencyShort(total)}</strong>
+      <span>Total do mix</span>
+    </div>
+  `;
+}
+
+function renderPackageMixCard(rows) {
+  const mix = buildPackageMixRows(rows);
+  return `
+    <article class="panel mix-card package-analysis-card package-mix-card">
+      <div class="panel__header">
+        <div>
+          <span class="section-eyebrow">Mix</span>
+          <h2>Mix da Gestão de Pacotes</h2>
+        </div>
+      </div>
+      <div class="mix-card__body package-mix-card__body">
+        <div class="mix-chart package-mix-card__chart">
+          ${renderPackageMixDonut(mix.items, mix.total)}
+        </div>
+        <div class="mix-legend package-mix-card__legend">
+          <div class="mix-legend__head" aria-hidden="true">
+            <span>Categoria</span>
+            <span>Valor</span>
+            <span>%</span>
+          </div>
+          ${mix.items
+    .map((item) => `
+            <div class="mix-legend__row package-mix-card__row">
+              <span class="mix-legend__category">
+                <i style="background:${item.color}"></i>
+                ${escapeHtml(item.label)}
+              </span>
+              <span class="mix-legend__value">${formatCurrencyShort(item.value)}</span>
+              <span class="mix-legend__share">${formatPercent(item.share)}</span>
+            </div>
+          `)
+    .join("")}
+        </div>
+      </div>
+    </article>
+  `;
+}
+
+function buildPackageDriverErrorRanking(rows, limit = 5) {
+  const prefaturaDriverById = buildPrefaturaDriverIndexById(allRows);
+  const groups = new Map();
+  (Array.isArray(rows) ? rows : [])
+    .filter(isPackageManagementDetailRow)
+    .filter(isPackageDriverErrorRow)
+    .forEach((row) => {
+    const resolvedName = resolvePackageDriverName(row, prefaturaDriverById);
+    if (!resolvedName) return;
+    const key = normalizeDriverName(resolvedName);
+    const current = groups.get(key) || {
+      key,
+      label: resolvedName,
+      count: 0,
+      total: 0,
+    };
+    current.label = resolvedName;
+    current.count += getOccurrenceCount(row);
+    current.total += normalizarValorGestao(row.valor_numerico);
+    groups.set(key, current);
+  });
+  return Array.from(groups.values())
+    .sort((a, b) => b.count - a.count || b.total - a.total || a.label.localeCompare(b.label, "pt-BR", { sensitivity: "base" }))
+    .slice(0, limit);
+}
+
+function isPackageDriverErrorRow(row) {
+  return String(row?.categoria_final || row?.categoria || "").toUpperCase() === "DRIVER";
+}
+
+function buildPrefaturaDriverIndexById(prefaturaRows = allRows) {
+  const index = new Map();
+  (Array.isArray(prefaturaRows) ? prefaturaRows : [])
+    .filter((row) => (row?.file_category || PRE_FATURA_FILE_CATEGORY) !== PACKAGE_MANAGEMENT_FILE_CATEGORY)
+    .forEach((row) => {
+      const driver = formatDriverName(row.motorista || row.driver || row.nomeMotorista || row.nome_driver || "", "");
+      if (!driver || isUnidentifiedDriverName(driver)) return;
+      getPackageEnvioIds(row).forEach((id) => {
+        if (id && !index.has(id)) index.set(id, driver);
+      });
+    });
+  return index;
+}
+
+function resolvePackageDriverName(row, prefaturaDriverById = buildPrefaturaDriverIndexById()) {
+  const direct = formatDriverName(row?.motorista || row?.driver || row?.nomeMotorista || row?.nome_driver || "", "");
+  if (direct && !isUnidentifiedDriverName(direct)) return direct;
+  for (const id of getPackageEnvioIds(row)) {
+    const driver = prefaturaDriverById.get(id);
+    if (driver && !isUnidentifiedDriverName(driver)) return formatDriverName(driver, "");
+  }
+  return null;
+}
+
+function renderPackageDriverErrorsCard(rows) {
+  const ranking = buildPackageDriverErrorRanking(rows, 5);
+  return `
+    <article class="panel package-analysis-card package-driver-card">
+      <div class="panel__header">
+        <div>
+          <span class="section-eyebrow">Recorrência</span>
+          <h2>Motoristas com mais erros</h2>
+        </div>
+      </div>
+      <div class="package-driver-ranking">
+        ${ranking.length
+    ? ranking
+      .map((item, index) => `
+            <div class="package-driver-ranking__row">
+              <span class="package-driver-ranking__position">${index + 1}</span>
+              <strong>${escapeHtml(item.label)}</strong>
+              <span>${integer.format(item.count)} ocorrências</span>
+              <em>${currency.format(item.total)}</em>
+            </div>
+          `)
+      .join("")
+    : emptyState("Sem motoristas no recorte", "Ajuste os filtros ou importe arquivos de Gestão de Pacotes.")}
+      </div>
+    </article>
+  `;
+}
+
 function renderPackageManagementView(pagedRows, allPackageRows) {
-  const cards = buildPackageManagementKpiCards(allPackageRows, filterPrefaturaRowsByType(allRows, state.packageTipo));
+  const prefaturaRows = filterPrefaturaRowsByTypes(allRows, state.packageTipo);
+  const cards = buildPackageManagementKpiCards(allPackageRows, prefaturaRows);
   el.kpiGrid.innerHTML = `
     <section class="kpi-grid__group kpi-grid__group--package" aria-label="Cards de Gestão de Pacotes">
       ${cards.map((card, index) => renderKpiCard(card, index)).join("")}
+    </section>
+    <section class="package-analysis-grid" aria-label="Análises da Gestão de Pacotes">
+      ${renderPackageMixCard(allPackageRows)}
+      ${renderPackageDriverErrorsCard(allPackageRows)}
     </section>
   `;
   renderPackageManagementTable(pagedRows, allPackageRows);
@@ -2525,7 +2962,7 @@ function renderPnrGoalSummary(filtered) {
       ${
         canConfigureGoal
           ? `<details class="goal-config" data-goal-mode="${goalMode}">
-        <summary title="${escapeAttribute(configTitle)}" aria-label="${escapeAttribute(configTitle)}">âš™</summary>
+        <summary title="${escapeAttribute(configTitle)}" aria-label="${escapeAttribute(configTitle)}">⚙</summary>
         <form class="goal-config__panel" data-goal-config-form>
           <strong>${escapeHtml(configTitle)}</strong>
           <label>
@@ -2569,14 +3006,14 @@ function renderPnrGoalSummary(filtered) {
 function renderMonthlyComparison() {
   if (!el.monthlyComparison) return;
   const rows = buildMonthlyComparison();
-  const activeType = normalizeMainTypeFilter(state.prefaturaTipo);
+  const activeType = getTypeFilterLabel(state.prefaturaTipo);
   const scopeLabel = activeType === "Todos" ? "geral" : activeType;
   syncComparisonViewControl();
   if (el.comparisonMeta) {
     el.comparisonMeta.textContent = rows.length ? `${integer.format(rows.length)} competências · ${scopeLabel}` : `sem histórico · ${scopeLabel}`;
   }
   if (!rows.length) {
-    el.monthlyComparison.innerHTML = emptyState("Sem comparação mensal", "Importe pré-faturas de meses diferentes para comparar esta aba.");
+    el.monthlyComparison.innerHTML = emptyState("Sem comparação mensal", "Importe arquivos de Pré-Fatura de meses diferentes para comparar esta aba.");
     return;
   }
 
@@ -2589,11 +3026,10 @@ function renderMonthlyComparison() {
       const pct = (offenseTotal / maxCount) * 100;
       const previousOffense = row.previous ? row.previous.pnrCount + row.previous.packageCount : 0;
       const deltaOffense = row.previous ? offenseTotal - previousOffense : 0;
-      const deltaOffensePct = row.previous && previousOffense ? (deltaOffense / previousOffense) * 100 : 0;
-      const trendClass = deltaOffense > 0 ? "is-up" : deltaOffense < 0 ? "is-down" : "is-flat";
-      const trendLabel = row.previous
-        ? `${deltaOffense > 0 ? "+" : ""}${deltaOffensePct.toFixed(1)}% ${deltaOffense > 0 ? "mais ofensivo" : deltaOffense < 0 ? "menos ofensivo" : "estável"}`
-        : "Base";
+      const deltaOffensePct = row.previous && previousOffense ? (deltaOffense / previousOffense) * 100 : deltaOffense > 0 ? 100 : 0;
+      const trend = row.previous ? formatEvolutionTrend(deltaOffensePct) : null;
+      const trendClass = trend ? trend.tone : "is-flat";
+      const trendLabel = trend ? formatEvolutionTrendText(trend) : "Base";
       const monthTone = getOffenseColor(offenseTotal, maxCount);
       const displayPeriod = shortMonthYear(row.label);
       const tooltipLines = [
@@ -2888,14 +3324,14 @@ function renderMonthlyBaseEvolution() {
   const sheets = ["SVC PERDIDOS", "XPT PERDIDOS", "PNR"];
   const datasets = getComparableDatasets();
   if (!datasets.length) {
-    el.monthlyBaseView.innerHTML = emptyState("Sem histórico mensal", "Importe pré-faturas de meses diferentes para comparar a evolução por base.");
+    el.monthlyBaseView.innerHTML = emptyState("Sem histórico mensal", "Importe arquivos de Pré-Fatura de meses diferentes para comparar a evolução por base.");
     return;
   }
 
   el.monthlyBaseView.innerHTML = `
     <div class="monthly-view__header">
       <div>
-        <h2>EVOLUÇÃO</h2>
+        <h2>Evolução mensal</h2>
       </div>
       <div class="evolution-view-control" aria-label="Visualização da evolução">
         <span>Visualização</span>
@@ -3079,7 +3515,7 @@ function renderBaseHorizontalGroup(base, rowsByDataset, max, metricLabel) {
     const previous = index > 0 ? values[index - 1] : null;
     const delta = previous?.total ? ((period.total - previous.total) / previous.total) * 100 : 0;
     const trendLabel = previous
-      ? `${delta > 0 ? "+" : ""}${delta.toFixed(1)}% ${delta > 0 ? "mais ofensiva" : delta < 0 ? "menos ofensiva" : "estável"}`
+      ? formatEvolutionTrendText(formatEvolutionTrend(delta))
       : "Base";
     const tooltipLines = [
       `Base: ${formatBaseCode(base)}`,
@@ -3116,14 +3552,11 @@ function getBaseEvolution(values) {
   const first = values[0]?.total || 0;
   const last = values[values.length - 1]?.total || 0;
   if (!values.length || values.length < 2) {
-    return { arrow: "â†’", label: "sem histórico", tone: "is-flat", status: "Histórico curto" };
+    return { arrow: "→", label: "sem histórico", tone: "is-flat", status: "Histórico curto" };
   }
-  if (!first && !last) return { arrow: "â†’", label: "0.0%", tone: "is-flat", status: "estável" };
+  if (!first && !last) return formatEvolutionTrend(0);
   const delta = first ? ((last - first) / first) * 100 : 100;
-  const label = `${delta > 0 ? "+" : ""}${delta.toFixed(1)}%`;
-  if (delta < 0) return { arrow: "â†“", label, tone: "is-good", status: "menos ofensiva" };
-  if (delta > 0) return { arrow: "â†‘", label, tone: "is-bad", status: "mais ofensiva" };
-  return { arrow: "â†’", label, tone: "is-flat", status: "estável" };
+  return formatEvolutionTrend(delta);
 }
 
 function getPnrGoalStatus(totalValue, limitOverride) {
@@ -3426,18 +3859,23 @@ function buildReportPdfBlob({ analysis, summary }) {
   const addPage = () => {
     if (commands.length) pages.push(commands.join("\n"));
     commands = [];
+    const infoW = 168;
+    const infoH = 52;
+    const infoX = page.width - page.margin - infoW;
+    const infoY = 773;
     commands.push(`${colors.soft} rg 0 0 ${page.width} ${page.height} re f`);
     addRect(0, 754, page.width, 88, colors.navy);
     addRect(0, 754, page.width, 5, colors.teal);
-    addRect(page.width - page.margin - 166, 773, 166, 50, "0.06 0.24 0.36");
+    addRect(infoX, infoY, infoW, infoH, "0.06 0.24 0.36");
+    addStrokeRect(infoX, infoY, infoW, infoH, "0.16 0.42 0.55");
     addLine(page.margin, 754, page.width - page.margin, 754, colors.teal, 0.9);
-    if (PDF_LOGO_IMAGE.base64) addPdfImage(PDF_LOGO_IMAGE.name, page.margin, 766, 64, 64);
-    addText("Painel de Inteligência Operacional", page.margin + 78, 817, 8.2, "0.77 0.88 0.96", "left", "F2");
-    addText("Relatório Executivo", page.margin + 78, 799, 14.1, colors.white, "left", "F2");
-    addText("Performance Operacional", page.margin + 78, 784, 10.5, "0.86 0.95 1", "left");
-    addText("Setor: LOSS", page.width - page.margin - 12, 811, 8.5, colors.white, "right", "F2");
-    addText(`Período: ${analysis.scopeLabel}`, page.width - page.margin - 12, 797, 8.1, "0.82 0.92 0.98", "right");
-    addText(analysis.generatedAt, page.width - page.margin - 12, 784, 8.1, "0.82 0.92 0.98", "right");
+    if (PDF_LOGO_IMAGE.base64) addPdfImage(PDF_LOGO_IMAGE.name, page.margin, 768, 60, 60);
+    addText("Painel de Inteligência Operacional", page.margin + 74, 815, 8.2, "0.77 0.88 0.96", "left", "F2");
+    addText("Relatório Executivo", page.margin + 74, 798, 14.1, colors.white, "left", "F2");
+    addText("Performance Operacional", page.margin + 74, 784, 10.5, "0.86 0.95 1", "left");
+    addText("Setor: Loss", infoX + 14, 810, 8.4, colors.white, "left", "F2");
+    addText(`Período: ${analysis.scopeLabel}`, infoX + 14, 796, 8.1, "0.82 0.92 0.98", "left");
+    addText(analysis.generatedAt, infoX + 14, 783, 8.1, "0.82 0.92 0.98", "left");
     y = 734;
   };
   const addText = (text, x, yy, size = 10, color = "0.08 0.14 0.22", align = "left", font = "F1") => {
@@ -3473,7 +3911,7 @@ function buildReportPdfBlob({ analysis, summary }) {
   };
   const sectionTitle = (title, meta = "") => {
     ensure(38);
-    addText(meta ? `${title} â€” ${meta}` : title, page.margin, y, 13, colors.ink, "left", "F2");
+    addText(meta ? `${title} — ${meta}` : title, page.margin, y, 13, colors.ink, "left", "F2");
     y -= 10;
     addLine(page.margin, y, page.width - page.margin, y, colors.line, 0.6);
     y -= 16;
@@ -3566,6 +4004,46 @@ function buildReportPdfBlob({ analysis, summary }) {
       });
     });
   };
+  const drawWrappedTable = (x, top, w, title, headers, rows, widths, accent = colors.blue, aligns = []) => {
+    const sizes = widths.map((_, index) => (index === 2 ? 7.4 : 7.8));
+    const rowHeights = rows.map((row) => {
+      const lineCounts = row.map((cell, index) => {
+        if ((aligns[index] || "") === "right") return 1;
+        return wrapPdfText(cell, widths[index] - 8, sizes[index], index === 2 ? 4 : 2).length;
+      });
+      return Math.max(22, Math.max(...lineCounts) * 9.4 + 9);
+    });
+    const height = 50 + rowHeights.reduce((acc, value) => acc + value, 0);
+    card(x, top, w, height, colors.white, accent);
+    addText(title, x + 12, top - 18, 10.5, colors.ink);
+    const tableTop = top - 32;
+    addRect(x + 10, tableTop - 14, w - 20, 18, colors.tableHead);
+    let cursor = x + 14;
+    headers.forEach((header, index) => {
+      const align = aligns[index] || "left";
+      addText(header, align === "right" ? cursor + widths[index] - 4 : cursor, tableTop - 8, 7.3, colors.muted, align);
+      cursor += widths[index];
+    });
+    let rowTop = tableTop - 28;
+    rows.forEach((row, rowIndex) => {
+      const rowHeight = rowHeights[rowIndex];
+      if (rowIndex % 2 === 1) addRect(x + 10, rowTop - rowHeight + 8, w - 20, rowHeight - 2, "0.97 0.985 1");
+      cursor = x + 14;
+      row.forEach((cell, index) => {
+        const text = String(cell ?? "");
+        const align = aligns[index] || "left";
+        const size = sizes[index];
+        if (align === "right") {
+          addText(clipPdfText(text, widths[index] - 8, size), cursor + widths[index] - 4, rowTop, size, colors.ink, "right");
+        } else {
+          addWrappedText(text, cursor, rowTop, widths[index] - 8, size, colors.ink, 9.4, index === 2 ? 4 : 2, true);
+        }
+        cursor += widths[index];
+      });
+      rowTop -= rowHeight;
+    });
+    return height;
+  };
   const drawMonthlyTable = () => {
     ensure(150);
     sectionTitle("Comparativo mensal", analysis.scope.mode === "annual" ? "ano consolidado" : "recorte selecionado x mês anterior");
@@ -3573,7 +4051,7 @@ function buildReportPdfBlob({ analysis, summary }) {
       shortMonthYear(row.label),
       integer.format(row.count || 0),
       formatCurrencyShort(row.totalValue),
-      index === 0 || !row.previous ? "â€”" : formatSignedPct(row.deltaPct),
+      index === 0 || !row.previous ? "—" : formatSignedPct(row.deltaPct),
     ]);
     drawTable(page.margin, y, contentW, "Evolução por competência", ["Mês", "Registros", "Descontos", "Variação"], rows, [110, 100, 150, 120], 48 + rows.length * 18, colors.blue, ["left", "right", "right", "right"]);
     y -= 68 + rows.length * 18;
@@ -3621,25 +4099,55 @@ function buildReportPdfBlob({ analysis, summary }) {
       line.comparison,
       integer.format(line.located || 0),
     ]);
-    ensure(210);
-    sectionTitle("Gestão de Pacotes", "comparação com Pré-fatura");
-    drawTable(
+    const widths = [142, 88, 224, 58];
+    const tablePreviewHeight = 50 + rows.reduce((acc, row) => {
+      const comparisonLines = wrapPdfText(row[2], widths[2] - 8, 7.4, 4).length;
+      return acc + Math.max(22, comparisonLines * 9.4 + 9);
+    }, 0);
+    const distribution = comparison.typeDistribution || buildPackageTypeDistribution(comparison.rows);
+    const distributionRows = formatPackageTypeDistributionRows(distribution);
+    const distributionHeight = Number(distribution.total || 0) ? 48 + distributionRows.length * 18 : 62;
+    const summaryText = buildPackageComparisonExecutiveText(comparison);
+    const summaryLines = wrapPdfText(summaryText, contentW - 28, 8.6, 6);
+    const summaryHeight = Math.max(54, 26 + summaryLines.length * 11);
+    ensure(tablePreviewHeight + distributionHeight + summaryHeight + 90);
+    sectionTitle("Gestão de Pacotes", "comparação com Pré-Fatura");
+    const usedHeight = drawWrappedTable(
       page.margin,
       y,
       contentW,
-      "Gestão de Pacotes — comparação com Pré-fatura",
+      "Gestão de Pacotes — comparação com Pré-Fatura",
       ["Indicador", "Resultado", "Compara\u00e7\u00e3o", "Localizados"],
       rows,
-      [150, 92, 210, 70],
-      48 + rows.length * 18,
+      widths,
       colors.teal,
       ["left", "right", "left", "right"],
     );
-    y -= 68 + rows.length * 18;
-    ensure(58);
-    card(page.margin, y, contentW, 54, colors.greenSoft, colors.teal);
-    addWrappedText(buildPackageComparisonExecutiveText(comparison), page.margin + 14, y - 17, contentW - 28, 8.6, colors.ink, 10.8, 3);
-    y -= 78;
+    y -= usedHeight + 14;
+    if (Number(distribution.total || 0)) {
+      drawTable(
+        page.margin,
+        y,
+        contentW,
+        "Distribuição por tipo — Gestão de Pacotes",
+        ["Tipo", "Quantidade", "Percentual"],
+        distributionRows,
+        [210, 170, 120],
+        distributionHeight,
+        colors.blue,
+        ["left", "right", "right"],
+      );
+      y -= distributionHeight + 14;
+    } else {
+      card(page.margin, y, contentW, distributionHeight, colors.white, colors.blue);
+      addText("Distribuição por tipo — Gestão de Pacotes", page.margin + 12, y - 18, 10.5, colors.ink);
+      addText("Sem dados no recorte", page.margin + 12, y - 42, 8.8, colors.muted);
+      y -= distributionHeight + 14;
+    }
+    ensure(summaryHeight + 16);
+    card(page.margin, y, contentW, summaryHeight, colors.greenSoft, colors.teal);
+    addWrappedText(summaryText, page.margin + 14, y - 17, contentW - 28, 8.6, colors.ink, 10.8, 6);
+    y -= summaryHeight + 24;
   };
   const drawNumberedList = (title, meta, items, accent = colors.green) => {
     ensure(128);
@@ -3720,8 +4228,8 @@ function buildReportAnalysis({ rows, filteredRows, summary, scope: providedScope
   const topBases = reportTopBy(filteredRows, "base", "valor_numerico", 8);
   const topDrivers = reportTopBy(filteredRows, "motorista", "valor_numerico", 8);
   const topBaseByCount = reportTopBy(filteredRows, "base", null, 5);
-  const selectedReportDivision = getPrefaturaDivisionForType();
-  const reportSheets = selectedReportDivision ? [selectedReportDivision] : DONUT_SHEETS;
+  const selectedReportDivisions = getPrefaturaDivisionsForTypes();
+  const reportSheets = selectedReportDivisions.length < MAIN_TYPE_OPTIONS.length ? selectedReportDivisions : DONUT_SHEETS;
   const categoryTotals = reportSheets.map((sheet) => {
     const rowsForSheet = filteredRows.filter((row) => normalizeDonutSheet(row) === sheet);
     return {
@@ -3743,7 +4251,8 @@ function buildReportAnalysis({ rows, filteredRows, summary, scope: providedScope
   const volumeMonth = comparisonRows.reduce((best, row) => (Number(row.count || 0) > Number(best.count || 0) ? row : best), comparisonRows[0] || fallbackRow);
   const topBase = topBases[0] || { label: "Não identificado", total: 0, count: 0 };
   const topDriver = topDrivers[0] || { label: "Não identificado", total: 0, count: 0 };
-  const packageComparison = buildPackageManagementComparisonForScope(scope, filteredRows);
+  const packagePrefaturaRows = filterPrefaturaRowsByTypes(allRows, state.packageTipo);
+  const packageComparison = buildPackageManagementComparisonForScope(scope, packagePrefaturaRows, state.packageTipo);
   const topBaseShareNumber = summary.totalValue ? (topBase.total / summary.totalValue) * 100 : 0;
   const topDriverShareNumber = summary.totalValue ? (topDriver.total / summary.totalValue) * 100 : 0;
   const topBaseShare = formatNumberPt(topBaseShareNumber, 1);
@@ -3874,15 +4383,15 @@ function getReportScope() {
       year,
       periodMode,
       periodLabel,
-      label: `Anual ${year} â€” ${annualPeriodLabel}`,
-      title: `Relatório Executivo de Performance Operacional â€” Anual ${year}`,
+      label: `Anual ${year} — ${annualPeriodLabel}`,
+      title: `Relatório Executivo de Performance Operacional — Anual ${year}`,
       fileName: `relatorio-performance-operacional-anual-${year}.pdf`,
     };
   }
   const monthIndex = Number(String(key).slice(5, 7)) || 1;
   const monthName = MONTHS[monthIndex - 1] || "período";
   const monthLabel = `${capitalize(monthName)}/${year}`;
-  const label = `${monthLabel} â€” ${periodLabel.toLowerCase()}`;
+  const label = `${monthLabel} — ${periodLabel.toLowerCase()}`;
   return {
     mode: "monthly",
     key,
@@ -3891,7 +4400,7 @@ function getReportScope() {
     periodLabel,
     monthLabel,
     label,
-    title: `Relatório Executivo de Performance Operacional â€” ${label}`,
+    title: `Relatório Executivo de Performance Operacional — ${label}`,
     fileName: `relatorio-performance-operacional-${slugify(`${monthName}-${year}-${periodLabel}`)}.pdf`,
   };
 }
@@ -4030,7 +4539,9 @@ function buildReportConclusionItems({ scope, summary, topBase, topDriver, domina
 function reportTopBy(rows, key, metric, limit) {
   const map = new Map();
   for (const row of rows) {
-    const label = reportLabel(key === "base" ? getBaseIdentity(row) : row[key]);
+    const label = key === "motorista" || key === "driver"
+      ? formatDriverName(row[key])
+      : reportLabel(key === "base" ? getBaseIdentity(row) : row[key]);
     if (!map.has(label)) map.set(label, { label, total: 0, count: 0 });
     const item = map.get(label);
     item.total += metric ? Number(row[metric] || 0) : 1;
@@ -4080,7 +4591,18 @@ function getReportOffenseColor(value, max) {
 
 function formatSignedPct(value) {
   const number = Number(value || 0);
-  return `${number >= 0 ? "+" : ""}${formatNumberPt(number, 1)}%`;
+  return `${number > 0 ? "+" : ""}${formatNumberPt(number, 1)}%`;
+}
+
+function formatEvolutionTrend(value) {
+  const number = Number(value || 0);
+  if (number > 0) return { arrow: "↑", label: formatSignedPct(number), tone: "is-bad", status: "mais ofensiva" };
+  if (number < 0) return { arrow: "↓", label: formatSignedPct(number), tone: "is-good", status: "menos ofensiva" };
+  return { arrow: "→", label: formatSignedPct(0), tone: "is-flat", status: "estável" };
+}
+
+function formatEvolutionTrendText(trend) {
+  return `${trend.arrow} ${trend.label} ${trend.status}`;
 }
 
 function formatNumberPt(value, digits = 1) {
@@ -4132,9 +4654,9 @@ function pdfEscape(value) {
   return String(value ?? "")
     .normalize("NFD")
     .replace(/[\u0300-\u036f]/g, "")
-    .replace(/[â€“â€”]/g, "-")
-    .replace(/[â€œâ€]/g, '"')
-    .replace(/[â€˜â€™]/g, "'")
+    .replace(/[–—]/g, "-")
+    .replace(/[“”]/g, '"')
+    .replace(/[‘’]/g, "'")
     .replace(/[^\x20-\x7E]/g, " ")
     .replace(/\\/g, "\\\\")
     .replace(/\(/g, "\\(")
@@ -4143,30 +4665,30 @@ function pdfEscape(value) {
 
 function pdfTextHex(value) {
   const winAnsi = {
-    "â‚¬": 0x80,
-    "â€š": 0x82,
-    "Æ’": 0x83,
-    "â€ž": 0x84,
-    "â€¦": 0x85,
-    "â€ ": 0x86,
-    "â€¡": 0x87,
-    "Ë†": 0x88,
-    "â€°": 0x89,
+    "€": 0x80,
+    "‚": 0x82,
+    "ƒ": 0x83,
+    "„": 0x84,
+    "…": 0x85,
+    "†": 0x86,
+    "‡": 0x87,
+    "ˆ": 0x88,
+    "‰": 0x89,
     "Š": 0x8a,
-    "â€¹": 0x8b,
+    "‹": 0x8b,
     "Œ": 0x8c,
     "Ž": 0x8e,
-    "â€˜": 0x91,
-    "â€™": 0x92,
-    "â€œ": 0x93,
-    "â€": 0x94,
-    "â€¢": 0x95,
-    "â€“": 0x96,
-    "â€”": 0x97,
-    "Ëœ": 0x98,
-    "â„¢": 0x99,
+    "‘": 0x91,
+    "’": 0x92,
+    "“": 0x93,
+    "”": 0x94,
+    "•": 0x95,
+    "–": 0x96,
+    "—": 0x97,
+    "˜": 0x98,
+    "™": 0x99,
     "š": 0x9a,
-    "â€º": 0x9b,
+    "›": 0x9b,
     "œ": 0x9c,
     "ž": 0x9e,
     "Ÿ": 0x9f,
@@ -4382,7 +4904,7 @@ function renderTable(rows, summary) {
       const badgeClass = row.tipo_registro === "PNR" ? "badge--pnr" : row.aba_origem === "XPT PERDIDOS" ? "badge--xpt" : "badge--svc";
       const linkedIds = getLinkedPackageIds(row);
       const linkedIdsCount = linkedIds.length || Number(row.linked_ids_count || row.quantidade_ids || 0);
-      const linkedIdsLabel = linkedIdsCount > 1 ? `${linkedIds[0]} +${linkedIdsCount - 1}` : row.id_pacote || "â€”";
+      const linkedIdsLabel = linkedIdsCount > 1 ? `${linkedIds[0]} +${linkedIdsCount - 1}` : row.id_pacote || "—";
       const linkedIdsTitle = linkedIds.length ? linkedIds.join(", ") : row.id_pacote || "";
       const linkedValues = getLinkedValues(row);
       const linkedValuesLabel = linkedValues.length > 1 ? linkedValues.map((value) => currency.format(value)).join(" + ") : "";
@@ -4396,7 +4918,7 @@ function renderTable(rows, summary) {
             <span class="cell-subtle">${escapeHtml(row.cidade_base || row.sigla_base || "Base")}</span>
           </td>
           <td>
-            <strong>${escapeHtml(row.motorista || "Sem driver")}</strong>
+            <strong>${escapeHtml(formatDriverName(row.motorista, "Sem driver"))}</strong>
             <span class="cell-subtle">${escapeHtml(row.n_rota ? `Rota ${row.n_rota}` : "Sem rota")}</span>
           </td>
           <td>${escapeHtml(row.placa || "Sem placa")}</td>
@@ -4407,7 +4929,7 @@ function renderTable(rows, summary) {
             ${escapeHtml(linkedIdsLabel)}
             ${linkedIdsCount > 1 ? `<span class="cell-subtle">${integer.format(linkedIdsCount)} IDs vinculados</span>` : ""}
           </td>
-          <td>${escapeHtml(row.n_rota || "â€”")}</td>
+          <td>${escapeHtml(row.n_rota || "—")}</td>
           <td class="is-right">
             <strong>${currency.format(row.valor_numerico || 0)}</strong>
             ${linkedValuesLabel ? `<span class="cell-subtle">${escapeHtml(linkedValuesLabel)}</span>` : ""}
@@ -4433,7 +4955,7 @@ function renderPackageManagementTableHeader() {
         <th data-sort="base">Base</th>
         <th data-sort="valor_numerico" class="is-right">Valor</th>
         <th data-sort="data_sort">Data</th>
-        <th data-sort="id_caso">ID Caso</th>
+        <th data-sort="id_pacote">ID de Envio</th>
         <th data-sort="decisao_adm">Decisão ADM</th>
       </tr>
     `;
@@ -4449,11 +4971,13 @@ function getPackageTypeBadgeClass(type) {
 
 function renderPackageManagementTable(rows, allPackageRows) {
   renderPackageManagementTableHeader();
-  const totalRows = allPackageRows.length;
+  const validAllRows = (Array.isArray(allPackageRows) ? allPackageRows : []).filter(isPackageManagementDetailRow);
+  const validPageRows = (Array.isArray(rows) ? rows : []).filter(isPackageManagementDetailRow);
+  const totalRows = validAllRows.length;
   const pageCount = Math.max(1, Math.ceil(totalRows / state.pageSize));
   state.page = Math.min(state.page, pageCount);
   const start = totalRows === 0 ? 0 : (state.page - 1) * state.pageSize + 1;
-  const end = totalRows === 0 ? 0 : Math.min(start + rows.length - 1, totalRows);
+  const end = totalRows === 0 ? 0 : Math.min(start + validPageRows.length - 1, totalRows);
 
   el.resultCount.textContent = integer.format(totalRows);
   el.tableRange.textContent = `${integer.format(start)}-${integer.format(end)} de ${integer.format(totalRows)}`;
@@ -4461,7 +4985,7 @@ function renderPackageManagementTable(rows, allPackageRows) {
   el.prevPage.disabled = state.page <= 1;
   el.nextPage.disabled = state.page >= pageCount;
 
-  if (!rows.length) {
+  if (!validPageRows.length) {
     el.tableBody.innerHTML = `
       <tr>
         <td colspan="9">
@@ -4475,7 +4999,7 @@ function renderPackageManagementTable(rows, allPackageRows) {
     return;
   }
 
-  el.tableBody.innerHTML = rows
+  el.tableBody.innerHTML = validPageRows
     .map((row, index) => {
       const type = row.tipo_operacional || "Indefinido";
       const category = PACKAGE_CATEGORY_LABELS[row.categoria_final] || row.categoria_label || "Indefinido";
@@ -4488,8 +5012,8 @@ function renderPackageManagementTable(rows, allPackageRows) {
           <td><strong>${escapeHtml(row.base || row.base_normalizada || "—")}</strong></td>
           <td class="is-right"><strong>${currency.format(row.valor_numerico || 0)}</strong></td>
           <td>${formatDate(row.data_normalizada || row.data_sort)}</td>
-          <td>${escapeHtml(row.id_caso || row.id_pacote || "—")}</td>
-          <td>${escapeHtml(row.decisao_adm || "—")}</td>
+          <td>${escapeHtml(row.id_pacote || row.id_caso || "—")}</td>
+          <td class="decision-cell">${renderPackageDecisionCell(row)}</td>
         </tr>
       `;
     })
@@ -4504,29 +5028,29 @@ function renderFilterSummary() {
 
   if (state.sheet !== PRE_FATURA_VIEW) push("Aba", getSheetDisplayLabel(state.sheet));
   if (state.sheet !== MONTHLY_BASE_VIEW) push("Tipo", getActiveTypeFilter());
-  if (state.sheet !== PACKAGE_MANAGEMENT_VIEW) {
-    push("Base", state.base);
-    push("Driver", state.motorista);
-  }
   if (normalizePeriodMode(state.period) !== "month") push("Período", getPeriodModeLabel(state.period));
-  if (state.query && state.sheet !== PACKAGE_MANAGEMENT_VIEW) applied.push({ label: "Busca", value: state.query });
+  if (state.query && state.sheet !== MONTHLY_BASE_VIEW) applied.push({ label: "Busca", value: state.query });
 
-  el.activeFiltersCount.textContent = `${applied.length} filtro${applied.length === 1 ? "" : "s"} ativo${applied.length === 1 ? "" : "s"}`;
-  el.filterSummary.innerHTML = applied.length
-    ? `
+  if (el.activeFiltersCount) {
+    el.activeFiltersCount.textContent = `${applied.length} filtro${applied.length === 1 ? "" : "s"} ativo${applied.length === 1 ? "" : "s"}`;
+  }
+  if (el.filterSummary) {
+    el.filterSummary.innerHTML = applied.length
+      ? `
       <div class="filter-pill-row">
         ${applied.map((item) => `<span class="filter-pill"><strong>${escapeHtml(item.label)}:</strong> ${escapeHtml(item.value)}</span>`).join("")}
       </div>
     `
-    : `
+      : `
       <div class="status-row">
         <strong>Sem filtros ativos</strong>
         <span>Mostrando a base inteira</span>
       </div>
     `;
+  }
 }
 
-function updateTopbar(summary = buildSummary(getFilteredRows())) {
+function updateTopbar(summary = null) {
   if (el.sourceLine) {
     el.sourceLine.textContent = "";
     el.sourceLine.hidden = true;
@@ -4578,7 +5102,7 @@ function buildSummary(rows) {
 }
 
 function buildMonthlyComparison() {
-  return buildMonthlyComparisonFromDatasets(library.datasets, { sheet: getPrefaturaComparisonSheet(), viewMode: comparisonPeriodView });
+  return buildMonthlyComparisonFromDatasets(library.datasets, { types: state.prefaturaTipo, viewMode: comparisonPeriodView });
 }
 
 function buildMonthlyComparisonFromDatasets(datasets, options = {}) {
@@ -4587,7 +5111,7 @@ function buildMonthlyComparisonFromDatasets(datasets, options = {}) {
   const map = new Map();
   for (const dataset of Array.isArray(datasets) ? datasets : []) {
     if (!dataset || dataset.source === "filtered" || dataset.id === EMPTY_DATASET_ID || !Array.isArray(dataset.rows) || !dataset.rows.length) continue;
-    const scopedRows = getMonthlyComparisonRows(dataset.rows, sheet);
+    const scopedRows = options.types ? filterPrefaturaRowsByTypes(dataset.rows, options.types) : getMonthlyComparisonRows(dataset.rows, sheet);
     if (!scopedRows.length) continue;
     if ((dataset.fileCategory || inferRowsFileCategory(dataset.rows)) === PACKAGE_MANAGEMENT_FILE_CATEGORY) continue;
     const period = getDatasetPeriod({ ...dataset, rows: scopedRows });
@@ -4795,26 +5319,51 @@ function detectYearFromRows(rows) {
   return String(date.getUTCFullYear());
 }
 
-function getFilteredRows() {
-  const query = normalize(state.query);
+function getFilteredRowsCacheKey() {
+  const datasetId = getActiveDataset()?.id || fileMeta?.id || "";
+  return [
+    datasetId,
+    allRows.length,
+    state.monthFilter,
+    state.period,
+    normalizeTypeSelection(state.prefaturaTipo).join("|"),
+    normalize(state.query),
+  ].join("::");
+}
 
-  return allRows.filter((row) => {
+function getFilteredRows() {
+  const cacheKey = getFilteredRowsCacheKey();
+  if (derivedDataCache.prefaturaKey === cacheKey) {
+    return derivedDataCache.prefaturaRows;
+  }
+
+  const query = normalize(state.query);
+  const selectedDivisions = getPrefaturaDivisionsForTypes();
+  const rows = allRows.filter((row) => {
     const rowCategory = row.file_category || PRE_FATURA_FILE_CATEGORY;
     if (rowCategory === PACKAGE_MANAGEMENT_FILE_CATEGORY) return false;
-    const selectedDivision = getPrefaturaDivisionForType();
-    if (selectedDivision && getRowDivision(row) !== selectedDivision) return false;
-    if (state.base !== "Todos" && getBaseIdentity(row) !== state.base) return false;
-    if (state.motorista !== "Todos" && row.motorista !== state.motorista) return false;
+    if (selectedDivisions.length < MAIN_TYPE_OPTIONS.length && !selectedDivisions.includes(getRowDivision(row))) return false;
 
     if (!query) return true;
     return row._search.includes(query);
   });
+  derivedDataCache.prefaturaKey = cacheKey;
+  derivedDataCache.prefaturaRows = rows;
+  return rows;
 }
 
 function filterPrefaturaRowsByType(rows, type) {
   const selectedDivision = getPrefaturaDivisionForType(type);
   const baseRows = (Array.isArray(rows) ? rows : []).filter((row) => (row.file_category || PRE_FATURA_FILE_CATEGORY) !== PACKAGE_MANAGEMENT_FILE_CATEGORY);
   return selectedDivision ? baseRows.filter((row) => getRowDivision(row) === selectedDivision) : baseRows;
+}
+
+function filterPrefaturaRowsByTypes(rows, selection = state.packageTipo) {
+  const baseRows = (Array.isArray(rows) ? rows : []).filter((row) => (row.file_category || PRE_FATURA_FILE_CATEGORY) !== PACKAGE_MANAGEMENT_FILE_CATEGORY);
+  const selectedTypes = getTypeSelectionValues(selection);
+  if (selectedTypes.length === MAIN_TYPE_OPTIONS.length) return baseRows;
+  const selectedDivisions = new Set(selectedTypes.map((type) => PREFATURA_TYPE_TO_DIVISION[type]).filter(Boolean));
+  return baseRows.filter((row) => selectedDivisions.has(getRowDivision(row)));
 }
 
 function sortRows(rows) {
@@ -4841,58 +5390,6 @@ function sortRows(rows) {
 function paginateRows(rows) {
   const start = (state.page - 1) * state.pageSize;
   return rows.slice(start, start + state.pageSize);
-}
-
-function populateSelect(select, values, current) {
-  const unique = Array.from(new Set(values.filter(Boolean).filter((value) => value !== "Todos")));
-  const opts = ["Todos", ...unique];
-  select.innerHTML = opts
-    .map((value) => `<option value="${escapeAttribute(value)}">${escapeHtml(getSelectDisplayLabel(value))}</option>`)
-    .join("");
-  select.value = current && opts.includes(current) ? current : "Todos";
-}
-
-function sanitizeCurrentFilters(options) {
-  const optionMap = {
-    base: options?.bases || [],
-    motorista: options?.motoristas || [],
-  };
-
-  Object.entries(optionMap).forEach(([key, values]) => {
-    const current = state[key];
-    if (!current || current === "Todos") {
-      state[key] = "Todos";
-      return;
-    }
-    if (!values.includes(current)) {
-      state[key] = "Todos";
-      state.page = 1;
-    }
-  });
-}
-
-function buildOptions(rows) {
-  const normalizeSort = (values) =>
-    Array.from(
-      new Set(
-        values
-          .map((value) => (value == null ? "" : String(value).trim()))
-          .filter(Boolean),
-      ),
-    ).sort((a, b) => a.localeCompare(b, "pt-BR", { sensitivity: "base" }));
-  return {
-    tipos: normalizeSort(rows.map((row) => row.tipo_desconto)),
-    bases: normalizeSort(rows.map((row) => getBaseIdentity(row))),
-    motoristas: normalizeSort(rows.map((row) => row.motorista)),
-  };
-}
-
-function buildMainTypeOptions() {
-  return {
-    tipos: MAIN_TYPE_OPTIONS,
-    bases: [],
-    motoristas: [],
-  };
 }
 
 function countBySheet(rows) {
@@ -4959,8 +5456,8 @@ function buildMixRows(rows) {
       end,
     };
   });
-  const selectedDivision = getPrefaturaDivisionForType();
-  return selectedDivision ? mix.filter((item) => item.label === selectedDivision) : mix;
+  const selectedDivisions = getPrefaturaDivisionsForTypes();
+  return selectedDivisions.length < MAIN_TYPE_OPTIONS.length ? mix.filter((item) => selectedDivisions.includes(item.label)) : mix;
 }
 
 function normalizeDonutSheet(row) {
@@ -5045,6 +5542,7 @@ function bottomBy(rows, key, metric, limit) {
 
 function getGroupLabel(row, key) {
   if (key === "base") return getBaseIdentity(row) || "Sem valor";
+  if (key === "motorista" || key === "driver") return formatDriverName(row[key], "Sem valor");
   const value = row[key];
   return value == null || value === "" ? "Sem valor" : String(value);
 }
@@ -5071,6 +5569,29 @@ function normalizeDriverName(value) {
     .replace(/\s+/g, " ");
 }
 
+function isUnidentifiedDriverName(value) {
+  const normalized = normalizeDriverName(value);
+  return !normalized || normalized.includes("IDENTIFICADO") || normalized.includes("IDENTIFICADA") || normalized === "SEM DRIVER" || normalized === "SEM MOTORISTA" || normalized === "NAO INFORMADO";
+}
+
+function formatDriverName(value, fallback = "Não identificado") {
+  const fallbackIdentity = normalizeDriverName(fallback);
+  const safeFallback = fallbackIdentity.includes("IDENTIFICADO") ? "Não identificado" : fallback;
+  const raw = String(value || "").replace(/\s+/g, " ").trim();
+  if (!raw) return safeFallback;
+  const normalized = normalizeDriverName(raw);
+  if (isUnidentifiedDriverName(raw)) return safeFallback;
+  const lowerConnectors = new Set(["DA", "DAS", "DE", "DI", "DO", "DOS", "E"]);
+  return normalized
+    .split(" ")
+    .map((part, index) => {
+      if (index > 0 && lowerConnectors.has(part)) return part.toLowerCase();
+      if (part.length <= 2 && /^[A-Z]+$/.test(part)) return part;
+      return `${part.slice(0, 1)}${part.slice(1).toLowerCase()}`;
+    })
+    .join(" ");
+}
+
 function normalizeDriver(value) {
   return normalizeDriverName(value);
 }
@@ -5080,7 +5601,7 @@ function calcularTotalDriversUnicos(rows) {
   rows.forEach((row) => {
     const name = row?.driver || row?.motorista || row?.nomeMotorista || row?.nome_driver || "";
     const normalizedName = normalizeDriverName(name);
-    if (normalizedName) drivers.add(normalizedName);
+    if (normalizedName && !isUnidentifiedDriverName(name)) drivers.add(normalizedName);
   });
   return drivers.size;
 }
@@ -5380,14 +5901,78 @@ function classifyPackageDecision(value, sheetType) {
   if (sheetType === "MERCADO_LIVRE") return "MERCADO_LIVRE";
   const decision = normalizeText(value);
   if (!decision) return "INDEFINIDO";
-  const hasDispatcher = decision.includes("DISPATCHER") || decision.includes("DISPATHCER");
-  const hasDriver = decision.includes("DRIVER") || decision.includes("MOTORISTA");
+  const hasDispatcher = hasDispatcherDecisionText(decision);
+  const hasDriver = hasDriverDecisionText(decision);
   const removesDriver = decision.includes("RETIRAR") && hasDriver;
-  const keepsDriver = decision.includes("MANTER") || decision.includes("MANTIDO") || decision.includes("DIRECIONADO");
-  if (hasDispatcher && (removesDriver || decision.includes("DESCONTO") || !hasDriver)) return "DISPATCHER";
+  if (hasUnsignedTermDecision(decision) && hasDispatcher) return "DISPATCHER";
+  if (isDispatcherDiscountDecisionText(decision)) return "DISPATCHER";
   if (removesDriver) return "INDEFINIDO";
-  if (hasDriver && !hasDispatcher && (keepsDriver || decision.includes("DESCONTO"))) return "DRIVER";
+  if (isDriverKeptDecisionText(decision)) return "DRIVER";
   return "INDEFINIDO";
+}
+
+function hasDispatcherDecisionText(decision) {
+  return decision.includes("DISPATCHER") || decision.includes("DISPATHCER") || decision.includes("DISPACHER");
+}
+
+function hasDriverDecisionText(decision) {
+  return decision.includes("DRIVER") || decision.includes("MOTORISTA");
+}
+
+function hasUnsignedTermDecision(decision) {
+  return decision.includes("ASSIN") && decision.includes("TERMO");
+}
+
+function isDispatcherDiscountDecisionText(decision) {
+  const hasDispatcher = hasDispatcherDecisionText(decision);
+  const hasDriver = hasDriverDecisionText(decision);
+  const removesDriver = decision.includes("RETIRAR") && hasDriver;
+  return hasDispatcher && (removesDriver || decision.includes("DESCONTO") || hasUnsignedTermDecision(decision) || !hasDriver);
+}
+
+function isDriverKeptDecisionText(decision) {
+  const hasDriver = hasDriverDecisionText(decision);
+  const hasDispatcher = hasDispatcherDecisionText(decision);
+  const keepsDriver = decision.includes("MANTER") || decision.includes("MANTIDO") || decision.includes("MANTEM") || decision.includes("DIRECIONADO");
+  return hasDriver && !hasDispatcher && (keepsDriver || decision.includes("DESCONTO"));
+}
+
+function cleanPackageDecisionText(value) {
+  return String(value || "")
+    .replace(/com\s*driver/gi, "com Driver")
+    .replace(/\s*\/\s*/g, " / ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function getPackageDecisionDisplay(row) {
+  const rawDecision = row?.decisao_adm || "";
+  const normalizedDecision = normalizeText(rawDecision);
+  const category = row?.categoria_final || classifyPackageDecision(rawDecision, row?.aba_gestao);
+  const unsignedTerm = hasUnsignedTermDecision(normalizedDecision);
+
+  if (category === "DISPATCHER" || isDispatcherDiscountDecisionText(normalizedDecision)) {
+    return {
+      primary: "Desconto direcionado ao Dispatcher",
+      note: unsignedTerm ? "Não assinou o termo" : "",
+    };
+  }
+  if (category === "DRIVER" || isDriverKeptDecisionText(normalizedDecision)) {
+    return { primary: "Desconto mantido com Driver", note: "" };
+  }
+  if (category === "ALC") return { primary: "Absorvido pela ALC", note: "" };
+  if (category === "MERCADO_LIVRE") return { primary: "Mercado Livre", note: "" };
+
+  return { primary: cleanPackageDecisionText(rawDecision) || "—", note: "" };
+}
+
+function renderPackageDecisionCell(row) {
+  const display = getPackageDecisionDisplay(row);
+  if (!display.note) return escapeHtml(display.primary);
+  return `
+    <span class="decision-cell__primary">${escapeHtml(display.primary)}</span>
+    <span class="decision-cell__note">${escapeHtml(display.note)}</span>
+  `;
 }
 
 function findDecisionInfo(headers, row, sheetType) {
@@ -5421,28 +6006,70 @@ function isPackageTotalRow(row) {
     .map(normalizeText)
     .filter(Boolean);
 
-  return values.some((value) =>
-    value === "TOTAL" ||
-    value === "TOTAIS" ||
-    value === "TOTAL GERAL" ||
-    value === "RESUMO" ||
-    value.includes("SUBTOTAL") ||
-    value.includes("SOMA") ||
-    value.includes("SOMATORIA") ||
-    value.includes("VALOR TOTAL") ||
-    value.includes("TOTAL DESCONTO") ||
-    value.includes("TOTAL DE DESCONTO") ||
-    value.includes("TOTAL ABSORVIDO") ||
-    value.includes("TOTAL DRIVER") ||
-    value.includes("TOTAL DISPATCHER") ||
-    value.includes("TOTAL MERCADO LIVRE") ||
-    value.includes("QTD TOTAL") ||
-    value.includes("QUANTIDADE TOTAL")
+  return values.some(isPackageSummaryText);
+}
+
+function isPackageSummaryText(value) {
+  const text = normalizeText(value);
+  if (!text) return false;
+  if (text === "TOTAL" || text === "TOTAIS" || text === "TOTAL GERAL" || text === "RESUMO") return true;
+  return (
+    text.startsWith("TOTAL ") ||
+    text.includes(" TOTAL ") ||
+    text.includes("SUBTOTAL") ||
+    text.includes("SOMA") ||
+    text.includes("SOMATORIA") ||
+    text.includes("VALOR TOTAL") ||
+    text.includes("TOTAL DESCONTO") ||
+    text.includes("TOTAL DESCONTOS") ||
+    text.includes("TOTAL DE DESCONTO") ||
+    text.includes("TOTAL DE DESCONTOS") ||
+    text.includes("TOTAL ABSORVIDO") ||
+    text.includes("TOTAL DRIVER") ||
+    text.includes("TOTAL DISPATCHER") ||
+    text.includes("TOTAL MERCADO LIVRE") ||
+    text.includes("QTD TOTAL") ||
+    text.includes("QUANTIDADE TOTAL")
   );
 }
 
+function hasPackageStrongDetailAnchor(row) {
+  return [
+    row.id_pacote,
+    row.id_caso,
+    row.id,
+    row.n_rota,
+    row.rota,
+    row.data_normalizada,
+    row.data_sort,
+  ].some((value) => String(value || "").trim());
+}
+
+function isPackageManagementDetailRow(row) {
+  if (!row || typeof row !== "object") return false;
+  if (isPackageTotalRow(row)) return false;
+  const driverRaw = row.motorista || row.driver || row.nomeMotorista || row.nome_driver || "";
+  const hasDriver = !isUnidentifiedDriverName(driverRaw);
+  const occurrenceCount = getOccurrenceCount(row);
+  const hasStrongDetailAnchor = hasPackageStrongDetailAnchor(row);
+  const hasDetailAnchor = [
+    row.id_pacote,
+    row.id_caso,
+    row.id,
+    row.n_rota,
+    row.rota,
+    row.data_normalizada,
+    row.data_sort,
+    row.base_normalizada,
+    normalizeBase(row.base),
+  ].some((value) => String(value || "").trim());
+  if (!hasDriver && occurrenceCount > 1) return false;
+  if (!hasDriver && !hasStrongDetailAnchor) return false;
+  return hasDriver || hasDetailAnchor;
+}
+
 function hasPackageRecordMinimum({ valor, base, motorista, dataValue, rota, id, decision }) {
-  const numericValue = parseMoney(valor);
+  const numericValue = normalizarValorGestao(valor);
   if (!Number.isFinite(numericValue) || numericValue === 0) return false;
   return [base, motorista, dataValue, rota, id, decision?.value].some((value) => String(value || "").trim());
 }
@@ -5503,9 +6130,9 @@ function normalizePackageManagementWorkbook(workbook, fileName = "") {
         categoria_label: PACKAGE_CATEGORY_LABELS[category] || "Indefinido",
         base: base || "",
         base_normalizada: normalizeBase(base),
-        motorista: motorista || "",
-        driver: motorista || "",
-        valor_numerico: parseMoney(valor),
+        motorista: formatDriverName(motorista, ""),
+        driver: formatDriverName(motorista, ""),
+        valor_numerico: normalizarValorGestao(valor),
         data_normalizada: parsedDate.iso,
         data_sort: parsedDate.ts,
         n_rota: formatId(rota),
@@ -5525,18 +6152,23 @@ function normalizePackageManagementWorkbook(workbook, fileName = "") {
         arquivo_origem: fileName,
         ocorrencias: 1,
       };
+      if (!isPackageManagementDetailRow(normalized)) {
+        totalRowsSkipped += 1;
+        continue;
+      }
       normalized._search = buildPackageManagementSearchText(normalized);
       records.push(normalized);
     }
   });
-  if (ignoredSheets.length) console.warn("[GESTAO PACOTES] Abas ignoradas:", ignoredSheets);
   normalizePackageManagementWorkbook.lastStats = { originalRows: records.length + totalRowsSkipped, consolidatedRows: records.length, duplicatesSkipped: 0, ignoredSheets, totalRowsSkipped };
   return records;
 }
 
 function normalizePackageManagementStoredRow(row) {
   if (!row || typeof row !== "object") return null;
-  const category = row.categoria_final || row.categoria || "INDEFINIDO";
+  const existingCategory = row.categoria_final || row.categoria || "";
+  const decisionCategory = classifyPackageDecision(row.decisao_adm, row.aba_gestao);
+  const category = decisionCategory && decisionCategory !== "INDEFINIDO" ? decisionCategory : existingCategory || "INDEFINIDO";
   const normalized = {
     ...row,
     file_category: PACKAGE_MANAGEMENT_FILE_CATEGORY,
@@ -5547,15 +6179,16 @@ function normalizePackageManagementStoredRow(row) {
     categoria_final: category,
     categoria_label: PACKAGE_CATEGORY_LABELS[category] || row.categoria_label || "Indefinido",
     base_normalizada: normalizeBase(row.base || row.base_normalizada),
-    motorista: row.motorista || row.driver || "",
-    driver: row.driver || row.motorista || "",
-    valor_numerico: Number.isFinite(Number(row.valor_numerico)) ? Number(row.valor_numerico) : parseMoney(row.valor),
+    motorista: formatDriverName(row.motorista || row.driver || "", ""),
+    driver: formatDriverName(row.driver || row.motorista || "", ""),
+    valor_numerico: normalizarValorGestao(row.valor_numerico !== undefined && row.valor_numerico !== null && row.valor_numerico !== "" ? row.valor_numerico : row.valor),
     id_pacote: row.id_pacote || row.id_caso || row.id || "",
     reference_month: row.reference_month || getMonthNumberFromAny(row.mes || row.competencia || row.arquivo_origem),
     reference_year: row.reference_year || normalizeReferenceYear(row.ano || detectYear(`${row.competencia || ""} ${row.arquivo_origem || ""}`)),
     period_type: row.period_type || getPeriodModeFromLabel(`${row.quinzena || ""} ${row.arquivo_origem || ""}`),
     ocorrencias: 1,
   };
+  if (!isPackageManagementDetailRow(normalized)) return null;
   normalized._search = buildPackageManagementSearchText(normalized);
   return normalized;
 }
@@ -5615,7 +6248,7 @@ function normalizeWorkbook(workbook) {
         cidade_base: baseParts.cidade_base,
         sigla_base: baseParts.sigla_base,
         base_normalizada: normalizeBase(base),
-        motorista: motorista || "",
+        motorista: formatDriverName(motorista, ""),
         placa: placa || "",
         descricao: descricao || "",
         data_normalizada: parsedDate.iso,
@@ -6074,6 +6707,10 @@ async function loadPackageManagementRowsForCards(records, cachedDatasets = new M
   const packageFiles = (Array.isArray(records) ? records : [])
     .filter(isUsableDashboardFileRecord)
     .filter((record) => getFileRecordCategory(record) === PACKAGE_MANAGEMENT_FILE_CATEGORY);
+  const loadKey = packageFiles.map((record) => `${record.id || record.file_name}:${record.updated_at || record.metadata?.last_loaded_at || ""}`).join("|") || "__empty";
+  if (packageManagementRowsLoadedKey === loadKey) {
+    return (Array.isArray(library.datasets) ? library.datasets : []).filter((dataset) => dataset?.fileCategory === PACKAGE_MANAGEMENT_FILE_CATEGORY);
+  }
   const datasets = [];
 
   for (const fileRecord of packageFiles) {
@@ -6087,7 +6724,49 @@ async function loadPackageManagementRowsForCards(records, cachedDatasets = new M
   }
 
   packageManagementRows = datasets.flatMap((dataset) => dataset.rows.map(normalizePackageManagementStoredRow).filter(Boolean));
+  packageManagementRowsLoadedKey = loadKey;
+  resetDerivedDataCache();
   return datasets;
+}
+
+async function ensurePackageManagementRowsLoaded(records = dashboardFileRecords) {
+  const cachedDatasets = new Map(
+    (Array.isArray(library.datasets) ? library.datasets : [])
+      .filter((dataset) => dataset?.source !== "filtered" && Array.isArray(dataset.rows))
+      .map((dataset) => [dataset.id, dataset]),
+  );
+  return loadPackageManagementRowsForCards(records, cachedDatasets);
+}
+
+function applyDashboardScopeFromLoadedDatasets() {
+  if (!dashboardFileRecords.length || !Array.isArray(library.datasets) || !library.datasets.length) return false;
+  const categoryFiles = dashboardFileRecords
+    .filter(isUsableDashboardFileRecord)
+    .filter((record) => getFileRecordCategory(record) === PRE_FATURA_FILE_CATEGORY);
+  if (!categoryFiles.length) return false;
+  const selectedFiles = getFilesByMonthAndPeriod(categoryFiles, state.monthFilter || "all", state.period, PRE_FATURA_FILE_CATEGORY);
+  if (!selectedFiles.length) return false;
+  const datasetById = new Map(
+    library.datasets
+      .filter((dataset) => dataset?.source !== "filtered" && Array.isArray(dataset.rows) && dataset.rows.length)
+      .map((dataset) => [dataset.id, dataset]),
+  );
+  const selectedDatasets = selectedFiles.map((file) => datasetById.get(file.id)).filter(Boolean);
+  if (selectedDatasets.length !== selectedFiles.length) return false;
+  const allHistoricalDatasets = categoryFiles.map((file) => datasetById.get(file.id)).filter(Boolean);
+  const packageDatasets = library.datasets.filter((dataset) => dataset?.source !== "filtered" && dataset?.fileCategory === PACKAGE_MANAGEMENT_FILE_CATEGORY);
+  const rows = selectedDatasets.flatMap((dataset) => dataset.rows);
+  if (!rows.length) return false;
+  replaceDashboardData(rows, {
+    selectedFiles,
+    selectedDatasets,
+    allHistoricalDatasets: [...allHistoricalDatasets, ...packageDatasets],
+    selectedMonth: state.monthFilter || "all",
+    selectedPeriod: state.period,
+    fileCategory: PRE_FATURA_FILE_CATEGORY,
+  });
+  setDashboardVisualState("", { render: false });
+  return true;
 }
 
 async function loadDashboardDataByFilters(options = {}) {
@@ -6397,9 +7076,11 @@ async function loadActiveDashboardFile() {
 
 function clearDashboardData(options = {}) {
   const { render = true, preserveRecords = true } = options;
+  resetDerivedDataCache();
   if (!preserveRecords) {
     dashboardFileRecords = [];
     packageManagementRows = [];
+    packageManagementRowsLoadedKey = "";
   }
   currentActiveFile = null;
   const preservedDatasets = preserveRecords
@@ -6493,7 +7174,6 @@ async function loadFileFromStorage(fileRecord, options = {}) {
       storagePath: fileRecord.storage_path,
     });
     if (!dataset || !Array.isArray(dataset.rows) || !dataset.rows.length) {
-      console.warn("[PARSER] Arquivo processado sem registros:", fileRecord);
       const emptyRecord = {
         ...fileRecord,
         status: "empty_or_parse_error",
@@ -7492,6 +8172,23 @@ function parseMoney(value) {
   return Number.isFinite(parsed) ? parsed : 0;
 }
 
+function normalizarValorGestao(value) {
+  if (value === null || value === undefined || value === "") return 0;
+  if (typeof value === "number" && Number.isFinite(value)) {
+    return Math.abs(Number(value.toFixed(2)));
+  }
+  const texto = String(value)
+    .replace("R$", "")
+    .replace(/\s/g, "")
+    .replace(/\./g, "")
+    .replace(",", ".")
+    .replace(/[^\d.-]/g, "")
+    .trim();
+  const numero = Number(texto);
+  if (!Number.isFinite(numero)) return 0;
+  return Math.abs(Number(numero.toFixed(2)));
+}
+
 function splitBase(base) {
   const raw = String(base || "").trim();
   const parts = raw
@@ -7577,7 +8274,7 @@ function escapeAttribute(value) {
 }
 
 function formatDate(value) {
-  if (!value) return "â€”";
+  if (!value) return "—";
   if (typeof value === "string") {
     const iso = value.match(/^(\d{4})-(\d{2})-(\d{2})$/);
     if (iso) {
@@ -7598,7 +8295,7 @@ function formatDate(value) {
 }
 
 function formatDateTime(value) {
-  if (!value) return "â€”";
+  if (!value) return "—";
   const parsed = value instanceof Date ? value : new Date(value);
   if (Number.isNaN(parsed.getTime())) return String(value);
   return liveClockFormatter.format(parsed);
@@ -7644,7 +8341,8 @@ function normalizeLoadedState(loadedState) {
   delete loadedState.metaMensal;
   delete loadedState.metaAnual;
   delete loadedState.metaAnualEditada;
-  loadedState.base = loadedState.base && loadedState.base !== "Todos" ? normalizeBase(loadedState.base) || "Todos" : "Todos";
+  loadedState.base = "Todos";
+  loadedState.motorista = "Todos";
   loadedState.accountPanelOpen = false;
   loadedState.fileName = "";
   loadedState.activeDatasetId = EMPTY_DATASET_ID;
@@ -7657,8 +8355,8 @@ function normalizeLoadedState(loadedState) {
   } else if (!SHEET_TABS.includes(loadedState.sheet)) {
     loadedState.sheet = PRE_FATURA_VIEW;
   }
-  loadedState.prefaturaTipo = normalizeMainTypeFilter(loadedState.prefaturaTipo);
-  loadedState.packageTipo = normalizeMainTypeFilter(loadedState.packageTipo);
+  loadedState.prefaturaTipo = normalizeTypeSelection(loadedState.prefaturaTipo);
+  loadedState.packageTipo = normalizeTypeSelection(loadedState.packageTipo);
   loadedState.tipo = "Todos";
   return loadedState;
 }
@@ -7719,6 +8417,7 @@ function normalizeDatasetRecord(dataset) {
 function upsertDataset(dataset) {
   const normalized = normalizeDatasetRecord(dataset);
   if (!normalized) return;
+  resetDerivedDataCache();
   const index = library.datasets.findIndex((entry) => entry.id === normalized.id);
   if (index >= 0) {
     library.datasets[index] = normalized;
