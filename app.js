@@ -4385,7 +4385,8 @@ function buildReportPdfBlob({ analysis, summary }) {
     let cursor = x + 14;
     headers.forEach((header, index) => {
       const align = aligns[index] || (index >= 2 ? "right" : "left");
-      addText(header, align === "right" ? cursor + widths[index] - 4 : cursor, tableTop - 8, 7.3, colors.muted, align);
+      const cellX = align === "right" ? cursor + widths[index] - 4 : align === "center" ? cursor + widths[index] / 2 : cursor;
+      addText(clipPdfText(header, widths[index] - 8, 7.3), cellX, tableTop - 8, 7.3, colors.muted, align);
       cursor += widths[index];
     });
     rows.forEach((row, rowIndex) => {
@@ -4396,11 +4397,8 @@ function buildReportPdfBlob({ analysis, summary }) {
         const text = String(cell ?? "");
         const align = aligns[index] || (index >= 2 ? "right" : "left");
         const size = index === 1 && text.length > 28 ? 6.7 : 8;
-        if (index === 1) {
-          addText(clipPdfText(text, widths[index] - 8, size), cursor, rowY, size, colors.ink);
-        } else {
-          addText(text, align === "right" ? cursor + widths[index] - 4 : cursor, rowY, 8, colors.ink, align);
-        }
+        const cellX = align === "right" ? cursor + widths[index] - 4 : align === "center" ? cursor + widths[index] / 2 : cursor;
+        addText(clipPdfText(text, widths[index] - 8, size), cellX, rowY, size, colors.ink, align);
         cursor += widths[index];
       });
     });
@@ -4422,7 +4420,8 @@ function buildReportPdfBlob({ analysis, summary }) {
     let cursor = x + 14;
     headers.forEach((header, index) => {
       const align = aligns[index] || "left";
-      addText(header, align === "right" ? cursor + widths[index] - 4 : cursor, tableTop - 8, 7.3, colors.muted, align);
+      const cellX = align === "right" ? cursor + widths[index] - 4 : align === "center" ? cursor + widths[index] / 2 : cursor;
+      addText(clipPdfText(header, widths[index] - 8, 7.3), cellX, tableTop - 8, 7.3, colors.muted, align);
       cursor += widths[index];
     });
     let rowTop = tableTop - 28;
@@ -4436,6 +4435,8 @@ function buildReportPdfBlob({ analysis, summary }) {
         const size = sizes[index];
         if (align === "right") {
           addText(clipPdfText(text, widths[index] - 8, size), cursor + widths[index] - 4, rowTop, size, colors.ink, "right");
+        } else if (align === "center") {
+          addText(clipPdfText(text, widths[index] - 8, size), cursor + widths[index] / 2, rowTop, size, colors.ink, "center");
         } else {
           addWrappedText(text, cursor, rowTop, widths[index] - 8, size, colors.ink, 9.4, index === 2 ? 4 : 2, true);
         }
@@ -4513,7 +4514,7 @@ function buildReportPdfBlob({ analysis, summary }) {
     ]);
     const financialHeight = 48 + financialRows.length * 18;
     ensure(financialHeight + 12);
-    drawTable(page.margin, y, contentW, "Valores financeiros por competência", ["Competência", "ALC", "Driver", "Dispatcher"], financialRows, [112, 130, 130, 130], financialHeight, colors.teal, ["left", "right", "right", "right"]);
+    drawTable(page.margin, y, contentW, "Valores financeiros por competência", ["Competência", "ALC", "Driver", "Dispatcher"], financialRows, [125, 126, 126, 125], financialHeight, colors.teal, ["left", "right", "right", "right"]);
     y -= financialHeight + 12;
 
     const errorRows = evolutionRows.map((row) => [
@@ -4524,7 +4525,7 @@ function buildReportPdfBlob({ analysis, summary }) {
     ]);
     const errorHeight = 48 + errorRows.length * 18;
     ensure(errorHeight + 12);
-    drawTable(page.margin, y, contentW, "Erros por competência", ["Competência", "Erros Driver", "Erros Dispatcher", "Erros Mercado Livre"], errorRows, [112, 126, 132, 132], errorHeight, colors.blue, ["left", "right", "right", "right"]);
+    drawTable(page.margin, y, contentW, "Erros por competência", ["Competência", "Erros Driver", "Erros Dispatcher", "Erros Mercado Livre"], errorRows, [125, 126, 126, 125], errorHeight, colors.blue, ["left", "right", "right", "right"]);
     y -= errorHeight + 12;
 
     const summaryLines = wrapPdfText(summaryText, contentW - 28, 8.6, 4);
@@ -4576,7 +4577,7 @@ function buildReportPdfBlob({ analysis, summary }) {
         "Distribuição por tipo — Gestão de Pacotes",
         ["Tipo", "Quantidade", "Percentual"],
         distributionRows,
-        [210, 170, 120],
+        [176, 176, 150],
         distributionHeight,
         colors.blue,
         ["left", "right", "right"],
@@ -5205,7 +5206,15 @@ function formatNumberPt(value, digits = 1) {
 }
 
 function estimatePdfTextWidth(text, size) {
-  return String(text ?? "").length * size * 0.5;
+  return Array.from(String(text ?? "")).reduce((total, char) => {
+    if (char === " ") return total + size * 0.26;
+    if (/[,.;:]/.test(char)) return total + size * 0.25;
+    if (/[0-9]/.test(char)) return total + size * 0.56;
+    if (/[A-ZÁÉÍÓÚÃÕÂÊÔÇ]/.test(char)) return total + size * 0.62;
+    if (/[mwMW]/.test(char)) return total + size * 0.74;
+    if (/[ilI]/.test(char)) return total + size * 0.30;
+    return total + size * 0.50;
+  }, 0);
 }
 
 function wrapPdfText(text, width, size = 10, maxLines = 6) {
