@@ -14,6 +14,7 @@ const PDF_LOGO_IMAGE = {
 };
 const DEBUG_AUTH_FLOW = false;
 const EMPTY_DATASET_ID = "__empty";
+const PRE_FATURA_VIEW = "Pré-Fatura";
 const MONTHLY_BASE_VIEW = "Evolução mensal";
 const PACKAGE_MANAGEMENT_VIEW = "Gestão de Pacotes";
 const PRE_FATURA_FILE_CATEGORY = "PRE_FATURA";
@@ -26,9 +27,10 @@ const DEFAULT_PNR_GOAL_SETTINGS = {
   goal_type: "loss_limit",
 };
 const DEFAULT_PNR_GOAL_LIMIT = DEFAULT_PNR_GOAL_SETTINGS.monthly_goal;
-const SHEET_ORDER = ["Todos", "SVC PERDIDOS", "XPT PERDIDOS", "PNR"];
-const SHEET_TABS = [...SHEET_ORDER, MONTHLY_BASE_VIEW, PACKAGE_MANAGEMENT_VIEW];
+const SHEET_ORDER = ["SVC PERDIDOS", "XPT PERDIDOS", "PNR"];
+const SHEET_TABS = [PRE_FATURA_VIEW, MONTHLY_BASE_VIEW, PACKAGE_MANAGEMENT_VIEW];
 const SHEET_DISPLAY_LABELS = {
+  [PRE_FATURA_VIEW]: "Pré-Fatura",
   Todos: "Todos",
   "SVC PERDIDOS": "SVC Perdidos",
   "XPT PERDIDOS": "XPT Perdidos",
@@ -54,14 +56,27 @@ const DONUT_LABELS = {
   "SVC PERDIDOS": "SVC Perd.",
   "XPT PERDIDOS": "XPT Perd.",
 };
+const PREFATURA_TYPE_TO_DIVISION = {
+  SVC: "SVC PERDIDOS",
+  XPT: "XPT PERDIDOS",
+  PNR: "PNR",
+};
+const PREFATURA_DIVISION_TO_TYPE = {
+  "SVC PERDIDOS": "SVC",
+  "XPT PERDIDOS": "XPT",
+  PNR: "PNR",
+};
+const MAIN_TYPE_OPTIONS = ["SVC", "XPT", "PNR"];
 const MONTHS = ["janeiro", "fevereiro", "março", "abril", "maio", "junho", "julho", "agosto", "setembro", "outubro", "novembro", "dezembro"];
 const MONTH_ABBR = ["JAN", "FEV", "MAR", "ABR", "MAI", "JUN", "JUL", "AGO", "SET", "OUT", "NOV", "DEZ"];
 const SETOR_OPTIONS = ["LOSS", "Operação", "Administrativo", "Financeiro", "Qualidade", "Monitoramento", "Suporte", "Outros"];
 
 const STATE_DEFAULT = {
   query: "",
-  sheet: "Todos",
+  sheet: PRE_FATURA_VIEW,
   tipo: "Todos",
+  prefaturaTipo: "Todos",
+  packageTipo: "Todos",
   base: "Todos",
   motorista: "Todos",
   period: "month",
@@ -333,6 +348,7 @@ function cacheDom() {
   el.searchInput = document.getElementById("search-input");
   el.monthSelect = document.getElementById("month-select");
   el.periodSelect = document.getElementById("period-select");
+  el.packageTypeSelect = document.getElementById("package-type-select");
   el.sheetSelect = document.getElementById("sheet-select");
   el.typeSelect = document.getElementById("type-select");
   el.baseSelect = document.getElementById("base-select");
@@ -610,6 +626,15 @@ function bindEvents() {
       await loadDashboardDataByFilters();
     });
   }
+  if (el.packageTypeSelect) {
+    el.packageTypeSelect.addEventListener("change", (event) => {
+      setActiveTypeFilter(event.target.value);
+      state.page = 1;
+      persistState();
+      hydrateControls();
+      renderAll();
+    });
+  }
 
   if (el.sortHigh) {
     el.sortHigh.addEventListener("click", () => setValueSort("desc"));
@@ -686,21 +711,23 @@ function bindEvents() {
   el.donutLegend.addEventListener("click", (event) => {
     const row = event.target.closest("[data-sheet]");
     if (!row) return;
-    state.sheet = row.dataset.sheet;
+    state.sheet = PRE_FATURA_VIEW;
+    state.prefaturaTipo = getPrefaturaTypeForDivision(row.dataset.sheet);
     state.page = 1;
     hydrateControls();
     renderAll();
-    showToast(`Aba filtrada: ${state.sheet}`, "info");
+    showToast(`Tipo filtrado: ${state.prefaturaTipo}`, "info");
   });
 
   el.donutChart.addEventListener("click", (event) => {
     const segment = event.target.closest("[data-sheet]");
     if (!segment) return;
-    state.sheet = segment.dataset.sheet;
+    state.sheet = PRE_FATURA_VIEW;
+    state.prefaturaTipo = getPrefaturaTypeForDivision(segment.dataset.sheet);
     state.page = 1;
     hydrateControls();
     renderAll();
-    showToast(`Aba filtrada: ${state.sheet}`, "info");
+    showToast(`Tipo filtrado: ${state.prefaturaTipo}`, "info");
   });
 
   el.donutChart.addEventListener("pointerover", (event) => {
@@ -833,6 +860,35 @@ function getCurrentFileCategory(sheet = state.sheet) {
   return sheet === PACKAGE_MANAGEMENT_VIEW ? PACKAGE_MANAGEMENT_FILE_CATEGORY : PRE_FATURA_FILE_CATEGORY;
 }
 
+function normalizeMainTypeFilter(value) {
+  return MAIN_TYPE_OPTIONS.includes(value) ? value : "Todos";
+}
+
+function getActiveTypeFilter() {
+  return state.sheet === PACKAGE_MANAGEMENT_VIEW ? normalizeMainTypeFilter(state.packageTipo) : normalizeMainTypeFilter(state.prefaturaTipo);
+}
+
+function setActiveTypeFilter(value) {
+  const normalized = normalizeMainTypeFilter(value);
+  if (state.sheet === PACKAGE_MANAGEMENT_VIEW) {
+    state.packageTipo = normalized;
+  } else {
+    state.prefaturaTipo = normalized;
+  }
+}
+
+function getPrefaturaDivisionForType(type = state.prefaturaTipo) {
+  return PREFATURA_TYPE_TO_DIVISION[normalizeMainTypeFilter(type)] || "";
+}
+
+function getPrefaturaTypeForDivision(division) {
+  return PREFATURA_DIVISION_TO_TYPE[normalizeSheetLabel(division)] || "Todos";
+}
+
+function getPrefaturaComparisonSheet() {
+  return getPrefaturaDivisionForType() || "Todos";
+}
+
 function isDashboardFileCategory(value) {
   return value === PRE_FATURA_FILE_CATEGORY || value === PACKAGE_MANAGEMENT_FILE_CATEGORY;
 }
@@ -948,13 +1004,18 @@ function handleEscapeFilter(event) {
       return true;
     },
     "sheet-select": () => {
-      if (state.sheet === "Todos") return false;
-      state.sheet = "Todos";
+      if (state.sheet === PRE_FATURA_VIEW) return false;
+      state.sheet = PRE_FATURA_VIEW;
       return true;
     },
     "type-select": () => {
-      if (state.tipo === "Todos") return false;
-      state.tipo = "Todos";
+      if (state.prefaturaTipo === "Todos") return false;
+      state.prefaturaTipo = "Todos";
+      return true;
+    },
+    "package-type-select": () => {
+      if (getActiveTypeFilter() === "Todos") return false;
+      setActiveTypeFilter("Todos");
       return true;
     },
     "base-select": () => {
@@ -1072,14 +1133,17 @@ function markDashboardReady() {
 
 function hydrateControls() {
   syncActiveDataset();
-  const options = state.sheet === PACKAGE_MANAGEMENT_VIEW ? buildPackageManagementOptions() : buildOptions(allRows);
+  state.prefaturaTipo = normalizeMainTypeFilter(state.prefaturaTipo);
+  state.packageTipo = normalizeMainTypeFilter(state.packageTipo);
+  const options = buildOptions(allRows);
   sanitizeCurrentFilters(options);
   renderDatasetSelect();
   renderMonthSelect();
   renderPeriodSelect();
   renderFileDeleteMenu();
   populateSelect(el.sheetSelect, SHEET_TABS, state.sheet);
-  populateSelect(el.typeSelect, options.tipos, state.tipo);
+  populateSelect(el.typeSelect, [], "Todos");
+  if (el.packageTypeSelect) populateSelect(el.packageTypeSelect, buildMainTypeOptions().tipos, getActiveTypeFilter());
   populateSelect(el.baseSelect, options.bases, state.base);
   populateSelect(el.driverSelect, options.motoristas, state.motorista);
 
@@ -1100,9 +1164,13 @@ function hydrateControls() {
 function updateSidebarFiltersForCurrentView() {
   const packageView = state.sheet === PACKAGE_MANAGEMENT_VIEW;
   const searchCard = el.searchInput?.closest(".sidebar-card");
+  const sheetLabel = el.sheetSelect?.closest("label");
+  const typeLabel = el.typeSelect?.closest("label");
   const baseLabel = el.baseSelect?.closest("label");
   const driverLabel = el.driverSelect?.closest("label");
   if (searchCard) searchCard.hidden = packageView;
+  if (sheetLabel) sheetLabel.hidden = true;
+  if (typeLabel) typeLabel.hidden = true;
   if (baseLabel) baseLabel.hidden = packageView;
   if (driverLabel) driverLabel.hidden = packageView;
 }
@@ -1110,11 +1178,14 @@ function updateSidebarFiltersForCurrentView() {
 function updateGlobalPeriodFiltersVisibility(isEvolutionView = state.sheet === MONTHLY_BASE_VIEW) {
   const monthFilter = el.monthSelect?.closest(".global-period-filter");
   const periodFilter = el.periodSelect?.closest(".global-period-filter");
+  const packageTypeFilter = el.packageTypeSelect?.closest(".global-period-filter");
   [monthFilter, periodFilter].forEach((filter) => {
     if (filter) filter.hidden = isEvolutionView;
   });
+  if (packageTypeFilter) packageTypeFilter.hidden = isEvolutionView || state.sheet === MONTHLY_BASE_VIEW;
   if (el.viewToolbar) {
     el.viewToolbar.classList.toggle("is-evolution-view", isEvolutionView);
+    el.viewToolbar.classList.toggle("is-package-view", state.sheet === PACKAGE_MANAGEMENT_VIEW);
   }
 }
 
@@ -1205,7 +1276,7 @@ async function handleDatasetSelection(datasetId) {
   }
 
   if ((dataset.fileCategory || getFileRecordCategory(dataset.remoteRecord)) === PACKAGE_MANAGEMENT_FILE_CATEGORY) {
-    showToast("Arquivos de Gestão de Pacotes alimentam apenas os cards resumidos.", "info", 4200);
+    showToast("Arquivos de Gestão de Pacotes alimentam apenas a aba Gestão de Pacotes.", "info", 4200);
     renderDatasetSelect();
     return;
   }
@@ -1342,22 +1413,12 @@ function renderFileDeleteMenu() {
 }
 
 function renderTabs() {
-  const counts = calcularContadoresAbas(allRows);
   el.sheetTabs.innerHTML = SHEET_TABS.map((sheet) => {
     const isActive = state.sheet === sheet ? "is-active" : "";
-    const count = counts[sheet] || 0;
     const label = getSheetDisplayLabel(sheet);
-    if (sheet === MONTHLY_BASE_VIEW) {
-      return `
-        <button type="button" class="sheet-tab ${isActive}" data-sheet="${escapeAttribute(sheet)}">
-          ${escapeHtml(label)}
-        </button>
-      `;
-    }
     return `
       <button type="button" class="sheet-tab ${isActive}" data-sheet="${escapeAttribute(sheet)}">
         ${escapeHtml(label)}
-        <span class="sheet-tab__count">${integer.format(count)}</span>
       </button>
     `;
   }).join("");
@@ -1389,7 +1450,7 @@ function renderAll() {
     return;
   }
 
-  const dashboardState = getDashboardState(packageView ? packageRows : filtered);
+  const dashboardState = getDashboardState(packageView ? packageRows : monthlyView ? allRows : filtered);
   if (dashboardState) {
     renderDashboardState(dashboardState);
     renderFilterSummary();
@@ -1870,8 +1931,10 @@ function showPermissionDeniedState() {
 function resetDashboardFilters() {
   Object.assign(state, {
     query: "",
-    sheet: "Todos",
+    sheet: PRE_FATURA_VIEW,
     tipo: "Todos",
+    prefaturaTipo: "Todos",
+    packageTipo: "Todos",
     base: "Todos",
     motorista: "Todos",
     period: "month",
@@ -2088,64 +2151,6 @@ function isPackageLocatedInPrefatura(row) {
   return row?.prefatura_match?.status === "LOCALIZADO_NA_PRE_FATURA" || row?.prefatura_match?.status === "CORRESPONDENCIA_PROVAVEL";
 }
 
-function formatPackageFinancialDelta(rows, prefaturaSummary) {
-  const total = Number(prefaturaSummary?.totalValue || 0);
-  const locatedRows = rows.filter(isPackageLocatedInPrefatura);
-  const located = locatedRows.length;
-  const locatedValue = locatedRows.reduce((sum, row) => sum + Math.abs(Number(row.valor_numerico || 0)), 0);
-  const pct = total ? formatNumberPt((locatedValue / total) * 100, 1) : "0,0";
-  return `${pct}% do total da pré-fatura · ${integer.format(located)} registros localizados`;
-}
-
-function formatPackageCountDelta(rows, prefaturaSummary) {
-  const total = Number(prefaturaSummary?.count || 0);
-  const located = rows.filter(isPackageLocatedInPrefatura).length;
-  const pct = total ? formatNumberPt((located / total) * 100, 1) : "0,0";
-  return `${pct}% dos registros da pré-fatura · ${integer.format(located)} localizados`;
-}
-
-function buildPackageManagementKpiCardsLegacy(rows = packageManagementRows, prefaturaRows = allRows, prefaturaSummary = buildSummary(prefaturaRows)) {
-  const enrichedRows = enrichPackageRowsWithPrefaturaMatch(rows, prefaturaRows);
-  const summary = buildPackageManagementSummary(enrichedRows);
-  const byCategory = (category) => enrichedRows.filter((row) => row.categoria_final === category);
-  const alcRows = byCategory("ALC");
-  const driverRows = byCategory("DRIVER");
-  const dispatcherRows = byCategory("DISPATCHER");
-  const mercadoLivreRows = byCategory("MERCADO_LIVRE");
-  return [
-    { label: "Absorvido pela ALC", value: currency.format(summary.alcValue), tone: "kpi-card--finance", delta: formatPackageFinancialDelta(alcRows, prefaturaSummary) },
-    { label: "Mantido com Driver", value: currency.format(summary.driverValue), tone: "kpi-card--problem", delta: formatPackageFinancialDelta(driverRows, prefaturaSummary) },
-    { label: "Direcionado ao Dispatcher", value: currency.format(summary.dispatcherValue), tone: "kpi-card--problem", delta: formatPackageFinancialDelta(dispatcherRows, prefaturaSummary) },
-    { label: "Erros do Driver", value: integer.format(summary.driverErrors), tone: "kpi-card--volume", delta: formatPackageCountDelta(driverRows, prefaturaSummary) },
-    { label: "Erros do Dispatcher", value: integer.format(summary.dispatcherErrors), tone: "kpi-card--volume", delta: formatPackageCountDelta(dispatcherRows, prefaturaSummary) },
-    { label: "Erros do Mercado Livre", value: integer.format(summary.mercadoLivreErrors), tone: "kpi-card--neutral", delta: formatPackageCountDelta(mercadoLivreRows, prefaturaSummary) },
-  ];
-}
-
-function buildPackageComparisonLine({ label, rows, value, kind, prefaturaSummary, hasPackageRows }) {
-  const located = rows.filter(isPackageLocatedInPrefatura).length;
-  const denominator = kind === "financial" ? Number(prefaturaSummary?.totalValue || 0) : Number(prefaturaSummary?.count || 0);
-  const hasComparisonBase = hasPackageRows && denominator > 0;
-  const percentage = hasComparisonBase ? formatNumberPt((Number(value || 0) / denominator) * 100, 1) : null;
-  const comparison = !hasComparisonBase
-    ? "Sem base de comparaÃ§Ã£o"
-    : kind === "financial"
-      ? `${percentage}% do total da prÃ©-fatura`
-      : `${percentage}% dos registros da prÃ©-fatura`;
-  const locatedLabel = kind === "financial"
-    ? `${integer.format(located)} registros localizados`
-    : `${integer.format(located)} localizados`;
-  return {
-    label,
-    rows,
-    value,
-    kind,
-    located,
-    comparison,
-    delta: hasComparisonBase ? `${comparison} Â· ${locatedLabel}` : comparison,
-  };
-}
-
 function buildPackageManagementComparison(rows = packageManagementRows, prefaturaRows = allRows) {
   const scopedRows = Array.isArray(rows) ? rows : [];
   const enrichedRows = enrichPackageRowsWithPrefaturaMatch(scopedRows, prefaturaRows);
@@ -2179,22 +2184,46 @@ function formatPackageComparisonResult(line) {
   return line?.kind === "financial" ? currency.format(line.value || 0) : integer.format(line?.value || 0);
 }
 
+function buildPackageComparisonLine({ label, rows, value, kind, prefaturaSummary, hasPackageRows }) {
+  const located = rows.filter(isPackageLocatedInPrefatura).length;
+  const denominator = kind === "financial" ? Number(prefaturaSummary?.totalValue || 0) : Number(prefaturaSummary?.count || 0);
+  const hasComparisonBase = hasPackageRows && denominator > 0;
+  const percentage = hasComparisonBase ? formatNumberPt((Number(value || 0) / denominator) * 100, 1) : null;
+  const comparison = !hasComparisonBase
+    ? "Sem base de compara\u00e7\u00e3o"
+    : kind === "financial"
+      ? `${percentage}% do total da pr\u00e9-fatura`
+      : `${percentage}% dos registros da pr\u00e9-fatura`;
+  const locatedLabel = kind === "financial"
+    ? `${integer.format(located)} registros localizados`
+    : `${integer.format(located)} localizados`;
+  return {
+    label,
+    rows,
+    value,
+    kind,
+    located,
+    comparison,
+    delta: hasComparisonBase ? `${comparison} \u00b7 ${locatedLabel}` : comparison,
+  };
+}
+
 function buildPackageComparisonExecutiveText(comparison) {
   if (!comparison?.hasPackageRows) {
-    return "NÃ£o foram encontrados registros de GestÃ£o de Pacotes para o recorte selecionado.";
+    return "N\u00e3o foram encontrados registros de Gest\u00e3o de Pacotes para o recorte selecionado.";
   }
   if (!comparison?.hasPrefaturaRows) {
-    return "Foram encontrados registros de GestÃ£o de Pacotes, porÃ©m nÃ£o hÃ¡ base de PrÃ©-fatura correspondente para comparaÃ§Ã£o percentual.";
+    return "Foram encontrados registros de Gest\u00e3o de Pacotes, por\u00e9m n\u00e3o h\u00e1 base de Pr\u00e9-fatura correspondente para compara\u00e7\u00e3o percentual.";
   }
-  const alc = comparison.lines.find((line) => line.label === "Absorvido pela ALC") || { value: 0, comparison: "0,0% do total da prÃ©-fatura" };
-  const driver = comparison.lines.find((line) => line.label === "Erros do Driver") || { value: 0, comparison: "0,0% dos registros da prÃ©-fatura" };
-  return `No recorte selecionado, a GestÃ£o de Pacotes registrou ${currency.format(alc.value || 0)} absorvidos pela ALC, equivalente a ${alc.comparison}. Foram identificados ${integer.format(driver.value || 0)} erros classificados como Driver, representando ${driver.comparison}.`;
+  const alc = comparison.lines.find((line) => line.label === "Absorvido pela ALC") || { value: 0, comparison: "0,0% do total da pr\u00e9-fatura" };
+  const driver = comparison.lines.find((line) => line.label === "Erros do Driver") || { value: 0, comparison: "0,0% dos registros da pr\u00e9-fatura" };
+  return `No recorte selecionado, a Gest\u00e3o de Pacotes registrou ${currency.format(alc.value || 0)} absorvidos pela ALC, equivalente a ${alc.comparison}. Foram identificados ${integer.format(driver.value || 0)} erros classificados como Driver, representando ${driver.comparison}.`;
 }
 
 function buildPackageManagementKpiCards(rows = filterPackageManagementRowsByPeriod(packageManagementRows), prefaturaRows = allRows) {
   const comparison = buildPackageManagementComparison(rows, prefaturaRows);
   const byLabel = new Map(comparison.lines.map((line) => [line.label, line]));
-  const line = (label) => byLabel.get(label) || { value: 0, delta: "Sem base de comparaÃ§Ã£o" };
+  const line = (label) => byLabel.get(label) || { value: 0, delta: "Sem base de comparação" };
   return [
     { label: "Absorvido pela ALC", value: currency.format(line("Absorvido pela ALC").value || 0), tone: "kpi-card--finance", delta: line("Absorvido pela ALC").delta },
     { label: "Mantido com Driver", value: currency.format(line("Mantido com Driver").value || 0), tone: "kpi-card--problem", delta: line("Mantido com Driver").delta },
@@ -2220,8 +2249,9 @@ function getPackageManagementRowsForView() {
     ...row,
     tipo_operacional: getPackageOperationalType(row),
   }));
-  if (state.tipo !== "Todos") {
-    return enrichedRows.filter((row) => row.tipo_operacional === state.tipo);
+  const packageType = normalizeMainTypeFilter(state.packageTipo);
+  if (packageType !== "Todos") {
+    return enrichedRows.filter((row) => row.tipo_operacional === packageType);
   }
   return enrichedRows;
 }
@@ -2288,7 +2318,6 @@ function renderKpis(summary) {
       delta: `${summary.topBase ? summary.topBase.label : "Sem base"} com maior desconto`,
     },
   ];
-  const packageCards = buildPackageManagementKpiCards();
   const renderCard = (card, index) => `
     <article class="kpi-card ${card.tone}"${card.key ? ` data-kpi="${escapeAttribute(card.key)}"` : ""} style="--reveal-index:${index}">
       <div class="kpi-card__label">
@@ -2303,9 +2332,6 @@ function renderKpis(summary) {
   el.kpiGrid.innerHTML = `
     <section class="kpi-grid__group kpi-grid__group--main" aria-label="Cards principais da Pré-fatura">
       ${mainCards.map((card, index) => renderCard(card, index)).join("")}
-    </section>
-    <section class="kpi-grid__group kpi-grid__group--package" aria-label="Cards de Gestão de Pacotes">
-      ${packageCards.map((card, index) => renderCard(card, mainCards.length + index)).join("")}
     </section>
   `;
   void hydrateTotalDiscountComparison(summary);
@@ -2325,7 +2351,7 @@ function renderKpiCard(card, index) {
 }
 
 function renderPackageManagementView(pagedRows, allPackageRows) {
-  const cards = buildPackageManagementKpiCards(allPackageRows, allRows);
+  const cards = buildPackageManagementKpiCards(allPackageRows, filterPrefaturaRowsByType(allRows, state.packageTipo));
   el.kpiGrid.innerHTML = `
     <section class="kpi-grid__group kpi-grid__group--package" aria-label="Cards de Gestão de Pacotes">
       ${cards.map((card, index) => renderKpiCard(card, index)).join("")}
@@ -2543,7 +2569,8 @@ function renderPnrGoalSummary(filtered) {
 function renderMonthlyComparison() {
   if (!el.monthlyComparison) return;
   const rows = buildMonthlyComparison();
-  const scopeLabel = state.sheet === "Todos" ? "geral" : state.sheet;
+  const activeType = normalizeMainTypeFilter(state.prefaturaTipo);
+  const scopeLabel = activeType === "Todos" ? "geral" : activeType;
   syncComparisonViewControl();
   if (el.comparisonMeta) {
     el.comparisonMeta.textContent = rows.length ? `${integer.format(rows.length)} competências · ${scopeLabel}` : `sem histórico · ${scopeLabel}`;
@@ -2911,7 +2938,8 @@ function getComparableDatasets() {
 
 function getEvolutionSourceDatasets() {
   return library.datasets
-    .filter((dataset) => dataset && dataset.id !== EMPTY_DATASET_ID && dataset.source !== "filtered" && Array.isArray(dataset.rows) && dataset.rows.length);
+    .filter((dataset) => dataset && dataset.id !== EMPTY_DATASET_ID && dataset.source !== "filtered" && Array.isArray(dataset.rows) && dataset.rows.length)
+    .filter((dataset) => (dataset.fileCategory || inferRowsFileCategory(dataset.rows)) !== PACKAGE_MANAGEMENT_FILE_CATEGORY);
 }
 
 function getAnnualPnrRowsForEvolution() {
@@ -3594,13 +3622,13 @@ function buildReportPdfBlob({ analysis, summary }) {
       integer.format(line.located || 0),
     ]);
     ensure(210);
-    sectionTitle("GestÃ£o de Pacotes", "comparaÃ§Ã£o com PrÃ©-fatura");
+    sectionTitle("Gestão de Pacotes", "comparação com Pré-fatura");
     drawTable(
       page.margin,
       y,
       contentW,
-      "GestÃ£o de Pacotes Ã¢â‚¬â€ comparaÃ§Ã£o com PrÃ©-fatura",
-      ["Indicador", "Resultado", "ComparaÃ§Ã£o", "Localizados"],
+      "Gestão de Pacotes — comparação com Pré-fatura",
+      ["Indicador", "Resultado", "Compara\u00e7\u00e3o", "Localizados"],
       rows,
       [150, 92, 210, 70],
       48 + rows.length * 18,
@@ -3692,7 +3720,9 @@ function buildReportAnalysis({ rows, filteredRows, summary, scope: providedScope
   const topBases = reportTopBy(filteredRows, "base", "valor_numerico", 8);
   const topDrivers = reportTopBy(filteredRows, "motorista", "valor_numerico", 8);
   const topBaseByCount = reportTopBy(filteredRows, "base", null, 5);
-  const categoryTotals = DONUT_SHEETS.map((sheet) => {
+  const selectedReportDivision = getPrefaturaDivisionForType();
+  const reportSheets = selectedReportDivision ? [selectedReportDivision] : DONUT_SHEETS;
+  const categoryTotals = reportSheets.map((sheet) => {
     const rowsForSheet = filteredRows.filter((row) => normalizeDonutSheet(row) === sheet);
     return {
       label: sheet,
@@ -4472,12 +4502,14 @@ function renderFilterSummary() {
     if (value && value !== "Todos") applied.push({ label, value });
   };
 
-  push("Aba", getSheetDisplayLabel(state.sheet));
-  push("Tipo", state.tipo);
-  push("Base", state.base);
-  push("Driver", state.motorista);
+  if (state.sheet !== PRE_FATURA_VIEW) push("Aba", getSheetDisplayLabel(state.sheet));
+  if (state.sheet !== MONTHLY_BASE_VIEW) push("Tipo", getActiveTypeFilter());
+  if (state.sheet !== PACKAGE_MANAGEMENT_VIEW) {
+    push("Base", state.base);
+    push("Driver", state.motorista);
+  }
   if (normalizePeriodMode(state.period) !== "month") push("Período", getPeriodModeLabel(state.period));
-  if (state.query) applied.push({ label: "Busca", value: state.query });
+  if (state.query && state.sheet !== PACKAGE_MANAGEMENT_VIEW) applied.push({ label: "Busca", value: state.query });
 
   el.activeFiltersCount.textContent = `${applied.length} filtro${applied.length === 1 ? "" : "s"} ativo${applied.length === 1 ? "" : "s"}`;
   el.filterSummary.innerHTML = applied.length
@@ -4546,7 +4578,7 @@ function buildSummary(rows) {
 }
 
 function buildMonthlyComparison() {
-  return buildMonthlyComparisonFromDatasets(library.datasets, { sheet: state.sheet, viewMode: comparisonPeriodView });
+  return buildMonthlyComparisonFromDatasets(library.datasets, { sheet: getPrefaturaComparisonSheet(), viewMode: comparisonPeriodView });
 }
 
 function buildMonthlyComparisonFromDatasets(datasets, options = {}) {
@@ -4592,13 +4624,13 @@ function buildMonthlyComparisonFromDatasets(datasets, options = {}) {
 }
 
 function getMonthlyComparisonRows(rows, sheet = state.sheet) {
-  if (sheet === "Todos") return rows;
-  return rows.filter((row) => row.aba_origem === sheet);
+  if (sheet === "Todos" || sheet === PRE_FATURA_VIEW) return rows;
+  return rows.filter((row) => getRowDivision(row) === sheet);
 }
 
 async function buildReportHistoricalComparisonRows(scope) {
   const files = await getReportAvailableFileRecords();
-  if (!files.length) return buildMonthlyComparisonFromDatasets(library.datasets, { sheet: state.sheet, viewMode: "monthly" });
+  if (!files.length) return buildMonthlyComparisonFromDatasets(library.datasets, { sheet: getPrefaturaComparisonSheet(), viewMode: "monthly" });
 
   if (scope.mode === "annual") {
     const annualFiles = getFilesByMonthAndPeriod(files, "all", scope.periodMode, PRE_FATURA_FILE_CATEGORY)
@@ -4653,7 +4685,7 @@ async function buildReportMonthlyComparisonForFiles(files) {
     const dataset = await loadRowsFromStorage(file);
     if (dataset?.rows?.length) datasets.push(dataset);
   }
-  return buildMonthlyComparisonFromDatasets(datasets, { sheet: state.sheet });
+  return buildMonthlyComparisonFromDatasets(datasets, { sheet: getPrefaturaComparisonSheet() });
 }
 
 function uniqueDashboardFileRecords(files) {
@@ -4769,14 +4801,20 @@ function getFilteredRows() {
   return allRows.filter((row) => {
     const rowCategory = row.file_category || PRE_FATURA_FILE_CATEGORY;
     if (rowCategory === PACKAGE_MANAGEMENT_FILE_CATEGORY) return false;
-    if (SHEET_ORDER.includes(state.sheet) && state.sheet !== "Todos" && getRowDivision(row) !== state.sheet) return false;
-    if (state.tipo !== "Todos" && row.tipo_desconto !== state.tipo) return false;
+    const selectedDivision = getPrefaturaDivisionForType();
+    if (selectedDivision && getRowDivision(row) !== selectedDivision) return false;
     if (state.base !== "Todos" && getBaseIdentity(row) !== state.base) return false;
     if (state.motorista !== "Todos" && row.motorista !== state.motorista) return false;
 
     if (!query) return true;
     return row._search.includes(query);
   });
+}
+
+function filterPrefaturaRowsByType(rows, type) {
+  const selectedDivision = getPrefaturaDivisionForType(type);
+  const baseRows = (Array.isArray(rows) ? rows : []).filter((row) => (row.file_category || PRE_FATURA_FILE_CATEGORY) !== PACKAGE_MANAGEMENT_FILE_CATEGORY);
+  return selectedDivision ? baseRows.filter((row) => getRowDivision(row) === selectedDivision) : baseRows;
 }
 
 function sortRows(rows) {
@@ -4816,7 +4854,6 @@ function populateSelect(select, values, current) {
 
 function sanitizeCurrentFilters(options) {
   const optionMap = {
-    tipo: options?.tipos || [],
     base: options?.bases || [],
     motorista: options?.motoristas || [],
   };
@@ -4850,9 +4887,9 @@ function buildOptions(rows) {
   };
 }
 
-function buildPackageManagementOptions() {
+function buildMainTypeOptions() {
   return {
-    tipos: ["SVC", "XPT", "PNR"],
+    tipos: MAIN_TYPE_OPTIONS,
     bases: [],
     motoristas: [],
   };
@@ -4866,7 +4903,7 @@ function calcularContadoresAbas(dados) {
   const base = Array.isArray(dados) ? dados : [];
   const preRows = base.filter((item) => (item.file_category || PRE_FATURA_FILE_CATEGORY) !== PACKAGE_MANAGEMENT_FILE_CATEGORY);
   return SHEET_TABS.reduce((acc, sheet) => {
-    if (sheet === "Todos") acc[sheet] = preRows.length;
+    if (sheet === PRE_FATURA_VIEW) acc[sheet] = preRows.length;
     else if (sheet === MONTHLY_BASE_VIEW) acc[sheet] = 0;
     else if (sheet === PACKAGE_MANAGEMENT_VIEW) acc[sheet] = packageManagementRows.length;
     else acc[sheet] = preRows.filter((item) => getRowDivision(item) === sheet).length;
@@ -4907,7 +4944,7 @@ function buildMixRows(rows) {
   };
 
   let cursor = 0;
-  return DONUT_SHEETS.map((label) => {
+  const mix = DONUT_SHEETS.map((label) => {
     const item = totals[label];
     const share = shares[label] || 0;
     const start = cursor;
@@ -4922,6 +4959,8 @@ function buildMixRows(rows) {
       end,
     };
   });
+  const selectedDivision = getPrefaturaDivisionForType();
+  return selectedDivision ? mix.filter((item) => item.label === selectedDivision) : mix;
 }
 
 function normalizeDonutSheet(row) {
@@ -5769,7 +5808,7 @@ async function uploadDashboardFile(file) {
   }
 
   const uploadedPeriod = getFileRecordPeriod(data);
-  state.sheet = "Todos";
+  state.sheet = previewDataset.fileCategory === PACKAGE_MANAGEMENT_FILE_CATEGORY ? PACKAGE_MANAGEMENT_VIEW : PRE_FATURA_VIEW;
   if (previewDataset.fileCategory === PRE_FATURA_FILE_CATEGORY) {
     state.monthFilter = uploadedPeriod.key;
     state.period = uploadedPeriod.periodType;
@@ -7610,7 +7649,17 @@ function normalizeLoadedState(loadedState) {
   loadedState.fileName = "";
   loadedState.activeDatasetId = EMPTY_DATASET_ID;
   loadedState.deleteDatasetId = "";
-  if (!SHEET_TABS.includes(loadedState.sheet)) loadedState.sheet = "Todos";
+  if (loadedState.sheet === "Todos") {
+    loadedState.sheet = PRE_FATURA_VIEW;
+  } else if (SHEET_ORDER.includes(loadedState.sheet)) {
+    loadedState.prefaturaTipo = getPrefaturaTypeForDivision(loadedState.sheet);
+    loadedState.sheet = PRE_FATURA_VIEW;
+  } else if (!SHEET_TABS.includes(loadedState.sheet)) {
+    loadedState.sheet = PRE_FATURA_VIEW;
+  }
+  loadedState.prefaturaTipo = normalizeMainTypeFilter(loadedState.prefaturaTipo);
+  loadedState.packageTipo = normalizeMainTypeFilter(loadedState.packageTipo);
+  loadedState.tipo = "Todos";
   return loadedState;
 }
 

@@ -4759,6 +4759,49 @@ body:not([data-theme="light"]) .search-box:focus-within {
   box-shadow: 0 0 0 3px rgba(96, 165, 250, 0.18);
 }
 
+.view-toolbar {
+  grid-template-columns: minmax(0, 1fr) max-content !important;
+  align-items: center;
+}
+
+.view-toolbar.is-evolution-view {
+  grid-template-columns: minmax(0, 1fr) !important;
+}
+
+.view-toolbar.is-evolution-view .global-period-filters {
+  display: none;
+}
+
+.global-period-filters {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 0.72rem;
+  flex-wrap: nowrap;
+  justify-self: end;
+  min-width: 0;
+  max-width: 100%;
+}
+
+.global-period-filter {
+  flex: 0 0 auto;
+  justify-self: auto;
+  grid-template-columns: auto minmax(7.4rem, 8.8rem);
+  margin: 0;
+}
+
+.global-period-filter--month {
+  grid-template-columns: auto minmax(6.8rem, 8rem);
+}
+
+.global-period-filter--package-type {
+  grid-template-columns: auto minmax(6.8rem, 7.8rem);
+}
+
+.global-period-filter[hidden] {
+  display: none !important;
+}
+
 body:not([data-theme="light"]) #active-filters-count {
   border-color: rgba(164, 183, 202, 0.16);
   background: rgba(22, 36, 52, 0.74);
@@ -4910,6 +4953,10 @@ body:not([data-theme="light"]) #next-page:hover:not(:disabled) {
 }
 
 @media (max-width: 760px) {
+  .view-toolbar {
+    grid-template-columns: 1fr !important;
+  }
+
   .table-footer {
     align-items: stretch;
   }
@@ -4927,6 +4974,19 @@ body:not([data-theme="light"]) #next-page:hover:not(:disabled) {
   .global-period-filter {
     grid-template-columns: 1fr;
     align-items: stretch;
+  }
+
+  .global-period-filters {
+    width: 100%;
+    justify-content: flex-start;
+    flex-wrap: wrap;
+  }
+
+  .global-period-filter,
+  .global-period-filter--month,
+  .global-period-filter--package-type {
+    flex: 1 1 11rem;
+    grid-template-columns: 1fr;
   }
 
   .comparison-panel .panel__header {

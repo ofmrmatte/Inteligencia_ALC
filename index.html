@@ -60,7 +60,7 @@
           </button>
           <button class="ghost-button ghost-button--compact" id="report-button" type="button">Relatório</button>
           <div class="file-delete-picker" id="file-delete-picker">
-            <button class="ghost-button ghost-button--icon" id="file-select-button" type="button" aria-label="Selecionar arquivo para exclusÃ£o" title="Selecionar arquivo para exclusÃ£o">
+            <button class="ghost-button ghost-button--icon" id="file-select-button" type="button" aria-label="Selecionar arquivo para exclusão" title="Selecionar arquivo para exclusão">
               <svg viewBox="0 0 24 24" aria-hidden="true">
                 <path d="M5 7h14M5 12h9M5 17h6m7-2 1.8 1.8L23 13.6" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8"></path>
               </svg>
@@ -159,11 +159,11 @@
             </div>
 
             <div class="filter-list">
-              <label>
+              <label hidden>
                 <span>Aba de origem</span>
                 <select id="sheet-select"></select>
               </label>
-              <label>
+              <label hidden>
                 <span>Tipo</span>
                 <select id="type-select"></select>
               </label>
@@ -189,14 +189,20 @@
         <section class="content">
           <div class="view-toolbar">
             <nav class="sheet-tabs" id="sheet-tabs" aria-label="Selecionar aba de origem"></nav>
-            <label class="global-period-filter global-period-filter--month">
-              <span>Mês</span>
-              <select id="month-select"></select>
-            </label>
-            <label class="global-period-filter">
-              <span>Período</span>
-              <select id="period-select"></select>
-            </label>
+            <div class="global-period-filters" aria-label="Filtros de período e tipo">
+              <label class="global-period-filter global-period-filter--month">
+                <span>Mês</span>
+                <select id="month-select"></select>
+              </label>
+              <label class="global-period-filter">
+                <span>Período</span>
+                <select id="period-select"></select>
+              </label>
+              <label class="global-period-filter global-period-filter--package-type" hidden>
+                <span>Tipo</span>
+                <select id="package-type-select"></select>
+              </label>
+            </div>
           </div>
 
           <section class="monthly-base-view" id="monthly-base-view" hidden></section>
