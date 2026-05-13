@@ -1,4 +1,4 @@
-# Painel de Inteligencia Operacional
+# Painel de Inteligencia
 
 Dashboard web estatico para analise de pre-fatura, descontos, PNR e pacotes perdidos por base, driver, competencia, mes e quinzena.
 
@@ -95,6 +95,61 @@ A permissao administrativa vem da tabela `profiles`, pelos campos `role = 'admin
 8. Usuarios comuns podem visualizar os indicadores e baixar relatorios.
 9. Administradores podem excluir arquivos, trocar arquivo ativo, editar usuarios, ajustar a meta global e consultar auditoria em **Configuracoes gerais**.
 
+## Sincronizador local de arquivos
+
+O projeto inclui um sincronizador Node.js para Windows que monitora duas pastas locais e envia automaticamente arquivos Excel para o Supabase:
+
+- Pre-Fatura: `C:\Users\ALC Usuario\Documents\Painel de Inteligência\Pré Fatura`
+- Gestao de Pacotes: `C:\Users\ALC Usuario\Documents\Painel de Inteligência\Gestão de pacotes`
+
+### Configuracao
+
+1. Instale as dependencias:
+
+```powershell
+npm install
+```
+
+2. Copie `.env.example` para `.env`.
+
+3. Preencha no `.env`:
+
+- `SUPABASE_URL`
+- `SUPABASE_SERVICE_ROLE_KEY` para uso local seguro, ou `SUPABASE_ANON_KEY` + `SUPABASE_EMAIL` + `SUPABASE_PASSWORD`
+- `DASHBOARD_BUCKET=dashboard-files`
+- `PRE_FATURA_FOLDER`
+- `GESTAO_FOLDER`
+
+Nao commitar o `.env`. Ele fica ignorado pelo Git.
+
+### Execucao
+
+Rodar em modo continuo:
+
+```powershell
+npm run sync:dashboard
+```
+
+Rodar uma sincronizacao pontual e encerrar:
+
+```powershell
+npm run sync:dashboard:once
+```
+
+### Regras do sincronizador
+
+- Monitora arquivos `.xlsx` e `.xls`.
+- Ignora arquivos temporarios do Excel, como `~$arquivo.xlsx`.
+- Aguarda o arquivo estabilizar antes do upload.
+- Calcula SHA-256 para evitar duplicidade.
+- Arquivos da pasta de Pre-Fatura recebem `file_type = PRE_FATURA` e sao enviados para `pre-fatura/`.
+- Arquivos da pasta de Gestao de Pacotes recebem `file_type = GESTAO_PACOTES` e sao enviados para `gestao-pacotes/`.
+- Extrai mes, ano e quinzena pelo nome do arquivo.
+- Salva metadados como `file_hash`, `original_name`, `display_name`, `competencia`, `quinzena`, `size_bytes`, `last_modified_local` e `synced_at`.
+- Se uma nova versao do mesmo arquivo for detectada, registros anteriores equivalentes sao marcados como inativos e uma nova versao e registrada.
+- Exclusao local nao remove arquivos do Supabase por padrao. Para ativar, defina `SYNC_DELETE=true` no `.env`.
+- Com `SYNC_DELETE=true`, ao apagar um Excel da pasta local, o sincronizador remove do Storage e da tabela `dashboard_files` os registros correspondentes ao mesmo tipo, nome original, competencia e quinzena.
+
 ## Arquivos principais
 
 - `index.html`: estrutura da aplicacao.
@@ -103,8 +158,9 @@ A permissao administrativa vem da tabela `profiles`, pelos campos `role = 'admin
 - `authService.js`: autenticacao, sessao, perfil e permissoes via Supabase Auth.
 - `app.js`: logica do dashboard, filtros, rankings, graficos, upload, relatorio e permissoes.
 - `styles.css`: estilos, tema claro/escuro e responsividade.
+- `scripts/dashboard-local-sync.mjs`: sincronizador local das pastas Windows com Supabase Storage e `dashboard_files`.
 - `assets/vendor/xlsx.full.min.js`: biblioteca usada para leitura dos arquivos Excel no navegador.
 
 ## Relatorios
 
-O Relatorio Executivo de Performance Operacional usa o recorte selecionado para KPIs, rankings e diagnostico principal. Para comparativo e tendencia, o painel busca o historico disponivel em `dashboard_files` e compara o recorte atual com o mes anterior disponivel quando existir.
+O Relatorio Executivo usa o recorte selecionado para KPIs, rankings e diagnostico principal. Para comparativo e tendencia, o painel busca o historico disponivel em `dashboard_files` e compara o recorte atual com o mes anterior disponivel quando existir.

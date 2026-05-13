@@ -1,0 +1,15 @@
+{
+  "name": "dashboardfatura",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Painel de Inteligência e sincronizador local de arquivos do dashboard.",
+  "scripts": {
+    "sync:dashboard": "node scripts/dashboard-local-sync.mjs",
+    "sync:dashboard:once": "node scripts/dashboard-local-sync.mjs --once"
+  },
+  "dependencies": {
+    "@supabase/supabase-js": "^2.87.1",
+    "chokidar": "^4.0.3",
+    "dotenv": "^17.2.3"
+  }
+}

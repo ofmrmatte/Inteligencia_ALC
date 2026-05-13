@@ -1726,7 +1726,7 @@ function isDashboardFileActive(file) {
   if (!file) return false;
   const status = normalizeText(file.status || file.metadata?.status || "");
   if (file.deleted_at || file.deletedAt) return false;
-  if (["DELETED", "REMOVIDO", "MISSING STORAGE", "MISSING_STORAGE", "EMPTY OR PARSE ERROR", "EMPTY_OR_PARSE_ERROR"].includes(status)) return false;
+  if (["DELETED", "REMOVIDO", "MISSING STORAGE", "MISSING_STORAGE", "EMPTY OR PARSE ERROR", "EMPTY_OR_PARSE_ERROR", "SUPERSEDED", "SUBSTITUIDO", "SUBSTITUÍDO"].includes(status)) return false;
   return Boolean(file.id && file.storage_path);
 }
 
@@ -6226,14 +6226,25 @@ function getDatasetPeriod(dataset) {
 }
 
 function getFileRecordPeriod(fileRecord) {
-  const name = `${fileRecord?.file_name || ""} ${fileRecord?.period_label || ""} ${fileRecord?.metadata?.period_label || ""}`;
+  const metadataPeriodText = [
+    fileRecord?.metadata?.mes,
+    fileRecord?.metadata?.competencia,
+    fileRecord?.metadata?.ano,
+    fileRecord?.metadata?.display_name,
+    fileRecord?.metadata?.original_name,
+  ].filter(Boolean).join(" ");
+  const name = `${metadataPeriodText} ${fileRecord?.file_name || ""} ${fileRecord?.period_label || ""} ${fileRecord?.metadata?.period_label || ""}`;
   const monthNumberValue =
-    normalizeReferenceMonth(fileRecord?.reference_month) ||
-    normalizeReferenceMonth(fileRecord?.metadata?.reference_month) ||
+    getMonthNumberFromAny(fileRecord?.metadata?.mes) ||
+    getMonthNumberFromAny(fileRecord?.metadata?.competencia) ||
+    getMonthNumberFromAny(fileRecord?.metadata?.reference_month) ||
+    getMonthNumberFromAny(fileRecord?.reference_month) ||
     String(monthNumber(detectMonth(name)) || 1).padStart(2, "0");
   const yearValue =
-    normalizeReferenceYear(fileRecord?.reference_year) ||
+    normalizeReferenceYear(fileRecord?.metadata?.ano) ||
+    normalizeReferenceYear(fileRecord?.metadata?.competencia) ||
     normalizeReferenceYear(fileRecord?.metadata?.reference_year) ||
+    normalizeReferenceYear(fileRecord?.reference_year) ||
     detectYear(name) ||
     String(new Date().getFullYear());
   const monthIndex = Number(monthNumberValue) || 1;
@@ -7288,7 +7299,172 @@ async function handleUpload(event) {
   }
 }
 
-async function processDashboardFile(file, fileRecord = null) {
+function arrayBufferToHex(buffer) {
+  return Array.from(new Uint8Array(buffer))
+    .map((byte) => byte.toString(16).padStart(2, "0"))
+    .join("");
+}
+
+async function calculateSha256FromBuffer(buffer) {
+  if (!window.crypto?.subtle?.digest) {
+    throw new Error("Não foi possível calcular o hash do arquivo neste navegador.");
+  }
+  const digest = await window.crypto.subtle.digest("SHA-256", buffer);
+  return arrayBufferToHex(digest);
+}
+
+function buildUploadPeriodMetadata({ file, previewDataset, referenceYear, referenceMonth, periodLabel, periodType, packagePeriod, displayName, fileHash, previewStats }) {
+  const monthAbbr = packagePeriod?.mes || capitalize((getMonthAbbr(referenceMonth) || "").toLowerCase());
+  const year = packagePeriod?.ano || referenceYear || "";
+  const competencia = packagePeriod?.competencia || (monthAbbr && year ? `${monthAbbr}/${String(year).slice(-2)}` : "");
+  const quinzena = packagePeriod?.quinzena || periodLabel;
+  return {
+    parsed_rows: previewDataset.rows.length,
+    period_label: periodLabel,
+    period_type: periodType,
+    file_category: previewDataset.fileCategory,
+    semantic_file_type: previewDataset.fileCategory,
+    file_type: previewDataset.fileCategory,
+    mime_type: file.type || "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    original_name: file.name,
+    display_name: displayName,
+    competencia,
+    quinzena,
+    mes: monthAbbr || "",
+    ano: year || "",
+    reference_month: referenceMonth || "",
+    reference_year: referenceYear || "",
+    file_hash: fileHash,
+    size_bytes: file.size,
+    uploaded_at: new Date().toISOString(),
+    sync_source: "manual-upload",
+    original_rows: previewStats.originalRows || previewDataset.rows.length,
+    consolidated_rows: previewStats.consolidatedRows || previewDataset.rows.length,
+    duplicatesSkipped: previewStats.duplicatesSkipped || 0,
+    linked_occurrences: previewStats.linkedOccurrences || 0,
+    linked_ids_count: previewStats.linkedIds || 0,
+    total_rows_skipped: previewStats.totalRowsSkipped || 0,
+  };
+}
+
+async function findDashboardFileByHash(fileCategory, fileHash) {
+  if (!window.supabaseClient || !fileHash) return null;
+  const { data, error } = await window.supabaseClient
+    .from("dashboard_files")
+    .select("*")
+    .eq("file_type", fileCategory)
+    .contains("metadata", { file_hash: fileHash })
+    .limit(1);
+
+  if (error) throw error;
+  return Array.isArray(data) && data.length ? data[0] : null;
+}
+
+async function findDashboardFilesByUploadMetadata(fileCategory, fileName, metadata) {
+  if (!window.supabaseClient) return [];
+  const { data, error } = await window.supabaseClient
+    .from("dashboard_files")
+    .select("id,file_name,storage_path,file_type,is_active,status,reference_month,reference_year,period_label,period_type,metadata")
+    .eq("file_type", fileCategory)
+    .eq("file_name", fileName)
+    .contains("metadata", {
+      original_name: fileName,
+      competencia: metadata.competencia,
+      quinzena: metadata.quinzena,
+    });
+
+  if (error) throw error;
+  if (Array.isArray(data) && data.length) return data;
+
+  const { data: fallbackData, error: fallbackError } = await window.supabaseClient
+    .from("dashboard_files")
+    .select("id,file_name,storage_path,file_type,is_active,status,reference_month,reference_year,period_label,period_type,metadata")
+    .eq("file_type", fileCategory)
+    .eq("file_name", fileName);
+
+  if (fallbackError) throw fallbackError;
+  const targetKey = metadata.reference_year && metadata.reference_month ? `${metadata.reference_year}-${metadata.reference_month}` : "";
+  return (Array.isArray(fallbackData) ? fallbackData : []).filter((record) => {
+    if (!targetKey) return true;
+    const period = getFileRecordPeriod(record);
+    return period.key === targetKey && period.periodType === normalizePeriodMode(metadata.period_type);
+  });
+}
+
+async function deactivateDashboardFileRecords(records, exceptId = "") {
+  const ids = (Array.isArray(records) ? records : [])
+    .map((record) => record?.id)
+    .filter((id) => id && id !== exceptId);
+  if (!ids.length) return;
+  const { error } = await window.supabaseClient
+    .from("dashboard_files")
+    .update({
+      is_active: false,
+      status: "superseded",
+      updated_at: new Date().toISOString(),
+    })
+    .in("id", ids);
+  if (error) throw error;
+}
+
+function removeDashboardFileRecordsFromMemory(records, exceptId = "") {
+  const ids = new Set((Array.isArray(records) ? records : []).map((record) => record?.id).filter((id) => id && id !== exceptId));
+  if (!ids.size) return;
+  dashboardFileRecords = dashboardFileRecords.filter((record) => !ids.has(record.id));
+  library.datasets = (Array.isArray(library.datasets) ? library.datasets : []).filter((dataset) => !ids.has(dataset.id));
+  packageManagementRowsLoadedKey = "";
+  resetDerivedDataCache();
+}
+
+async function deactivateOtherPreFaturaRecords(activeRecordId) {
+  if (!activeRecordId) return;
+  const { error } = await window.supabaseClient
+    .from("dashboard_files")
+    .update({
+      is_active: false,
+      updated_at: new Date().toISOString(),
+    })
+    .eq("file_type", PRE_FATURA_FILE_CATEGORY)
+    .eq("is_active", true)
+    .neq("id", activeRecordId);
+  if (error) throw error;
+}
+
+async function updateDuplicateDashboardFileRecord(record, uploadMetadata, previewDataset) {
+  const fileCategory = getFileRecordCategory(record);
+  const nextMetadata = {
+    ...(record.metadata || {}),
+    ...uploadMetadata,
+    sync_source: record.metadata?.sync_source || uploadMetadata.sync_source,
+  };
+  const shouldActivate = fileCategory === PRE_FATURA_FILE_CATEGORY;
+  const payload = {
+    file_type: fileCategory,
+    file_size: uploadMetadata.size_bytes || record.file_size || null,
+    reference_month: uploadMetadata.reference_month || record.reference_month || "",
+    reference_year: uploadMetadata.reference_year || record.reference_year || "",
+    period_label: uploadMetadata.period_label || record.period_label || "",
+    period_type: uploadMetadata.period_type || record.period_type || "",
+    status: "loaded",
+    metadata: nextMetadata,
+    updated_at: new Date().toISOString(),
+  };
+  if (shouldActivate) payload.is_active = true;
+
+  const { data, error } = await window.supabaseClient
+    .from("dashboard_files")
+    .update(payload)
+    .eq("id", record.id)
+    .select()
+    .single();
+
+  if (error) throw error;
+  if (shouldActivate) await deactivateOtherPreFaturaRecords(data.id);
+  mergeUploadedDatasetIntoMemory(data, previewDataset);
+  return data;
+}
+
+async function processDashboardFile(file, fileRecord = null, options = {}) {
   const engineReady = await loadWorkbookEngine();
   if (!engineReady || !window.XLSX || typeof window.XLSX.read !== "function") {
     throw new Error("Não foi possível ler o Excel porque o parser local não carregou.");
@@ -7300,6 +7476,7 @@ async function processDashboardFile(file, fileRecord = null) {
     "Tempo limite excedido ao ler o arquivo Excel.",
   );
   const workbook = XLSX.read(buffer, { type: "array", cellDates: true });
+  const fileHash = options.calculateHash ? await calculateSha256FromBuffer(buffer) : fileRecord?.metadata?.file_hash || "";
   const fileName = fileRecord?.file_name || file.name;
   const fileCategory = getFileRecordCategory(fileRecord || { file_name: fileName });
   const rows = fileCategory === PACKAGE_MANAGEMENT_FILE_CATEGORY
@@ -7314,6 +7491,7 @@ async function processDashboardFile(file, fileRecord = null) {
     importedAt: fileRecord?.created_at || new Date().toISOString(),
     remoteRecord: fileRecord,
     storagePath: fileRecord?.storage_path || "",
+    fileHash,
     rows,
   };
 }
@@ -7334,7 +7512,7 @@ async function uploadDashboardFile(file) {
   dashboardFilesLoading = true;
   setDashboardVisualState("processing-file");
   updateDatasetMeta();
-  const previewDataset = await processDashboardFile(file);
+  const previewDataset = await processDashboardFile(file, null, { calculateHash: true });
   const previewStats = previewDataset.fileCategory === PACKAGE_MANAGEMENT_FILE_CATEGORY ? (normalizePackageManagementWorkbook.lastStats || {}) : (normalizeWorkbook.lastStats || {});
   if (!previewDataset.rows.length) {
     dashboardFilesLoading = false;
@@ -7357,6 +7535,56 @@ async function uploadDashboardFile(file) {
       competencia: packagePeriod.competencia,
     } : {},
   });
+  const uploadMetadata = buildUploadPeriodMetadata({
+    file,
+    previewDataset,
+    referenceYear,
+    referenceMonth,
+    periodLabel,
+    periodType,
+    packagePeriod,
+    displayName,
+    fileHash: previewDataset.fileHash,
+    previewStats,
+  });
+
+  const duplicatedRecord = await findDashboardFileByHash(previewDataset.fileCategory, previewDataset.fileHash);
+  if (duplicatedRecord) {
+    const data = await updateDuplicateDashboardFileRecord(duplicatedRecord, uploadMetadata, previewDataset);
+    const previousRecords = await findDashboardFilesByUploadMetadata(previewDataset.fileCategory, file.name, uploadMetadata);
+    if (previousRecords.length) {
+      await deactivateDashboardFileRecords(previousRecords, data.id);
+      removeDashboardFileRecordsFromMemory(previousRecords, data.id);
+    }
+    const uploadedPeriod = getFileRecordPeriod(data);
+    state.sheet = previewDataset.fileCategory === PACKAGE_MANAGEMENT_FILE_CATEGORY ? PACKAGE_MANAGEMENT_VIEW : PRE_FATURA_VIEW;
+    if (previewDataset.fileCategory === PRE_FATURA_FILE_CATEGORY) {
+      state.monthFilter = uploadedPeriod.key;
+      state.period = uploadedPeriod.periodType;
+      state.prefaturaMonths = [uploadedPeriod.key];
+      state.prefaturaPeriod = uploadedPeriod.periodType;
+    } else {
+      const packageKey = getPackageManagementMonthKey(previewDataset.rows?.[0] || {});
+      if (packageKey) state.packageMonths = [packageKey];
+      state.packagePeriod = getPackageManagementPeriodType(previewDataset.rows?.[0] || {}) || "month";
+    }
+    persistState();
+    setDashboardVisualState("", { render: false });
+    hydrateControls();
+    renderAll();
+    setDashboardVisualState("");
+    await logAudit("deduplicate_upload_file", "dashboard_file", data.id, {
+      file_name: data.file_name,
+      reference_month: data.reference_month,
+      reference_year: data.reference_year,
+      period_label: data.period_label,
+      file_hash: previewDataset.fileHash,
+    });
+    showToast("Arquivo já existia no painel. Os metadados foram atualizados sem duplicar.", "info", 5200);
+    return;
+  }
+
+  const previousRecords = await findDashboardFilesByUploadMetadata(previewDataset.fileCategory, file.name, uploadMetadata);
   const safeName = file.name
     .normalize("NFD")
     .replace(/[\u0300-\u036f]/g, "")
@@ -7376,18 +7604,6 @@ async function uploadDashboardFile(file) {
     throw new Error("Erro ao salvar arquivo no Supabase Storage.");
   }
 
-  if (previewDataset.fileCategory === PRE_FATURA_FILE_CATEGORY) {
-    const { error: deactivateError } = await window.supabaseClient
-      .from("dashboard_files")
-      .update({ is_active: false, updated_at: new Date().toISOString() })
-      .eq("is_active", true);
-
-    if (deactivateError) {
-      console.error("Erro ao desativar arquivos:", deactivateError);
-      throw new Error("Arquivo enviado, mas houve erro ao atualizar o arquivo ativo.");
-    }
-  }
-
   const { data, error } = await window.supabaseClient
     .from("dashboard_files")
     .insert({
@@ -7403,35 +7619,23 @@ async function uploadDashboardFile(file) {
       period_type: periodType,
       is_active: previewDataset.fileCategory === PRE_FATURA_FILE_CATEGORY,
       status: "loaded",
-      metadata: {
-        parsed_rows: previewDataset.rows.length,
-        period_label: periodLabel,
-        period_type: periodType,
-        file_category: previewDataset.fileCategory,
-        semantic_file_type: previewDataset.fileCategory,
-        file_type: previewDataset.fileCategory,
-        mime_type: file.type || "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        original_name: file.name,
-        display_name: displayName,
-        competencia: packagePeriod?.competencia || "",
-        quinzena: packagePeriod?.quinzena || periodLabel,
-        mes: packagePeriod?.mes || "",
-        ano: packagePeriod?.ano || referenceYear || "",
-        uploaded_at: new Date().toISOString(),
-        original_rows: previewStats.originalRows || previewDataset.rows.length,
-        consolidated_rows: previewStats.consolidatedRows || previewDataset.rows.length,
-        duplicatesSkipped: previewStats.duplicatesSkipped || 0,
-        linked_occurrences: previewStats.linkedOccurrences || 0,
-        linked_ids_count: previewStats.linkedIds || 0,
-        total_rows_skipped: previewStats.totalRowsSkipped || 0,
-      },
+      metadata: uploadMetadata,
     })
     .select()
     .single();
 
   if (error) {
     console.error("Erro ao salvar metadados:", error);
+    await window.supabaseClient.storage.from("dashboard-files").remove([storagePath]);
     throw new Error("Arquivo enviado, mas houve erro ao salvar o registro.");
+  }
+
+  if (previousRecords.length) {
+    await deactivateDashboardFileRecords(previousRecords, data.id);
+    removeDashboardFileRecordsFromMemory(previousRecords, data.id);
+  }
+  if (previewDataset.fileCategory === PRE_FATURA_FILE_CATEGORY) {
+    await deactivateOtherPreFaturaRecords(data.id);
   }
 
   const uploadedPeriod = getFileRecordPeriod(data);
@@ -7658,13 +7862,32 @@ async function hydrateDashboardFileMetadata(records, options = {}) {
       reference_year: record.reference_year,
       period_label: record.period_label,
       period_type: record.period_type,
+      metadataReferenceMonth: record.metadata?.reference_month,
+      metadataReferenceYear: record.metadata?.reference_year,
       metadataPeriodLabel: record.metadata?.period_label,
       metadataPeriodType: record.metadata?.period_type,
     };
     const hadStoredPeriod = Boolean(original.period_type || original.metadataPeriodType);
-    const nameText = `${record.file_name || ""} ${record.period_label || ""} ${record.metadata?.period_label || ""}`;
-    let month = normalizeReferenceMonth(record.reference_month) || normalizeReferenceMonth(record.metadata?.reference_month) || normalizeReferenceMonth(detectMonth(nameText));
-    let year = normalizeReferenceYear(record.reference_year) || normalizeReferenceYear(record.metadata?.reference_year) || detectYear(nameText);
+    const metadataPeriodText = [
+      record.metadata?.mes,
+      record.metadata?.competencia,
+      record.metadata?.ano,
+      record.metadata?.display_name,
+      record.metadata?.original_name,
+    ].filter(Boolean).join(" ");
+    const nameText = `${metadataPeriodText} ${record.file_name || ""} ${record.period_label || ""} ${record.metadata?.period_label || ""}`;
+    let month =
+      getMonthNumberFromAny(record.metadata?.mes) ||
+      getMonthNumberFromAny(record.metadata?.competencia) ||
+      getMonthNumberFromAny(record.metadata?.reference_month) ||
+      getMonthNumberFromAny(record.reference_month) ||
+      getMonthNumberFromAny(detectMonth(nameText));
+    let year =
+      normalizeReferenceYear(record.metadata?.ano) ||
+      normalizeReferenceYear(record.metadata?.competencia) ||
+      normalizeReferenceYear(record.metadata?.reference_year) ||
+      normalizeReferenceYear(record.reference_year) ||
+      detectYear(nameText);
     let periodType = normalizePeriodMode(record.period_type || record.metadata?.period_type || getPeriodModeFromLabel(nameText));
 
     if (inferFromFile && (!month || !year) && record.storage_path && window.supabaseClient) {
@@ -7701,8 +7924,8 @@ async function hydrateDashboardFileMetadata(records, options = {}) {
         file_type: getFileRecordCategory(record),
         original_name: record.metadata?.original_name || record.file_name,
         display_name: record.metadata?.display_name || getDashboardFileDisplayName(record),
-        reference_month: record.metadata?.reference_month || month || String(inferred.key).slice(5, 7),
-        reference_year: record.metadata?.reference_year || year || String(inferred.key).slice(0, 4),
+        reference_month: month || String(inferred.key).slice(5, 7),
+        reference_year: year || String(inferred.key).slice(0, 4),
         period_label: original.metadataPeriodLabel || original.period_label || getPeriodModeLabel(periodType),
         period_type: original.metadataPeriodType || original.period_type || periodType,
       },
@@ -7718,7 +7941,13 @@ async function hydrateDashboardFileMetadata(records, options = {}) {
       !original.period_label ||
       !original.period_type ||
       !original.metadataPeriodLabel ||
-      !original.metadataPeriodType;
+      !original.metadataPeriodType ||
+      original.reference_month !== next.reference_month ||
+      String(original.reference_year || "") !== String(next.reference_year || "") ||
+      original.metadataReferenceMonth !== next.metadata.reference_month ||
+      String(original.metadataReferenceYear || "") !== String(next.metadata.reference_year || "") ||
+      original.period_label !== next.period_label ||
+      original.period_type !== next.period_type;
     if (canEdit() && needsUpdate) {
       updates.push(next);
     }
