@@ -170,13 +170,19 @@ const derivedDataCache = {
   prefaturaRows: [],
   packageKey: "",
   packageRows: [],
+  packageMonthOptionsKey: "",
+  packageMonthOptions: [],
 };
+const prefaturaMatchIndexCache = new WeakMap();
+const prefaturaDriverIndexCache = new WeakMap();
 
 function resetDerivedDataCache() {
   derivedDataCache.prefaturaKey = "";
   derivedDataCache.prefaturaRows = [];
   derivedDataCache.packageKey = "";
   derivedDataCache.packageRows = [];
+  derivedDataCache.packageMonthOptionsKey = "";
+  derivedDataCache.packageMonthOptions = [];
 }
 
 const DASHBOARD_STATE_CONFIG = {
@@ -1049,6 +1055,14 @@ function getMonthLabelFromKey(key) {
 }
 
 function getAvailablePackageMonthOptions() {
+  const fileKey = dashboardFileRecords
+    .filter((record) => getFileRecordCategory(record) === PACKAGE_MANAGEMENT_FILE_CATEGORY)
+    .map((record) => `${record.id || record.file_name}:${record.updated_at || record.metadata?.last_loaded_at || ""}`)
+    .join("|");
+  const cacheKey = `${packageManagementRowsLoadedKey || "__rows"}::${packageManagementRows.length}::${fileKey}`;
+  if (derivedDataCache.packageMonthOptionsKey === cacheKey) {
+    return derivedDataCache.packageMonthOptions;
+  }
   const months = new Map();
   (Array.isArray(packageManagementRows) ? packageManagementRows : [])
     .filter(isPackageManagementDetailRow)
@@ -1066,7 +1080,10 @@ function getAvailablePackageMonthOptions() {
         if (!months.has(period.key)) months.set(period.key, { key: period.key, label: period.monthLabel, sort: period.key });
       });
   }
-  return Array.from(months.values()).sort((a, b) => String(a.sort).localeCompare(String(b.sort)));
+  const options = Array.from(months.values()).sort((a, b) => String(a.sort).localeCompare(String(b.sort)));
+  derivedDataCache.packageMonthOptionsKey = cacheKey;
+  derivedDataCache.packageMonthOptions = options;
+  return options;
 }
 
 function getActiveMonthOptions() {
@@ -1860,7 +1877,6 @@ function renderAll() {
     updateTopbar(summary || undefined);
     updateAccessControls();
     persistState();
-    persistLibrary();
     return;
   }
 
@@ -1880,7 +1896,6 @@ function renderAll() {
   updateTopbar(summary || undefined);
   updateAccessControls();
   persistState();
-  persistLibrary();
   scheduleChartAnimations({ reset: false });
 }
 
@@ -2387,23 +2402,44 @@ async function retryDashboardLoad() {
 }
 
 function buildPackageManagementSummary(rows) {
-  const base = (Array.isArray(rows) ? rows : []).filter(isPackageManagementDetailRow);
-  const byCategory = (category) => base.filter((row) => row.categoria_final === category);
-  const sumAbs = (items) => items.reduce((total, row) => total + Math.abs(Number(row.valor_numerico || 0)), 0);
-  const alcRows = byCategory("ALC");
-  const driverRows = byCategory("DRIVER");
-  const dispatcherRows = byCategory("DISPATCHER");
-  const mercadoLivreRows = byCategory("MERCADO_LIVRE");
-  const indefinidos = byCategory("INDEFINIDO");
+  const summary = {
+    count: 0,
+    alcValue: 0,
+    driverValue: 0,
+    dispatcherValue: 0,
+    driverErrors: 0,
+    dispatcherErrors: 0,
+    mercadoLivreErrors: 0,
+    pendingCount: 0,
+  };
+  (Array.isArray(rows) ? rows : []).forEach((row) => {
+    if (!isPackageManagementDetailRow(row)) return;
+    summary.count += 1;
+    const category = row.categoria_final;
+    const value = Math.abs(Number(row.valor_numerico || 0));
+    if (category === "ALC") {
+      summary.alcValue += value;
+    } else if (category === "DRIVER") {
+      summary.driverValue += value;
+      summary.driverErrors += 1;
+    } else if (category === "DISPATCHER") {
+      summary.dispatcherValue += value;
+      summary.dispatcherErrors += 1;
+    } else if (category === "MERCADO_LIVRE") {
+      summary.mercadoLivreErrors += 1;
+    } else if (category === "INDEFINIDO") {
+      summary.pendingCount += 1;
+    }
+  });
   return {
-    count: base.length,
-    alcValue: sumAbs(alcRows),
-    driverValue: sumAbs(driverRows),
-    dispatcherValue: sumAbs(dispatcherRows),
-    driverErrors: driverRows.length,
-    dispatcherErrors: dispatcherRows.length,
-    mercadoLivreErrors: mercadoLivreRows.length,
-    pendingCount: indefinidos.length,
+    count: summary.count,
+    alcValue: summary.alcValue,
+    driverValue: summary.driverValue,
+    dispatcherValue: summary.dispatcherValue,
+    driverErrors: summary.driverErrors,
+    dispatcherErrors: summary.dispatcherErrors,
+    mercadoLivreErrors: summary.mercadoLivreErrors,
+    pendingCount: summary.pendingCount,
   };
 }
 
@@ -2523,6 +2559,9 @@ function buildMatchKey(parts) {
 }
 
 function buildPrefaturaMatchIndex(rows) {
+  if (Array.isArray(rows) && prefaturaMatchIndexCache.has(rows)) {
+    return prefaturaMatchIndexCache.get(rows);
+  }
   const index = {
     byPackageId: new Map(),
     byCaseId: new Map(),
@@ -2549,6 +2588,7 @@ function buildPrefaturaMatchIndex(rows) {
     }
   });
 
+  if (Array.isArray(rows)) prefaturaMatchIndexCache.set(rows, index);
   return index;
 }
 
@@ -2587,9 +2627,11 @@ function classifyPackagePrefaturaMatch(row, index) {
     : buildPackagePrefaturaMatchResult("SEM_DADOS_SUFICIENTES", "NENHUMA", "");
 }
 
-function enrichPackageRowsWithPrefaturaMatch(packageRows, prefaturaRows) {
+function enrichPackageRowsWithPrefaturaMatch(packageRows, prefaturaRows, options = {}) {
+  const baseRows = Array.isArray(packageRows) ? packageRows : [];
+  if (options.reuseExisting === true && baseRows.every((row) => row?.prefatura_match)) return baseRows;
   const index = buildPrefaturaMatchIndex(prefaturaRows);
-  return (Array.isArray(packageRows) ? packageRows : []).map((row) => ({
+  return baseRows.map((row) => ({
     ...row,
     prefatura_match: classifyPackagePrefaturaMatch(row, index),
   }));
@@ -2601,7 +2643,7 @@ function isPackageLocatedInPrefatura(row) {
 
 function buildPackageManagementComparison(rows = packageManagementRows, prefaturaRows = allRows) {
   const scopedRows = (Array.isArray(rows) ? rows : []).filter(isPackageManagementDetailRow);
-  const enrichedRows = enrichPackageRowsWithPrefaturaMatch(scopedRows, prefaturaRows);
+  const enrichedRows = enrichPackageRowsWithPrefaturaMatch(scopedRows, prefaturaRows, { reuseExisting: prefaturaRows === allRows });
   const summary = buildPackageManagementSummary(enrichedRows);
   const typeDistribution = buildPackageTypeDistribution(enrichedRows);
   const prefaturaSummary = buildSummary(Array.isArray(prefaturaRows) ? prefaturaRows : []);
@@ -2963,14 +3005,14 @@ function renderKpiCard(card, index) {
 function buildPackageMixRows(rows) {
   const baseRows = (Array.isArray(rows) ? rows : []).filter(isPackageManagementDetailRow);
   const summary = buildPackageManagementSummary(baseRows);
-  const byCategory = (category) => baseRows.filter((row) => row.categoria_final === category);
-  const alcRows = byCategory("ALC");
-  const driverRows = byCategory("DRIVER");
-  const dispatcherRows = byCategory("DISPATCHER");
+  const counts = { ALC: 0, DRIVER: 0, DISPATCHER: 0 };
+  baseRows.forEach((row) => {
+    if (Object.prototype.hasOwnProperty.call(counts, row.categoria_final)) counts[row.categoria_final] += 1;
+  });
   const items = [
-    { key: "ALC", label: "ALC", value: summary.alcValue, count: alcRows.length, color: "#58d68d" },
-    { key: "DRIVER", label: "Driver", value: summary.driverValue, count: driverRows.length, color: "#ffb454" },
-    { key: "DISPATCHER", label: "Dispatcher", value: summary.dispatcherValue, count: dispatcherRows.length, color: "#3ba6ff" },
+    { key: "ALC", label: "ALC", value: summary.alcValue, count: counts.ALC, color: "#58d68d" },
+    { key: "DRIVER", label: "Driver", value: summary.driverValue, count: counts.DRIVER, color: "#ffb454" },
+    { key: "DISPATCHER", label: "Dispatcher", value: summary.dispatcherValue, count: counts.DISPATCHER, color: "#3ba6ff" },
   ];
   const total = items.reduce((acc, item) => acc + Number(item.value || 0), 0);
   return {
@@ -3114,6 +3156,9 @@ function isPackageDriverErrorRow(row) {
 }
 
 function buildPrefaturaDriverIndexById(prefaturaRows = allRows) {
+  if (Array.isArray(prefaturaRows) && prefaturaDriverIndexCache.has(prefaturaRows)) {
+    return prefaturaDriverIndexCache.get(prefaturaRows);
+  }
   const index = new Map();
   (Array.isArray(prefaturaRows) ? prefaturaRows : [])
     .filter((row) => (row?.file_category || PRE_FATURA_FILE_CATEGORY) !== PACKAGE_MANAGEMENT_FILE_CATEGORY)
@@ -3124,6 +3169,7 @@ function buildPrefaturaDriverIndexById(prefaturaRows = allRows) {
         if (id && !index.has(id)) index.set(id, driver);
       });
     });
+  if (Array.isArray(prefaturaRows)) prefaturaDriverIndexCache.set(prefaturaRows, index);
   return index;
 }
 
@@ -5069,7 +5115,13 @@ async function loadPrefaturaRowsForReportScope(scope, options = {}) {
     }
     try {
       const dataset = await loadRowsFromStorage(file);
-      if (dataset?.rows?.length) datasets.push(dataset);
+      if (dataset?.rows?.length) {
+        datasets.push(dataset);
+        datasetById.set(file.id, dataset);
+        if (!library.datasets.some((entry) => entry.id === dataset.id)) {
+          library.datasets.push(dataset);
+        }
+      }
     } catch (error) {
       console.error("[REPORT] Falha ao carregar Pré-Fatura para comparação:", file?.file_name, error);
     }
@@ -5800,13 +5852,28 @@ function getOccurrenceCount(row) {
 }
 
 function buildSummary(rows) {
-  const count = rows.reduce((acc, row) => acc + getOccurrenceCount(row), 0);
-  const totalValue = rows.reduce((acc, row) => acc + Number(row.valor_numerico || 0), 0);
-  const baseCount = uniqueBaseCount(rows);
-  const driverCount = calcularTotalDriversUnicos(rows);
-  const routeCount = uniqueCount(rows, "n_rota");
-  const packageCount = rows.filter((row) => row.tipo_registro === "PACOTE PERDIDO").reduce((acc, row) => acc + getOccurrenceCount(row), 0);
-  const pnrCount = rows.filter((row) => row.tipo_registro === "PNR").reduce((acc, row) => acc + getOccurrenceCount(row), 0);
+  let count = 0;
+  let totalValue = 0;
+  let packageCount = 0;
+  let pnrCount = 0;
+  const bases = new Set();
+  const drivers = new Set();
+  const routes = new Set();
+  rows.forEach((row) => {
+    const occurrences = getOccurrenceCount(row);
+    count += occurrences;
+    totalValue += Number(row.valor_numerico || 0);
+    if (row.tipo_registro === "PACOTE PERDIDO") packageCount += occurrences;
+    if (row.tipo_registro === "PNR") pnrCount += occurrences;
+    const baseIdentity = getBaseIdentity(row);
+    if (baseIdentity) bases.add(baseIdentity);
+    const driverName = normalizeDriverName(row?.driver || row?.motorista || row?.nomeMotorista || row?.nome_driver || "");
+    if (driverName && !isUnidentifiedDriverName(driverName)) drivers.add(driverName);
+    if (row.n_rota) routes.add(row.n_rota);
+  });
+  const baseCount = bases.size;
+  const driverCount = drivers.size;
+  const routeCount = routes.size;
   const topBase = topBy(rows, "base", "valor_numerico", 1)[0] || null;
   const topDriver = topBy(rows, "motorista", "valor_numerico", 1)[0] || null;
   const packageShare = count ? ((packageCount / count) * 100).toFixed(1) : "0.0";
@@ -5861,10 +5928,13 @@ function buildMonthlyComparisonFromDatasets(datasets, options = {}) {
     }
     const bucket = map.get(key);
     bucket.datasetId = dataset.id;
-    bucket.count += scopedRows.reduce((acc, row) => acc + getOccurrenceCount(row), 0);
-    bucket.totalValue += scopedRows.reduce((acc, row) => acc + Number(row.valor_numerico || 0), 0);
-    bucket.pnrCount += scopedRows.filter((row) => row.tipo_registro === "PNR").reduce((acc, row) => acc + getOccurrenceCount(row), 0);
-    bucket.packageCount += scopedRows.filter((row) => row.tipo_registro === "PACOTE PERDIDO").reduce((acc, row) => acc + getOccurrenceCount(row), 0);
+    scopedRows.forEach((row) => {
+      const occurrences = getOccurrenceCount(row);
+      bucket.count += occurrences;
+      bucket.totalValue += Number(row.valor_numerico || 0);
+      if (row.tipo_registro === "PNR") bucket.pnrCount += occurrences;
+      if (row.tipo_registro === "PACOTE PERDIDO") bucket.packageCount += occurrences;
+    });
   }
 
   const rows = Array.from(map.values()).sort((a, b) => a.sort - b.sort || a.label.localeCompare(b.label, "pt-BR"));
@@ -5915,8 +5985,8 @@ async function buildReportHistoricalComparisonRows(scope, typeSelection = state.
 }
 
 async function getReportAvailableFileRecords() {
-  let files = [];
-  if (currentUser && window.supabaseClient) {
+  let files = dashboardFileRecords.filter(isUsableDashboardFileRecord).filter(isDashboardFileActive);
+  if (!files.length && currentUser && window.supabaseClient) {
     try {
       files = await loadDashboardFilesFromSupabase({
         loadActive: false,
@@ -5928,15 +5998,30 @@ async function getReportAvailableFileRecords() {
       console.error("[REPORT] Erro ao buscar histórico no Supabase:", error);
     }
   }
-  if (!files?.length) files = dashboardFileRecords.filter(isUsableDashboardFileRecord);
   return (files || []).filter(isUsableDashboardFileRecord).filter((file) => getFileRecordCategory(file) === PRE_FATURA_FILE_CATEGORY);
 }
 
 async function buildReportMonthlyComparisonForFiles(files, typeSelection = state.prefaturaTipo) {
   const datasets = [];
+  const datasetById = new Map(
+    (Array.isArray(library.datasets) ? library.datasets : [])
+      .filter((dataset) => dataset?.source !== "filtered" && Array.isArray(dataset.rows) && dataset.rows.length)
+      .map((dataset) => [dataset.id, dataset]),
+  );
   for (const file of uniqueDashboardFileRecords(files)) {
+    const cached = datasetById.get(file.id);
+    if (cached?.rows?.length) {
+      datasets.push(cached);
+      continue;
+    }
     const dataset = await loadRowsFromStorage(file);
-    if (dataset?.rows?.length) datasets.push(dataset);
+    if (dataset?.rows?.length) {
+      datasets.push(dataset);
+      datasetById.set(file.id, dataset);
+      if (!library.datasets.some((entry) => entry.id === dataset.id)) {
+        library.datasets.push(dataset);
+      }
+    }
   }
   return buildMonthlyComparisonFromDatasets(datasets, { types: typeSelection });
 }
