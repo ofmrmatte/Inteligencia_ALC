@@ -71,7 +71,7 @@ const PREFATURA_DIVISION_TO_TYPE = {
 const MAIN_TYPE_OPTIONS = ["SVC", "XPT", "PNR"];
 const MONTHS = ["janeiro", "fevereiro", "março", "abril", "maio", "junho", "julho", "agosto", "setembro", "outubro", "novembro", "dezembro"];
 const MONTH_ABBR = ["JAN", "FEV", "MAR", "ABR", "MAI", "JUN", "JUL", "AGO", "SET", "OUT", "NOV", "DEZ"];
-const SETOR_OPTIONS = ["LOSS", "Operação", "Administrativo", "Financeiro", "Qualidade", "Monitoramento", "Suporte", "Outros"];
+const SETOR_OPTIONS = ["LOSS", "Operação", "Administrativo", "Financeiro", "Qualidade", "Monitoramento", "Suporte", "Desenvolvimento T.I", "Outros"];
 
 const STATE_DEFAULT = {
   query: "",
@@ -93,7 +93,6 @@ const STATE_DEFAULT = {
   fileName: "",
   activeDatasetId: EMPTY_DATASET_ID,
   monthFilter: "",
-  deleteDatasetId: "",
   appView: "dashboard",
   theme: "dark",
   accountPanelOpen: false,
@@ -162,6 +161,8 @@ let pendingAvatarPreviewUrl = "";
 let pendingAvatarSourceUrl = "";
 let evolutionPeriodView = loadEvolutionPeriodView();
 let comparisonPeriodView = loadComparisonPeriodView();
+let settingsFilesTab = PRE_FATURA_FILE_CATEGORY;
+const selectedSettingsFileIds = new Set();
 let totalDiscountComparisonRequest = 0;
 let globalGoalSettings = getDefaultGoalSettings();
 let packageManagementRowsLoadedKey = "";
@@ -289,13 +290,10 @@ function cacheDom() {
   el.content = document.querySelector(".content");
   el.uploadButton = document.getElementById("upload-button");
   el.refreshButton = document.getElementById("refresh-button");
-  el.deleteActiveButton = document.getElementById("delete-active-button");
   el.themeToggle = document.getElementById("theme-toggle");
   el.accountToggle = document.getElementById("account-toggle");
   el.fileInput = document.getElementById("file-input");
   el.reportButton = document.getElementById("report-button");
-  el.fileSelectButton = document.getElementById("file-select-button");
-  el.fileDeleteMenu = document.getElementById("file-delete-menu");
   el.accountMenu = document.getElementById("account-menu");
   el.accountIdentity = document.getElementById("account-identity");
   el.datasetSelect = document.getElementById("dataset-select");
@@ -329,6 +327,10 @@ function cacheDom() {
   el.settingsView = document.getElementById("settings-view");
   el.settingsUsersList = document.getElementById("settings-users-list");
   el.settingsAuditList = document.getElementById("settings-audit-list");
+  el.settingsFilesSection = document.getElementById("settings-files-section");
+  el.settingsFilesTabs = document.getElementById("settings-files-tabs");
+  el.settingsFilesList = document.getElementById("settings-files-list");
+  el.settingsFilesDelete = document.getElementById("settings-files-delete");
   el.profileAvatar = document.getElementById("profile-avatar");
   el.profileAvatarFile = document.getElementById("profile-avatar-file");
   el.profileCropPanel = document.getElementById("profile-crop-panel");
@@ -403,12 +405,21 @@ function cacheDom() {
 function startLiveClock() {
   updateLiveClock();
   window.clearInterval(liveClockTimer);
-  liveClockTimer = window.setInterval(updateLiveClock, 30000);
+  liveClockTimer = window.setInterval(updateLiveClock, 60000);
+}
+
+function formatCurrentDateTime(date = new Date()) {
+  const data = date.toLocaleDateString("pt-BR");
+  const hora = date.toLocaleTimeString("pt-BR", {
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+  return `${data} · ${hora}`;
 }
 
 function updateLiveClock() {
   if (!el.lastUpdate) return;
-  el.lastUpdate.textContent = `Última atualização: ${liveClockFormatter.format(new Date())}`;
+  el.lastUpdate.textContent = formatCurrentDateTime(new Date());
 }
 
 function bindEvents() {
@@ -567,36 +578,35 @@ function bindEvents() {
       await updateUserRole(button.dataset.userId, button.dataset.role);
     });
   }
-  if (el.deleteActiveButton) {
-    el.deleteActiveButton.addEventListener("click", async () => {
-      await deleteActiveDataset();
+  if (el.settingsFilesTabs) {
+    el.settingsFilesTabs.addEventListener("click", (event) => {
+      const button = event.target.closest("[data-settings-files-tab]");
+      if (!button) return;
+      settingsFilesTab = button.dataset.settingsFilesTab === PACKAGE_MANAGEMENT_FILE_CATEGORY ? PACKAGE_MANAGEMENT_FILE_CATEGORY : PRE_FATURA_FILE_CATEGORY;
+      selectedSettingsFileIds.clear();
+      renderSettingsFileManagement();
     });
   }
-  if (el.fileSelectButton) {
-    el.fileSelectButton.addEventListener("click", async () => {
-      if (!ensureDeletePermission()) {
+  if (el.settingsFilesList) {
+    el.settingsFilesList.addEventListener("change", (event) => {
+      const selectAll = event.target.closest("[data-settings-file-select-all]");
+      if (selectAll) {
+        const files = getSettingsFilesForActiveTab();
+        selectedSettingsFileIds.clear();
+        if (selectAll.checked) files.forEach((file) => selectedSettingsFileIds.add(file.id));
+        renderSettingsFileManagement();
         return;
       }
-      await reloadDashboardFilesList({ silent: true });
-      hydrateControls();
-      renderFileDeleteMenu();
-      if (el.fileDeleteMenu) el.fileDeleteMenu.hidden = !el.fileDeleteMenu.hidden;
+      const input = event.target.closest("[data-settings-file-id]");
+      if (!input) return;
+      if (input.checked) selectedSettingsFileIds.add(input.value);
+      else selectedSettingsFileIds.delete(input.value);
+      renderSettingsFileManagement();
     });
   }
-  if (el.fileDeleteMenu) {
-    el.fileDeleteMenu.addEventListener("click", (event) => {
-      const button = event.target.closest("[data-delete-dataset-id]");
-      if (!button) return;
-      state.deleteDatasetId = button.dataset.deleteDatasetId;
-      persistState();
-      renderFileDeleteMenu();
-      updateDatasetMeta();
-      el.fileDeleteMenu.hidden = true;
-      showToast("Arquivo selecionado para exclusão.", "info", 3500);
-    });
-    document.addEventListener("click", (event) => {
-      if (el.fileDeleteMenu.hidden || event.target.closest("#file-delete-picker")) return;
-      el.fileDeleteMenu.hidden = true;
+  if (el.settingsFilesDelete) {
+    el.settingsFilesDelete.addEventListener("click", async () => {
+      await deleteSelectedSettingsFiles();
     });
   }
   el.fileInput.addEventListener("change", handleUpload);
@@ -1542,7 +1552,6 @@ function hydrateControls() {
   renderDatasetSelect();
   renderMonthSelect();
   renderPeriodSelect();
-  renderFileDeleteMenu();
   syncPackageTypeFilterControl();
 
   if (el.searchInput) el.searchInput.value = state.query;
@@ -1692,7 +1701,6 @@ async function handleDatasetSelection(datasetId) {
 function updateDatasetMeta() {
   const totalFiles = getDeletableDatasets().length;
   const active = getActiveDataset();
-  const permissions = getActionPermissions();
   if (el.datasetCount) el.datasetCount.textContent = `${integer.format(totalFiles)} arquivo${totalFiles === 1 ? "" : "s"}`;
   if (el.datasetNote) {
     if (dashboardFilesLoading) {
@@ -1703,36 +1711,6 @@ function updateDatasetMeta() {
     } else {
       el.datasetNote.textContent = currentUser ? "Nenhum arquivo carregado. Faça upload de um arquivo para iniciar." : "Faça login para carregar o arquivo ativo salvo.";
     }
-  }
-  if (el.deleteActiveButton) {
-    const selected = getSelectedDeleteDataset();
-    const deletable = Boolean(selected && selected.id !== EMPTY_DATASET_ID && permissions.canDeleteFile);
-    el.deleteActiveButton.hidden = false;
-    el.deleteActiveButton.disabled = false;
-    el.deleteActiveButton.classList.toggle("is-action-blocked", !deletable);
-    el.deleteActiveButton.setAttribute("aria-disabled", deletable ? "false" : "true");
-    const label = permissions.canDeleteFile
-      ? selected
-        ? `Excluir ${selected.label}`
-        : "Selecione um arquivo antes de excluir"
-      : getAdminActionDeniedMessage("Somente administradores podem usar esta função.");
-    el.deleteActiveButton.setAttribute("aria-label", label);
-    el.deleteActiveButton.setAttribute("title", label);
-  }
-  if (el.fileSelectButton) {
-    const selected = getSelectedDeleteDataset();
-    el.fileSelectButton.disabled = false;
-    el.fileSelectButton.classList.toggle("is-action-blocked", !permissions.canDeleteFile);
-    el.fileSelectButton.classList.toggle("is-active", Boolean(selected));
-    el.fileSelectButton.setAttribute("aria-disabled", permissions.canDeleteFile ? "false" : "true");
-    el.fileSelectButton.setAttribute(
-      "title",
-      permissions.canDeleteFile
-        ? selected
-          ? `Selecionado: ${selected.label}`
-          : "Selecionar arquivo para exclusão"
-        : getAdminActionDeniedMessage("Somente administradores podem usar esta função."),
-    );
   }
 }
 
@@ -1800,30 +1778,172 @@ function getFilesByMonthsAndPeriod(files, monthSelection, periodMode, fileCatego
     });
 }
 
-function getSelectedDeleteDataset() {
-  return getDeletableDatasets().find((dataset) => dataset.id === state.deleteDatasetId) || null;
+function getQuinzenaIndex(value) {
+  const normalized = normalizePeriodMode(value);
+  if (normalized === "q1") return 1;
+  if (normalized === "q2") return 2;
+  const detected = detectQuinzena(value);
+  if (detected.includes("1")) return 1;
+  if (detected.includes("2")) return 2;
+  return 3;
 }
 
-function renderFileDeleteMenu() {
-  if (!el.fileDeleteMenu) return;
-  const datasets = getDeletableDatasets();
-  if (!datasets.length) {
-    el.fileDeleteMenu.innerHTML = `<p class="file-delete-menu__empty">Nenhum arquivo salvo.</p>`;
+function getFileCompetenceSortParts(file) {
+  const metadata = file?.metadata || {};
+  const text = [
+    file?.ano,
+    file?.mes,
+    file?.competencia,
+    file?.quinzena,
+    file?.period_label,
+    file?.file_name,
+    file?.original_name,
+    file?.storage_path,
+    metadata.ano,
+    metadata.mes,
+    metadata.competencia,
+    metadata.quinzena,
+    metadata.period_label,
+    metadata.display_name,
+  ].filter(Boolean).join(" ");
+  const period = getFileRecordPeriod(file);
+  const [periodYear, periodMonth] = String(period.key || "").split("-");
+  const year =
+    Number(normalizeReferenceYear(file?.reference_year || metadata.reference_year || file?.ano || metadata.ano)) ||
+    Number(detectYear(text)) ||
+    Number(periodYear) ||
+    9999;
+  const month =
+    Number(getMonthNumberFromAny(file?.reference_month || metadata.reference_month || file?.mes || metadata.mes || file?.competencia || metadata.competencia)) ||
+    Number(getMonthNumberFromAny(text)) ||
+    Number(periodMonth) ||
+    99;
+  const quinzena = getQuinzenaIndex(file?.period_type || metadata.period_type || file?.quinzena || metadata.quinzena || period.periodType || text);
+  return {
+    year,
+    month,
+    quinzena,
+    label: getDashboardFileDisplayName(file),
+    uploadedAt: file?.created_at || "",
+  };
+}
+
+function ordenarArquivosPorCompetencia(files) {
+  return [...(Array.isArray(files) ? files : [])].sort((a, b) => {
+    const aSort = getFileCompetenceSortParts(a);
+    const bSort = getFileCompetenceSortParts(b);
+    if (aSort.year !== bSort.year) return aSort.year - bSort.year;
+    if (aSort.month !== bSort.month) return aSort.month - bSort.month;
+    if (aSort.quinzena !== bSort.quinzena) return aSort.quinzena - bSort.quinzena;
+    const labelCompare = aSort.label.localeCompare(bSort.label, "pt-BR", { numeric: true, sensitivity: "base" });
+    if (labelCompare) return labelCompare;
+    return String(aSort.uploadedAt).localeCompare(String(bSort.uploadedAt));
+  });
+}
+
+function getSettingsFilesForActiveTab() {
+  const files = dashboardFileRecords
+    .filter(isUsableDashboardFileRecord)
+    .filter(isDashboardFileActive)
+    .filter((file) => getFileRecordCategory(file) === settingsFilesTab);
+  return ordenarArquivosPorCompetencia(files);
+}
+
+function getSettingsFileCategoryLabel(category) {
+  return category === PACKAGE_MANAGEMENT_FILE_CATEGORY ? "Gestão de Pacotes" : "Pré-Fatura";
+}
+
+function formatSettingsFilePeriod(file) {
+  const period = getFileRecordPeriod(file);
+  const periodLabel = getPeriodModeLabel(period.periodType || "month");
+  return `${periodLabel} · ${shortMonthYear(period.monthLabel || getMonthLabelFromKey(period.key))}`;
+}
+
+function formatSettingsFileStatus(file) {
+  const status = normalizeText(file?.status || file?.metadata?.status || "");
+  if (!status || status === "LOADED") return file?.is_active ? "Ativo" : "Carregado";
+  if (status.includes("MISSING")) return "Arquivo ausente";
+  if (status.includes("EMPTY")) return "Sem registros";
+  return status.replace(/_/g, " ").toLowerCase().split(/\s+/).map(capitalize).join(" ");
+}
+
+function getSettingsFileRowsLabel(file) {
+  const rows = getFileRowsCount(file);
+  if (rows > 0) return `${integer.format(rows)} registros`;
+  if (file?.status === "empty_or_parse_error") return "0 registros válidos";
+  return "—";
+}
+
+function renderSettingsFileManagement() {
+  if (!el.settingsFilesTabs || !el.settingsFilesList || !el.settingsFilesDelete) return;
+  const permissions = getActionPermissions();
+  const tabs = [
+    [PRE_FATURA_FILE_CATEGORY, "Pré-Fatura"],
+    [PACKAGE_MANAGEMENT_FILE_CATEGORY, "Gestão de Pacotes"],
+  ];
+  el.settingsFilesTabs.innerHTML = tabs
+    .map(([category, label]) => `
+      <button class="settings-files-tab ${settingsFilesTab === category ? "is-active" : ""}" type="button" data-settings-files-tab="${escapeAttribute(category)}" role="tab" aria-selected="${settingsFilesTab === category ? "true" : "false"}">
+        ${escapeHtml(label)}
+      </button>
+    `)
+    .join("");
+
+  const files = getSettingsFilesForActiveTab();
+  const availableIds = new Set(files.map((file) => file.id));
+  Array.from(selectedSettingsFileIds).forEach((id) => {
+    if (!availableIds.has(id)) selectedSettingsFileIds.delete(id);
+  });
+  const selectedCount = files.filter((file) => selectedSettingsFileIds.has(file.id)).length;
+  const canDelete = permissions.canDeleteFile && selectedCount > 0;
+  el.settingsFilesDelete.disabled = !canDelete;
+  el.settingsFilesDelete.classList.toggle("is-action-blocked", !canDelete);
+  el.settingsFilesDelete.setAttribute("aria-disabled", canDelete ? "false" : "true");
+  el.settingsFilesDelete.setAttribute(
+    "title",
+    permissions.canDeleteFile ? "Excluir selecionados" : getAdminActionDeniedMessage("Somente administradores podem usar esta função."),
+  );
+
+  if (dashboardFilesLoading) {
+    el.settingsFilesList.innerHTML = `<div class="settings-files-empty">Carregando arquivos...</div>`;
     return;
   }
-  el.fileDeleteMenu.innerHTML = datasets
-    .map((dataset) => {
-      const selected = dataset.id === state.deleteDatasetId ? "is-selected" : "";
-      const active = dataset.remoteRecord?.is_active ? " · ativo" : "";
-      const uploaded = dataset.remoteRecord?.uploaded_by_email ? ` · ${dataset.remoteRecord.uploaded_by_email}` : "";
-      return `
-        <button type="button" class="${selected}" data-delete-dataset-id="${escapeAttribute(dataset.id)}">
-          <span>${escapeHtml(getDashboardFileDisplayName(dataset.remoteRecord || dataset))}</span>
-          <small>${escapeHtml(getFileRowsLabel(dataset.remoteRecord, dataset))}${escapeHtml(active)}${escapeHtml(uploaded)}</small>
-        </button>
-      `;
-    })
-    .join("");
+  if (!files.length) {
+    el.settingsFilesList.innerHTML = `<div class="settings-files-empty">Nenhum arquivo de ${escapeHtml(getSettingsFileCategoryLabel(settingsFilesTab))} encontrado.</div>`;
+    return;
+  }
+
+  const allSelected = selectedCount === files.length;
+  el.settingsFilesList.innerHTML = `
+    <label class="settings-files-select-all">
+      <input type="checkbox" data-settings-file-select-all ${allSelected ? "checked" : ""} ${permissions.canDeleteFile ? "" : "disabled"}>
+      <span class="type-filter__check" aria-hidden="true"></span>
+      <span>${selectedCount ? `${integer.format(selectedCount)} selecionado${selectedCount === 1 ? "" : "s"}` : "Selecionar todos"}</span>
+    </label>
+    <div class="settings-files-items">
+      ${files.map((file) => {
+        const category = getSettingsFileCategoryLabel(getFileRecordCategory(file));
+        const checked = selectedSettingsFileIds.has(file.id);
+        const uploaded = file.created_at ? formatDateTime(file.created_at) : "Data não informada";
+        const rows = getSettingsFileRowsLabel(file);
+        const status = formatSettingsFileStatus(file);
+        return `
+          <label class="settings-file-row">
+            <input type="checkbox" value="${escapeAttribute(file.id)}" data-settings-file-id ${checked ? "checked" : ""} ${permissions.canDeleteFile ? "" : "disabled"}>
+            <span class="type-filter__check" aria-hidden="true"></span>
+            <span class="settings-file-row__content">
+              <strong>${escapeHtml(category)} · ${escapeHtml(formatSettingsFilePeriod(file))}</strong>
+              <span>${escapeHtml(getDashboardFileDisplayName(file))}</span>
+              <small>Enviado em ${escapeHtml(uploaded)} · ${escapeHtml(rows)}</small>
+            </span>
+            <span class="settings-file-row__status">${escapeHtml(status)}</span>
+          </label>
+        `;
+      }).join("")}
+    </div>
+  `;
+  const selectAll = el.settingsFilesList.querySelector("[data-settings-file-select-all]");
+  if (selectAll) selectAll.indeterminate = selectedCount > 0 && selectedCount < files.length;
 }
 
 function renderTabs() {
@@ -1996,6 +2116,7 @@ function renderSettingsPage() {
   if (!canEdit()) {
     el.settingsUsersList.innerHTML = emptyState("Acesso restrito", "Somente administradores podem editar usuários.");
     if (el.settingsAuditList) el.settingsAuditList.innerHTML = emptyState("Acesso restrito", "Somente administradores podem visualizar a auditoria.");
+    if (el.settingsFilesList) el.settingsFilesList.innerHTML = emptyState("Acesso restrito", "Somente administradores podem excluir arquivos.");
     return;
   }
   const users = knownUsers;
@@ -2030,6 +2151,7 @@ function renderSettingsPage() {
       `;
     })
     .join("") || emptyState("Sem usuários", "Os perfis do Supabase aparecerão aqui.");
+  renderSettingsFileManagement();
   renderAuditLogs();
 }
 
@@ -2110,6 +2232,7 @@ function formatSetorLabel(value) {
   const raw = String(value || "").trim();
   if (!raw) return "Não informado";
   if (raw.toUpperCase() === "LOSS") return "Loss";
+  if (normalizeText(raw) === "DESENVOLVIMENTO T I" || normalizeText(raw) === "DESENVOLVIMENTO TI") return "Desenvolvimento T.I";
   if (raw === raw.toUpperCase()) {
     return raw.charAt(0).toUpperCase() + raw.slice(1).toLowerCase();
   }
@@ -4413,10 +4536,10 @@ function buildReportPdfBlob({ analysis, summary }) {
     addStrokeRect(infoX, infoY, infoW, infoH, "0.16 0.42 0.55");
     addLine(page.margin, 754, page.width - page.margin, 754, colors.teal, 0.9);
     if (PDF_LOGO_IMAGE.base64) addPdfImage(PDF_LOGO_IMAGE.name, page.margin, 768, 60, 60);
-    addText("Painel de Inteligência Operacional", page.margin + 74, 815, 8.2, "0.77 0.88 0.96", "left", "F2");
+    addText("Painel de Inteligência", page.margin + 74, 815, 8.2, "0.77 0.88 0.96", "left", "F2");
     addText("Relatório Executivo", page.margin + 74, 798, 14.1, colors.white, "left", "F2");
-    addText(analysis.reportSubtitle || "Performance Operacional", page.margin + 74, 784, 10.5, "0.86 0.95 1", "left");
-    addText("Setor: Loss", infoX + 14, 810, 8.4, colors.white, "left", "F2");
+    addText(analysis.reportSubtitle || "Pré-Fatura", page.margin + 74, 784, 10.5, "0.86 0.95 1", "left");
+    addText("Loss · Dashboard", infoX + 14, 810, 8.4, colors.white, "left", "F2");
     addText(`Período: ${analysis.scopeLabel}`, infoX + 14, 796, 8.1, "0.82 0.92 0.98", "left");
     addText(analysis.generatedAt, infoX + 14, 783, 8.1, "0.82 0.92 0.98", "left");
     y = 734;
@@ -4943,9 +5066,9 @@ function buildReportAnalysis({ rows, filteredRows, summary, scope: providedScope
     fileName: scope.fileName,
     scope,
     reportMode,
-    reportSubtitle: reportMode === "package" ? "Gestão de Pacotes" : "Performance Operacional",
+    reportSubtitle: reportMode === "package" ? "Gestão de Pacotes" : "Pré-Fatura",
     scopeLabel: scope.label,
-    generatedAt: `Gerado em: ${liveClockFormatter.format(new Date())}`,
+    generatedAt: `Gerado em: ${formatCurrentDateTime(new Date())}`,
     timelineRows: comparisonRows,
     ticketAverage,
     monthlyAverage,
@@ -5016,8 +5139,13 @@ function getReportScope() {
       periodMode,
       periodLabel,
       label: `Anual ${year} — ${annualPeriodLabel}`,
-      title: `Relatório Executivo de Performance Operacional — Anual ${year}`,
-      fileName: `relatorio-performance-operacional-anual-${year}.pdf`,
+      title: `Relatório Executivo de Pré-Fatura — Anual ${year}`,
+      fileName: buildReportDownloadFileName({
+        typeLabel: "Pré-Fatura",
+        mode: "annual",
+        year,
+        periodMode,
+      }),
     };
   }
   const monthIndex = Number(String(key).slice(5, 7)) || 1;
@@ -5032,9 +5160,34 @@ function getReportScope() {
     periodLabel,
     monthLabel,
     label,
-    title: `Relatório Executivo de Performance Operacional — ${label}`,
-    fileName: `relatorio-performance-operacional-${slugify(`${monthName}-${year}-${periodLabel}`)}.pdf`,
+    title: `Relatório Executivo de Pré-Fatura — ${label}`,
+    fileName: buildReportDownloadFileName({
+      typeLabel: "Pré-Fatura",
+      mode: "monthly",
+      year,
+      monthName,
+      periodMode,
+    }),
   };
+}
+
+function formatReportFilePeriodLabel(periodMode) {
+  const normalized = normalizePeriodMode(periodMode);
+  if (normalized === "q1") return "1ª Quinzena";
+  if (normalized === "q2") return "2ª Quinzena";
+  return "Mês Completo";
+}
+
+function buildReportDownloadFileName({ typeLabel, mode, year, monthName = "", periodMode = "month", recorteLabel = "" }) {
+  const parts = ["Relatório", typeLabel];
+  if (mode === "annual") {
+    parts.push("Anual", String(year));
+  } else {
+    parts.push("Mensal", String(year));
+    parts.push(monthName ? capitalize(monthName) : recorteLabel || "Recorte Mês");
+  }
+  parts.push(formatReportFilePeriodLabel(periodMode));
+  return `${parts.filter(Boolean).join(" ")}.pdf`;
 }
 
 function getPackageReportScope() {
@@ -5060,7 +5213,13 @@ function getPackageReportScope() {
       monthLabel,
       label,
       title: `Relatório Executivo — Gestão de Pacotes — ${label}`,
-      fileName: `relatorio-gestao-pacotes-${slugify(`${monthName}-${year}-${periodLabel}`)}.pdf`,
+      fileName: buildReportDownloadFileName({
+        typeLabel: "Gestão de Pacotes",
+        mode: "monthly",
+        year,
+        monthName,
+        periodMode,
+      }),
     };
   }
 
@@ -5078,7 +5237,13 @@ function getPackageReportScope() {
     monthSelection: selectedMonths,
     label,
     title: `Relatório Executivo — Gestão de Pacotes — ${label}`,
-    fileName: `relatorio-gestao-pacotes-${slugify(`${selectedLabel}-${periodLabel}`)}.pdf`,
+    fileName: buildReportDownloadFileName({
+      typeLabel: "Gestão de Pacotes",
+      mode: allMonthsSelected ? "annual" : "monthly",
+      year,
+      periodMode,
+      recorteLabel: "Recorte Mês",
+    }),
   };
 }
 
@@ -8041,7 +8206,6 @@ function clearDashboardData(options = {}) {
     datasets: [buildEmptyDataset(), ...preservedDatasets],
   };
   state.activeDatasetId = EMPTY_DATASET_ID;
-  state.deleteDatasetId = "";
   state.fileName = "";
   state.page = 1;
   activeDataset = buildEmptyDataset();
@@ -8282,58 +8446,74 @@ async function setActiveDashboardFile(fileId) {
   showToast("Arquivo ativo atualizado.", "good", 4200);
 }
 
-async function deleteDashboardFile(fileRecord) {
+async function deleteDashboardFiles(fileRecords = []) {
   const permissions = getActionPermissions();
   if (!permissions.canDeleteFile) {
     showToast(permissions.isLoggedIn ? "Apenas administradores podem realizar esta ação." : "Faça login para acessar esta função.", "warn", 5200);
     if (permissions.isLoggedIn) showPermissionDeniedState();
     return;
   }
-  const wasActive = fileRecord.is_active === true || currentActiveFile?.id === fileRecord.id;
 
-  const { error: storageError } = await window.supabaseClient.storage
-    .from("dashboard-files")
-    .remove([fileRecord.storage_path]);
+  if (!window.supabaseClient) {
+    showToast("Supabase não está configurado para remover arquivos.", "error", 5200);
+    return;
+  }
 
-  if (storageError) {
-    console.error("Erro ao remover do storage:", storageError);
-    showToast("Arquivo não encontrado no Storage. Removendo registro do painel.", "warn", 5200);
+  const recordsById = new Map();
+  fileRecords
+    .filter(isUsableDashboardFileRecord)
+    .forEach((record) => {
+      if (record?.id) recordsById.set(record.id, record);
+    });
+  const records = Array.from(recordsById.values());
+  if (!records.length) {
+    showToast("Nenhum arquivo válido selecionado.", "warn", 5000);
+    return;
+  }
+
+  const storagePaths = records.map((record) => record.storage_path).filter(Boolean);
+  if (storagePaths.length) {
+    const { error: storageError } = await window.supabaseClient.storage.from("dashboard-files").remove(storagePaths);
+
+    if (storageError) {
+      console.error("Erro ao remover do storage:", storageError);
+      showToast("Um ou mais arquivos não foram encontrados no Storage. Removendo registros do painel.", "warn", 5200);
+    }
   }
 
   const { error: dbError } = await window.supabaseClient
     .from("dashboard_files")
     .delete()
-    .eq("id", fileRecord.id);
+    .in("id", records.map((record) => record.id));
 
   if (dbError) {
-    console.error("Erro ao remover registro:", dbError);
-    showToast("Erro ao remover registro do arquivo.", "error", 5200);
+    console.error("Erro ao remover registros:", dbError);
+    showToast("Erro ao remover registros dos arquivos.", "error", 5200);
     return;
   }
 
-  await logAudit("delete_file", "dashboard_file", fileRecord.id, {
-    file_name: fileRecord.file_name,
-    storage_path: fileRecord.storage_path,
-  });
+  await Promise.all(
+    records.map((record) =>
+      logAudit("delete_file", "dashboard_file", record.id, {
+        file_name: record.file_name,
+        storage_path: record.storage_path,
+      }),
+    ),
+  );
 
-  const files = await loadDashboardFilesFromSupabase({ loadActive: false, render: false, validateStorage: true });
+  selectedSettingsFileIds.clear();
+  const deletedIds = new Set(records.map((record) => record.id));
+  dashboardFileRecords = dashboardFileRecords.filter((record) => !deletedIds.has(record.id));
+  library.datasets = (Array.isArray(library.datasets) ? library.datasets : []).filter((dataset) => !deletedIds.has(dataset.id));
+  packageManagementRowsLoadedKey = "";
+  resetDerivedDataCache();
+
+  const files = await loadDashboardFilesFromSupabase({ loadActive: true, render: true, validateStorage: true, showLoading: false });
   if (!files.length) {
     clearDashboardData({ render: true, preserveRecords: false });
-    showToast("Todos os arquivos foram removidos.", "good", 4200);
-    return;
   }
-
-  if (wasActive) {
-    await setActiveDashboardFile(files[0].id);
-  } else {
-    const activeFile = files.find((record) => record.is_active) || files[0];
-    if (activeFile?.is_active) {
-      await loadFileFromStorage(activeFile);
-    } else {
-      await setActiveDashboardFile(activeFile.id);
-    }
-  }
-  showToast("Arquivo removido com sucesso.", "good", 4200);
+  renderSettingsFileManagement();
+  showToast(records.length === 1 ? "Arquivo excluído com sucesso." : "Arquivos excluídos com sucesso.", "good", 4200);
 }
 
 
@@ -8493,29 +8673,7 @@ function updateAccessControls() {
         ? "Somente administradores podem usar esta função."
         : "Faça login para usar esta função.",
   );
-  setActionButtonState(
-    el.fileSelectButton,
-    permissions.canDeleteFile,
-    permissions.canDeleteFile
-      ? el.fileSelectButton?.getAttribute("title") || "Selecionar arquivo para exclusão"
-      : permissions.isLoggedIn
-        ? "Somente administradores podem usar esta função."
-        : "Faça login para usar esta função.",
-  );
-  if (el.deleteActiveButton) {
-    const selected = getSelectedDeleteDataset();
-    setActionButtonState(
-      el.deleteActiveButton,
-      permissions.canDeleteFile && Boolean(selected),
-      permissions.canDeleteFile
-        ? selected
-          ? `Excluir ${selected.label}`
-          : "Selecione um arquivo antes de excluir"
-        : permissions.isLoggedIn
-          ? "Somente administradores podem usar esta função."
-          : "Faça login para usar esta função.",
-    );
-  }
+  renderSettingsFileManagement();
   if (el.usersCard) el.usersCard.hidden = true;
   if (el.accountCard) el.accountCard.hidden = !showLogin;
   if (el.accountToggle) {
@@ -8543,7 +8701,7 @@ function updateAccessControls() {
     positionAccountMenu();
   }
   renderUsers();
-  renderFileDeleteMenu();
+  renderSettingsFileManagement();
 }
 
 function bindSupabaseAuthState() {
@@ -8677,7 +8835,7 @@ async function applyAuthenticatedUser(user, options = {}) {
   updateAccessControls();
   updateDatasetMeta();
   renderAccountPage();
-  renderFileDeleteMenu();
+  renderSettingsFileManagement();
   renderAll();
   return { user: currentUser, profile: currentProfile };
 }
@@ -8783,7 +8941,7 @@ async function loginUser(event) {
       updateAccessControls();
       updateDatasetMeta();
       renderAccountPage();
-      renderFileDeleteMenu();
+      renderSettingsFileManagement();
       showToast("Login realizado, mas houve erro ao carregar o perfil.", "warn", 5600);
     }
 
@@ -9028,42 +9186,22 @@ function renderUsers() {
     : emptyState("Sem usuários", "Crie acessos para visualizar ou administrar.");
 }
 
-async function deleteActiveDataset() {
+async function deleteSelectedSettingsFiles() {
   if (!ensureDeletePermission()) {
     return;
   }
-  const active = getSelectedDeleteDataset();
-  if (!active || active.id === EMPTY_DATASET_ID) {
+  const files = getSettingsFilesForActiveTab().filter((file) => selectedSettingsFileIds.has(file.id));
+  if (!files.length) {
     showToast("Selecione um arquivo antes de excluir.", "warn", 5000);
     return;
   }
-
-  if (active.source === "supabase" && active.remoteRecord) {
-    const confirmed = window.confirm(`Excluir o arquivo "${active.label}"? Essa ação remove o arquivo do Supabase Storage e da lista do dashboard.`);
-    if (!confirmed) return;
-    await deleteDashboardFile(active.remoteRecord);
-    return;
-  }
-
-  const confirmed = window.confirm(`Remover o arquivo local "${active.label}" deste painel?`);
+  const confirmed = window.confirm(
+    files.length === 1
+      ? "Excluir arquivo selecionado?\n\nEsta ação removerá o arquivo do painel e atualizará os indicadores. Essa ação não pode ser desfeita."
+      : `Excluir ${files.length} arquivos selecionados?\n\nEsta ação removerá os arquivos do painel e atualizará os indicadores. Essa ação não pode ser desfeita.`,
+  );
   if (!confirmed) return;
-
-  const index = library.datasets.findIndex((dataset) => dataset.id === active.id);
-  if (index < 0) return;
-
-  library.datasets.splice(index, 1);
-  const nextActive =
-    state.activeDatasetId === active.id ? library.datasets[index] || library.datasets[index - 1] || buildEmptyDataset() : getActiveDataset();
-  library.activeDatasetId = nextActive.id;
-  state.activeDatasetId = nextActive.id;
-  state.deleteDatasetId = "";
-  state.fileName = nextActive.fileName;
-  syncActiveDataset();
-  hydrateControls();
-  persistState();
-  persistLibrary();
-  renderAll();
-  showToast(`Arquivo "${active.label}" excluído.`, "good", 5000);
+  await deleteDashboardFiles(files);
 }
 
 function parseDateValue(value) {
@@ -9285,7 +9423,6 @@ function normalizeLoadedState(loadedState) {
   loadedState.accountPanelOpen = false;
   loadedState.fileName = "";
   loadedState.activeDatasetId = EMPTY_DATASET_ID;
-  loadedState.deleteDatasetId = "";
   if (loadedState.sheet === "Todos") {
     loadedState.sheet = PRE_FATURA_VIEW;
   } else if (SHEET_ORDER.includes(loadedState.sheet)) {
@@ -9310,7 +9447,6 @@ function persistState() {
     const {
       fileName,
       activeDatasetId,
-      deleteDatasetId,
       pnrGoalLimit,
       metaMensal,
       metaAnual,
@@ -9575,8 +9711,8 @@ function compactQuinzena(period) {
 
 function detectQuinzena(text) {
   const normalized = normalize(text);
-  if (/(^|\s)(1\s*q|1q|1a quinzena|1ª quinzena)(\s|$)/i.test(text)) return "1ª quinzena";
-  if (/(^|\s)(2\s*q|2q|2a quinzena|2ª quinzena)(\s|$)/i.test(text)) return "2ª quinzena";
+  if (/(^|\s)(1\s*q|1q|1a quinzena|1ª quinzena|primeira quinzena)(\s|$)/i.test(normalized)) return "1ª quinzena";
+  if (/(^|\s)(2\s*q|2q|2a quinzena|2ª quinzena|segunda quinzena)(\s|$)/i.test(normalized)) return "2ª quinzena";
   return "";
 }
 

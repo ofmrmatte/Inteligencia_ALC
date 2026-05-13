@@ -3,10 +3,10 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Painel de Inteligência Operacional | ALC Transportes</title>
+    <title>Painel de Inteligência | ALC Transportes</title>
     <meta
       name="description"
-      content="Painel de Inteligência Operacional para análise de performance a partir de planilhas Excel com filtros, gráficos, relatórios, usuários e sincronização online."
+      content="Painel de Inteligência para análise de performance a partir de planilhas Excel com filtros, gráficos, relatórios, usuários e sincronização online."
     />
     <link rel="icon" type="image/png" sizes="32x32" href="/favicon-32x32.png" />
     <link rel="icon" type="image/png" sizes="16x16" href="/favicon-16x16.png" />
@@ -29,13 +29,13 @@
               <img src="assets/logo-alc-dashboard.png" alt="ALC Pereira Filho Transportes" />
             </div>
             <div class="topbar__titles">
-              <h1>Painel de Inteligência Operacional</h1>
-              <p>Setor: Loss · Dashboard Pré-Fatura</p>
+              <h1>Painel de Inteligência</h1>
+              <p>Loss · Dashboard</p>
             </div>
           </div>
         </div>
         <div class="topbar__center" id="status-line">
-          <span id="last-update">Última atualização: --</span>
+          <span id="last-update">--</span>
         </div>
         <div class="topbar__actions">
           <button class="ghost-button ghost-button--icon" id="refresh-button" type="button" aria-label="Sincronizar" title="Sincronizar">
@@ -44,14 +44,6 @@
             </svg>
           </button>
           <button class="ghost-button ghost-button--compact" id="report-button" type="button">Relatório</button>
-          <div class="file-delete-picker" id="file-delete-picker">
-            <button class="ghost-button ghost-button--icon" id="file-select-button" type="button" aria-label="Selecionar arquivo para exclusão" title="Selecionar arquivo para exclusão">
-              <svg viewBox="0 0 24 24" aria-hidden="true">
-                <path d="M5 7h14M5 12h9M5 17h6m7-2 1.8 1.8L23 13.6" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8"></path>
-              </svg>
-            </button>
-            <div class="file-delete-menu" id="file-delete-menu" hidden></div>
-          </div>
           <button class="ghost-button ghost-button--icon" id="theme-toggle" type="button" aria-label="Alternar tema" title="Alternar tema">
             <svg viewBox="0 0 24 24" aria-hidden="true">
               <path class="theme-ray" d="M12 3v2m0 14v2M4.2 4.2l1.4 1.4m12.8 12.8 1.4 1.4M3 12h2m14 0h2M4.2 19.8l1.4-1.4M18.4 5.6l1.4-1.4"></path>
@@ -96,11 +88,6 @@
             </svg>
             <span class="connection-indicator__label">Supabase</span>
           </span>
-          <button class="danger-button danger-button--compact danger-button--icon" id="delete-active-button" type="button" aria-label="Excluir arquivo" title="Excluir arquivo">
-            <svg viewBox="0 0 24 24" aria-hidden="true">
-              <path d="M4 7h16M10 11v6m4-6v6M9 7l1-3h4l1 3m-9 0 1 13h10l1-13" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8"></path>
-            </svg>
-          </button>
           <button class="ghost-button ghost-button--icon" id="upload-button" type="button" aria-label="Importar Excel" title="Importar Excel">
             <svg viewBox="0 0 24 24" aria-hidden="true">
               <path d="M12 3v10m0-10 4 4m-4-4-4 4M4 14v4a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-4" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8"></path>
@@ -289,6 +276,21 @@
             <div class="settings-section">
               <h3>Usuários</h3>
               <div class="settings-users-list" id="settings-users-list"></div>
+            </div>
+            <div class="settings-section settings-files-section" id="settings-files-section">
+              <div class="settings-files-header">
+                <div>
+                  <h3>Arquivos do dashboard</h3>
+                  <p>Gerencie os arquivos carregados no painel.</p>
+                </div>
+                <button class="ghost-button ghost-button--icon settings-files-delete" id="settings-files-delete" type="button" aria-label="Excluir selecionados" title="Excluir selecionados" disabled>
+                  <svg viewBox="0 0 24 24" aria-hidden="true">
+                    <path d="M4 7h16M10 11v6m4-6v6M9 7l1-3h4l1 3m-9 0 1 13h10l1-13" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8"></path>
+                  </svg>
+                </button>
+              </div>
+              <div class="settings-files-tabs" id="settings-files-tabs" role="tablist" aria-label="Tipos de arquivo do dashboard"></div>
+              <div class="settings-files-list" id="settings-files-list"></div>
             </div>
             <div class="settings-section">
               <h3>Auditoria</h3>

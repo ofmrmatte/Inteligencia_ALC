@@ -155,7 +155,7 @@ svg {
   top: 0;
   z-index: 30;
   display: grid;
-  grid-template-columns: minmax(360px, 1fr) minmax(210px, auto) minmax(420px, auto);
+  grid-template-columns: minmax(300px, 1fr) auto minmax(300px, 1fr);
   align-items: center;
   gap: 1rem;
   padding: 1rem 1.2rem;
@@ -235,11 +235,12 @@ svg {
   display: inline-flex;
   align-items: center;
   gap: 0.7rem;
-  justify-content: flex-start;
+  justify-content: center;
   min-width: 0;
   color: var(--muted);
   font-size: 0.92rem;
-  white-space: normal;
+  text-align: center;
+  white-space: nowrap;
 }
 
 .topbar__center span + span::before {
@@ -2247,11 +2248,11 @@ tbody td {
 
 @media (max-width: 1280px) {
   .topbar {
-    grid-template-columns: minmax(220px, 1fr) minmax(0, auto);
+    grid-template-columns: minmax(260px, 1fr) auto minmax(260px, 1fr);
   }
 
   .topbar__center {
-    display: none;
+    font-size: 0.86rem;
   }
 
   .topbar__actions {
@@ -2660,31 +2661,27 @@ body[data-theme="light"] .user-row {
 }
 
 #refresh-button {
-  order: 5;
+  order: 4;
 }
 
 #report-button {
   order: 1;
 }
 
-#delete-active-button {
+#upload-button {
   order: 2;
 }
 
-#upload-button {
+#theme-toggle {
   order: 3;
 }
 
-#theme-toggle {
-  order: 4;
-}
-
 #sync-status {
-  order: 6;
+  order: 5;
 }
 
 #account-toggle {
-  order: 7;
+  order: 6;
 }
 
 @keyframes riseIn {
@@ -2748,32 +2745,24 @@ html {
   overflow: visible;
 }
 
-#file-select-button {
+#upload-button {
   order: 2;
 }
 
-#delete-active-button {
+#theme-toggle {
   order: 3;
 }
 
-#upload-button {
+#refresh-button {
   order: 4;
 }
 
-#theme-toggle {
+#sync-status {
   order: 5;
 }
 
-#refresh-button {
-  order: 6;
-}
-
-#sync-status {
-  order: 7;
-}
-
 #account-toggle {
-  order: 8;
+  order: 6;
 }
 
 .ghost-button:disabled,
@@ -2795,13 +2784,6 @@ html {
   transform: none;
 }
 
-.file-delete-picker {
-  position: relative;
-  order: 2;
-  display: inline-flex;
-}
-
-.file-delete-menu,
 .account-menu {
   position: absolute;
   z-index: 80;
@@ -2815,13 +2797,9 @@ html {
   border-radius: 0.9rem;
   background: var(--surface-strong);
   box-shadow: var(--shadow-soft);
-}
-
-.account-menu {
   position: fixed;
 }
 
-.file-delete-menu button,
 .account-menu button {
   display: grid;
   width: 100%;
@@ -2834,16 +2812,8 @@ html {
   text-align: left;
 }
 
-.file-delete-menu button:hover,
-.file-delete-menu button.is-selected,
 .account-menu button:hover {
   background: rgba(59, 166, 255, 0.12);
-}
-
-.file-delete-menu small,
-.file-delete-menu__empty {
-  color: var(--muted);
-  font-size: 0.78rem;
 }
 
 .account-menu {
@@ -3493,8 +3463,7 @@ body:not([data-theme="light"]) .sheet-tab:hover {
 }
 
 body:not([data-theme="light"]) .sheet-tab.is-active,
-body:not([data-theme="light"]) .filter-pill.is-active,
-body:not([data-theme="light"]) .file-delete-menu button.is-selected {
+body:not([data-theme="light"]) .filter-pill.is-active {
   border-color: rgba(59, 166, 255, 0.58);
   background: rgba(59, 166, 255, 0.18);
   color: var(--text);
@@ -3508,8 +3477,7 @@ body:not([data-theme="light"]) button:disabled {
   color: rgba(243, 247, 252, 0.72);
 }
 
-body:not([data-theme="light"]) .account-menu,
-body:not([data-theme="light"]) .file-delete-menu {
+body:not([data-theme="light"]) .account-menu {
   border-color: rgba(164, 183, 202, 0.2);
   background:
     linear-gradient(180deg, rgba(17, 29, 43, 0.98), rgba(9, 18, 29, 0.98)),
@@ -3521,13 +3489,11 @@ body:not([data-theme="light"]) .account-menu__header {
   border-bottom-color: rgba(164, 183, 202, 0.18);
 }
 
-body:not([data-theme="light"]) .account-menu button,
-body:not([data-theme="light"]) .file-delete-menu button {
+body:not([data-theme="light"]) .account-menu button {
   color: var(--text);
 }
 
-body:not([data-theme="light"]) .account-menu button:hover,
-body:not([data-theme="light"]) .file-delete-menu button:hover {
+body:not([data-theme="light"]) .account-menu button:hover {
   background: var(--dropdown-hover);
 }
 
@@ -3536,9 +3502,7 @@ body:not([data-theme="light"]) .sidebar-card label,
 body:not([data-theme="light"]) .sidebar-note,
 body:not([data-theme="light"]) .account-login__note,
 body:not([data-theme="light"]) .account-menu__identity span,
-body:not([data-theme="light"]) .account-menu__header span,
-body:not([data-theme="light"]) .file-delete-menu small,
-body:not([data-theme="light"]) .file-delete-menu__empty {
+body:not([data-theme="light"]) .account-menu__header span {
   color: #b3c3d5;
 }
 
@@ -3699,6 +3663,200 @@ body:not([data-theme="light"]) .toast {
 
 .settings-section h3 {
   margin: 0;
+}
+
+.settings-files-section {
+  gap: 0.9rem;
+}
+
+.settings-files-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 1rem;
+}
+
+.settings-files-header p {
+  margin: 0.2rem 0 0;
+  color: var(--muted);
+  font-size: 0.88rem;
+}
+
+.settings-files-delete {
+  width: 2.55rem;
+  min-width: 2.55rem;
+  height: 2.55rem;
+  padding: 0;
+}
+
+.settings-files-delete svg {
+  width: 1.1rem;
+  height: 1.1rem;
+}
+
+.settings-files-tabs {
+  display: inline-flex;
+  align-items: center;
+  width: fit-content;
+  max-width: 100%;
+  padding: 0.18rem;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--surface-strong) 78%, transparent);
+}
+
+.settings-files-tab {
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+  font: inherit;
+  font-size: 0.84rem;
+  font-weight: 800;
+  padding: 0.48rem 0.82rem;
+  transition:
+    background 160ms ease,
+    color 160ms ease,
+    box-shadow 160ms ease;
+  white-space: nowrap;
+}
+
+.settings-files-tab:hover,
+.settings-files-tab.is-active {
+  background: color-mix(in srgb, var(--accent) 13%, var(--surface));
+  color: var(--text);
+}
+
+.settings-files-tab.is-active {
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 28%, transparent);
+}
+
+.settings-files-list {
+  display: grid;
+  gap: 0.65rem;
+}
+
+.settings-files-select-all,
+.settings-file-row {
+  position: relative;
+  display: grid;
+  align-items: center;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  gap: 0.75rem;
+}
+
+.settings-files-select-all {
+  display: inline-flex;
+  justify-self: start;
+  color: var(--muted);
+  cursor: pointer;
+  font-size: 0.82rem;
+  font-weight: 800;
+  user-select: none;
+}
+
+.settings-files-select-all input,
+.settings-file-row input {
+  position: absolute;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.settings-files-select-all input:checked + .type-filter__check,
+.settings-files-select-all input:indeterminate + .type-filter__check,
+.settings-file-row input:checked + .type-filter__check {
+  border-color: var(--accent);
+  background: var(--accent);
+}
+
+.settings-files-select-all input:checked + .type-filter__check::after,
+.settings-file-row input:checked + .type-filter__check::after {
+  content: "";
+  width: 0.42rem;
+  height: 0.68rem;
+  border: solid #fff;
+  border-width: 0 2px 2px 0;
+  transform: rotate(45deg) translateY(-0.05rem);
+}
+
+.settings-files-select-all input:indeterminate + .type-filter__check::after {
+  content: "";
+  width: 0.52rem;
+  height: 0.12rem;
+  border-radius: 999px;
+  background: #fff;
+}
+
+.settings-files-items {
+  display: grid;
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: 0.95rem;
+  background: color-mix(in srgb, var(--surface-strong) 70%, transparent);
+}
+
+.settings-file-row {
+  cursor: pointer;
+  min-height: 4.55rem;
+  padding: 0.78rem 0.9rem;
+  border-bottom: 1px solid var(--line);
+  transition: background 160ms ease;
+}
+
+.settings-file-row:last-child {
+  border-bottom: 0;
+}
+
+.settings-file-row:hover {
+  background: color-mix(in srgb, var(--accent) 7%, transparent);
+}
+
+.settings-file-row__content {
+  display: grid;
+  gap: 0.16rem;
+  min-width: 0;
+}
+
+.settings-file-row__content strong,
+.settings-file-row__content span,
+.settings-file-row__content small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.settings-file-row__content strong {
+  color: var(--text);
+  font-size: 0.92rem;
+}
+
+.settings-file-row__content span,
+.settings-file-row__content small {
+  color: var(--muted);
+  font-size: 0.8rem;
+}
+
+.settings-file-row__status {
+  justify-self: end;
+  border: 1px solid color-mix(in srgb, var(--accent) 18%, var(--line));
+  border-radius: 999px;
+  color: var(--muted);
+  font-size: 0.76rem;
+  font-weight: 800;
+  padding: 0.28rem 0.56rem;
+  white-space: nowrap;
+}
+
+.settings-files-empty {
+  display: grid;
+  min-height: 4.5rem;
+  place-items: center;
+  border: 1px dashed var(--line);
+  border-radius: 0.95rem;
+  color: var(--muted);
+  font-size: 0.9rem;
+  text-align: center;
 }
 
 .settings-user {
@@ -4538,8 +4696,7 @@ body:not([data-theme="light"]) .sidebar-card,
 body:not([data-theme="light"]) .panel,
 body:not([data-theme="light"]) .kpi-card,
 body:not([data-theme="light"]) .goal-config__panel,
-body:not([data-theme="light"]) .account-menu,
-body:not([data-theme="light"]) .file-delete-menu {
+body:not([data-theme="light"]) .account-menu {
   border-color: rgba(164, 183, 202, 0.18);
   background-color: var(--surface-strong);
 }
@@ -4585,6 +4742,19 @@ body:not([data-theme="light"]) .kpi-card--finance .kpi-card__value {
 
   .settings-user__badge,
   .settings-user__action {
+    justify-self: start;
+  }
+
+  .settings-files-header {
+    align-items: center;
+  }
+
+  .settings-file-row {
+    grid-template-columns: auto minmax(0, 1fr);
+  }
+
+  .settings-file-row__status {
+    grid-column: 2;
     justify-self: start;
   }
 
