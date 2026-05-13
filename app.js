@@ -149,6 +149,8 @@ let searchDebounceTimer = null;
 let activeComparisonTooltipColumn = null;
 let evolutionTooltipHideTimer = null;
 let activeEvolutionTooltipBar = null;
+let packageMixTooltipHideTimer = null;
+let activePackageMixSegment = null;
 let chartViewportObserver = null;
 let chartAnimationFrame = 0;
 let chartAnimationToken = 0;
@@ -3040,7 +3042,6 @@ function renderPackageMixDonut(items, total) {
       <strong class="mix-center-value">${formatCurrencyShort(total)}</strong>
       <span>Total do mix</span>
     </div>
-    <div class="mix-tooltip package-mix-tooltip" hidden></div>
   `;
 }
 
@@ -3317,51 +3318,78 @@ function hideDonutTooltip() {
   if (el.donutTooltip) el.donutTooltip.hidden = true;
 }
 
-function getPackageMixTooltip(segment) {
-  return segment?.closest(".mix-chart")?.querySelector(".package-mix-tooltip") || null;
+function getPackageMixTooltip() {
+  let tooltip = document.getElementById("package-mix-tooltip");
+  if (tooltip) return tooltip;
+  tooltip = document.createElement("div");
+  tooltip.id = "package-mix-tooltip";
+  tooltip.className = "comparison-chart-tooltip package-mix-tooltip";
+  tooltip.setAttribute("role", "tooltip");
+  tooltip.hidden = true;
+  document.body.appendChild(tooltip);
+  return tooltip;
 }
 
 function setPackageMixSegmentState(segment, isActive) {
-  const chart = segment?.closest(".mix-chart");
-  if (!chart) return;
-  chart.querySelectorAll(".mix-chart__segment").forEach((node) => {
+  document.querySelectorAll(".package-mix-card .mix-chart__segment").forEach((node) => {
     node.classList.toggle("is-active", isActive && node === segment);
   });
 }
 
 function showPackageMixTooltip(segment, event) {
-  const tooltip = getPackageMixTooltip(segment);
+  const tooltip = getPackageMixTooltip();
   if (!tooltip) return;
+  window.clearTimeout(packageMixTooltipHideTimer);
   const countValue = Number(segment.dataset.count || 0);
   const recordsLabel = countValue === 1 ? "1 registro" : `${escapeHtml(segment.dataset.count || "0")} registros`;
-  tooltip.innerHTML = `
-    <strong>${escapeHtml(segment.dataset.title || "")}</strong>
-    <span>${escapeHtml(segment.dataset.value || "")}</span>
-    <span>${escapeHtml(segment.dataset.share || "0%")}</span>
-    <span>${recordsLabel}</span>
-  `;
+  if (activePackageMixSegment !== segment || tooltip.hidden) {
+    tooltip.innerHTML = `
+      <strong>${escapeHtml(segment.dataset.title || "")}</strong>
+      <span>${escapeHtml(segment.dataset.value || "")}</span>
+      <span>${escapeHtml(segment.dataset.share || "0%")}</span>
+      <span>${recordsLabel}</span>
+    `;
+    activePackageMixSegment = segment;
+  }
   tooltip.hidden = false;
+  requestAnimationFrame(() => {
+    tooltip.classList.add("is-visible");
+  });
   setPackageMixSegmentState(segment, true);
   positionPackageMixTooltip(segment, event);
 }
 
 function positionPackageMixTooltip(segment, event) {
-  const tooltip = getPackageMixTooltip(segment);
+  const tooltip = getPackageMixTooltip();
   if (!tooltip || tooltip.hidden || !event) return;
   const gap = 14;
+  const viewportPadding = 12;
   const tooltipRect = tooltip.getBoundingClientRect();
-  const width = tooltipRect.width || 220;
-  const height = tooltipRect.height || 88;
-  const left = Math.min(window.innerWidth - width - 12, Math.max(12, event.clientX + gap));
-  const top = Math.min(window.innerHeight - height - 12, Math.max(12, event.clientY + gap));
-  tooltip.style.left = `${left}px`;
-  tooltip.style.top = `${top}px`;
+  const width = tooltipRect.width || Math.min(288, Math.max(220, window.innerWidth - 32));
+  const height = tooltipRect.height || 112;
+  let left = event.clientX + gap;
+  let top = event.clientY + gap;
+  if (left + width > window.innerWidth - viewportPadding) {
+    left = event.clientX - width - gap;
+  }
+  if (top + height > window.innerHeight - viewportPadding) {
+    top = event.clientY - height - gap;
+  }
+  tooltip.style.left = `${Math.max(viewportPadding, left)}px`;
+  tooltip.style.top = `${Math.max(viewportPadding, top)}px`;
   setPackageMixSegmentState(segment, true);
 }
 
 function hidePackageMixTooltip(segment) {
-  const tooltip = getPackageMixTooltip(segment);
-  if (tooltip) tooltip.hidden = true;
+  const tooltip = document.getElementById("package-mix-tooltip");
+  if (tooltip) {
+    tooltip.classList.remove("is-visible");
+    window.clearTimeout(packageMixTooltipHideTimer);
+    packageMixTooltipHideTimer = window.setTimeout(() => {
+      tooltip.hidden = true;
+    }, 180);
+  }
+  activePackageMixSegment = null;
   if (segment) setPackageMixSegmentState(segment, false);
 }
 

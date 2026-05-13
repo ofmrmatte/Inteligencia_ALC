@@ -4125,17 +4125,6 @@ body:not([data-theme="light"]) .toast {
   stroke-width: 1.08px;
 }
 
-.package-mix-tooltip {
-  opacity: 0;
-  transform: translate3d(0, 6px, 0);
-  transition: opacity 140ms ease, transform 140ms ease;
-}
-
-.package-mix-tooltip:not([hidden]) {
-  opacity: 1;
-  transform: translate3d(0, 0, 0);
-}
-
 .mix-legend {
   display: grid;
   grid-template-columns: minmax(0, 1fr);
