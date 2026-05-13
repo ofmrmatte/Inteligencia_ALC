@@ -808,6 +808,25 @@ function bindEvents() {
     hideDonutTooltip();
   });
 
+  if (el.kpiGrid) {
+    el.kpiGrid.addEventListener("pointerover", (event) => {
+      const segment = event.target.closest(".package-mix-card .mix-chart__segment");
+      if (!segment) return;
+      showPackageMixTooltip(segment, event);
+    });
+
+    el.kpiGrid.addEventListener("pointermove", (event) => {
+      const segment = event.target.closest(".package-mix-card .mix-chart__segment");
+      if (!segment) return;
+      positionPackageMixTooltip(segment, event);
+    });
+
+    el.kpiGrid.addEventListener("pointerout", (event) => {
+      if (!event.target.closest(".package-mix-card .mix-chart__segment")) return;
+      hidePackageMixTooltip(event.target.closest(".package-mix-card .mix-chart__segment"));
+    });
+  }
+
   if (el.pnrGoalSummary) {
     const pnrGoalPanel = el.pnrGoalSummary.closest(".goal-card");
     const goalTarget = pnrGoalPanel || el.pnrGoalSummary;
@@ -2940,11 +2959,16 @@ function renderKpiCard(card, index) {
 }
 
 function buildPackageMixRows(rows) {
-  const summary = buildPackageManagementSummary(rows);
+  const baseRows = (Array.isArray(rows) ? rows : []).filter(isPackageManagementDetailRow);
+  const summary = buildPackageManagementSummary(baseRows);
+  const byCategory = (category) => baseRows.filter((row) => row.categoria_final === category);
+  const alcRows = byCategory("ALC");
+  const driverRows = byCategory("DRIVER");
+  const dispatcherRows = byCategory("DISPATCHER");
   const items = [
-    { key: "ALC", label: "ALC", value: summary.alcValue, color: "#58d68d" },
-    { key: "DRIVER", label: "Driver", value: summary.driverValue, color: "#ffb454" },
-    { key: "DISPATCHER", label: "Dispatcher", value: summary.dispatcherValue, color: "#3ba6ff" },
+    { key: "ALC", label: "ALC", value: summary.alcValue, count: alcRows.length, color: "#58d68d" },
+    { key: "DRIVER", label: "Driver", value: summary.driverValue, count: driverRows.length, color: "#ffb454" },
+    { key: "DISPATCHER", label: "Dispatcher", value: summary.dispatcherValue, count: dispatcherRows.length, color: "#3ba6ff" },
   ];
   const total = items.reduce((acc, item) => acc + Number(item.value || 0), 0);
   return {
@@ -2959,12 +2983,29 @@ function buildPackageMixRows(rows) {
 function renderPackageMixDonut(items, total) {
   const circumference = 2 * Math.PI * 42;
   let offset = 0;
+  const labels = [];
   const segments = total > 0
     ? items
-      .map((item) => {
+      .map((item, index) => {
+        const start = offset;
         const length = (item.share / 100) * circumference;
         const dashOffset = -offset;
         offset += length;
+        if (item.share >= 7.5 && length > 18) {
+          const midpoint = start + length / 2;
+          const angle = (midpoint / circumference) * Math.PI * 2 - Math.PI / 2;
+          const x = 50 + Math.cos(angle) * 42;
+          const y = 50 + Math.sin(angle) * 42;
+          const fontSize = item.share >= 18 ? 5.4 : item.share >= 11 ? 4.8 : 4.2;
+          labels.push(`
+            <text
+              class="mix-chart__percent"
+              x="${x.toFixed(2)}"
+              y="${y.toFixed(2)}"
+              style="font-size:${fontSize}px"
+            >${formatPercent(item.share)}</text>
+          `);
+        }
         return `
           <circle
             class="mix-chart__segment"
@@ -2976,6 +3017,11 @@ function renderPackageMixDonut(items, total) {
             stroke-width="18"
             stroke-dasharray="${length.toFixed(3)} ${(circumference - length).toFixed(3)}"
             stroke-dashoffset="${dashOffset.toFixed(3)}"
+            data-mix-segment="${escapeAttribute(item.key || String(index))}"
+            data-title="${escapeAttribute(item.label)}"
+            data-value="${escapeAttribute(currency.format(item.value || 0))}"
+            data-count="${escapeAttribute(integer.format(item.count || 0))}"
+            data-share="${escapeAttribute(formatPercent(item.share))}"
           ></circle>
         `;
       })
@@ -2988,11 +3034,13 @@ function renderPackageMixDonut(items, total) {
         <circle class="mix-chart__track" cx="50" cy="50" r="42" fill="none" stroke-width="18"></circle>
         ${segments}
       </g>
+      ${labels.join("")}
     </svg>
     <div class="mix-chart__center">
       <strong class="mix-center-value">${formatCurrencyShort(total)}</strong>
       <span>Total do mix</span>
     </div>
+    <div class="mix-tooltip package-mix-tooltip" hidden></div>
   `;
 }
 
@@ -3267,6 +3315,54 @@ function positionDonutTooltip(event) {
 
 function hideDonutTooltip() {
   if (el.donutTooltip) el.donutTooltip.hidden = true;
+}
+
+function getPackageMixTooltip(segment) {
+  return segment?.closest(".mix-chart")?.querySelector(".package-mix-tooltip") || null;
+}
+
+function setPackageMixSegmentState(segment, isActive) {
+  const chart = segment?.closest(".mix-chart");
+  if (!chart) return;
+  chart.querySelectorAll(".mix-chart__segment").forEach((node) => {
+    node.classList.toggle("is-active", isActive && node === segment);
+  });
+}
+
+function showPackageMixTooltip(segment, event) {
+  const tooltip = getPackageMixTooltip(segment);
+  if (!tooltip) return;
+  const countValue = Number(segment.dataset.count || 0);
+  const recordsLabel = countValue === 1 ? "1 registro" : `${escapeHtml(segment.dataset.count || "0")} registros`;
+  tooltip.innerHTML = `
+    <strong>${escapeHtml(segment.dataset.title || "")}</strong>
+    <span>${escapeHtml(segment.dataset.value || "")}</span>
+    <span>${escapeHtml(segment.dataset.share || "0%")}</span>
+    <span>${recordsLabel}</span>
+  `;
+  tooltip.hidden = false;
+  setPackageMixSegmentState(segment, true);
+  positionPackageMixTooltip(segment, event);
+}
+
+function positionPackageMixTooltip(segment, event) {
+  const tooltip = getPackageMixTooltip(segment);
+  if (!tooltip || tooltip.hidden || !event) return;
+  const gap = 14;
+  const tooltipRect = tooltip.getBoundingClientRect();
+  const width = tooltipRect.width || 220;
+  const height = tooltipRect.height || 88;
+  const left = Math.min(window.innerWidth - width - 12, Math.max(12, event.clientX + gap));
+  const top = Math.min(window.innerHeight - height - 12, Math.max(12, event.clientY + gap));
+  tooltip.style.left = `${left}px`;
+  tooltip.style.top = `${top}px`;
+  setPackageMixSegmentState(segment, true);
+}
+
+function hidePackageMixTooltip(segment) {
+  const tooltip = getPackageMixTooltip(segment);
+  if (tooltip) tooltip.hidden = true;
+  if (segment) setPackageMixSegmentState(segment, false);
 }
 
 function renderPnrGoalSummary(filtered) {

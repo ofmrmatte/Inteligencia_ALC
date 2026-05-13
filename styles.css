@@ -4035,7 +4035,7 @@ body:not([data-theme="light"]) .toast {
 
 .mix-chart__segment {
   cursor: pointer;
-  transition: opacity 160ms ease, stroke-width 160ms ease;
+  transition: opacity 160ms ease, stroke-width 180ms ease, filter 180ms ease;
 }
 
 .mix-chart__segment:hover {
@@ -4105,6 +4105,35 @@ body:not([data-theme="light"]) .toast {
 .mix-tooltip span {
   font-size: 0.78rem;
   line-height: 1.25;
+}
+
+.package-mix-card .mix-chart__segment {
+  transition: opacity 180ms ease, stroke-width 180ms ease, filter 180ms ease;
+}
+
+.package-mix-card .mix-chart__segment:hover,
+.package-mix-card .mix-chart__segment.is-active {
+  opacity: 1;
+  stroke-width: 20.5;
+  filter: brightness(1.08) drop-shadow(0 0 10px rgba(11, 29, 47, 0.18));
+}
+
+.package-mix-card .mix-chart__percent {
+  fill: rgba(255, 255, 255, 0.98);
+  font-weight: 950;
+  stroke: rgba(7, 22, 38, 0.72);
+  stroke-width: 1.08px;
+}
+
+.package-mix-tooltip {
+  opacity: 0;
+  transform: translate3d(0, 6px, 0);
+  transition: opacity 140ms ease, transform 140ms ease;
+}
+
+.package-mix-tooltip:not([hidden]) {
+  opacity: 1;
+  transform: translate3d(0, 0, 0);
 }
 
 .mix-legend {
