@@ -6099,6 +6099,28 @@ function styleExcelRange(worksheet, range, style) {
   }
 }
 
+async function addPackageExportLogo(worksheet, workbook) {
+  console.log("[Excel] Inserindo logo");
+  try {
+    await ensurePdfLogoImage();
+    if (!PDF_LOGO_IMAGE.base64) {
+      console.warn("[Excel] Logo não carregada para o Excel.");
+      return;
+    }
+    const extension = /\.png(?:$|\?)/i.test(PDF_LOGO_IMAGE.src) ? "png" : "jpeg";
+    const logoImageId = workbook.addImage({
+      base64: `data:image/${extension};base64,${PDF_LOGO_IMAGE.base64}`,
+      extension,
+    });
+    worksheet.addImage(logoImageId, {
+      tl: { col: 0.2, row: 0.55 },
+      ext: { width: 58, height: 58 },
+    });
+  } catch (logoError) {
+    console.warn("[Excel] Não foi possível inserir a logo. Exportação continuará sem logo.", logoError);
+  }
+}
+
 function configurePackageExportHeader(worksheet, rows, exportRows) {
   const darkBlue = "0B1F33";
   const aqua = "19D3C5";
@@ -6248,6 +6270,7 @@ async function buildStyledPackageManagementWorkbook(rows, exportRows) {
 
   console.log("[Excel] Aplicando cabeçalho");
   configurePackageExportHeader(worksheet, rows, exportRows);
+  await addPackageExportLogo(worksheet, workbook);
   console.log("[Excel] Aplicando tabela");
   addPackageExportTable(worksheet, exportRows);
   console.log("[Excel] Gerando buffer");
