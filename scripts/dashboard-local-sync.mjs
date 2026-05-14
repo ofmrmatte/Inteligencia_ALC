@@ -2,9 +2,13 @@ import "dotenv/config";
 import chokidar from "chokidar";
 import { createClient } from "@supabase/supabase-js";
 import { createHash } from "node:crypto";
+import { createRequire } from "node:module";
 import { createReadStream } from "node:fs";
 import { promises as fs } from "node:fs";
 import path from "node:path";
+
+const require = createRequire(import.meta.url);
+const XLSX = require("../assets/vendor/xlsx.full.min.js");
 
 const PRE_FATURA_FILE_TYPE = "PRE_FATURA";
 const GESTAO_FILE_TYPE = "GESTAO_PACOTES";
@@ -12,6 +16,7 @@ const DEFAULT_DEBOUNCE_MS = 4500;
 const STABILITY_CHECK_INTERVAL_MS = 1000;
 const STABILITY_REQUIRED_CHECKS = 2;
 const STABILITY_TIMEOUT_MS = 60000;
+const PROCESSED_RECORDS_BATCH_SIZE = 500;
 
 const MONTHS = [
   { number: "01", abbr: "Jan", aliases: ["janeiro", "jan"] },
@@ -67,6 +72,119 @@ function normalize(value) {
     .replace(/\s+/g, " ")
     .trim()
     .toLowerCase();
+}
+
+function normalizeText(value) {
+  return String(value || "")
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/[^a-zA-Z0-9]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim()
+    .toUpperCase();
+}
+
+function normalizeHeader(value) {
+  return normalizeText(value).replace(/\s+/g, " ");
+}
+
+function normalizeBase(value) {
+  return normalizeText(value)
+    .replace(/\bBASE\b/g, "")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function normalizeDriverName(value) {
+  return normalizeText(value);
+}
+
+function formatDriverName(value) {
+  const normalized = normalizeText(value);
+  if (!normalized) return "";
+  const connectors = new Set(["DA", "DE", "DO", "DAS", "DOS", "E"]);
+  return normalized
+    .toLowerCase()
+    .split(/\s+/)
+    .map((part, index) => (index > 0 && connectors.has(part.toUpperCase()) ? part : part.charAt(0).toUpperCase() + part.slice(1)))
+    .join(" ");
+}
+
+function parseMoney(value) {
+  if (typeof value === "number") return Number.isFinite(value) ? value : 0;
+  const text = String(value ?? "")
+    .replace("R$", "")
+    .replace(/\s/g, "")
+    .replace(/\./g, "")
+    .replace(",", ".")
+    .trim();
+  const number = Number(text);
+  return Number.isFinite(number) ? Number(number.toFixed(2)) : 0;
+}
+
+function normalizarValorGestao(value) {
+  return Math.abs(parseMoney(value));
+}
+
+function excelSerialToDate(value) {
+  const utcDays = Math.floor(Number(value) - 25569);
+  const utcValue = utcDays * 86400;
+  return new Date(utcValue * 1000);
+}
+
+function parseDateValue(value) {
+  if (value instanceof Date && !Number.isNaN(value.getTime())) return value.toISOString().slice(0, 10);
+  if (typeof value === "number" && Number.isFinite(value)) {
+    const date = excelSerialToDate(value);
+    return Number.isNaN(date.getTime()) ? null : date.toISOString().slice(0, 10);
+  }
+  const text = String(value || "").trim();
+  if (!text) return null;
+  const br = text.match(/^(\d{1,2})[/-](\d{1,2})[/-](\d{2,4})$/);
+  if (br) {
+    const year = br[3].length === 2 ? `20${br[3]}` : br[3];
+    return `${year}-${String(br[2]).padStart(2, "0")}-${String(br[1]).padStart(2, "0")}`;
+  }
+  const date = new Date(text);
+  return Number.isNaN(date.getTime()) ? null : date.toISOString().slice(0, 10);
+}
+
+function findHeaderIndex(headers, aliases) {
+  const normalizedAliases = aliases.map(normalizeHeader);
+  for (let index = 0; index < headers.length; index += 1) {
+    const header = normalizeHeader(headers[index]);
+    if (normalizedAliases.includes(header)) return index;
+  }
+  for (let index = 0; index < headers.length; index += 1) {
+    const header = normalizeHeader(headers[index]);
+    if (normalizedAliases.some((alias) => header.includes(alias))) return index;
+  }
+  return -1;
+}
+
+function readCell(row, index) {
+  return index >= 0 ? row[index] ?? "" : "";
+}
+
+function formatId(value) {
+  return String(value ?? "").trim();
+}
+
+function normalizeSheetLabel(value, type = "") {
+  const raw = normalizeText(`${value || ""} ${type || ""}`);
+  if ((raw.includes("SVC") || raw.includes("SERVICE") || raw.includes("SERVICO")) && raw.includes("PERDID")) return "SVC PERDIDOS";
+  if (raw.includes("XPT") && raw.includes("PERDID")) return "XPT PERDIDOS";
+  if (raw.includes("PNR")) return "PNR";
+  return String(value || "").trim() || "Sem aba";
+}
+
+function splitBase(value) {
+  const raw = String(value || "").trim();
+  const match = raw.match(/(.+?)\s*[-–]\s*([A-Z]{1,4}\d{0,3})$/i);
+  return {
+    cidade_base: match ? match[1].trim() : raw,
+    sigla_base: match ? match[2].trim().toUpperCase() : normalizeBase(raw),
+  };
 }
 
 function parseBoolean(value, fallback = false) {
@@ -150,6 +268,223 @@ function extractFileMetadata(filePath, category) {
     period_label: period.label,
     period_type: period.type,
   };
+}
+
+function getProcessedTable(category) {
+  return category.fileType === GESTAO_FILE_TYPE ? "gestao_pacotes_records" : "pre_fatura_records";
+}
+
+function getPeriodTypeFromLabel(label) {
+  const text = normalizeText(label);
+  if (text.includes("1")) return "q1";
+  if (text.includes("2")) return "q2";
+  return "month";
+}
+
+function identificarAbaGestao(sheetName) {
+  const sheet = normalizeText(sheetName);
+  if (sheet.includes("ALINHAMENTO")) return "ALINHAMENTO";
+  if (sheet.includes("ABSORVID") || /\bALC\b/.test(sheet)) return "ALC";
+  if (sheet.includes("MERCADO LIVRE") || sheet.includes("MELI") || /\bML\b/.test(sheet)) return "MERCADO_LIVRE";
+  return null;
+}
+
+function classifyPackageDecision(value, sheetType) {
+  if (sheetType === "ALC") return "ALC";
+  if (sheetType === "MERCADO_LIVRE") return "MERCADO_LIVRE";
+  const text = normalizeText(value);
+  if (text.includes("DISPATCHER")) return "DISPATCHER";
+  if (text.includes("DRIVER") || text.includes("MOTORISTA")) return "DRIVER";
+  return "INDEFINIDO";
+}
+
+function findPackageHeaderRow(matrix) {
+  const limit = Math.min(matrix.length, 12);
+  for (let index = 0; index < limit; index += 1) {
+    const rowText = normalizeText((matrix[index] || []).join(" "));
+    if ((rowText.includes("VALOR") || rowText.includes("DESCONTO")) && (rowText.includes("BASE") || rowText.includes("MOTORISTA") || rowText.includes("DRIVER"))) {
+      return index;
+    }
+  }
+  return 0;
+}
+
+function isPackageTotalRow(row) {
+  const text = normalizeText((row || []).join(" "));
+  return /\b(TOTAL|TOTAIS|TOTAL GERAL|SUBTOTAL|SOMA|SOMATORIA|RESUMO|VALOR TOTAL|TOTAL DESCONTOS|TOTAL DRIVER|TOTAL DISPATCHER|TOTAL MERCADO LIVRE|QTD TOTAL|QUANTIDADE TOTAL)\b/.test(text);
+}
+
+function identifyTypeByBase(base) {
+  const code = normalizeBase(base);
+  if (code.startsWith("S")) return "SVC";
+  if (code.startsWith("E")) return "XPT";
+  return "";
+}
+
+function parsePreFaturaWorkbook(filePath, fileRecord, metadata) {
+  const workbook = XLSX.readFile(filePath, { cellDates: true });
+  const rows = [];
+  workbook.SheetNames.forEach((sheetName) => {
+    const sheet = workbook.Sheets[sheetName];
+    const matrix = XLSX.utils.sheet_to_json(sheet, { header: 1, raw: true, defval: null });
+    if (!matrix.length) return;
+    const headers = (matrix[0] || []).map((value) => String(value || "").trim());
+    const idx = {
+      base: findHeaderIndex(headers, ["BASE"]),
+      motorista: findHeaderIndex(headers, ["MOTORISTA", "DRIVER"]),
+      placa: findHeaderIndex(headers, ["PLACA"]),
+      tipo: findHeaderIndex(headers, ["DESCONTO PACOTE PERDIDO", "DESCONTO PNR"]),
+      data: findHeaderIndex(headers, ["DATA DA ROTA", "DATA"]),
+      pacote: findHeaderIndex(headers, ["ID DO PACOTE", "ID DE ENVIO", "ID PACOTE"]),
+      rota: findHeaderIndex(headers, ["Nº ROTA", "N° ROTA", "NRO ROTA", "NUMERO ROTA", "ROTA"]),
+      valor: findHeaderIndex(headers, ["VALOR"]),
+      descricao: findHeaderIndex(headers, ["DESCRIÇÃO", "DESCRICAO"]),
+    };
+    for (let index = 1; index < matrix.length; index += 1) {
+      const row = matrix[index];
+      if (!row || row.every((cell) => cell == null || String(cell).trim() === "")) continue;
+      const base = readCell(row, idx.base);
+      if (!base || normalize(base) === "total") continue;
+      const tipoDesc = readCell(row, idx.tipo) || (normalizeText(sheetName).includes("PNR") ? "DESCONTO PNR" : "DESCONTO PACOTE PERDIDO");
+      const abaOrigem = normalizeSheetLabel(sheetName, tipoDesc);
+      const tipo = abaOrigem === "PNR" ? "PNR" : abaOrigem.includes("XPT") ? "XPT" : "SVC";
+      const baseParts = splitBase(base);
+      const driver = formatDriverName(readCell(row, idx.motorista));
+      const rawData = {
+        file_category: PRE_FATURA_FILE_TYPE,
+        arquivo_origem: metadata.original_name,
+        competencia: metadata.competencia,
+        quinzena: metadata.quinzena,
+        aba_origem: abaOrigem,
+        divisao: abaOrigem,
+        tipo_desconto: tipoDesc,
+        tipo_registro: abaOrigem === "PNR" ? "PNR" : "PACOTE PERDIDO",
+        base,
+        cidade_base: baseParts.cidade_base,
+        sigla_base: baseParts.sigla_base,
+        base_normalizada: normalizeBase(base),
+        motorista: driver,
+        placa: readCell(row, idx.placa) || "",
+        descricao: readCell(row, idx.descricao) || "",
+        data_normalizada: parseDateValue(readCell(row, idx.data)),
+        id_pacote: formatId(readCell(row, idx.pacote)),
+        n_rota: formatId(readCell(row, idx.rota)),
+        valor_numerico: parseMoney(readCell(row, idx.valor)),
+        ocorrencias: 1,
+      };
+      rows.push({
+        file_id: fileRecord.id,
+        competencia: metadata.competencia,
+        quinzena: metadata.quinzena,
+        tipo,
+        base,
+        codigo_base: normalizeBase(base),
+        driver,
+        driver_normalizado: normalizeDriverName(driver),
+        placa: rawData.placa,
+        data: rawData.data_normalizada,
+        id_envio: rawData.id_pacote,
+        rota: rawData.n_rota,
+        valor: rawData.valor_numerico,
+        aba_origem: abaOrigem,
+        raw_data: rawData,
+      });
+    }
+  });
+  return rows;
+}
+
+function parseGestaoWorkbook(filePath, fileRecord, metadata) {
+  const workbook = XLSX.readFile(filePath, { cellDates: true });
+  const rows = [];
+  workbook.SheetNames.forEach((sheetName) => {
+    const sheetType = identificarAbaGestao(sheetName);
+    if (!sheetType) return;
+    const sheet = workbook.Sheets[sheetName];
+    const matrix = XLSX.utils.sheet_to_json(sheet, { header: 1, raw: true, defval: null });
+    if (!matrix.length) return;
+    const headerIndex = findPackageHeaderRow(matrix);
+    const headers = (matrix[headerIndex] || []).map((value) => String(value || "").trim());
+    const idx = {
+      base: findHeaderIndex(headers, ["BASE", "SVC", "ESTACAO", "ESTAÇÃO", "UNIDADE"]),
+      motorista: findHeaderIndex(headers, ["MOTORISTA", "DRIVER", "NOME MOTORISTA", "NOME DO MOTORISTA"]),
+      valor: findHeaderIndex(headers, ["VALOR", "VALOR DESCONTO", "DESCONTO"]),
+      data: findHeaderIndex(headers, ["DATA", "DATA DA ROTA"]),
+      rota: findHeaderIndex(headers, ["ROTA", "N ROTA", "Nº ROTA", "NRO ROTA", "NUMERO ROTA", "NÚMERO ROTA"]),
+      id: findHeaderIndex(headers, ["ID CASO", "ID", "ID DO PACOTE", "ID PACOTE", "CASO", "ID DE ENVIO"]),
+      decisao: findHeaderIndex(headers, ["DECISAO", "DECISÃO", "ADM", "RETORNO", "ACAO", "AÇÃO"]),
+      evidencia1: findHeaderIndex(headers, ["EVIDENCIA 1", "EVIDÊNCIA 1", "EVIDENCIA", "EVIDÊNCIA"]),
+      evidencia2: findHeaderIndex(headers, ["EVIDENCIA 2", "EVIDÊNCIA 2"]),
+    };
+    for (let index = headerIndex + 1; index < matrix.length; index += 1) {
+      const row = matrix[index];
+      if (!row || row.every((cell) => cell == null || String(cell).trim() === "") || isPackageTotalRow(row)) continue;
+      const valor = normalizarValorGestao(readCell(row, idx.valor));
+      if (!valor) continue;
+      const base = readCell(row, idx.base);
+      const driver = formatDriverName(readCell(row, idx.motorista));
+      const decisao = readCell(row, idx.decisao);
+      const desconto = classifyPackageDecision(decisao, sheetType);
+      const idEnvio = formatId(readCell(row, idx.id));
+      const rawData = {
+        file_category: GESTAO_FILE_TYPE,
+        arquivo_origem: metadata.original_name,
+        competencia: metadata.competencia,
+        quinzena: metadata.quinzena,
+        aba_origem: "Gestão de Pacotes",
+        divisao: "Gestão de Pacotes",
+        aba_gestao: sheetType,
+        aba_gestao_label: sheetName,
+        tipo_registro: "GESTAO_PACOTES",
+        tipo_desconto: desconto,
+        categoria_final: desconto,
+        base: base || "",
+        base_normalizada: normalizeBase(base),
+        motorista: driver,
+        driver,
+        valor_numerico: valor,
+        data_normalizada: parseDateValue(readCell(row, idx.data)),
+        n_rota: formatId(readCell(row, idx.rota)),
+        id_caso: idEnvio,
+        id_pacote: idEnvio,
+        evidencia_1: readCell(row, idx.evidencia1),
+        evidencia_2: readCell(row, idx.evidencia2),
+        decisao_adm: decisao || "",
+        mes: metadata.mes,
+        ano: metadata.ano,
+        reference_month: metadata.reference_month,
+        reference_year: metadata.reference_year,
+        period_type: metadata.period_type,
+        ocorrencias: 1,
+      };
+      rows.push({
+        file_id: fileRecord.id,
+        competencia: metadata.competencia,
+        quinzena: metadata.quinzena,
+        tipo: identifyTypeByBase(base),
+        desconto,
+        base: base || "",
+        codigo_base: normalizeBase(base),
+        driver,
+        driver_normalizado: normalizeDriverName(driver),
+        data: rawData.data_normalizada,
+        id_envio: idEnvio,
+        rota: rawData.n_rota,
+        valor,
+        decisao_adm: decisao || "",
+        observacao: [rawData.evidencia_1, rawData.evidencia_2].filter(Boolean).join(" | "),
+        aba_origem: sheetType,
+        raw_data: rawData,
+      });
+    }
+  });
+  return rows;
+}
+
+function parseProcessedRows(filePath, category, fileRecord, metadata) {
+  return category.fileType === GESTAO_FILE_TYPE
+    ? parseGestaoWorkbook(filePath, fileRecord, metadata)
+    : parsePreFaturaWorkbook(filePath, fileRecord, metadata);
 }
 
 async function calculateSha256(filePath) {
@@ -504,6 +839,51 @@ async function uploadAndRegisterFile({ supabase, user, filePath, category, stat,
   return data;
 }
 
+function isMissingProcessedTableError(error) {
+  const text = `${error?.code || ""} ${error?.message || ""} ${error?.details || ""}`;
+  return /42P01|PGRST205|does not exist|schema cache|Could not find the table/i.test(text);
+}
+
+async function saveProcessedRowsForFile({ supabase, filePath, category, fileRecord, metadata }) {
+  const tableName = getProcessedTable(category);
+  try {
+    const { error: tableError } = await supabase.from(tableName).select("id", { head: true }).limit(1);
+    if (tableError) throw tableError;
+    const rows = parseProcessedRows(filePath, category, fileRecord, metadata);
+    await supabase.from(tableName).delete().eq("file_id", fileRecord.id);
+    for (let index = 0; index < rows.length; index += PROCESSED_RECORDS_BATCH_SIZE) {
+      const batch = rows.slice(index, index + PROCESSED_RECORDS_BATCH_SIZE);
+      if (!batch.length) continue;
+      const { error } = await supabase.from(tableName).insert(batch);
+      if (error) throw error;
+    }
+
+    const nextMetadata = {
+      ...(fileRecord.metadata || {}),
+      parsed_rows: rows.length,
+      record_count: rows.length,
+      processed_at: new Date().toISOString(),
+      processed_source: "local-sync",
+    };
+    const { error } = await supabase
+      .from("dashboard_files")
+      .update({
+        status: "processed",
+        metadata: nextMetadata,
+        updated_at: new Date().toISOString(),
+      })
+      .eq("id", fileRecord.id);
+    if (error) throw error;
+    log(`Registros processados salvos: ${rows.length} linha${rows.length === 1 ? "" : "s"} em ${tableName}.`);
+  } catch (error) {
+    if (isMissingProcessedTableError(error)) {
+      log(`Tabela processada ainda não existe (${tableName}); arquivo ficará disponível pelo fallback XLSX até aplicar a migração.`);
+      return;
+    }
+    log(`Erro ao salvar registros processados de ${metadata.original_name}: ${error.message || error}`);
+  }
+}
+
 async function syncFile(filePath, eventName = "change") {
   if (!isExcelFile(filePath)) return;
   const category = findCategoryForPath(filePath);
@@ -522,6 +902,13 @@ async function syncFile(filePath, eventName = "change") {
       await ensureRemotePeriodMetadata(syncContext.supabase, duplicated, metadata, category);
       const previousRecords = await findFilesByMetadata(syncContext.supabase, category, metadata);
       await deactivatePreviousRecords(syncContext.supabase, previousRecords, duplicated.id);
+      await saveProcessedRowsForFile({
+        supabase: syncContext.supabase,
+        filePath,
+        category,
+        fileRecord: duplicated,
+        metadata,
+      });
       log(`Ignorado por duplicidade: ${metadata.original_name}`);
       return;
     }
@@ -546,6 +933,13 @@ async function syncFile(filePath, eventName = "change") {
     if (category.fileType === PRE_FATURA_FILE_TYPE) {
       await deactivateOtherActivePreFaturaRecords(syncContext.supabase, newRecord.id);
     }
+    await saveProcessedRowsForFile({
+      supabase: syncContext.supabase,
+      filePath,
+      category,
+      fileRecord: newRecord,
+      metadata,
+    });
   } catch (error) {
     log(`Erro ao sincronizar ${path.basename(filePath)}: ${error.message || error}`);
   }

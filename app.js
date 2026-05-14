@@ -29,6 +29,9 @@ const DEFAULT_PNR_GOAL_LIMIT = DEFAULT_PNR_GOAL_SETTINGS.monthly_goal;
 const SUPABASE_QUERY_TIMEOUT_MS = 25000;
 const STORAGE_DOWNLOAD_TIMEOUT_MS = 45000;
 const XLSX_PROCESS_TIMEOUT_MS = 60000;
+const PROCESSED_RECORDS_BATCH_SIZE = 500;
+const PROCESSED_RECORDS_PAGE_SIZE = 1000;
+let processedRecordsUnavailable = false;
 const SHEET_ORDER = ["SVC PERDIDOS", "XPT PERDIDOS", "PNR"];
 const SHEET_TABS = [PRE_FATURA_VIEW, MONTHLY_BASE_VIEW, PACKAGE_MANAGEMENT_VIEW];
 const SHEET_DISPLAY_LABELS = {
@@ -7460,6 +7463,7 @@ async function updateDuplicateDashboardFileRecord(record, uploadMetadata, previe
 
   if (error) throw error;
   if (shouldActivate) await deactivateOtherPreFaturaRecords(data.id);
+  await saveProcessedRowsForFile(data, previewDataset.rows);
   mergeUploadedDatasetIntoMemory(data, previewDataset);
   return data;
 }
@@ -7637,6 +7641,7 @@ async function uploadDashboardFile(file) {
   if (previewDataset.fileCategory === PRE_FATURA_FILE_CATEGORY) {
     await deactivateOtherPreFaturaRecords(data.id);
   }
+  await saveProcessedRowsForFile(data, previewDataset.rows);
 
   const uploadedPeriod = getFileRecordPeriod(data);
   state.sheet = previewDataset.fileCategory === PACKAGE_MANAGEMENT_FILE_CATEGORY ? PACKAGE_MANAGEMENT_VIEW : PRE_FATURA_VIEW;
@@ -8198,7 +8203,242 @@ async function loadDashboardDataByFilters(options = {}) {
   }
 }
 
+function getProcessedRecordsTable(fileCategory) {
+  return fileCategory === PACKAGE_MANAGEMENT_FILE_CATEGORY ? "gestao_pacotes_records" : "pre_fatura_records";
+}
+
+function getFileCompetencia(fileRecord, row = {}) {
+  return row.competencia || fileRecord?.metadata?.competencia || "";
+}
+
+function getFileQuinzena(fileRecord, row = {}) {
+  return row.quinzena || fileRecord?.metadata?.quinzena || fileRecord?.period_label || fileRecord?.metadata?.period_label || "";
+}
+
+function toDatabaseDate(value) {
+  const parsed = parseDateValue(value);
+  return parsed.iso || null;
+}
+
+function mapPreFaturaRowToProcessedRecord(row, fileRecord) {
+  const division = normalizeSheetLabel(row.aba_origem || row.divisao, row.tipo_desconto || row.tipo_registro);
+  const tipo = getPrefaturaTypeForDivision(division);
+  return {
+    file_id: fileRecord.id,
+    competencia: getFileCompetencia(fileRecord, row),
+    quinzena: getFileQuinzena(fileRecord, row),
+    tipo: tipo === "Todos" ? "" : tipo,
+    base: row.base || "",
+    codigo_base: normalizeBase(row.base_normalizada || row.base || ""),
+    driver: formatDriverName(row.motorista || row.driver || "", ""),
+    driver_normalizado: normalizeDriverName(row.motorista || row.driver || ""),
+    placa: row.placa || "",
+    data: toDatabaseDate(row.data_normalizada || row.data_sort),
+    id_envio: row.id_pacote || row.id_envio || "",
+    rota: row.n_rota || row.rota || "",
+    valor: Number(row.valor_numerico || 0),
+    aba_origem: division,
+    raw_data: {
+      ...row,
+      file_category: PRE_FATURA_FILE_CATEGORY,
+      arquivo_origem: row.arquivo_origem || fileRecord.file_name,
+      competencia: getFileCompetencia(fileRecord, row),
+      quinzena: getFileQuinzena(fileRecord, row),
+    },
+  };
+}
+
+function mapPackageRowToProcessedRecord(row, fileRecord) {
+  const category = row.categoria_final || classifyPackageDecision(row.decisao_adm, row.aba_gestao) || "INDEFINIDO";
+  return {
+    file_id: fileRecord.id,
+    competencia: getFileCompetencia(fileRecord, row),
+    quinzena: getFileQuinzena(fileRecord, row),
+    tipo: getPackageOperationalType(row),
+    desconto: category,
+    base: row.base || "",
+    codigo_base: normalizeBase(row.base_normalizada || row.base || ""),
+    driver: formatDriverName(row.motorista || row.driver || "", ""),
+    driver_normalizado: normalizeDriverName(row.motorista || row.driver || ""),
+    data: toDatabaseDate(row.data_normalizada || row.data_sort),
+    id_envio: row.id_pacote || row.id_caso || row.id_envio || "",
+    rota: row.n_rota || row.rota || "",
+    valor: normalizarValorGestao(row.valor_numerico),
+    decisao_adm: row.decisao_adm || "",
+    observacao: row.evidencia_1 || row.evidencia_2 || row.observacao || "",
+    aba_origem: row.aba_gestao || row.aba_gestao_label || "",
+    raw_data: {
+      ...row,
+      file_category: PACKAGE_MANAGEMENT_FILE_CATEGORY,
+      arquivo_origem: row.arquivo_origem || fileRecord.file_name,
+      competencia: getFileCompetencia(fileRecord, row),
+      quinzena: getFileQuinzena(fileRecord, row),
+    },
+  };
+}
+
+function mapRowToProcessedRecord(row, fileRecord, fileCategory) {
+  return fileCategory === PACKAGE_MANAGEMENT_FILE_CATEGORY
+    ? mapPackageRowToProcessedRecord(row, fileRecord)
+    : mapPreFaturaRowToProcessedRecord(row, fileRecord);
+}
+
+function mapProcessedPreFaturaRecord(record, fileRecord) {
+  const raw = record.raw_data || {};
+  return normalizeStoredRow({
+    ...raw,
+    file_category: PRE_FATURA_FILE_CATEGORY,
+    arquivo_origem: raw.arquivo_origem || fileRecord.file_name,
+    competencia: record.competencia || raw.competencia || fileRecord.metadata?.competencia || "",
+    quinzena: record.quinzena || raw.quinzena || fileRecord.metadata?.quinzena || "",
+    aba_origem: record.aba_origem || raw.aba_origem,
+    divisao: record.aba_origem || raw.divisao,
+    tipo_registro: record.aba_origem === "PNR" || record.tipo === "PNR" ? "PNR" : raw.tipo_registro || "PACOTE PERDIDO",
+    base: record.base || raw.base,
+    base_normalizada: record.codigo_base || raw.base_normalizada,
+    motorista: record.driver || raw.motorista,
+    driver: record.driver || raw.driver,
+    placa: record.placa || raw.placa,
+    data_normalizada: record.data || raw.data_normalizada,
+    id_pacote: record.id_envio || raw.id_pacote,
+    n_rota: record.rota || raw.n_rota,
+    valor_numerico: Number(record.valor || raw.valor_numerico || 0),
+  });
+}
+
+function mapProcessedPackageRecord(record, fileRecord) {
+  const raw = record.raw_data || {};
+  return normalizePackageManagementStoredRow({
+    ...raw,
+    file_category: PACKAGE_MANAGEMENT_FILE_CATEGORY,
+    arquivo_origem: raw.arquivo_origem || fileRecord.file_name,
+    competencia: record.competencia || raw.competencia || fileRecord.metadata?.competencia || "",
+    quinzena: record.quinzena || raw.quinzena || fileRecord.metadata?.quinzena || "",
+    tipo: record.tipo || raw.tipo,
+    categoria_final: record.desconto || raw.categoria_final,
+    tipo_desconto: PACKAGE_CATEGORY_LABELS[record.desconto] || raw.tipo_desconto,
+    base: record.base || raw.base,
+    base_normalizada: record.codigo_base || raw.base_normalizada,
+    motorista: record.driver || raw.motorista,
+    driver: record.driver || raw.driver,
+    data_normalizada: record.data || raw.data_normalizada,
+    id_pacote: record.id_envio || raw.id_pacote,
+    id_caso: record.id_envio || raw.id_caso,
+    n_rota: record.rota || raw.n_rota,
+    valor_numerico: normalizarValorGestao(record.valor ?? raw.valor_numerico),
+    decisao_adm: record.decisao_adm || raw.decisao_adm,
+    observacao: record.observacao || raw.observacao,
+    aba_gestao: record.aba_origem || raw.aba_gestao,
+  });
+}
+
+function mapProcessedRecordToRow(record, fileRecord, fileCategory) {
+  return fileCategory === PACKAGE_MANAGEMENT_FILE_CATEGORY
+    ? mapProcessedPackageRecord(record, fileRecord)
+    : mapProcessedPreFaturaRecord(record, fileRecord);
+}
+
+async function fetchAllProcessedRows(tableName, fileId) {
+  const rows = [];
+  for (let from = 0; ; from += PROCESSED_RECORDS_PAGE_SIZE) {
+    const to = from + PROCESSED_RECORDS_PAGE_SIZE - 1;
+    const { data, error } = await window.supabaseClient
+      .from(tableName)
+      .select("*")
+      .eq("file_id", fileId)
+      .range(from, to);
+
+    if (error) throw error;
+    const page = Array.isArray(data) ? data : [];
+    rows.push(...page);
+    if (page.length < PROCESSED_RECORDS_PAGE_SIZE) break;
+  }
+  return rows;
+}
+
+function isMissingProcessedRecordsTableError(error) {
+  const text = `${error?.code || ""} ${error?.message || ""} ${error?.details || ""}`;
+  return /42P01|PGRST205|does not exist|schema cache|Could not find the table/i.test(text);
+}
+
+async function loadProcessedDatasetForFile(fileRecord) {
+  if (processedRecordsUnavailable || !fileRecord?.id || !window.supabaseClient) return null;
+  const fileCategory = getFileRecordCategory(fileRecord);
+  const tableName = getProcessedRecordsTable(fileCategory);
+  try {
+    const processedRows = await fetchAllProcessedRows(tableName, fileRecord.id);
+    if (!processedRows.length) return null;
+    const rows = processedRows
+      .map((record) => mapProcessedRecordToRow(record, fileRecord, fileCategory))
+      .filter(Boolean);
+    if (!rows.length) return null;
+    return normalizeDatasetRecord({
+      id: fileRecord.id,
+      fileName: fileRecord.file_name,
+      label: getDashboardFileDisplayName(fileRecord),
+      source: "supabase",
+      importedAt: fileRecord.created_at,
+      remoteRecord: fileRecord,
+      storagePath: fileRecord.storage_path,
+      fileCategory,
+      rows,
+    });
+  } catch (error) {
+    if (isMissingProcessedRecordsTableError(error)) {
+      processedRecordsUnavailable = true;
+      console.warn("[PROCESSED RECORDS] Tabelas processadas indisponíveis; usando XLSX como fallback até aplicar a migração.", error);
+      return null;
+    }
+    throw error;
+  }
+}
+
+async function saveProcessedRowsForFile(fileRecord, rows) {
+  if (processedRecordsUnavailable || !canEdit() || !fileRecord?.id || !window.supabaseClient || !Array.isArray(rows)) return false;
+  const fileCategory = getFileRecordCategory(fileRecord);
+  const tableName = getProcessedRecordsTable(fileCategory);
+  const payload = rows
+    .map((row) => mapRowToProcessedRecord(row, fileRecord, fileCategory))
+    .filter(Boolean);
+  try {
+    await window.supabaseClient.from(tableName).delete().eq("file_id", fileRecord.id);
+    for (let index = 0; index < payload.length; index += PROCESSED_RECORDS_BATCH_SIZE) {
+      const batch = payload.slice(index, index + PROCESSED_RECORDS_BATCH_SIZE);
+      const { error } = await window.supabaseClient.from(tableName).insert(batch);
+      if (error) throw error;
+    }
+    const metadata = {
+      ...(fileRecord.metadata || {}),
+      processed_at: new Date().toISOString(),
+      processed_source: "normalized_records",
+      record_count: payload.length,
+      parsed_rows: payload.length,
+    };
+    await window.supabaseClient
+      .from("dashboard_files")
+      .update({
+        status: "processed",
+        metadata,
+        updated_at: new Date().toISOString(),
+      })
+      .eq("id", fileRecord.id);
+    Object.assign(fileRecord, { status: "processed", metadata });
+    return true;
+  } catch (error) {
+    if (isMissingProcessedRecordsTableError(error)) {
+      processedRecordsUnavailable = true;
+      console.warn("[PROCESSED RECORDS] Não foi possível salvar linhas processadas; aplique a migração Supabase.", error);
+      return false;
+    }
+    console.error("[PROCESSED RECORDS] Falha ao salvar linhas processadas:", error);
+    return false;
+  }
+}
+
 async function loadRowsFromStorage(fileRecord) {
+  const processedDataset = await loadProcessedDatasetForFile(fileRecord);
+  if (processedDataset?.rows?.length) return processedDataset;
+
   const { data: blob, error } = await withTimeout(
     window.supabaseClient.storage
       .from("dashboard-files")
@@ -8236,6 +8476,7 @@ async function loadRowsFromStorage(fileRecord) {
   }
 
   await updateDashboardFileParsedRows(fileRecord, parsedRows, workbookStats);
+  await saveProcessedRowsForFile(fileRecord, normalized.rows);
   return normalized;
 }
 

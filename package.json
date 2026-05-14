@@ -4,12 +4,14 @@
   "private": true,
   "description": "Painel de Inteligência e sincronizador local de arquivos do dashboard.",
   "scripts": {
+    "db:migrate:processed-records": "node scripts/apply-processed-records-migration.mjs",
     "sync:dashboard": "node scripts/dashboard-local-sync.mjs",
     "sync:dashboard:once": "node scripts/dashboard-local-sync.mjs --once"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.87.1",
     "chokidar": "^4.0.3",
-    "dotenv": "^17.2.3"
+    "dotenv": "^17.2.3",
+    "postgres": "^3.4.9"
   }
 }

@@ -119,8 +119,31 @@ npm install
 - `DASHBOARD_BUCKET=dashboard-files`
 - `PRE_FATURA_FOLDER`
 - `GESTAO_FOLDER`
+- `SUPABASE_DB_URL` ou `DATABASE_URL` apenas para aplicar migracoes SQL pelo script local
 
 Nao commitar o `.env`. Ele fica ignorado pelo Git.
+
+### Registros processados
+
+O painel agora suporta leitura por tabelas processadas para evitar baixar e reprocessar XLSX a cada abertura. Aplique a migracao uma vez com uma URL Postgres do Supabase:
+
+```powershell
+npm run db:migrate:processed-records
+```
+
+Depois rode uma sincronizacao pontual para preencher as tabelas a partir dos arquivos locais:
+
+```powershell
+npm run sync:dashboard:once
+```
+
+Tabelas criadas:
+
+- `pre_fatura_records`
+- `gestao_pacotes_records`
+- `dashboard_metrics_cache`
+
+Se as tabelas ainda nao existirem, o dashboard continua funcionando pelo fallback antigo de XLSX, mas o ganho de desempenho so entra depois da migracao e do backfill.
 
 ### Execucao
 
@@ -146,6 +169,7 @@ npm run sync:dashboard:once
 - Arquivos da pasta de Gestao de Pacotes recebem `file_type = GESTAO_PACOTES` e sao enviados para `gestao-pacotes/`.
 - Extrai mes, ano e quinzena pelo nome do arquivo.
 - Salva metadados como `file_hash`, `original_name`, `display_name`, `competencia`, `quinzena`, `size_bytes`, `last_modified_local` e `synced_at`.
+- Quando as tabelas processadas existem, processa o Excel uma vez e grava os registros normalizados em `pre_fatura_records` ou `gestao_pacotes_records`.
 - Se uma nova versao do mesmo arquivo for detectada, registros anteriores equivalentes sao marcados como inativos e uma nova versao e registrada.
 - Exclusao local nao remove arquivos do Supabase por padrao. Para ativar, defina `SYNC_DELETE=true` no `.env`.
 - Com `SYNC_DELETE=true`, ao apagar um Excel da pasta local, o sincronizador remove do Storage e da tabela `dashboard_files` os registros correspondentes ao mesmo tipo, nome original, competencia e quinzena.
@@ -159,6 +183,7 @@ npm run sync:dashboard:once
 - `app.js`: logica do dashboard, filtros, rankings, graficos, upload, relatorio e permissoes.
 - `styles.css`: estilos, tema claro/escuro e responsividade.
 - `scripts/dashboard-local-sync.mjs`: sincronizador local das pastas Windows com Supabase Storage e `dashboard_files`.
+- `scripts/apply-processed-records-migration.mjs`: aplica a migracao das tabelas de registros processados quando `SUPABASE_DB_URL` ou `DATABASE_URL` estiver configurada.
 - `assets/vendor/xlsx.full.min.js`: biblioteca usada para leitura dos arquivos Excel no navegador.
 
 ## Relatorios
