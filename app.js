@@ -6029,6 +6029,8 @@ function buildPackageManagementExportSheetRows(rows) {
   return rows.map((row) => {
     const type = row.tipo_operacional || getPackageOperationalType(row) || "";
     const category = PACKAGE_CATEGORY_LABELS[row.categoria_final] || row.categoria_label || row.tipo_desconto || "";
+    const idEnvio = formatId(row.id_pacote || row.id_caso || row.id_envio || "");
+    const numericIdEnvio = idEnvio && /^\d+$/.test(idEnvio) ? Number(idEnvio) : idEnvio;
     return {
       "Competência": row.competencia || "—",
       "Quinzena": row.quinzena || "—",
@@ -6037,7 +6039,7 @@ function buildPackageManagementExportSheetRows(rows) {
       "Base": row.base || row.base_normalizada || "—",
       "Valor": normalizarValorGestao(row.valor_numerico),
       "Data": formatPackageExportDate(row.data_normalizada || row.data_sort || row.data) || "—",
-      "ID de Envio": formatId(row.id_pacote || row.id_caso || row.id_envio || ""),
+      "ID de Envio": numericIdEnvio,
       "Decisão ADM": getPackageDecisionExportText(row) || "—",
     };
   });
@@ -6113,8 +6115,8 @@ async function addPackageExportLogo(worksheet, workbook) {
       extension,
     });
     worksheet.addImage(logoImageId, {
-      tl: { col: 0.2, row: 0.55 },
-      ext: { width: 58, height: 58 },
+      tl: { col: 1, row: 0.46 },
+      ext: { width: 95.44, height: 95.44 },
     });
   } catch (logoError) {
     console.warn("[Excel] Não foi possível inserir a logo. Exportação continuará sem logo.", logoError);
@@ -6146,14 +6148,15 @@ function configurePackageExportHeader(worksheet, rows, exportRows) {
   worksheet.getCell("B3").value = "Gestão de Pacotes — Conferência de Registros";
   worksheet.getCell("B3").font = { name: "Arial", size: 12, bold: true, color: { argb: white } };
 
-  worksheet.getCell("G1").value = "Setor: LOSS";
-  worksheet.getCell("G2").value = `Período: ${getPackageExportPeriodDisplay(rows)}`;
-  worksheet.getCell("G3").value = `Tipo: ${summary.typeLabel}`;
-  worksheet.getCell("G4").value = `Gerado em: ${formatCurrentDateTime()}`;
-  ["G1", "G2", "G3", "G4"].forEach((address) => {
+  worksheet.getCell("I1").value = "Setor: LOSS";
+  worksheet.getCell("I2").value = `Período: ${getPackageExportPeriodDisplay(rows)}`;
+  worksheet.getCell("I3").value = `Tipo: ${summary.typeLabel}`;
+  worksheet.getCell("I4").value = `Gerado em: ${formatCurrentDateTime()}`;
+  ["G1", "G2", "G3", "G4", "H1", "H2", "H3", "H4", "I1", "I2", "I3", "I4"].forEach((address) => {
     worksheet.getCell(address).font = { name: "Arial", size: 10, bold: address === "G1", color: { argb: white } };
     worksheet.getCell(address).alignment = { horizontal: "right", vertical: "middle" };
   });
+  worksheet.getCell("I1").font = { name: "Arial", size: 10, bold: true, color: { argb: white } };
 
   const summaryHeaders = ["Resumo do recorte", "Registros exportados", "Competências no recorte", "Tipos presentes", "Filtro de período", "Filtro de tipo"];
   const summaryValues = ["", summary.totalRows, summary.competenciesCount, summary.presentTypes, summary.periodLabel, summary.typeLabel];
@@ -6197,7 +6200,23 @@ function getDiscountFillColor(discount) {
 function addPackageExportTable(worksheet, exportRows) {
   const headerRowNumber = 8;
   const headers = ["Competência", "Quinzena", "Tipo", "Desconto", "Base", "Valor", "Data", "ID de Envio", "Decisão ADM"];
-  worksheet.getRow(headerRowNumber).values = headers;
+  worksheet.addTable({
+    name: "Tabela1",
+    displayName: "Tabela1",
+    ref: `A${headerRowNumber}`,
+    headerRow: true,
+    totalsRow: false,
+    style: {
+      theme: "TableStyleMedium2",
+      showFirstColumn: true,
+      showLastColumn: true,
+      showRowStripes: false,
+      showColumnStripes: false,
+    },
+    columns: headers.map((name) => ({ name })),
+    rows: exportRows.map((item) => headers.map((header) => item[header])),
+  });
+
   worksheet.getRow(headerRowNumber).height = 14.4;
   worksheet.getRow(headerRowNumber).eachCell((cell) => {
     cell.font = { name: "Arial", size: 10, bold: true, italic: true, color: { argb: "102A43" } };
@@ -6236,9 +6255,10 @@ function addPackageExportTable(worksheet, exportRows) {
         right: { style: "thin", color: { argb: "E0E7EF" } },
       };
       if (colNumber === 6) cell.numFmt = '_-"R$" * #,##0.00_-;-"R$" * #,##0.00_-;_-"R$" * "-"??_-;_-@_-';
-      if (colNumber === 8) cell.numFmt = "@";
     });
-    row.getCell(8).value = String(item["ID de Envio"] || "");
+    const numericId = Number(item["ID de Envio"]);
+    row.getCell(8).value = Number.isFinite(numericId) ? numericId : item["ID de Envio"] || "";
+    row.getCell(8).numFmt = "0";
   });
 
   worksheet.views = [{ state: "frozen", ySplit: headerRowNumber, topLeftCell: "A9", zoomScale: 85, zoomScaleNormal: 85, activeCell: "C10" }];
