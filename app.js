@@ -6115,7 +6115,7 @@ async function addPackageExportLogo(worksheet, workbook) {
       extension,
     });
     worksheet.addImage(logoImageId, {
-      tl: { col: 1, row: 0.46 },
+      tl: { col: 0.12, row: 0.46 },
       ext: { width: 95.44, height: 95.44 },
     });
   } catch (logoError) {
@@ -6213,7 +6213,7 @@ function addPackageExportTable(worksheet, exportRows) {
       showRowStripes: false,
       showColumnStripes: false,
     },
-    columns: headers.map((name) => ({ name })),
+    columns: headers.map((name) => ({ name, filterButton: true })),
     rows: exportRows.map((item) => headers.map((header) => item[header])),
   });
 
