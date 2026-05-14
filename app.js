@@ -32,6 +32,7 @@ const XLSX_PROCESS_TIMEOUT_MS = 60000;
 const PROCESSED_RECORDS_BATCH_SIZE = 500;
 const PROCESSED_RECORDS_PAGE_SIZE = 1000;
 let processedRecordsUnavailable = false;
+let isExportingPackageExcel = false;
 const SHEET_ORDER = ["SVC PERDIDOS", "XPT PERDIDOS", "PNR"];
 const SHEET_TABS = [PRE_FATURA_VIEW, MONTHLY_BASE_VIEW, PACKAGE_MANAGEMENT_VIEW];
 const SHEET_DISPLAY_LABELS = {
@@ -132,6 +133,7 @@ let allRows = activeDataset.rows.slice();
 let packageManagementRows = [];
 let fileMeta = activeDataset;
 let workbookEnginePromise = null;
+let excelExportEnginePromise = null;
 let currentUser = null;
 let currentProfile = null;
 let knownUsers = [];
@@ -368,6 +370,7 @@ function cacheDom() {
   el.tableHead = document.querySelector("table thead");
   el.tableTitle = document.querySelector(".table-panel__header h2");
   el.tableDescription = document.querySelector(".table-panel__header p");
+  el.tableActions = document.querySelector(".table-actions");
   el.tableRange = document.getElementById("table-range");
   el.pageIndicator = document.getElementById("page-indicator");
   el.prevPage = document.getElementById("prev-page");
@@ -727,6 +730,12 @@ function bindEvents() {
   if (el.sortLow) {
     el.sortLow.addEventListener("click", () => setValueSort("asc"));
   }
+  document.addEventListener("click", async (event) => {
+    const button = event.target.closest("[data-package-export-excel]");
+    if (!button) return;
+    event.preventDefault();
+    await exportPackageManagementExcel(button);
+  });
 
   el.pageSize.addEventListener("change", (event) => {
     state.pageSize = Number(event.target.value) || 15;
@@ -3035,6 +3044,7 @@ function getPackageManagementRowsForView() {
 }
 
 function restorePrefaturaTableHeader() {
+  setPackageExportButtonVisible(false);
   if (el.tableTitle) el.tableTitle.textContent = "Detalhamento dos registros";
   if (el.tableDescription) el.tableDescription.innerHTML = `<span id="result-count">0</span> registros visíveis após os filtros`;
   el.resultCount = document.getElementById("result-count") || el.resultCount;
@@ -3053,6 +3063,37 @@ function restorePrefaturaTableHeader() {
       </tr>
     `;
   }
+}
+
+function setPackageExportButtonVisible(visible) {
+  if (!el.tableActions) return;
+  const existing = el.tableActions.querySelector("[data-package-export-excel]");
+  if (!visible) {
+    if (existing) existing.remove();
+    return;
+  }
+  if (existing) return;
+  el.tableActions.insertAdjacentHTML(
+    "afterbegin",
+    `
+      <button class="secondary-button secondary-button--icon table-export-button" type="button" data-package-export-excel title="Baixar Excel" aria-label="Baixar Excel">
+        <svg viewBox="0 0 24 24" aria-hidden="true">
+          <path d="M12 3v11" fill="none" stroke="currentColor" stroke-linecap="round" stroke-width="2"></path>
+          <path d="m7 10 5 5 5-5" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2"></path>
+          <path d="M5 19h14" fill="none" stroke="currentColor" stroke-linecap="round" stroke-width="2"></path>
+        </svg>
+      </button>
+    `
+  );
+}
+
+function syncPackageExportButtonState(totalRows = 0) {
+  const button = el.tableActions?.querySelector("[data-package-export-excel]");
+  if (!button) return;
+  button.disabled = isExportingPackageExcel || Number(totalRows) <= 0;
+  button.setAttribute("aria-busy", isExportingPackageExcel ? "true" : "false");
+  button.title = Number(totalRows) > 0 ? "Baixar Excel" : "Nenhum registro para exportar";
+  button.setAttribute("aria-label", button.title);
 }
 
 function renderKpis(summary) {
@@ -5887,6 +5928,7 @@ function renderTable(rows, summary) {
 }
 
 function renderPackageManagementTableHeader() {
+  setPackageExportButtonVisible(true);
   if (el.tableTitle) el.tableTitle.textContent = "Conferência da Gestão de Pacotes";
   if (el.tableDescription) el.tableDescription.innerHTML = `<span id="result-count">0</span> registros processados no recorte`;
   el.resultCount = document.getElementById("result-count") || el.resultCount;
@@ -5914,6 +5956,350 @@ function getPackageTypeBadgeClass(type) {
   return "badge--sheet";
 }
 
+function getPackageManagementExportRows() {
+  return sortRows(getPackageManagementRowsForView()).filter(isPackageManagementDetailRow);
+}
+
+function getPackageDecisionExportText(row) {
+  const display = getPackageDecisionDisplay(row);
+  const parts = [display.primary, display.note].filter((part) => part && part !== "—");
+  return parts.join(" — ");
+}
+
+function formatPackageExportDate(value) {
+  const formatted = formatDate(value);
+  return formatted === "—" ? "" : formatted;
+}
+
+function sanitizeExcelFileName(value) {
+  return String(value || "Arquivo")
+    .replace(/[<>:"/\\|?*\u0000-\u001F]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function getYearLabelForPackageExport(selectedMonths, rows) {
+  const years = new Set();
+  (Array.isArray(selectedMonths) ? selectedMonths : []).forEach((key) => {
+    const year = String(key || "").slice(0, 4);
+    if (/^\d{4}$/.test(year)) years.add(year);
+  });
+  if (!years.size) {
+    (Array.isArray(rows) ? rows : []).forEach((row) => {
+      const key = getPackageManagementMonthKey(row);
+      const year = String(key || "").slice(0, 4);
+      if (/^\d{4}$/.test(year)) years.add(year);
+    });
+  }
+  const sorted = Array.from(years).sort();
+  return sorted.length ? sorted.join("-") : String(new Date().getFullYear());
+}
+
+function getPackageExportScopeLabel(rows) {
+  const options = getAvailablePackageMonthOptions();
+  const selectedMonths = getPackageMonthSelectionValues();
+  const allMonthsSelected = !options.length || selectedMonths.length === options.length;
+  const yearLabel = getYearLabelForPackageExport(selectedMonths, rows);
+
+  if (allMonthsSelected) return `Anual ${yearLabel}`;
+  if (selectedMonths.length === 1) {
+    const [year, month] = String(selectedMonths[0] || "").split("-");
+    const monthIndex = Number(month) - 1;
+    const monthName = MONTHS[monthIndex] ? capitalize(MONTHS[monthIndex]) : "Recorte Mês";
+    return `${monthName} ${year || yearLabel}`;
+  }
+  return `${selectedMonths.length} Meses ${yearLabel}`;
+}
+
+function getPackageExportPeriodDisplay(rows) {
+  const scopeLabel = getPackageExportScopeLabel(rows);
+  const periodLabel = getPeriodModeLabel(state.packagePeriod || "month");
+  return `${scopeLabel.replace(/^Anual\s+/, "Ano ")} · ${periodLabel}`;
+}
+
+function buildPackageManagementExcelFileName(rows) {
+  const scopeLabel = getPackageExportScopeLabel(rows);
+  const periodLabel = formatReportFilePeriodLabel(state.packagePeriod || "month");
+  const selectedTypes = getPackageTypeSelectionValues(state.packageTipo);
+  const typeLabel = selectedTypes.length === MAIN_TYPE_OPTIONS.length ? "Todos" : selectedTypes.join(" ");
+  return `${sanitizeExcelFileName(`Conferência Gestão de Pacotes ${scopeLabel} ${periodLabel} ${typeLabel}`)}.xlsx`;
+}
+
+function buildPackageManagementExportSheetRows(rows) {
+  return rows.map((row) => {
+    const type = row.tipo_operacional || getPackageOperationalType(row) || "";
+    const category = PACKAGE_CATEGORY_LABELS[row.categoria_final] || row.categoria_label || row.tipo_desconto || "";
+    return {
+      "Competência": row.competencia || "—",
+      "Quinzena": row.quinzena || "—",
+      "Tipo": type || "—",
+      "Desconto": category || "—",
+      "Base": row.base || row.base_normalizada || "—",
+      "Valor": normalizarValorGestao(row.valor_numerico),
+      "Data": formatPackageExportDate(row.data_normalizada || row.data_sort || row.data) || "—",
+      "ID de Envio": formatId(row.id_pacote || row.id_caso || row.id_envio || ""),
+      "Decisão ADM": getPackageDecisionExportText(row) || "—",
+    };
+  });
+}
+
+async function loadExcelExportEngine() {
+  if (window.ExcelJS && typeof window.ExcelJS.Workbook === "function") return window.ExcelJS;
+
+  if (!excelExportEnginePromise) {
+    excelExportEnginePromise = new Promise((resolve, reject) => {
+      const script = document.createElement("script");
+      script.src = new URL("./assets/vendor/exceljs.min.js", document.baseURI).href;
+      script.async = true;
+      script.onload = () => {
+        if (window.ExcelJS && typeof window.ExcelJS.Workbook === "function") resolve(window.ExcelJS);
+        else reject(new Error("ExcelJS carregou, mas a API Workbook não ficou disponível."));
+      };
+      script.onerror = () => reject(new Error("Failed to load exceljs.min.js"));
+      document.head.appendChild(script);
+    });
+  }
+
+  try {
+    return await excelExportEnginePromise;
+  } finally {
+    excelExportEnginePromise = null;
+  }
+}
+
+function getPackageExportTypeLabel() {
+  const selectedTypes = getPackageTypeSelectionValues(state.packageTipo);
+  return selectedTypes.length === MAIN_TYPE_OPTIONS.length ? "Todos" : selectedTypes.join(" + ");
+}
+
+function getPackageExportSummary(rows, exportRows) {
+  const competencies = new Set(rows.map((row) => row.competencia).filter(Boolean));
+  const presentTypes = Array.from(new Set(exportRows.map((row) => row.Tipo).filter((type) => type && type !== "—"))).sort();
+  return {
+    totalRows: exportRows.length,
+    competenciesCount: competencies.size,
+    presentTypes: presentTypes.length ? presentTypes.join(", ") : "—",
+    periodLabel: getPeriodModeLabel(state.packagePeriod || "month"),
+    typeLabel: getPackageExportTypeLabel(),
+  };
+}
+
+function applyExcelCellStyle(cell, style) {
+  Object.assign(cell, style);
+}
+
+function styleExcelRange(worksheet, range, style) {
+  const [start, end] = range.split(":");
+  const startCell = worksheet.getCell(start);
+  const endCell = worksheet.getCell(end);
+  for (let row = startCell.row; row <= endCell.row; row += 1) {
+    for (let col = startCell.col; col <= endCell.col; col += 1) {
+      applyExcelCellStyle(worksheet.getCell(row, col), style);
+    }
+  }
+}
+
+function configurePackageExportHeader(worksheet, rows, exportRows) {
+  const darkBlue = "0B1F33";
+  const aqua = "19D3C5";
+  const white = "FFFFFF";
+  const mutedBlue = "E8F1F8";
+  const textDark = "1F2A37";
+  const borderColor = "D8E3ED";
+  const summary = getPackageExportSummary(rows, exportRows);
+
+  styleExcelRange(worksheet, "A1:I5", {
+    fill: { type: "pattern", pattern: "solid", fgColor: { argb: darkBlue } },
+    font: { name: "Arial", color: { argb: white } },
+    alignment: { vertical: "middle" },
+  });
+  worksheet.getRow(1).height = 21;
+  worksheet.getRow(2).height = 21;
+  worksheet.getRow(3).height = 15.6;
+  worksheet.getRow(4).height = 14.4;
+  worksheet.getRow(5).height = 14.4;
+
+  worksheet.getCell("B2").value = "Painel de Inteligência Operacional";
+  worksheet.getCell("B2").font = { name: "Arial", size: 16, bold: true, color: { argb: white } };
+  worksheet.getCell("B3").value = "Gestão de Pacotes — Conferência de Registros";
+  worksheet.getCell("B3").font = { name: "Arial", size: 12, bold: true, color: { argb: white } };
+
+  worksheet.getCell("G1").value = "Setor: LOSS";
+  worksheet.getCell("G2").value = `Período: ${getPackageExportPeriodDisplay(rows)}`;
+  worksheet.getCell("G3").value = `Tipo: ${summary.typeLabel}`;
+  worksheet.getCell("G4").value = `Gerado em: ${formatCurrentDateTime()}`;
+  ["G1", "G2", "G3", "G4"].forEach((address) => {
+    worksheet.getCell(address).font = { name: "Arial", size: 10, bold: address === "G1", color: { argb: white } };
+    worksheet.getCell(address).alignment = { horizontal: "right", vertical: "middle" };
+  });
+
+  const summaryHeaders = ["Resumo do recorte", "Registros exportados", "Competências no recorte", "Tipos presentes", "Filtro de período", "Filtro de tipo"];
+  const summaryValues = ["", summary.totalRows, summary.competenciesCount, summary.presentTypes, summary.periodLabel, summary.typeLabel];
+  worksheet.getRow(6).values = summaryHeaders;
+  worksheet.getRow(7).values = summaryValues;
+  worksheet.getRow(6).height = 15.6;
+  worksheet.getRow(7).height = 14.4;
+  styleExcelRange(worksheet, "A6:I6", {
+    fill: { type: "pattern", pattern: "solid", fgColor: { argb: aqua } },
+    font: { name: "Arial", size: 12, italic: true, color: { argb: white } },
+    alignment: { horizontal: "center", vertical: "middle" },
+    border: {
+      top: { style: "thin", color: { argb: borderColor } },
+      left: { style: "thin", color: { argb: borderColor } },
+      bottom: { style: "thin", color: { argb: borderColor } },
+      right: { style: "thin", color: { argb: borderColor } },
+    },
+  });
+  styleExcelRange(worksheet, "A7:I7", {
+    fill: { type: "pattern", pattern: "solid", fgColor: { argb: mutedBlue } },
+    font: { name: "Arial", size: 11, bold: true, color: { argb: textDark } },
+    alignment: { vertical: "middle" },
+    border: {
+      top: { style: "thin", color: { argb: borderColor } },
+      left: { style: "thin", color: { argb: borderColor } },
+      bottom: { style: "thin", color: { argb: borderColor } },
+      right: { style: "thin", color: { argb: borderColor } },
+    },
+  });
+}
+
+function getDiscountFillColor(discount) {
+  const normalized = normalizeText(discount);
+  if (normalized === "ALC") return "EEF2F6";
+  if (normalized === "DRIVER") return "EAF4FF";
+  if (normalized === "DISPATCHER") return "FFF1E2";
+  if (normalized === "MERCADO LIVRE") return "EAF8EF";
+  return "FFFFFF";
+}
+
+function addPackageExportTable(worksheet, exportRows) {
+  const headerRowNumber = 8;
+  const headers = ["Competência", "Quinzena", "Tipo", "Desconto", "Base", "Valor", "Data", "ID de Envio", "Decisão ADM"];
+  worksheet.getRow(headerRowNumber).values = headers;
+  worksheet.getRow(headerRowNumber).height = 14.4;
+  worksheet.getRow(headerRowNumber).eachCell((cell) => {
+    cell.font = { name: "Arial", size: 10, bold: true, italic: true, color: { argb: "102A43" } };
+    cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "DCEAF5" } };
+    cell.alignment = { vertical: "middle", horizontal: "left" };
+    cell.border = {
+      top: { style: "thin", color: { argb: "B9CAD8" } },
+      left: { style: "thin", color: { argb: "B9CAD8" } },
+      bottom: { style: "thin", color: { argb: "B9CAD8" } },
+      right: { style: "thin", color: { argb: "B9CAD8" } },
+    };
+  });
+
+  exportRows.forEach((item, index) => {
+    const rowNumber = headerRowNumber + 1 + index;
+    const row = worksheet.getRow(rowNumber);
+    row.values = headers.map((header) => item[header]);
+    row.height = 22.05;
+    row.eachCell((cell, colNumber) => {
+      cell.font = {
+        name: "Arial",
+        size: 10,
+        bold: colNumber === 4 || colNumber === 6,
+        color: { argb: colNumber === 6 ? "FF0000" : "1F2A37" },
+      };
+      cell.alignment = { vertical: "middle", horizontal: colNumber === 6 ? "right" : "left", wrapText: colNumber === 9 };
+      cell.fill = {
+        type: "pattern",
+        pattern: "solid",
+        fgColor: { argb: colNumber === 4 ? getDiscountFillColor(item.Desconto) : index % 2 === 0 ? "FFFFFF" : "F7FAFC" },
+      };
+      cell.border = {
+        top: { style: "thin", color: { argb: "E0E7EF" } },
+        left: { style: "thin", color: { argb: "E0E7EF" } },
+        bottom: { style: "thin", color: { argb: "E0E7EF" } },
+        right: { style: "thin", color: { argb: "E0E7EF" } },
+      };
+      if (colNumber === 6) cell.numFmt = '_-"R$" * #,##0.00_-;-"R$" * #,##0.00_-;_-"R$" * "-"??_-;_-@_-';
+      if (colNumber === 8) cell.numFmt = "@";
+    });
+    row.getCell(8).value = String(item["ID de Envio"] || "");
+  });
+
+  worksheet.views = [{ state: "frozen", ySplit: headerRowNumber, topLeftCell: "A9", zoomScale: 85, zoomScaleNormal: 85, activeCell: "C10" }];
+}
+
+async function buildStyledPackageManagementWorkbook(rows, exportRows) {
+  console.log("[Excel] ExcelJS disponível:", typeof window.ExcelJS !== "undefined");
+  const ExcelJS = await loadExcelExportEngine();
+  console.log("[Excel] Criando workbook");
+  const workbook = new ExcelJS.Workbook();
+  workbook.creator = "Painel de Inteligência";
+  workbook.created = new Date();
+  workbook.modified = new Date();
+  const worksheet = workbook.addWorksheet("Gestão de Pacotes", {
+    properties: { defaultRowHeight: 20 },
+    pageSetup: { orientation: "landscape", fitToPage: true, fitToWidth: 1, fitToHeight: 0 },
+  });
+  worksheet.columns = [
+    { key: "competencia", width: 25.88671875 },
+    { key: "quinzena", width: 25.77734375 },
+    { key: "tipo", width: 30.109375 },
+    { key: "desconto", width: 19.77734375 },
+    { key: "base", width: 37 },
+    { key: "valor", width: 15.5546875 },
+    { key: "data", width: 11.5546875 },
+    { key: "id", width: 13.88671875 },
+    { key: "decisao", width: 37.44140625 },
+  ];
+
+  console.log("[Excel] Aplicando cabeçalho");
+  configurePackageExportHeader(worksheet, rows, exportRows);
+  console.log("[Excel] Aplicando tabela");
+  addPackageExportTable(worksheet, exportRows);
+  console.log("[Excel] Gerando buffer");
+  const buffer = await workbook.xlsx.writeBuffer();
+  return new Blob([buffer], { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" });
+}
+
+async function exportPackageManagementExcel(button) {
+  if (isExportingPackageExcel) return;
+  const rows = getPackageManagementExportRows();
+  if (!rows.length) {
+    showToast("Nenhum registro para exportar.", "warn", 4200);
+    syncPackageExportButtonState(0);
+    return;
+  }
+
+  isExportingPackageExcel = true;
+  syncPackageExportButtonState(rows.length);
+  if (button) button.classList.add("is-loading");
+
+  try {
+    console.log("[Excel] Iniciando exportação");
+    const exportRows = buildPackageManagementExportSheetRows(rows);
+    const fileName = buildPackageManagementExcelFileName(rows);
+    console.log("[Excel] Registros:", exportRows.length);
+    console.info("Exportando Gestão de Pacotes:", {
+      totalRegistros: exportRows.length,
+      nomeArquivo: fileName,
+      biblioteca: window.ExcelJS?.Workbook ? "exceljs local" : "exceljs local pendente de carregamento",
+      primeiraLinha: exportRows[0] || null,
+    });
+    const blob = await buildStyledPackageManagementWorkbook(rows, exportRows);
+    console.log("[Excel] Baixando arquivo");
+    downloadBlob(blob, fileName);
+    showToast("Excel da Gestão de Pacotes baixado.", "good", 4200);
+  } catch (error) {
+    console.error("ERRO REAL AO GERAR EXCEL:", error);
+    console.error("Stack:", error?.stack);
+    console.error("Erro ao gerar Excel da Gestão de Pacotes:", {
+      totalRegistrosFiltrados: rows.length,
+      primeiraLinhaFiltrada: rows[0] || null,
+      excelJsDisponivel: Boolean(window.ExcelJS),
+      excelJsWorkbookDisponivel: Boolean(window.ExcelJS?.Workbook),
+    });
+    showToast("Não foi possível gerar o Excel. Verifique o console.", "error", 6200);
+  } finally {
+    isExportingPackageExcel = false;
+    if (button) button.classList.remove("is-loading");
+    syncPackageExportButtonState(rows.length);
+  }
+}
+
 function renderPackageManagementTable(rows, allPackageRows) {
   renderPackageManagementTableHeader();
   const validAllRows = (Array.isArray(allPackageRows) ? allPackageRows : []).filter(isPackageManagementDetailRow);
@@ -5929,6 +6315,7 @@ function renderPackageManagementTable(rows, allPackageRows) {
   el.pageIndicator.textContent = `Página ${integer.format(state.page)} de ${integer.format(pageCount)}`;
   el.prevPage.disabled = state.page <= 1;
   el.nextPage.disabled = state.page >= pageCount;
+  syncPackageExportButtonState(totalRows);
 
   if (!validPageRows.length) {
     el.tableBody.innerHTML = `

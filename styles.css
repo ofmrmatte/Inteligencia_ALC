@@ -1896,6 +1896,32 @@ body[data-theme="light"] #theme-toggle::before {
   flex-wrap: wrap;
 }
 
+.table-export-button {
+  align-self: flex-end;
+  border: 1px solid var(--line);
+  background: rgba(255, 255, 255, 0.03);
+}
+
+.table-export-button.is-loading {
+  pointer-events: none;
+  opacity: 0.68;
+}
+
+.table-export-button.is-loading svg {
+  animation: softPulse 900ms ease-in-out infinite;
+}
+
+@keyframes softPulse {
+  0%,
+  100% {
+    opacity: 0.58;
+  }
+
+  50% {
+    opacity: 1;
+  }
+}
+
 .value-sort {
   display: inline-flex;
   align-items: center;
