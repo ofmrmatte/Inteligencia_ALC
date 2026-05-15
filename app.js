@@ -6147,7 +6147,7 @@ async function addPackageExportLogo(worksheet, workbook) {
       extension,
     });
     worksheet.addImage(logoImageId, {
-      tl: { col: 0.2, row: 0.48 },
+      tl: { col: 0.34, row: 0.48 },
       ext: { width: 95.44, height: 95.44 },
     });
   } catch (logoError) {
