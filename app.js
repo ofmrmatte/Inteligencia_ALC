@@ -155,6 +155,7 @@ let evolutionTooltipHideTimer = null;
 let activeEvolutionTooltipBar = null;
 let packageMixTooltipHideTimer = null;
 let activePackageMixSegment = null;
+let donutTooltipHideTimer = null;
 let chartViewportObserver = null;
 let chartAnimationFrame = 0;
 let chartAnimationToken = 0;
@@ -3474,10 +3475,9 @@ function renderDonutChart(mixRows) {
       <strong class="mix-center-value" id="donut-total">${formatCurrencyShort(totalMix)}</strong>
       <span>Total de descontos</span>
     </div>
-    <div class="mix-tooltip" id="donut-tooltip" hidden></div>
   `;
   el.donutTotal = document.getElementById("donut-total");
-  el.donutTooltip = document.getElementById("donut-tooltip");
+  el.donutTooltip = getDonutTooltip();
 }
 
 function renderMixLegend(mixRows) {
@@ -3505,30 +3505,62 @@ function renderMixLegend(mixRows) {
 }
 
 function showDonutTooltip(segment, event) {
+  el.donutTooltip = getDonutTooltip();
   if (!el.donutTooltip) return;
+  window.clearTimeout(donutTooltipHideTimer);
   el.donutTooltip.innerHTML = `
     <strong>${escapeHtml(segment.dataset.title || "")}</strong>
     <span>${escapeHtml(segment.dataset.value || "")} em descontos</span>
     <span>${escapeHtml(segment.dataset.count || "0")} registros · ${escapeHtml(segment.dataset.share || "0%")}</span>
   `;
   el.donutTooltip.hidden = false;
+  requestAnimationFrame(() => {
+    el.donutTooltip.classList.add("is-visible");
+  });
   positionDonutTooltip(event);
 }
 
 function positionDonutTooltip(event) {
   if (!el.donutTooltip || el.donutTooltip.hidden || !event) return;
   const gap = 14;
+  const viewportPadding = 12;
   const tooltipRect = el.donutTooltip.getBoundingClientRect();
-  const width = tooltipRect.width || 220;
-  const height = tooltipRect.height || 72;
-  const left = Math.min(window.innerWidth - width - 12, Math.max(12, event.clientX + gap));
-  const top = Math.min(window.innerHeight - height - 12, Math.max(12, event.clientY + gap));
-  el.donutTooltip.style.left = `${left}px`;
-  el.donutTooltip.style.top = `${top}px`;
+  const width = tooltipRect.width || Math.min(288, Math.max(220, window.innerWidth - 32));
+  const height = tooltipRect.height || 96;
+  let left = event.clientX + gap;
+  let top = event.clientY + gap;
+  if (left + width > window.innerWidth - viewportPadding) {
+    left = event.clientX - width - gap;
+  }
+  if (top + height > window.innerHeight - viewportPadding) {
+    top = event.clientY - height - gap;
+  }
+  el.donutTooltip.style.left = `${Math.max(viewportPadding, left)}px`;
+  el.donutTooltip.style.top = `${Math.max(viewportPadding, top)}px`;
 }
 
 function hideDonutTooltip() {
-  if (el.donutTooltip) el.donutTooltip.hidden = true;
+  if (!el.donutTooltip) return;
+  el.donutTooltip.classList.remove("is-visible");
+  window.clearTimeout(donutTooltipHideTimer);
+  donutTooltipHideTimer = window.setTimeout(() => {
+    if (el.donutTooltip) el.donutTooltip.hidden = true;
+  }, 150);
+}
+
+function getDonutTooltip() {
+  let tooltip = document.getElementById("donut-tooltip");
+  if (!tooltip) {
+    tooltip = document.createElement("div");
+    tooltip.id = "donut-tooltip";
+    tooltip.setAttribute("role", "tooltip");
+    tooltip.hidden = true;
+  }
+  tooltip.className = "comparison-chart-tooltip pre-fatura-mix-tooltip";
+  if (tooltip.parentElement !== document.body) {
+    document.body.appendChild(tooltip);
+  }
+  return tooltip;
 }
 
 function getPackageMixTooltip() {
@@ -6115,7 +6147,7 @@ async function addPackageExportLogo(worksheet, workbook) {
       extension,
     });
     worksheet.addImage(logoImageId, {
-      tl: { col: 0.12, row: 0.46 },
+      tl: { col: 0.2, row: 0.48 },
       ext: { width: 95.44, height: 95.44 },
     });
   } catch (logoError) {
@@ -6143,20 +6175,26 @@ function configurePackageExportHeader(worksheet, rows, exportRows) {
   worksheet.getRow(4).height = 14.4;
   worksheet.getRow(5).height = 14.4;
 
+  worksheet.mergeCells("A1:A5");
+  worksheet.mergeCells("B2:C2");
+  worksheet.mergeCells("B3:C3");
+  worksheet.getCell("A1").alignment = { horizontal: "center", vertical: "middle" };
+
   worksheet.getCell("B2").value = "Painel de Inteligência Operacional";
   worksheet.getCell("B2").font = { name: "Arial", size: 16, bold: true, color: { argb: white } };
+  worksheet.getCell("B2").alignment = { horizontal: "left", vertical: "middle" };
   worksheet.getCell("B3").value = "Gestão de Pacotes — Conferência de Registros";
   worksheet.getCell("B3").font = { name: "Arial", size: 12, bold: true, color: { argb: white } };
+  worksheet.getCell("B3").alignment = { horizontal: "left", vertical: "middle" };
 
   worksheet.getCell("I1").value = "Setor: LOSS";
   worksheet.getCell("I2").value = `Período: ${getPackageExportPeriodDisplay(rows)}`;
   worksheet.getCell("I3").value = `Tipo: ${summary.typeLabel}`;
   worksheet.getCell("I4").value = `Gerado em: ${formatCurrentDateTime()}`;
-  ["G1", "G2", "G3", "G4", "H1", "H2", "H3", "H4", "I1", "I2", "I3", "I4"].forEach((address) => {
-    worksheet.getCell(address).font = { name: "Arial", size: 10, bold: address === "G1", color: { argb: white } };
-    worksheet.getCell(address).alignment = { horizontal: "right", vertical: "middle" };
+  ["I1", "I2", "I3", "I4"].forEach((address) => {
+    worksheet.getCell(address).font = { name: "Arial", size: 10, bold: address === "I1", color: { argb: white } };
+    worksheet.getCell(address).alignment = { horizontal: "left", vertical: "middle" };
   });
-  worksheet.getCell("I1").font = { name: "Arial", size: 10, bold: true, color: { argb: white } };
 
   const summaryHeaders = ["Resumo do recorte", "Registros exportados", "Competências no recorte", "Tipos presentes", "Filtro de período", "Filtro de tipo"];
   const summaryValues = ["", summary.totalRows, summary.competenciesCount, summary.presentTypes, summary.periodLabel, summary.typeLabel];
@@ -6279,6 +6317,8 @@ async function protectPackageExportHeader(worksheet, exportRows) {
     selectUnlockedCells: true,
     sort: true,
     autoFilter: true,
+    objects: false,
+    scenarios: false,
   });
 }
 
@@ -6295,15 +6335,15 @@ async function buildStyledPackageManagementWorkbook(rows, exportRows) {
     pageSetup: { orientation: "landscape", fitToPage: true, fitToWidth: 1, fitToHeight: 0 },
   });
   worksheet.columns = [
-    { key: "competencia", width: 25.88671875 },
-    { key: "quinzena", width: 25.77734375 },
-    { key: "tipo", width: 30.109375 },
-    { key: "desconto", width: 19.77734375 },
-    { key: "base", width: 37 },
-    { key: "valor", width: 15.5546875 },
-    { key: "data", width: 11.5546875 },
-    { key: "id", width: 13.88671875 },
-    { key: "decisao", width: 37.44140625 },
+    { key: "competencia", width: 21.21875 },
+    { key: "quinzena", width: 23.33203125 },
+    { key: "tipo", width: 27.44140625 },
+    { key: "desconto", width: 18 },
+    { key: "base", width: 38.88671875 },
+    { key: "valor", width: 14.21875 },
+    { key: "data", width: 10.88671875 },
+    { key: "id", width: 15 },
+    { key: "decisao", width: 37.33203125 },
   ];
 
   console.log("[Excel] Aplicando cabeçalho");
