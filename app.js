@@ -6264,6 +6264,24 @@ function addPackageExportTable(worksheet, exportRows) {
   worksheet.views = [{ state: "frozen", ySplit: headerRowNumber, topLeftCell: "A9", zoomScale: 85, zoomScaleNormal: 85, activeCell: "C10" }];
 }
 
+async function protectPackageExportHeader(worksheet, exportRows) {
+  const lastDataRow = 8 + Math.max(0, exportRows.length);
+  for (let rowNumber = 9; rowNumber <= lastDataRow; rowNumber += 1) {
+    worksheet.getRow(rowNumber).eachCell((cell) => {
+      cell.protection = { locked: false };
+    });
+  }
+  styleExcelRange(worksheet, "A1:I8", {
+    protection: { locked: true },
+  });
+  await worksheet.protect("alc-dashboard", {
+    selectLockedCells: true,
+    selectUnlockedCells: true,
+    sort: true,
+    autoFilter: true,
+  });
+}
+
 async function buildStyledPackageManagementWorkbook(rows, exportRows) {
   console.log("[Excel] ExcelJS disponível:", typeof window.ExcelJS !== "undefined");
   const ExcelJS = await loadExcelExportEngine();
@@ -6293,6 +6311,8 @@ async function buildStyledPackageManagementWorkbook(rows, exportRows) {
   await addPackageExportLogo(worksheet, workbook);
   console.log("[Excel] Aplicando tabela");
   addPackageExportTable(worksheet, exportRows);
+  console.log("[Excel] Protegendo cabeçalho");
+  await protectPackageExportHeader(worksheet, exportRows);
   console.log("[Excel] Gerando buffer");
   const buffer = await workbook.xlsx.writeBuffer();
   return new Blob([buffer], { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" });
