@@ -2384,6 +2384,44 @@ function renderTabs() {
 }
 
 function renderAll() {
+  try {
+    renderAllUnsafe();
+  } catch (error) {
+    renderDashboardRenderError(error);
+  }
+}
+
+function renderDashboardRenderError(error) {
+  console.error("Erro ao renderizar dashboard:", error);
+  console.error("Stack:", error?.stack);
+  try {
+    state.sheet = SHEET_TABS.includes(state.sheet) ? state.sheet : PRE_FATURA_VIEW;
+    state.appView = "dashboard";
+    renderTabs();
+    toggleAccountView(false);
+    toggleDashboardView(false, false, false);
+    if (el.kpiGrid) {
+      el.kpiGrid.hidden = false;
+      el.kpiGrid.innerHTML = `
+        <article class="wait-card wait-card--error">
+          <div>
+            <strong>Não foi possível carregar esta seção.</strong>
+            <p>O painel principal continua disponível. Verifique o console para o erro técnico.</p>
+          </div>
+        </article>
+      `;
+    }
+    if (el.insights) el.insights.innerHTML = "";
+    if (el.monthlyComparison) el.monthlyComparison.innerHTML = "";
+    if (el.tableBody) el.tableBody.innerHTML = "";
+    renderFilterSummary();
+    updateAccessControls();
+  } catch (fallbackError) {
+    console.error("Erro ao renderizar fallback do dashboard:", fallbackError);
+  }
+}
+
+function renderAllUnsafe() {
   resetChartAnimationObservers();
   syncActiveDataset();
   renderTabs();
@@ -2954,7 +2992,26 @@ function renderDeviationManagementView() {
   if (!el.deviationManagementView) return;
   state.activeDesvioCategory = normalizeDeviationCategory(state.activeDesvioCategory);
   if (state.activeDesvioCategory === DEVIATION_CATEGORY_PNRS) {
-    el.deviationManagementView.innerHTML = renderPnrPage();
+    try {
+      el.deviationManagementView.innerHTML = renderPnrPage();
+    } catch (error) {
+      console.error("Erro ao renderizar Gestão de Desvios / PNRs:", error);
+      console.error("Stack:", error?.stack);
+      el.deviationManagementView.innerHTML = `
+        <article class="panel deviation-management-panel">
+          <div class="panel__header">
+            <div>
+              <h2>Gestão de Desvios · PNRs</h2>
+              <p>Não foi possível carregar esta seção.</p>
+            </div>
+          </div>
+          <div class="deviation-management-placeholder">
+            <strong>Erro controlado na seção de PNRs</strong>
+            <p>As demais abas do painel continuam disponíveis. Verifique o console para o erro técnico.</p>
+          </div>
+        </article>
+      `;
+    }
     return;
   }
   el.deviationManagementView.innerHTML = `
@@ -11251,7 +11308,7 @@ async function fetchAllProcessedRows(tableName, fileId) {
 
 function isMissingProcessedRecordsTableError(error) {
   const text = `${error?.code || ""} ${error?.message || ""} ${error?.details || ""}`;
-  return /42P01|PGRST205|does not exist|schema cache|Could not find the table/i.test(text);
+  return /42P01|PGRST204|PGRST205|does not exist|schema cache|Could not find the table|Could not find .* column/i.test(text);
 }
 
 async function loadProcessedDatasetForFile(fileRecord) {
