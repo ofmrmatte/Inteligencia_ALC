@@ -198,6 +198,7 @@ let liveClockTimer = null;
 let accountMenuCloseTimer = null;
 let comparisonTooltipHideTimer = null;
 let searchDebounceTimer = null;
+let pnrSearchDebounceTimer = null;
 let activeComparisonTooltipColumn = null;
 let evolutionTooltipHideTimer = null;
 let activeEvolutionTooltipBar = null;
@@ -205,6 +206,7 @@ let packageMixTooltipHideTimer = null;
 let activePackageMixSegment = null;
 let donutTooltipHideTimer = null;
 let isDeviationCategoryMenuOpen = false;
+let activePnrFilterMenu = "";
 let activeDropdownPortalKind = "";
 let chartViewportObserver = null;
 let chartAnimationFrame = 0;
@@ -232,6 +234,14 @@ const derivedDataCache = {
   packageRows: [],
   pnrKey: "",
   pnrRows: [],
+  pnrAggregatesKey: "",
+  pnrAggregates: null,
+  pnrSortKey: "",
+  pnrSortedRows: [],
+  pnrPageKey: "",
+  pnrPagedRows: [],
+  pnrFilterOptionsKey: "",
+  pnrFilterOptions: null,
   packageMonthOptionsKey: "",
   packageMonthOptions: [],
   pnrMonthOptionsKey: "",
@@ -245,13 +255,27 @@ function resetDerivedDataCache() {
   derivedDataCache.prefaturaRows = [];
   derivedDataCache.packageKey = "";
   derivedDataCache.packageRows = [];
-  derivedDataCache.pnrKey = "";
-  derivedDataCache.pnrRows = [];
+  resetPnrRuntimeCache({ includeProcessed: true });
   derivedDataCache.packageMonthOptionsKey = "";
   derivedDataCache.packageMonthOptions = [];
+}
+
+function resetPnrRuntimeCache(options = {}) {
+  derivedDataCache.pnrKey = "";
+  derivedDataCache.pnrRows = [];
+  derivedDataCache.pnrAggregatesKey = "";
+  derivedDataCache.pnrAggregates = null;
+  derivedDataCache.pnrSortKey = "";
+  derivedDataCache.pnrSortedRows = [];
+  derivedDataCache.pnrPageKey = "";
+  derivedDataCache.pnrPagedRows = [];
+  if (options.includeProcessed) {
+    derivedDataCache.pnrFilterOptionsKey = "";
+    derivedDataCache.pnrFilterOptions = null;
+  }
   derivedDataCache.pnrMonthOptionsKey = "";
   derivedDataCache.pnrMonthOptions = [];
-  pnrDriverEnrichmentKey = "";
+  if (options.includeProcessed) pnrDriverEnrichmentKey = "";
 }
 
 const DASHBOARD_STATE_CONFIG = {
@@ -810,40 +834,44 @@ function bindEvents() {
   document.addEventListener("input", (event) => {
     const input = event.target.closest("[data-pnr-query]");
     if (!input) return;
-    window.clearTimeout(searchDebounceTimer);
-    searchDebounceTimer = window.setTimeout(() => {
+    window.clearTimeout(pnrSearchDebounceTimer);
+    pnrSearchDebounceTimer = window.setTimeout(() => {
       state.pnrQuery = input.value || "";
       state.page = 1;
-      resetDerivedDataCache();
       persistState();
       renderAll();
     }, 300);
+  });
+  document.addEventListener("click", (event) => {
+    const searchToggle = event.target.closest("[data-pnr-search-toggle]");
+    if (searchToggle) {
+      const control = searchToggle.closest("[data-pnr-search-control]");
+      control?.classList.add("is-expanded");
+      window.setTimeout(() => control?.querySelector("[data-pnr-query]")?.focus(), 20);
+      return;
+    }
+
+    const filterToggle = event.target.closest("[data-pnr-filter-toggle]");
+    if (filterToggle) {
+      event.preventDefault();
+      togglePnrFilterMenu(filterToggle.dataset.pnrFilterToggle);
+      return;
+    }
+
+    const filterOption = event.target.closest("[data-pnr-filter-option]");
+    if (filterOption) {
+      event.preventDefault();
+      applyPnrFilterValue(filterOption.dataset.pnrFilterOption, filterOption.dataset.value || "Todos");
+      return;
+    }
+
+    if (!event.target.closest("[data-pnr-filter-control]")) closePnrFilterMenus();
   });
   document.addEventListener("change", (event) => {
     const field = event.target.closest("[data-pnr-filter]");
     if (!field) return;
     const name = field.dataset.pnrFilter;
-    if (name === "pageSize") {
-      state.pageSize = Number(field.value) || 15;
-    } else if (name === "month") {
-      state.pnrMonths = field.value === "Todos" ? [] : [field.value];
-    } else if (name === "quinzena") {
-      state.pnrQuinzena = field.value || "all";
-    } else if (name === "status") {
-      state.pnrStatus = normalizePnrSelectValue(field.value);
-    } else if (name === "tipo") {
-      state.pnrTipoOperacional = normalizePnrSelectValue(field.value);
-    } else if (name === "estacao") {
-      state.pnrEstacao = normalizePnrSelectValue(field.value);
-    } else if (name === "statusMotorista") {
-      state.pnrStatusMotorista = normalizePnrSelectValue(field.value);
-    } else if (name === "fonteCruzamento") {
-      state.pnrFonteCruzamento = normalizePnrSelectValue(field.value);
-    }
-    state.page = 1;
-    resetDerivedDataCache();
-    persistState();
-    renderAll();
+    applyPnrFilterValue(name, field.value || "Todos");
   });
   document.addEventListener("click", (event) => {
     const clear = event.target.closest("[data-pnr-clear]");
@@ -857,20 +885,20 @@ function bindEvents() {
       state.pnrStatusMotorista = "Todos";
       state.pnrFonteCruzamento = "Todos";
       state.page = 1;
-      resetDerivedDataCache();
+      closePnrFilterMenus();
       persistState();
       renderAll();
       return;
     }
     const pageButton = event.target.closest("[data-pnr-page]");
     if (pageButton) {
-      const totalRows = sortPnrRows(getFilteredPnrRows()).length;
+      const totalRows = getFilteredPnrRows().length;
       const totalPages = Math.max(1, Math.ceil(totalRows / state.pageSize));
       state.page = pageButton.dataset.pnrPage === "next"
         ? Math.min(totalPages, state.page + 1)
         : Math.max(1, state.page - 1);
       persistState();
-      renderAll();
+      renderPnrTableOnly();
       return;
     }
     const sortHeader = event.target.closest("[data-pnr-sort]");
@@ -883,7 +911,7 @@ function bindEvents() {
         state.sortDir = sortKey === "valorCompraNumerico" || sortKey === "dataCaso" ? "desc" : "asc";
       }
       persistState();
-      renderAll();
+      renderPnrTableOnly();
     }
   });
   document.addEventListener("pointerover", (event) => {
@@ -1172,6 +1200,60 @@ function bindEvents() {
 
 function getSheetDisplayLabel(sheet) {
   return SHEET_DISPLAY_LABELS[sheet] || String(sheet || "");
+}
+
+function closePnrFilterMenus() {
+  activePnrFilterMenu = "";
+  document.querySelectorAll("[data-pnr-filter-menu]").forEach((menu) => {
+    menu.hidden = true;
+  });
+  document.querySelectorAll("[data-pnr-filter-toggle]").forEach((button) => {
+    button.setAttribute("aria-expanded", "false");
+  });
+}
+
+function togglePnrFilterMenu(name) {
+  if (!name) return;
+  const nextOpen = activePnrFilterMenu === name ? "" : name;
+  closePnrFilterMenus();
+  activePnrFilterMenu = nextOpen;
+  if (!nextOpen) return;
+  const menu = document.querySelector(`[data-pnr-filter-menu="${CSS.escape(nextOpen)}"]`);
+  const button = document.querySelector(`[data-pnr-filter-toggle="${CSS.escape(nextOpen)}"]`);
+  if (!menu || !button) return;
+  menu.hidden = false;
+  button.setAttribute("aria-expanded", "true");
+}
+
+function applyPnrFilterValue(name, value) {
+  if (!name) return;
+  if (name === "pageSize") {
+    state.pageSize = Number(value) || 15;
+    state.page = 1;
+    closePnrFilterMenus();
+    persistState();
+    renderPnrTableOnly();
+    return;
+  }
+  if (name === "month") {
+    state.pnrMonths = value === "Todos" ? [] : [value];
+  } else if (name === "quinzena") {
+    state.pnrQuinzena = value || "all";
+  } else if (name === "status") {
+    state.pnrStatus = normalizePnrSelectValue(value);
+  } else if (name === "tipo") {
+    state.pnrTipoOperacional = normalizePnrSelectValue(value);
+  } else if (name === "estacao") {
+    state.pnrEstacao = normalizePnrSelectValue(value);
+  } else if (name === "statusMotorista") {
+    state.pnrStatusMotorista = normalizePnrSelectValue(value);
+  } else if (name === "fonteCruzamento") {
+    state.pnrFonteCruzamento = normalizePnrSelectValue(value);
+  }
+  state.page = 1;
+  closePnrFilterMenus();
+  persistState();
+  renderAll();
 }
 
 function getDropdownPortalConfig(kind) {
@@ -2355,8 +2437,6 @@ function renderTabs() {
     const isActive = state.sheet === sheet ? "is-active" : "";
     const label = getSheetDisplayLabel(sheet);
     if (sheet === DEVIATION_MANAGEMENT_VIEW) {
-      const categoryLabel = getDeviationCategoryLabel();
-      const categoryBadge = categoryLabel ? `<span class="sheet-tab__badge">${escapeHtml(categoryLabel)}</span>` : "";
       return `
         <span class="sheet-tab-wrapper sheet-tab-wrapper--deviation">
           <button
@@ -2368,7 +2448,6 @@ function renderTabs() {
             aria-expanded="${isDeviationCategoryMenuOpen ? "true" : "false"}"
           >
             <span class="sheet-tab__label">${escapeHtml(label)}</span>
-            ${categoryBadge}
           </button>
           ${renderDeviationCategoryMenu()}
         </span>
@@ -3273,6 +3352,18 @@ function buildPnrDriverLookupIndexes() {
   };
 }
 
+function hasPnrDriverLookupEntries(indexes) {
+  return ["preFatura", "gestaoPacotes"].some((group) => {
+    const index = indexes?.[group];
+    return index && (
+      index.byIdMotorista?.size ||
+      index.byIdEnvio?.size ||
+      index.byRota?.size ||
+      index.byBaseRota?.size
+    );
+  });
+}
+
 function lookupPnrDriverNameInIndex(row, index) {
   const idMotorista = normalizePnrLookupId(row?.idMotorista);
   const idEnvio = normalizePnrLookupId(row?.idEnvio);
@@ -3378,14 +3469,22 @@ function ensurePnrDriverEnrichment() {
   const key = getPnrDriverEnrichmentKey();
   if (pnrDriverEnrichmentKey === key) return;
   const indexes = buildPnrDriverLookupIndexes();
+  if (!hasPnrDriverLookupEntries(indexes)) {
+    pnrDriverEnrichmentKey = key;
+    resetPnrRuntimeCache();
+    return;
+  }
   pnrRows = dedupePnrRecords(enrichPnrRowsWithDriverNames(pnrRows, indexes)).rows;
   pnrDriverEnrichmentKey = key;
-  derivedDataCache.pnrKey = "";
-  derivedDataCache.pnrRows = [];
+  resetPnrRuntimeCache();
 }
 
 function getPnrFilterOptions() {
   ensurePnrDriverEnrichment();
+  const cacheKey = `${pnrDriverEnrichmentKey}:${pnrRowsLoadedKey}:${pnrRows.length}`;
+  if (derivedDataCache.pnrFilterOptionsKey === cacheKey && derivedDataCache.pnrFilterOptions) {
+    return derivedDataCache.pnrFilterOptions;
+  }
   const statuses = new Set();
   const tipos = new Set();
   const estacoes = new Set();
@@ -3398,13 +3497,16 @@ function getPnrFilterOptions() {
     if (row.statusMotorista) statusMotoristas.add(row.statusMotorista);
     if (row.fonteCruzamento) fontesCruzamento.add(row.fonteCruzamento);
   });
-  return {
+  const options = {
     statuses: Array.from(statuses).sort((a, b) => a.localeCompare(b, "pt-BR", { sensitivity: "base" })),
     tipos: Array.from(tipos).sort((a, b) => a.localeCompare(b, "pt-BR", { sensitivity: "base" })),
     estacoes: Array.from(estacoes).sort((a, b) => a.localeCompare(b, "pt-BR", { numeric: true, sensitivity: "base" })),
     statusMotoristas: Array.from(statusMotoristas).sort((a, b) => a.localeCompare(b, "pt-BR", { sensitivity: "base" })),
     fontesCruzamento: Array.from(fontesCruzamento).sort((a, b) => a.localeCompare(b, "pt-BR", { sensitivity: "base" })),
   };
+  derivedDataCache.pnrFilterOptionsKey = cacheKey;
+  derivedDataCache.pnrFilterOptions = options;
+  return options;
 }
 
 function getFilteredPnrRows() {
@@ -3436,104 +3538,16 @@ function getFilteredPnrRows() {
   return rows;
 }
 
-function buildPnrSummary(rows) {
-  const baseRows = Array.isArray(rows) ? rows : [];
-  const totalValue = baseRows.reduce((sum, row) => sum + Number(row.valorCompraNumerico || 0), 0);
-  const anulado = baseRows.filter((row) => row.statusNormalizado === "Anulado").length;
-  const faturamento = baseRows.filter((row) => row.statusNormalizado === "Enviado para faturamento").length;
-  return {
-    count: baseRows.length,
-    totalValue,
-    avgValue: baseRows.length ? totalValue / baseRows.length : 0,
-    anulado,
-    faturamento,
-    aberto: Math.max(0, baseRows.length - anulado - faturamento),
-  };
-}
-
-function buildPnrStatusRows(rows) {
-  const total = rows.length || 0;
-  const map = new Map();
-  rows.forEach((row) => {
-    const key = row.statusNormalizado || "Indefinido";
-    map.set(key, (map.get(key) || 0) + 1);
-  });
-  return Array.from(map.entries())
-    .map(([label, count]) => ({ label, count, share: total ? (count / total) * 100 : 0 }))
-    .sort((a, b) => b.count - a.count);
-}
-
-function buildPnrOperationRows(rows) {
-  const order = ["SVC", "XPT", "Não identificada"];
-  const total = rows.length || 0;
-  const map = new Map(order.map((label) => [label, 0]));
-  rows.forEach((row) => {
-    const value = row.tipoBase || row.tipoOperacional;
-    const key = order.includes(value) ? value : "Não identificada";
-    map.set(key, (map.get(key) || 0) + 1);
-  });
-  return Array.from(map.entries())
-    .map(([label, count]) => ({ label, count, share: total ? (count / total) * 100 : 0 }))
-    .sort((a, b) => order.indexOf(a.label) - order.indexOf(b.label));
-}
-
-function buildPnrRanking(rows, key, fallbackLabel = "Sem identificação") {
-  const total = rows.length || 0;
-  const map = new Map();
-  rows.forEach((row) => {
-    const label = String(row[key] || "").trim() || fallbackLabel;
-    const entry = map.get(label) || { label, count: 0, totalValue: 0 };
-    entry.count += 1;
-    entry.totalValue += Number(row.valorCompraNumerico || 0);
-    map.set(label, entry);
-  });
-  return Array.from(map.values())
-    .map((item) => ({ ...item, share: total ? (item.count / total) * 100 : 0 }))
-    .sort((a, b) => b.count - a.count || b.totalValue - a.totalValue)
-    .slice(0, 8);
-}
-
-function buildPnrDriverRanking(rows) {
-  const baseRows = Array.isArray(rows) ? rows : [];
-  const map = new Map();
-  baseRows.forEach((row) => {
-    const driverId = formatPnrId(row.idMotorista || "");
-    const driverName = getPnrDriverNameFromSourceRow({ motorista: row.nomeMotorista });
-    const label = driverName || (driverId ? `ID ${driverId}` : "");
-    if (!label) return;
-    const key = driverName ? normalizeDriverName(driverName) || label : `ID:${driverId}`;
-    const entry = map.get(key) || { label, detail: driverId && driverName ? `ID: ${driverId}` : "", count: 0, totalValue: 0 };
-    entry.count += 1;
-    entry.totalValue += Number(row.valorCompraNumerico || 0);
-    map.set(key, entry);
-  });
-  return Array.from(map.values())
-    .map((item) => ({ ...item, share: baseRows.length ? (item.count / baseRows.length) * 100 : 0 }))
-    .sort((a, b) => b.count - a.count || b.totalValue - a.totalValue || a.label.localeCompare(b.label, "pt-BR", { sensitivity: "base" }))
-    .slice(0, 8);
-}
-
-function buildPnrEvolutionRows(rows) {
-  const map = new Map();
-  rows.forEach((row) => {
-    const period = getPnrPeriodFromBillingPeriod(row.sourcePeriodo || row.periodoFaturamentoOriginal || row.periodoFaturamento) || getPnrPeriodFromDate(row.dataCaso || row.periodoFaturamento);
-    const key = row.monthKey || period.monthKey;
-    const item = map.get(key) || {
-      key,
-      label: row.competencia || getPnrMonthFullLabel(period),
-      year: Number(row.ano || period.ano || String(key).slice(0, 4) || 0),
-      month: Number(row.mesNumero || period.mes || String(key).slice(5, 7) || 0),
-      count: 0,
-      totalValue: 0,
-    };
-    item.count += 1;
-    item.totalValue += Number(row.valorCompraNumerico || 0);
-    map.set(key, item);
-  });
-  return Array.from(map.values()).sort((a, b) => (a.year - b.year) || (a.month - b.month));
-}
-
 function getPnrChronologicalSortParts(row) {
+  if (row && (row._sortYear || row._sortMonth || row._sortDateTs)) {
+    return {
+      year: Number(row._sortYear || 0),
+      month: Number(row._sortMonth || 0),
+      quarter: Number(row._sortQuarter || 1),
+      dataCaso: Number(row._sortDateTs || 0),
+      idCaso: row.idCaso || "",
+    };
+  }
   const period = getPnrPeriodFromBillingPeriod(row.sourcePeriodo || row.periodoFaturamentoOriginal || row.periodoFaturamento) || getPnrPeriodFromDate(row.dataCaso || row.periodoFaturamento);
   return {
     year: Number(row.ano || period.ano || 0),
@@ -3545,14 +3559,16 @@ function getPnrChronologicalSortParts(row) {
 }
 
 function comparePnrChronologicalRows(a, b) {
-  const av = getPnrChronologicalSortParts(a);
-  const bv = getPnrChronologicalSortParts(b);
+  const av = (a && (a._sortYear || a._sortMonth || a._sortDateTs)) ? a : getPnrChronologicalSortParts(a);
+  const bv = (b && (b._sortYear || b._sortMonth || b._sortDateTs)) ? b : getPnrChronologicalSortParts(b);
+  const aid = Number(a?.idCaso || 0);
+  const bid = Number(b?.idCaso || 0);
   return (
-    (av.year - bv.year) ||
-    (av.month - bv.month) ||
-    (av.quarter - bv.quarter) ||
-    String(av.dataCaso).localeCompare(String(bv.dataCaso), "pt-BR", { numeric: true, sensitivity: "base" }) ||
-    String(av.idCaso).localeCompare(String(bv.idCaso), "pt-BR", { numeric: true, sensitivity: "base" })
+    (Number(av._sortYear ?? av.year ?? 0) - Number(bv._sortYear ?? bv.year ?? 0)) ||
+    (Number(av._sortMonth ?? av.month ?? 0) - Number(bv._sortMonth ?? bv.month ?? 0)) ||
+    (Number(av._sortQuarter ?? av.quarter ?? 1) - Number(bv._sortQuarter ?? bv.quarter ?? 1)) ||
+    (Number(av._sortDateTs ?? av.dataCaso ?? 0) - Number(bv._sortDateTs ?? bv.dataCaso ?? 0)) ||
+    (Number.isFinite(aid) && Number.isFinite(bid) && aid !== bid ? aid - bid : String(a?.idCaso || av.idCaso || "").localeCompare(String(b?.idCaso || bv.idCaso || ""), "pt-BR", { numeric: true, sensitivity: "base" }))
   );
 }
 
@@ -3569,36 +3585,138 @@ function sortPnrRows(rows) {
   });
 }
 
+function getSortedPnrRows(rows) {
+  const filteredKey = derivedDataCache.pnrKey || getPnrRowsCacheKey();
+  const cacheKey = `${filteredKey}::sort:${state.sortKey || ""}:${state.sortDir || "asc"}:${rows.length}`;
+  if (derivedDataCache.pnrSortKey === cacheKey) return derivedDataCache.pnrSortedRows;
+  const sortedRows = sortPnrRows(Array.isArray(rows) ? rows : []);
+  derivedDataCache.pnrSortKey = cacheKey;
+  derivedDataCache.pnrSortedRows = sortedRows;
+  derivedDataCache.pnrPageKey = "";
+  derivedDataCache.pnrPagedRows = [];
+  return sortedRows;
+}
+
+function getPaginatedPnrRows(sortedRows) {
+  const safeRows = Array.isArray(sortedRows) ? sortedRows : [];
+  const totalPages = Math.max(1, Math.ceil(safeRows.length / state.pageSize));
+  state.page = Math.min(Math.max(1, state.page), totalPages);
+  const cacheKey = `${derivedDataCache.pnrSortKey || ""}::page:${state.page}:${state.pageSize}:${safeRows.length}`;
+  if (derivedDataCache.pnrPageKey === cacheKey) return derivedDataCache.pnrPagedRows;
+  const pagedRows = paginateRows(safeRows);
+  derivedDataCache.pnrPageKey = cacheKey;
+  derivedDataCache.pnrPagedRows = pagedRows;
+  return pagedRows;
+}
+
+function getPnrAnalysisData(rows) {
+  const safeRows = Array.isArray(rows) ? rows : [];
+  const cacheKey = `${derivedDataCache.pnrKey || getPnrRowsCacheKey()}::analysis:${safeRows.length}`;
+  if (derivedDataCache.pnrAggregatesKey === cacheKey && derivedDataCache.pnrAggregates) return derivedDataCache.pnrAggregates;
+
+  const total = safeRows.length;
+  const summary = { count: total, totalValue: 0, avgValue: 0, anulado: 0, faturamento: 0, aberto: 0 };
+  const statusMap = new Map();
+  const operationOrder = ["SVC", "XPT", "Não identificada"];
+  const operationMap = new Map(operationOrder.map((label) => [label, 0]));
+  const stationMap = new Map();
+  const driverMap = new Map();
+  const evolutionMap = new Map();
+
+  safeRows.forEach((row) => {
+    const value = Number(row.valorCompraNumerico || 0);
+    summary.totalValue += value;
+    if (row.statusNormalizado === "Anulado") summary.anulado += 1;
+    if (row.statusNormalizado === "Enviado para faturamento") summary.faturamento += 1;
+
+    const status = row.statusNormalizado || "Indefinido";
+    statusMap.set(status, (statusMap.get(status) || 0) + 1);
+
+    const operationValue = row.tipoBase || row.tipoOperacional;
+    const operation = operationOrder.includes(operationValue) ? operationValue : "Não identificada";
+    operationMap.set(operation, (operationMap.get(operation) || 0) + 1);
+
+    const station = String(row.estacaoOrigem || "").trim() || "Sem estação";
+    const stationEntry = stationMap.get(station) || { label: station, count: 0, totalValue: 0 };
+    stationEntry.count += 1;
+    stationEntry.totalValue += value;
+    stationMap.set(station, stationEntry);
+
+    const driverId = formatPnrId(row.idMotorista || "");
+    const driverName = getPnrDriverNameFromSourceRow({ motorista: row.nomeMotorista });
+    const driverLabel = driverName || (driverId ? `ID ${driverId}` : "");
+    if (driverLabel) {
+      const driverKey = driverName ? normalizeDriverName(driverName) || driverLabel : `ID:${driverId}`;
+      const driverEntry = driverMap.get(driverKey) || { label: driverLabel, detail: driverId && driverName ? `ID: ${driverId}` : "", count: 0, totalValue: 0 };
+      driverEntry.count += 1;
+      driverEntry.totalValue += value;
+      driverMap.set(driverKey, driverEntry);
+    }
+
+    const period = getPnrPeriodFromBillingPeriod(row.sourcePeriodo || row.periodoFaturamentoOriginal || row.periodoFaturamento) || getPnrPeriodFromDate(row.dataCaso || row.periodoFaturamento);
+    const key = row.monthKey || period.monthKey;
+    const evolutionEntry = evolutionMap.get(key) || {
+      key,
+      label: row.competencia || getPnrMonthFullLabel(period),
+      year: Number(row.ano || period.ano || String(key).slice(0, 4) || 0),
+      month: Number(row.mesNumero || period.mes || String(key).slice(5, 7) || 0),
+      count: 0,
+      totalValue: 0,
+    };
+    evolutionEntry.count += 1;
+    evolutionEntry.totalValue += value;
+    evolutionMap.set(key, evolutionEntry);
+  });
+
+  summary.avgValue = total ? summary.totalValue / total : 0;
+  summary.aberto = Math.max(0, total - summary.anulado - summary.faturamento);
+
+  const aggregates = {
+    summary,
+    statusRows: Array.from(statusMap.entries())
+      .map(([label, count]) => ({ label, count, share: total ? (count / total) * 100 : 0 }))
+      .sort((a, b) => b.count - a.count),
+    operationRows: Array.from(operationMap.entries())
+      .map(([label, count]) => ({ label, count, share: total ? (count / total) * 100 : 0 }))
+      .sort((a, b) => operationOrder.indexOf(a.label) - operationOrder.indexOf(b.label)),
+    stationRows: Array.from(stationMap.values())
+      .map((item) => ({ ...item, share: total ? (item.count / total) * 100 : 0 }))
+      .sort((a, b) => b.count - a.count || b.totalValue - a.totalValue)
+      .slice(0, 8),
+    driverRows: Array.from(driverMap.values())
+      .map((item) => ({ ...item, share: total ? (item.count / total) * 100 : 0 }))
+      .sort((a, b) => b.count - a.count || b.totalValue - a.totalValue || a.label.localeCompare(b.label, "pt-BR", { sensitivity: "base" }))
+      .slice(0, 8),
+    evolutionRows: Array.from(evolutionMap.values()).sort((a, b) => (a.year - b.year) || (a.month - b.month)),
+  };
+
+  derivedDataCache.pnrAggregatesKey = cacheKey;
+  derivedDataCache.pnrAggregates = aggregates;
+  return aggregates;
+}
+
+function getPnrTableViewModel() {
+  const filteredRows = getFilteredPnrRows();
+  const sortedRows = getSortedPnrRows(filteredRows);
+  const pagedRows = getPaginatedPnrRows(sortedRows);
+  return { filteredRows, sortedRows, pagedRows };
+}
+
 const PNR_TABLE_COLUMNS = [
-  { key: "idCaso", label: "ID DO CASO", width: 120, format: "text" },
-  { key: "dataCaso", label: "DATA DO CASO", width: 150, format: "date" },
-  { key: "statusNormalizado", label: "STATUS", width: 160, format: "status" },
-  { key: "periodoFaturamentoOriginal", label: "PERÍODO DE FATURAMENTO", width: 170, format: "text" },
-  { key: "dataPedidoRevisao", label: "DATA DO PEDIDO DE REVISÃO", width: 200, format: "date" },
-  { key: "pedidoRevisao", label: "PEDIDO DE REVISÃO", width: 180, format: "text" },
-  { key: "dataEncerramentoCaso", label: "DATA DE ENCERRAMENTO DO CASO", width: 220, format: "date" },
-  { key: "repAssistente", label: "REP - ASSISTENTE", width: 180, format: "text" },
-  { key: "comentarioEncerramento", label: "COMENTÁRIO DE ENCERRAMENTO", width: 260, format: "long" },
-  { key: "numeroPreFatura", label: "N° DA PRÉ-FATURA", width: 160, format: "text" },
-  { key: "idEnvio", label: "ID DE ENVIO", width: 150, format: "text" },
-  { key: "produtos", label: "PRODUTOS", width: 280, format: "long" },
-  { key: "valorCompraOriginal", label: "VALOR DA COMPRA", width: 150, format: "currencyText" },
-  { key: "repTransportadora", label: "REP TRANSPORTADORA", width: 180, format: "text" },
-  { key: "estacaoOrigem", label: "ESTAÇÃO DE ORIGEM", width: 160, format: "text" },
-  { key: "idRota", label: "ID DA ROTA", width: 140, format: "text" },
-  { key: "idMotorista", label: "ID DO MOTORISTA", width: 150, format: "text" },
-  { key: "dataEntrega", label: "DATA DE ENTREGA", width: 160, format: "date" },
-  { key: "idReclamacao", label: "ID DA RECLAMAÇÃO", width: 170, format: "text" },
-  { key: "mes", label: "MÊS", width: 120, format: "text" },
-  { key: "quinzenaRef", label: "QUINZENA REF.", width: 160, format: "text" },
-  { key: "valorCompraNumerico", label: "VAL. COMPRA", width: 140, format: "currency" },
-  { key: "tipoOcorrencia", label: "TIPO DA OCORRÊNCIA", width: 170, format: "text" },
-  { key: "tipoBase", label: "TIPO DE BASE", width: 140, format: "text" },
-  { key: "baseIdentificada", label: "BASE IDENTIFICADA", width: 170, format: "text" },
-  { key: "motoristaDisplay", label: "MOTORISTA", width: 220, format: "text" },
-  { key: "statusMotorista", label: "STATUS DO MOTORISTA", width: 220, format: "text" },
-  { key: "fonteCruzamento", label: "FONTE DO CRUZAMENTO", width: 190, format: "text" },
-  { key: "observacaoCruzamento", label: "OBSERVAÇÃO", width: 280, format: "long" },
+  { key: "competencia", label: "Competência", width: 130, format: "text" },
+  { key: "quinzena", label: "Quinzena", width: 130, format: "text" },
+  { key: "statusNormalizado", label: "Status", width: 170, format: "status" },
+  { key: "idCaso", label: "ID do Caso", width: 130, format: "text" },
+  { key: "idEnvio", label: "ID de Envio", width: 140, format: "text" },
+  { key: "idReclamacao", label: "ID da Reclamação", width: 165, format: "text" },
+  { key: "valorCompraNumerico", label: "Valor da Compra", width: 145, format: "currency" },
+  { key: "estacaoOrigem", label: "Estação de Origem", width: 210, format: "text" },
+  { key: "idRota", label: "ID da Rota", width: 125, format: "text" },
+  { key: "idMotorista", label: "ID do Motorista", width: 150, format: "text" },
+  { key: "dataEntrega", label: "Data da Entrega", width: 150, format: "date" },
+  { key: "dataReclamacao", label: "Data da Reclamação", width: 170, format: "date" },
+  { key: "dataEncerramentoCaso", label: "Data de Encerramento", width: 185, format: "date" },
+  { key: "comentarioEncerramento", label: "Comentário de Encerramento", width: 280, format: "long" },
 ];
 
 function formatPnrTableCell(row, column) {
@@ -3611,19 +3729,40 @@ function formatPnrTableCell(row, column) {
 }
 
 function renderPnrFilterSelect(name, label, value, options, allLabel = "Todos") {
+  const normalizedValue = String(value || "Todos");
+  const sourceOptions = (Array.isArray(options) ? options : []).map((option) => ({
+    value: typeof option === "string" ? option : option.value,
+    label: typeof option === "string" ? option : option.label,
+  })).filter((option) => option.value !== undefined && option.value !== null);
+  const hasDefaultOption = sourceOptions.some((option) => ["Todos", "all", normalizedValue].includes(String(option.value)));
+  const normalizedOptions = (hasDefaultOption ? sourceOptions : [{ value: "Todos", label: allLabel }, ...sourceOptions]);
+  const selected = normalizedOptions.find((option) => String(option.value) === normalizedValue) || normalizedOptions[0];
+  const isOpen = activePnrFilterMenu === name;
   return `
-    <label class="pnr-filter-control">
+    <div class="pnr-filter-control pnr-filter-dropdown" data-pnr-filter-control="${escapeAttribute(name)}">
       <span>${escapeHtml(label)}</span>
-      <select data-pnr-filter="${escapeAttribute(name)}">
-        <option value="Todos"${value === "Todos" ? " selected" : ""}>${escapeHtml(allLabel)}</option>
-        ${options.map((option) => {
-          const optionValue = typeof option === "string" ? option : option.value;
-          const optionLabel = typeof option === "string" ? option : option.label;
-          return `<option value="${escapeAttribute(optionValue)}"${String(optionValue) === String(value) ? " selected" : ""}>${escapeHtml(optionLabel)}</option>`;
+      <button type="button" class="pnr-filter-button" data-pnr-filter-toggle="${escapeAttribute(name)}" aria-haspopup="listbox" aria-expanded="${isOpen ? "true" : "false"}">
+        <strong>${escapeHtml(selected?.label || allLabel)}</strong>
+        <svg viewBox="0 0 20 20" aria-hidden="true"><path d="m5 7 5 5 5-5" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8"></path></svg>
+      </button>
+      <div class="pnr-filter-menu" data-pnr-filter-menu="${escapeAttribute(name)}" role="listbox" ${isOpen ? "" : "hidden"}>
+        ${normalizedOptions.map((option) => {
+          const selectedClass = String(option.value) === normalizedValue ? " is-active" : "";
+          return `<button type="button" class="pnr-filter-option${selectedClass}" data-pnr-filter-option="${escapeAttribute(name)}" data-value="${escapeAttribute(option.value)}" role="option" aria-selected="${selectedClass ? "true" : "false"}">${escapeHtml(option.label)}</button>`;
         }).join("")}
-      </select>
-    </label>
+      </div>
+    </div>
   `;
+}
+
+function renderPnrPageSizeControl() {
+  return renderPnrFilterSelect(
+    "pageSize",
+    "Linhas por página",
+    String(state.pageSize || 15),
+    [10, 15, 25, 50, 100].map((size) => ({ value: String(size), label: String(size) })),
+    "15",
+  );
 }
 
 function renderPnrBarList(rows, options = {}) {
@@ -3684,18 +3823,13 @@ function renderPnrTable(rows, allRows) {
   state.page = Math.min(Math.max(1, state.page), totalPages);
   const tableMinWidth = PNR_TABLE_COLUMNS.reduce((sum, column) => sum + column.width, 0);
   return `
-    <article class="panel pnr-table-panel">
+    <article class="panel pnr-table-panel" data-pnr-table-panel>
       <div class="panel__header">
         <div>
           <h3>Tabela detalhada de PNRs</h3>
           <p>${integer.format(allRows.length)} registros no recorte</p>
         </div>
-        <label class="table-page-size">
-          Linhas por página
-          <select data-pnr-filter="pageSize">
-            ${[10, 15, 25, 50, 100].map((size) => `<option value="${size}"${Number(state.pageSize) === size ? " selected" : ""}>${size}</option>`).join("")}
-          </select>
-        </label>
+        ${renderPnrPageSizeControl()}
       </div>
       <div class="table-wrap pnr-table-wrap">
         <table style="min-width:${tableMinWidth}px">
@@ -3716,23 +3850,59 @@ function renderPnrTable(rows, allRows) {
           </tbody>
         </table>
       </div>
-      <div class="pagination">
-        <button type="button" class="secondary-button" data-pnr-page="prev"${state.page <= 1 ? " disabled" : ""}>Anterior</button>
-        <span>Página ${integer.format(state.page)} de ${integer.format(totalPages)}</span>
-        <button type="button" class="secondary-button" data-pnr-page="next"${state.page >= totalPages ? " disabled" : ""}>Próxima</button>
+      <div class="table-footer">
+        <div>${allRows.length ? `${integer.format((state.page - 1) * state.pageSize + 1)}-${integer.format(Math.min(state.page * state.pageSize, allRows.length))}` : "0-0"} de ${integer.format(allRows.length)}</div>
+        <div class="pagination">
+          <button type="button" class="secondary-button secondary-button--icon" data-pnr-page="prev"${state.page <= 1 ? " disabled" : ""} aria-label="Página anterior" title="Página anterior">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m15 6-6 6 6 6" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2"></path></svg>
+          </button>
+          <span>Página ${integer.format(state.page)} de ${integer.format(totalPages)}</span>
+          <button type="button" class="secondary-button secondary-button--icon" data-pnr-page="next"${state.page >= totalPages ? " disabled" : ""} aria-label="Próxima página" title="Próxima página">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m9 6 6 6-6 6" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2"></path></svg>
+          </button>
+        </div>
       </div>
     </article>
   `;
 }
 
+function renderPnrTableOnly() {
+  if (state.sheet !== DEVIATION_MANAGEMENT_VIEW || state.activeDesvioCategory !== DEVIATION_CATEGORY_PNRS || state.appView !== "dashboard") {
+    renderAll();
+    return;
+  }
+  const tablePanel = el.deviationManagementView?.querySelector("[data-pnr-table-panel]");
+  if (!tablePanel) {
+    renderAll();
+    return;
+  }
+  try {
+    const { sortedRows, pagedRows } = getPnrTableViewModel();
+    tablePanel.outerHTML = renderPnrTable(pagedRows, sortedRows);
+  } catch (error) {
+    console.error("Erro ao atualizar tabela de PNRs:", error);
+    console.error("Stack:", error?.stack);
+    tablePanel.outerHTML = `
+      <article class="panel pnr-table-panel" data-pnr-table-panel>
+        <div class="panel__header">
+          <div>
+            <h3>Tabela detalhada de PNRs</h3>
+            <p>Não foi possível atualizar a tabela.</p>
+          </div>
+        </div>
+        ${emptyState("Erro na tabela", "Verifique o console para o erro técnico.")}
+      </article>
+    `;
+  }
+}
+
 function renderPnrPage() {
-  const filteredRows = getFilteredPnrRows();
-  const sortedRows = sortPnrRows(filteredRows);
-  const pagedRows = paginateRows(sortedRows);
+  const { filteredRows, sortedRows, pagedRows } = getPnrTableViewModel();
   const monthOptions = getPnrMonthOptions();
   const selectedMonths = getPnrSelectedMonthKeys();
   const filterOptions = getPnrFilterOptions();
-  const summary = buildPnrSummary(filteredRows);
+  const analysis = getPnrAnalysisData(filteredRows);
+  const { summary, statusRows, operationRows, stationRows, driverRows, evolutionRows } = analysis;
   const cards = [
     { label: "Total de PNRs", value: integer.format(summary.count), tone: "kpi-card--volume", delta: "Registros no recorte" },
     { label: "Valor total dos produtos", value: currency.format(summary.totalValue), tone: "kpi-card--finance", delta: "Soma de valor da compra" },
@@ -3743,11 +3913,6 @@ function renderPnrPage() {
   ];
   const monthSelectOptions = monthOptions.map((option) => ({ value: option.key, label: option.label }));
   const selectedMonthValue = selectedMonths.length === monthOptions.length ? "Todos" : selectedMonths[0] || "Todos";
-  const statusRows = buildPnrStatusRows(filteredRows);
-  const operationRows = buildPnrOperationRows(filteredRows);
-  const stationRows = buildPnrRanking(filteredRows, "estacaoOrigem", "Sem estação");
-  const driverRows = buildPnrDriverRanking(filteredRows);
-  const evolutionRows = buildPnrEvolutionRows(filteredRows);
   const pnrLoadState = isLoadingPnrRows && !pnrRows.length
     ? emptyState("Carregando PNRs", "Os registros processados estão sendo carregados.")
     : !pnrRows.length
@@ -3764,27 +3929,28 @@ function renderPnrPage() {
           <span class="panel__meta">${integer.format(pnrRows.length)} registros carregados</span>
         </div>
         <div class="pnr-filter-bar">
-          <label class="pnr-search">
-            <span aria-hidden="true">
-              <svg viewBox="0 0 24 24"><path d="m21 21-4.35-4.35M10.8 18a7.2 7.2 0 1 1 0-14.4 7.2 7.2 0 0 1 0 14.4Z" fill="none" stroke="currentColor" stroke-linecap="round" stroke-width="2"></path></svg>
-            </span>
-            <input type="search" data-pnr-query value="${escapeAttribute(state.pnrQuery || "")}" placeholder="Buscar" autocomplete="off">
-          </label>
-          ${renderPnrFilterSelect("month", "Mês", selectedMonthValue, monthSelectOptions)}
-          <label class="pnr-filter-control">
-            <span>Quinzena</span>
-            <select data-pnr-filter="quinzena">
-              <option value="all"${(state.pnrQuinzena || "all") === "all" ? " selected" : ""}>Todas</option>
-              <option value="q1"${state.pnrQuinzena === "q1" ? " selected" : ""}>1ª quinzena</option>
-              <option value="q2"${state.pnrQuinzena === "q2" ? " selected" : ""}>2ª quinzena</option>
-            </select>
-          </label>
-          ${renderPnrFilterSelect("status", "Status", normalizePnrSelectValue(state.pnrStatus), filterOptions.statuses)}
-          ${renderPnrFilterSelect("tipo", "Tipo de base", normalizePnrSelectValue(state.pnrTipoOperacional), filterOptions.tipos)}
-          ${renderPnrFilterSelect("statusMotorista", "Status do motorista", normalizePnrSelectValue(state.pnrStatusMotorista), filterOptions.statusMotoristas)}
-          ${renderPnrFilterSelect("fonteCruzamento", "Fonte do cruzamento", normalizePnrSelectValue(state.pnrFonteCruzamento), filterOptions.fontesCruzamento)}
-          ${renderPnrFilterSelect("estacao", "Estação de origem", normalizePnrSelectValue(state.pnrEstacao), filterOptions.estacoes)}
-          <button type="button" class="secondary-button" data-pnr-clear>Limpar</button>
+          <div class="pnr-filter-row pnr-filter-row--primary">
+            <div class="pnr-search global-search-filter${state.pnrQuery ? " is-expanded" : ""}" data-pnr-search-control>
+              <button type="button" class="global-search-filter__button" data-pnr-search-toggle aria-label="Pesquisar PNRs">
+                <svg viewBox="0 0 24 24"><path d="m21 21-4.35-4.35M10.8 18a7.2 7.2 0 1 1 0-14.4 7.2 7.2 0 0 1 0 14.4Z" fill="none" stroke="currentColor" stroke-linecap="round" stroke-width="2"></path></svg>
+              </button>
+              <input type="search" data-pnr-query value="${escapeAttribute(state.pnrQuery || "")}" placeholder="Buscar" autocomplete="off">
+            </div>
+            ${renderPnrFilterSelect("month", "Mês", selectedMonthValue, monthSelectOptions)}
+            ${renderPnrFilterSelect("quinzena", "Quinzena", state.pnrQuinzena || "all", [
+              { value: "all", label: "Todas" },
+              { value: "q1", label: "1ª quinzena" },
+              { value: "q2", label: "2ª quinzena" },
+            ], "Todas")}
+            ${renderPnrFilterSelect("status", "Status", normalizePnrSelectValue(state.pnrStatus), filterOptions.statuses)}
+            ${renderPnrFilterSelect("tipo", "Tipo de base", normalizePnrSelectValue(state.pnrTipoOperacional), filterOptions.tipos)}
+          </div>
+          <div class="pnr-filter-row pnr-filter-row--secondary">
+            ${renderPnrFilterSelect("statusMotorista", "Status do motorista", normalizePnrSelectValue(state.pnrStatusMotorista), filterOptions.statusMotoristas)}
+            ${renderPnrFilterSelect("fonteCruzamento", "Fonte do cruzamento", normalizePnrSelectValue(state.pnrFonteCruzamento), filterOptions.fontesCruzamento)}
+            ${renderPnrFilterSelect("estacao", "Estação de origem", normalizePnrSelectValue(state.pnrEstacao), filterOptions.estacoes)}
+            <button type="button" class="secondary-button" data-pnr-clear>Limpar</button>
+          </div>
         </div>
       </article>
 
@@ -9527,6 +9693,17 @@ function normalizePnrStoredRow(row) {
   const nomeMotorista = getPnrDriverNameFromSourceRow({
     motorista: row.nomeMotorista || row.nome_motorista || row.motorista || row.driver || row["NOME DO MOTORISTA"],
   });
+  const idMotorista = formatPnrId(row.idMotorista || row.id_motorista || row["ID DO MOTORISTA"] || row["ID MOTORISTA"]);
+  const motoristaDisplay = row.motoristaDisplay || row.motorista_display || nomeMotorista || (idMotorista ? `ID ${idMotorista}` : "");
+  const statusMotorista =
+    row.statusMotorista ||
+    row.status_motorista ||
+    (nomeMotorista ? "Sem vínculo recente identificado" : idMotorista ? "Driver possivelmente desligado" : "ID não informado");
+  const fonteCruzamento = row.fonteCruzamento || row.fonte_cruzamento || (baseIdentificada ? "Gestão de Desvios" : "Não identificado");
+  const observacaoCruzamento =
+    row.observacaoCruzamento ||
+    row.observacao_cruzamento ||
+    (baseIdentificada ? "Identificado pela estação de origem do arquivo PNR" : idMotorista ? "Sem correspondência suficiente nas bases de 2026" : "ID do motorista não informado");
   const normalized = {
     idCaso: formatPnrId(row.idCaso || row.id_caso || row["ID DO CASO"]),
     dataCaso,
@@ -9557,12 +9734,12 @@ function normalizePnrStoredRow(row) {
     baseIdentificada,
     nomeBaseOperacao: repairPnrText(row.nomeBaseOperacao || row.nome_base_operacao || row.base || estacaoOrigem || "").trim(),
     idRota: formatPnrId(row.idRota || row.id_rota || row["ID DA ROTA"] || row["ID ROTA"]),
-    idMotorista: formatPnrId(row.idMotorista || row.id_motorista || row["ID DO MOTORISTA"] || row["ID MOTORISTA"]),
+    idMotorista,
     nomeMotorista,
-    motoristaDisplay: row.motoristaDisplay || row.motorista_display || nomeMotorista || "",
-    statusMotorista: row.statusMotorista || row.status_motorista || (nomeMotorista ? "Sem vínculo recente identificado" : ""),
-    fonteCruzamento: row.fonteCruzamento || row.fonte_cruzamento || "",
-    observacaoCruzamento: row.observacaoCruzamento || row.observacao_cruzamento || "",
+    motoristaDisplay,
+    statusMotorista,
+    fonteCruzamento,
+    observacaoCruzamento,
     motoristaMatchSource: row.motoristaMatchSource || row.motorista_match_source || row.fonteCruzamento || row.fonte_cruzamento || "",
     dataEntrega,
     idReclamacao: formatPnrId(row.idReclamacao || row.id_reclamacao || row["ID DA RECLAMAÇÃO"] || row["ID DA RECLAMACAO"] || row["ID RECLAMAÇÃO"] || row["ID RECLAMACAO"]),
@@ -9579,6 +9756,10 @@ function normalizePnrStoredRow(row) {
     tipo_registro: DEVIATION_PNR_FILE_CATEGORY,
     arquivo_origem: row.arquivo_origem || row.file_name || "",
   };
+  normalized._sortYear = Number(normalized.ano || period.ano || 0);
+  normalized._sortMonth = Number(normalized.mesNumero || period.mes || 0);
+  normalized._sortQuarter = getPeriodModeFromLabel(normalized.quinzena || period.quinzena) === "q2" ? 2 : 1;
+  normalized._sortDateTs = parseDateValue(normalized.dataCaso).ts || 0;
   normalized.dedupeKey = row.dedupeKey || row.dedupe_key || getPnrDedupeKey(normalized);
   normalized.valorCompraFormatado = currency.format(normalized.valorCompraNumerico || 0);
   normalized._search = buildPnrSearchText(normalized);
