@@ -1,5 +1,5 @@
 import "dotenv/config";
-import { readFile } from "node:fs/promises";
+import { readdir, readFile } from "node:fs/promises";
 import path from "node:path";
 import postgres from "postgres";
 
@@ -10,15 +10,22 @@ if (!databaseUrl) {
   process.exit(1);
 }
 
-const migrationPath = path.resolve("supabase/migrations/20260514_create_processed_dashboard_records.sql");
-const sqlText = await readFile(migrationPath, "utf8");
 const sql = postgres(databaseUrl, {
   max: 1,
   ssl: "require",
 });
 
 try {
-  await sql.unsafe(sqlText);
+  const migrationsDir = path.resolve("supabase/migrations");
+  const migrationFiles = (await readdir(migrationsDir))
+    .filter((file) => file.endsWith(".sql"))
+    .filter((file) => file >= "20260514_create_processed_dashboard_records.sql")
+    .sort();
+  for (const file of migrationFiles) {
+    const sqlText = await readFile(path.join(migrationsDir, file), "utf8");
+    await sql.unsafe(sqlText);
+    console.log(`Migração aplicada: ${file}`);
+  }
   console.log("Migração de registros processados aplicada com sucesso.");
 } finally {
   await sql.end();

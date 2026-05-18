@@ -16,8 +16,45 @@ const EMPTY_DATASET_ID = "__empty";
 const PRE_FATURA_VIEW = "Pré-Fatura";
 const MONTHLY_BASE_VIEW = "Evolução mensal";
 const PACKAGE_MANAGEMENT_VIEW = "Gestão de Pacotes";
+const DEVIATION_MANAGEMENT_VIEW = "Gestão de Desvios";
 const PRE_FATURA_FILE_CATEGORY = "PRE_FATURA";
 const PACKAGE_MANAGEMENT_FILE_CATEGORY = "GESTAO_PACOTES";
+const DEVIATION_PNR_FILE_CATEGORY = "DESVIOS_PNR";
+const DEVIATION_CATEGORY_PNRS = "PNRS";
+const DEVIATION_CATEGORIES = [
+  { key: "SAFETY_OCORRENCIAS", label: "Safety - Ocorrências", enabled: false },
+  { key: "SAFETY_MULTAS", label: "Safety - Multas", enabled: false },
+  { key: "SAFETY_TELEMETRIA_MM", label: "Safety - Telemetria MM", enabled: false },
+  { key: "SAFETY_BRIEFING", label: "Safety - Briefing", enabled: false },
+  { key: "SAFETY_RELATOS", label: "Safety - Relatos", enabled: false },
+  { key: DEVIATION_CATEGORY_PNRS, label: "PNRs", enabled: true },
+  { key: "JURIDICO", label: "Jurídico", enabled: false },
+];
+const PNR_STANDARD_HEADERS = [
+  "ID DO CASO",
+  "DATA DO CASO",
+  "STATUS",
+  "PERÍODO DE FATURAMENTO",
+  "DATA DO PEDIDO DE REVISÃO",
+  "PEDIDO DE REVISÃO",
+  "DATA DE ENCERRAMENTO DO CASO",
+  "REP - ASSISTENTE",
+  "COMENTÁRIO DE ENCERRAMENTO",
+  "N° DA PRÉ-FATURA",
+  "ID DE ENVIO",
+  "PRODUTOS",
+  "VALOR DA COMPRA",
+  "REP TRANSPORTADORA",
+  "ESTAÇÃO DE ORIGEM",
+  "ID DA ROTA",
+  "ID DO MOTORISTA",
+  "DATA DE ENTREGA",
+  "ID DA RECLAMAÇÃO",
+  "MÊS",
+  "QUINZENA REF.",
+  "VAL. COMPRA",
+];
+const PNR_CALCULATED_HEADERS = ["MÊS", "QUINZENA REF.", "VAL. COMPRA"];
 const PNR_GOAL_SETTINGS_KEY = "pnr_goal";
 const DEFAULT_PNR_GOAL_SETTINGS = {
   monthly_goal: 40000,
@@ -34,7 +71,7 @@ const PROCESSED_RECORDS_PAGE_SIZE = 1000;
 let processedRecordsUnavailable = false;
 let isExportingPackageExcel = false;
 const SHEET_ORDER = ["SVC PERDIDOS", "XPT PERDIDOS", "PNR"];
-const SHEET_TABS = [PRE_FATURA_VIEW, MONTHLY_BASE_VIEW, PACKAGE_MANAGEMENT_VIEW];
+const SHEET_TABS = [PRE_FATURA_VIEW, MONTHLY_BASE_VIEW, PACKAGE_MANAGEMENT_VIEW, DEVIATION_MANAGEMENT_VIEW];
 const SHEET_DISPLAY_LABELS = {
   [PRE_FATURA_VIEW]: "Pré-Fatura",
   Todos: "Todos",
@@ -43,6 +80,7 @@ const SHEET_DISPLAY_LABELS = {
   PNR: "PNR",
   [MONTHLY_BASE_VIEW]: "Evolução mensal",
   [PACKAGE_MANAGEMENT_VIEW]: "Gestão de Pacotes",
+  [DEVIATION_MANAGEMENT_VIEW]: "Gestão de Desvios",
 };
 const PACKAGE_CATEGORY_LABELS = {
   ALC: "ALC",
@@ -87,6 +125,13 @@ const STATE_DEFAULT = {
   packageMonths: [],
   prefaturaPeriod: "month",
   packagePeriod: "month",
+  activeDesvioCategory: null,
+  pnrQuery: "",
+  pnrMonths: [],
+  pnrQuinzena: "all",
+  pnrStatus: "Todos",
+  pnrTipoOperacional: "Todos",
+  pnrEstacao: "Todos",
   base: "Todos",
   motorista: "Todos",
   period: "month",
@@ -131,6 +176,7 @@ let library = loadLibrary();
 let activeDataset = getActiveDataset();
 let allRows = activeDataset.rows.slice();
 let packageManagementRows = [];
+let pnrRows = [];
 let fileMeta = activeDataset;
 let workbookEnginePromise = null;
 let excelExportEnginePromise = null;
@@ -156,6 +202,8 @@ let activeEvolutionTooltipBar = null;
 let packageMixTooltipHideTimer = null;
 let activePackageMixSegment = null;
 let donutTooltipHideTimer = null;
+let isDeviationCategoryMenuOpen = false;
+let activeDropdownPortalKind = "";
 let chartViewportObserver = null;
 let chartAnimationFrame = 0;
 let chartAnimationToken = 0;
@@ -172,13 +220,20 @@ const selectedSettingsFileIds = new Set();
 let totalDiscountComparisonRequest = 0;
 let globalGoalSettings = getDefaultGoalSettings();
 let packageManagementRowsLoadedKey = "";
+let pnrRowsLoadedKey = "";
+let pnrDriverEnrichmentKey = "";
+let isLoadingPnrRows = false;
 const derivedDataCache = {
   prefaturaKey: "",
   prefaturaRows: [],
   packageKey: "",
   packageRows: [],
+  pnrKey: "",
+  pnrRows: [],
   packageMonthOptionsKey: "",
   packageMonthOptions: [],
+  pnrMonthOptionsKey: "",
+  pnrMonthOptions: [],
 };
 const prefaturaMatchIndexCache = new WeakMap();
 const prefaturaDriverIndexCache = new WeakMap();
@@ -188,8 +243,13 @@ function resetDerivedDataCache() {
   derivedDataCache.prefaturaRows = [];
   derivedDataCache.packageKey = "";
   derivedDataCache.packageRows = [];
+  derivedDataCache.pnrKey = "";
+  derivedDataCache.pnrRows = [];
   derivedDataCache.packageMonthOptionsKey = "";
   derivedDataCache.packageMonthOptions = [];
+  derivedDataCache.pnrMonthOptionsKey = "";
+  derivedDataCache.pnrMonthOptions = [];
+  pnrDriverEnrichmentKey = "";
 }
 
 const DASHBOARD_STATE_CONFIG = {
@@ -325,6 +385,7 @@ function cacheDom() {
   el.viewToolbar = document.querySelector(".view-toolbar");
   el.sheetTabs = document.getElementById("sheet-tabs");
   el.monthlyBaseView = document.getElementById("monthly-base-view");
+  el.deviationManagementView = document.getElementById("deviation-management-view");
   el.insightGrid = document.querySelector(".insight-grid");
   el.comparisonPanel = document.querySelector(".comparison-panel");
   el.tablePanel = document.querySelector(".table-panel");
@@ -589,7 +650,7 @@ function bindEvents() {
     el.settingsFilesTabs.addEventListener("click", (event) => {
       const button = event.target.closest("[data-settings-files-tab]");
       if (!button) return;
-      settingsFilesTab = button.dataset.settingsFilesTab === PACKAGE_MANAGEMENT_FILE_CATEGORY ? PACKAGE_MANAGEMENT_FILE_CATEGORY : PRE_FATURA_FILE_CATEGORY;
+      settingsFilesTab = isDashboardFileCategory(button.dataset.settingsFilesTab) ? button.dataset.settingsFilesTab : PRE_FATURA_FILE_CATEGORY;
       selectedSettingsFileIds.clear();
       renderSettingsFileManagement();
     });
@@ -718,10 +779,17 @@ function bindEvents() {
       });
     });
     document.addEventListener("click", (event) => {
-      if (event.target.closest("#type-filter") || event.target.closest("#month-filter") || event.target.closest("#period-filter")) return;
+      if (
+        event.target.closest("#type-filter") ||
+        event.target.closest("#month-filter") ||
+        event.target.closest("#period-filter") ||
+        event.target.closest(".sheet-tab-wrapper--deviation") ||
+        isDropdownPortalTarget(event.target)
+      ) return;
       closePackageTypeMenu();
       closeCustomFilterMenu("month");
       closeCustomFilterMenu("period");
+      closeDeviationCategoryMenu({ render: true });
     });
   }
 
@@ -736,6 +804,94 @@ function bindEvents() {
     if (!button) return;
     event.preventDefault();
     await exportPackageManagementExcel(button);
+  });
+  document.addEventListener("input", (event) => {
+    const input = event.target.closest("[data-pnr-query]");
+    if (!input) return;
+    window.clearTimeout(searchDebounceTimer);
+    searchDebounceTimer = window.setTimeout(() => {
+      state.pnrQuery = input.value || "";
+      state.page = 1;
+      resetDerivedDataCache();
+      persistState();
+      renderAll();
+    }, 300);
+  });
+  document.addEventListener("change", (event) => {
+    const field = event.target.closest("[data-pnr-filter]");
+    if (!field) return;
+    const name = field.dataset.pnrFilter;
+    if (name === "pageSize") {
+      state.pageSize = Number(field.value) || 15;
+    } else if (name === "month") {
+      state.pnrMonths = field.value === "Todos" ? [] : [field.value];
+    } else if (name === "quinzena") {
+      state.pnrQuinzena = field.value || "all";
+    } else if (name === "status") {
+      state.pnrStatus = normalizePnrSelectValue(field.value);
+    } else if (name === "tipo") {
+      state.pnrTipoOperacional = normalizePnrSelectValue(field.value);
+    } else if (name === "estacao") {
+      state.pnrEstacao = normalizePnrSelectValue(field.value);
+    }
+    state.page = 1;
+    resetDerivedDataCache();
+    persistState();
+    renderAll();
+  });
+  document.addEventListener("click", (event) => {
+    const clear = event.target.closest("[data-pnr-clear]");
+    if (clear) {
+      state.pnrQuery = "";
+      state.pnrMonths = [];
+      state.pnrQuinzena = "all";
+      state.pnrStatus = "Todos";
+      state.pnrTipoOperacional = "Todos";
+      state.pnrEstacao = "Todos";
+      state.page = 1;
+      resetDerivedDataCache();
+      persistState();
+      renderAll();
+      return;
+    }
+    const pageButton = event.target.closest("[data-pnr-page]");
+    if (pageButton) {
+      const totalRows = sortPnrRows(getFilteredPnrRows()).length;
+      const totalPages = Math.max(1, Math.ceil(totalRows / state.pageSize));
+      state.page = pageButton.dataset.pnrPage === "next"
+        ? Math.min(totalPages, state.page + 1)
+        : Math.max(1, state.page - 1);
+      persistState();
+      renderAll();
+      return;
+    }
+    const sortHeader = event.target.closest("[data-pnr-sort]");
+    if (sortHeader) {
+      const sortKey = sortHeader.dataset.pnrSort;
+      if (state.sortKey === sortKey) {
+        state.sortDir = state.sortDir === "asc" ? "desc" : "asc";
+      } else {
+        state.sortKey = sortKey;
+        state.sortDir = sortKey === "valorCompraNumerico" || sortKey === "dataCaso" ? "desc" : "asc";
+      }
+      persistState();
+      renderAll();
+    }
+  });
+  document.addEventListener("pointerover", (event) => {
+    const target = event.target.closest(".pnr-tooltip-target");
+    if (!target) return;
+    showPnrTooltip(target, event);
+  });
+  document.addEventListener("pointermove", (event) => {
+    const target = event.target.closest(".pnr-tooltip-target");
+    if (!target) return;
+    positionPnrTooltip(event);
+  });
+  document.addEventListener("pointerout", (event) => {
+    const target = event.target.closest(".pnr-tooltip-target");
+    if (!target || (event.relatedTarget && target.contains(event.relatedTarget))) return;
+    hidePnrTooltip();
   });
 
   el.pageSize.addEventListener("change", (event) => {
@@ -761,6 +917,20 @@ function bindEvents() {
   });
 
   el.sheetTabs.addEventListener("click", (event) => {
+    const deviationCategory = event.target.closest("[data-deviation-category]");
+    if (deviationCategory) {
+      event.preventDefault();
+      handleDeviationCategorySelection(deviationCategory.dataset.deviationCategory);
+      return;
+    }
+
+    const deviationToggle = event.target.closest("[data-deviation-toggle]");
+    if (deviationToggle) {
+      event.preventDefault();
+      toggleDeviationCategoryMenu();
+      return;
+    }
+
     const button = event.target.closest("button[data-sheet]");
     if (!button) return;
     const previousCategory = getCurrentFileCategory();
@@ -772,6 +942,9 @@ function bindEvents() {
     persistState();
     hydrateControls();
     renderAll();
+    if (state.sheet === DEVIATION_MANAGEMENT_VIEW) {
+      return;
+    }
     if (getCurrentFileCategory() !== previousCategory) {
       if (getCurrentFileCategory() === PACKAGE_MANAGEMENT_FILE_CATEGORY) {
         void ensurePackageManagementRowsLoaded(dashboardFileRecords).finally(() => {
@@ -787,6 +960,36 @@ function bindEvents() {
       return;
     }
   });
+
+  document.addEventListener("click", (event) => {
+    if (!isDeviationCategoryMenuOpen) return;
+    if (event.target.closest(".sheet-tab-wrapper--deviation") || isDropdownPortalTarget(event.target)) return;
+    closeDeviationCategoryMenu({ render: true });
+  });
+
+  document.addEventListener("keydown", (event) => {
+    if (event.key !== "Escape") return;
+    if (activeDropdownPortalKind) {
+      const closingKind = activeDropdownPortalKind;
+      if (closingKind === "deviation") closeDeviationCategoryMenu({ render: true });
+      else closeDropdownPortal(closingKind, { focus: true });
+      event.preventDefault();
+      return;
+    }
+    if (!isDeviationCategoryMenuOpen) return;
+    closeDeviationCategoryMenu({ render: true });
+    el.sheetTabs?.querySelector("[data-deviation-toggle]")?.focus();
+  });
+
+  document.addEventListener("click", (event) => {
+    const deviationCategory = event.target.closest("body > .deviation-category-menu [data-deviation-category]");
+    if (!deviationCategory) return;
+    event.preventDefault();
+    handleDeviationCategorySelection(deviationCategory.dataset.deviationCategory);
+  });
+
+  window.addEventListener("resize", () => positionDropdownPortal());
+  window.addEventListener("scroll", () => positionDropdownPortal(), true);
 
   el.baseBars.addEventListener("click", (event) => {
     const row = event.target.closest("[data-base]");
@@ -963,7 +1166,134 @@ function getSheetDisplayLabel(sheet) {
   return SHEET_DISPLAY_LABELS[sheet] || String(sheet || "");
 }
 
+function getDropdownPortalConfig(kind) {
+  if (kind === "type") {
+    return {
+      kind,
+      trigger: el.typeFilterToggle,
+      menu: el.typeFilterMenu,
+      minWidth: 192,
+      align: "right",
+      focusTarget: el.typeFilterToggle,
+    };
+  }
+  if (kind === "month") {
+    return {
+      kind,
+      trigger: el.monthFilterToggle,
+      menu: el.monthFilterMenu,
+      minWidth: 192,
+      align: "left",
+      focusTarget: el.monthFilterToggle,
+    };
+  }
+  if (kind === "period") {
+    return {
+      kind,
+      trigger: el.periodFilterToggle,
+      menu: el.periodFilterMenu,
+      minWidth: 192,
+      align: "left",
+      focusTarget: el.periodFilterToggle,
+    };
+  }
+  if (kind === "deviation") {
+    const trigger = el.sheetTabs?.querySelector("[data-deviation-toggle]");
+    return {
+      kind,
+      trigger,
+      menu: document.querySelector(".deviation-category-menu"),
+      minWidth: 280,
+      align: "left",
+      focusTarget: trigger,
+    };
+  }
+  return null;
+}
+
+function isDropdownPortalTarget(target) {
+  return Boolean(target?.closest?.("[data-dropdown-portal-menu], .type-filter__menu, .deviation-category-menu"));
+}
+
+function positionDropdownPortal(kind = activeDropdownPortalKind) {
+  const config = getDropdownPortalConfig(kind);
+  if (!config?.trigger || !config?.menu || config.menu.hidden) return;
+  const { trigger, menu } = config;
+  const rect = trigger.getBoundingClientRect();
+  const viewportPadding = 8;
+  const gap = 8;
+  const minWidth = Math.max(Math.ceil(rect.width), config.minWidth || 0);
+
+  menu.style.position = "fixed";
+  menu.style.right = "auto";
+  menu.style.bottom = "auto";
+  menu.style.minWidth = `${minWidth}px`;
+  menu.style.maxWidth = `calc(100vw - ${viewportPadding * 2}px)`;
+  menu.style.maxHeight = `calc(100vh - ${viewportPadding * 2}px)`;
+  menu.style.overflowY = "auto";
+  menu.style.zIndex = "9999";
+
+  const menuRect = menu.getBoundingClientRect();
+  const menuWidth = Math.max(menuRect.width, minWidth);
+  const menuHeight = menuRect.height;
+  let left = config.align === "right" ? rect.right - menuWidth : rect.left;
+  left = Math.min(Math.max(viewportPadding, left), Math.max(viewportPadding, window.innerWidth - menuWidth - viewportPadding));
+  let top = rect.bottom + gap;
+  if (top + menuHeight > window.innerHeight - viewportPadding && rect.top - menuHeight - gap >= viewportPadding) {
+    top = rect.top - menuHeight - gap;
+  }
+  top = Math.min(Math.max(viewportPadding, top), Math.max(viewportPadding, window.innerHeight - Math.min(menuHeight, window.innerHeight - viewportPadding * 2) - viewportPadding));
+
+  menu.style.left = `${Math.round(left)}px`;
+  menu.style.top = `${Math.round(top)}px`;
+}
+
+function openDropdownPortal(kind) {
+  const config = getDropdownPortalConfig(kind);
+  if (!config?.trigger || !config?.menu) return false;
+  closeDropdownPortal(activeDropdownPortalKind && activeDropdownPortalKind !== kind ? activeDropdownPortalKind : "", { focus: false });
+  if (config.menu.parentElement !== document.body) document.body.appendChild(config.menu);
+  config.menu.dataset.dropdownPortalMenu = kind;
+  config.menu.hidden = false;
+  config.trigger.setAttribute("aria-expanded", "true");
+  activeDropdownPortalKind = kind;
+  positionDropdownPortal(kind);
+  return true;
+}
+
+function closeDropdownPortal(kind = activeDropdownPortalKind, options = {}) {
+  if (!kind) return;
+  const config = getDropdownPortalConfig(kind);
+  if (config?.menu) {
+    config.menu.hidden = true;
+    config.menu.removeAttribute("data-dropdown-portal-menu");
+    config.menu.style.left = "";
+    config.menu.style.top = "";
+    config.menu.style.right = "";
+    config.menu.style.bottom = "";
+    config.menu.style.minWidth = "";
+    config.menu.style.maxWidth = "";
+    config.menu.style.maxHeight = "";
+    config.menu.style.overflowY = "";
+    config.menu.style.zIndex = "";
+  }
+  config?.trigger?.setAttribute("aria-expanded", "false");
+  if (activeDropdownPortalKind === kind) activeDropdownPortalKind = "";
+  if (options.focus) config?.focusTarget?.focus?.();
+}
+
+function closeAllFloatingDropdowns(options = {}) {
+  ["type", "month", "period", "deviation"].forEach((kind) => closeDropdownPortal(kind, options));
+  isDeviationCategoryMenuOpen = false;
+}
+
+function removeDetachedDeviationMenus() {
+  document.querySelectorAll("body > .deviation-category-menu").forEach((menu) => menu.remove());
+  if (activeDropdownPortalKind === "deviation") activeDropdownPortalKind = "";
+}
+
 function getCurrentFileCategory(sheet = state.sheet) {
+  if (sheet === DEVIATION_MANAGEMENT_VIEW) return DEVIATION_PNR_FILE_CATEGORY;
   return sheet === PACKAGE_MANAGEMENT_VIEW ? PACKAGE_MANAGEMENT_FILE_CATEGORY : PRE_FATURA_FILE_CATEGORY;
 }
 
@@ -1047,21 +1377,21 @@ function syncPackageTypeFilterControl() {
   el.typeFilterOptions.forEach((input) => {
     input.checked = input.value === "Todos" ? allSelected : (!allSelected && selectedValues.has(input.value));
   });
+  if (activeDropdownPortalKind === "type") positionDropdownPortal("type");
 }
 
 function closePackageTypeMenu() {
   if (!el.typeFilterMenu || !el.typeFilterToggle) return;
-  el.typeFilterMenu.hidden = true;
-  el.typeFilterToggle.setAttribute("aria-expanded", "false");
+  closeDropdownPortal("type");
 }
 
 function openPackageTypeMenu() {
   if (!el.typeFilterMenu || !el.typeFilterToggle) return;
+  closeDeviationCategoryMenu({ render: true });
   closeCustomFilterMenu("month");
   closeCustomFilterMenu("period");
-  el.typeFilterMenu.hidden = false;
-  el.typeFilterToggle.setAttribute("aria-expanded", "true");
   syncPackageTypeFilterControl();
+  openDropdownPortal("type");
 }
 
 function togglePackageTypeMenu() {
@@ -1187,6 +1517,7 @@ function syncMonthFilterControl() {
       </label>
     `),
   ].join("");
+  if (activeDropdownPortalKind === "month") positionDropdownPortal("month");
 }
 
 function syncPeriodFilterControl() {
@@ -1202,6 +1533,7 @@ function syncPeriodFilterControl() {
       </button>
     `)
     .join("");
+  if (activeDropdownPortalKind === "period") positionDropdownPortal("period");
 }
 
 function getPeriodDropdownOptions() {
@@ -1216,21 +1548,20 @@ function closeCustomFilterMenu(kind) {
   const menu = kind === "month" ? el.monthFilterMenu : el.periodFilterMenu;
   const toggle = kind === "month" ? el.monthFilterToggle : el.periodFilterToggle;
   if (!menu || !toggle) return;
-  menu.hidden = true;
-  toggle.setAttribute("aria-expanded", "false");
+  closeDropdownPortal(kind);
 }
 
 function openCustomFilterMenu(kind) {
   const menu = kind === "month" ? el.monthFilterMenu : el.periodFilterMenu;
   const toggle = kind === "month" ? el.monthFilterToggle : el.periodFilterToggle;
   if (!menu || !toggle) return;
+  closeDeviationCategoryMenu({ render: true });
   closePackageTypeMenu();
   if (kind !== "month") closeCustomFilterMenu("month");
   if (kind !== "period") closeCustomFilterMenu("period");
   if (kind === "month") syncMonthFilterControl();
   else syncPeriodFilterControl();
-  menu.hidden = false;
-  toggle.setAttribute("aria-expanded", "true");
+  openDropdownPortal(kind);
 }
 
 function toggleCustomFilterMenu(kind) {
@@ -1277,6 +1608,7 @@ function closeTopFilterOverlays() {
   closePackageTypeMenu();
   closeCustomFilterMenu("month");
   closeCustomFilterMenu("period");
+  closeDeviationCategoryMenu();
   setSearchExpanded(false, { focus: false });
   if (el.searchInput && !state.query) el.searchInput.blur();
 }
@@ -1327,7 +1659,7 @@ function getPrefaturaComparisonSheet() {
 }
 
 function isDashboardFileCategory(value) {
-  return value === PRE_FATURA_FILE_CATEGORY || value === PACKAGE_MANAGEMENT_FILE_CATEGORY;
+  return value === PRE_FATURA_FILE_CATEGORY || value === PACKAGE_MANAGEMENT_FILE_CATEGORY || value === DEVIATION_PNR_FILE_CATEGORY;
 }
 
 function withTimeout(promise, timeoutMs, message) {
@@ -1342,7 +1674,9 @@ function withTimeout(promise, timeoutMs, message) {
 
 function identificarTipoArquivo(nomeArquivo) {
   const nome = normalizeText(nomeArquivo);
-  return nome.includes("GESTAO DE PACOTES") ? PACKAGE_MANAGEMENT_FILE_CATEGORY : PRE_FATURA_FILE_CATEGORY;
+  if (nome.includes("GESTAO DE PACOTES")) return PACKAGE_MANAGEMENT_FILE_CATEGORY;
+  if (nome.includes("DESVIOS PNR") || nome.includes("PNRS") || /\bPNR\b/.test(nome)) return DEVIATION_PNR_FILE_CATEGORY;
+  return PRE_FATURA_FILE_CATEGORY;
 }
 
 function getFileRecordCategory(fileRecord) {
@@ -1360,9 +1694,11 @@ function getFileRecordCategory(fileRecord) {
 
   const nameCategory = identificarTipoArquivo(fileRecord?.metadata?.original_name || fileRecord?.file_name || fileRecord?.fileName || "");
   if (nameCategory === PACKAGE_MANAGEMENT_FILE_CATEGORY) return PACKAGE_MANAGEMENT_FILE_CATEGORY;
+  if (nameCategory === DEVIATION_PNR_FILE_CATEGORY) return DEVIATION_PNR_FILE_CATEGORY;
 
   const storagePath = String(fileRecord?.storage_path || fileRecord?.storagePath || "");
   if (storagePath.startsWith("gestao-pacotes/")) return PACKAGE_MANAGEMENT_FILE_CATEGORY;
+  if (storagePath.startsWith("gestao-desvios/pnrs/")) return DEVIATION_PNR_FILE_CATEGORY;
   if (storagePath.startsWith("pre-fatura/")) return PRE_FATURA_FILE_CATEGORY;
 
   return nameCategory;
@@ -1374,6 +1710,7 @@ function getFileRecordMimeType(fileRecord, fallback = "") {
 }
 
 function inferRowsFileCategory(rows) {
+  if (Array.isArray(rows) && rows.some((row) => row?.file_category === DEVIATION_PNR_FILE_CATEGORY || row?.tipo_registro === DEVIATION_PNR_FILE_CATEGORY)) return DEVIATION_PNR_FILE_CATEGORY;
   return Array.isArray(rows) && rows.some((row) => row?.file_category === PACKAGE_MANAGEMENT_FILE_CATEGORY) ? PACKAGE_MANAGEMENT_FILE_CATEGORY : PRE_FATURA_FILE_CATEGORY;
 }
 
@@ -1402,6 +1739,14 @@ function getDashboardFileDisplayName(fileOrDataset) {
   const category = fileOrDataset.fileCategory || getFileRecordCategory(fileOrDataset.remoteRecord || fileOrDataset);
   if (category === PACKAGE_MANAGEMENT_FILE_CATEGORY) {
     return buildPackageManagementDisplayName(fileName, metadata);
+  }
+  if (category === DEVIATION_PNR_FILE_CATEGORY) {
+    const period = getFileRecordPeriod(fileOrDataset.remoteRecord || fileOrDataset);
+    const monthLabel = period?.monthLabel ? period.monthLabel.replace(/\s*\/\s*/g, "/") : "";
+    const parts = ["PNRs"];
+    if (period?.periodLabel && period.periodType !== "month") parts.push(period.periodLabel);
+    if (monthLabel) parts.push(monthLabel);
+    return parts.join(" · ");
   }
   const humanized = humanizeWorkbookName(fileName);
   return humanized.startsWith("Pré-Fatura ·") ? humanized : `Pré-Fatura · ${humanized}`;
@@ -1582,17 +1927,18 @@ function hydrateControls() {
 }
 
 function updateGlobalPeriodFiltersVisibility(isEvolutionView = state.sheet === MONTHLY_BASE_VIEW) {
+  const hideDataFilters = isEvolutionView || state.sheet === DEVIATION_MANAGEMENT_VIEW;
   const searchFilter = el.searchInput?.closest(".global-search-filter");
   const monthFilter = el.monthFilter || el.monthSelect?.closest(".global-period-filter");
   const periodFilter = el.periodFilter || el.periodSelect?.closest(".global-period-filter");
   const typeFilter = el.typeFilter;
   [monthFilter, periodFilter].forEach((filter) => {
-    if (filter) filter.hidden = isEvolutionView;
+    if (filter) filter.hidden = hideDataFilters;
   });
-  if (searchFilter) searchFilter.hidden = isEvolutionView;
-  if (typeFilter) typeFilter.hidden = isEvolutionView;
+  if (searchFilter) searchFilter.hidden = hideDataFilters;
+  if (typeFilter) typeFilter.hidden = hideDataFilters;
   if (el.viewToolbar) {
-    el.viewToolbar.classList.toggle("is-evolution-view", isEvolutionView);
+    el.viewToolbar.classList.toggle("is-evolution-view", hideDataFilters);
     el.viewToolbar.classList.toggle("is-package-view", state.sheet === PACKAGE_MANAGEMENT_VIEW);
   }
 }
@@ -1863,13 +2209,44 @@ function getSettingsFilesForActiveTab() {
 }
 
 function getSettingsFileCategoryLabel(category) {
+  if (category === DEVIATION_PNR_FILE_CATEGORY) return "PNRs";
   return category === PACKAGE_MANAGEMENT_FILE_CATEGORY ? "Gestão de Pacotes" : "Pré-Fatura";
+}
+
+function getSettingsFileTabLabel(category) {
+  if (category === DEVIATION_PNR_FILE_CATEGORY) return "Gestão de Desvios";
+  return getSettingsFileCategoryLabel(category);
 }
 
 function formatSettingsFilePeriod(file) {
   const period = getFileRecordPeriod(file);
   const periodLabel = getPeriodModeLabel(period.periodType || "month");
-  return `${periodLabel} · ${shortMonthYear(period.monthLabel || getMonthLabelFromKey(period.key))}`;
+  const monthLabel = categoryAwareFullMonthLabel(file, period);
+  return `${periodLabel} · ${monthLabel}`;
+}
+
+function categoryAwareFullMonthLabel(file, period = getFileRecordPeriod(file)) {
+  const category = getFileRecordCategory(file);
+  const label = period.monthLabel || getMonthLabelFromKey(period.key);
+  if (category === DEVIATION_PNR_FILE_CATEGORY) return String(label || "").replace(/\s*\/\s*/g, "/");
+  return shortMonthYear(label);
+}
+
+function renderDeviationSettingsCategories(filesCount = 0) {
+  const rowsLabel = filesCount ? `${integer.format(filesCount)} arquivo${filesCount === 1 ? "" : "s"}` : "Sem arquivos";
+  return `
+    <div class="settings-deviation-categories" aria-label="Categorias da Gestão de Desvios">
+      ${DEVIATION_CATEGORIES.map((category) => {
+        const enabled = category.key === DEVIATION_CATEGORY_PNRS;
+        return `
+          <span class="settings-deviation-category ${enabled ? "is-enabled is-active" : "is-disabled"}">
+            <span>${escapeHtml(category.label)}</span>
+            <small>${enabled ? rowsLabel : "Em desenvolvimento"}</small>
+          </span>
+        `;
+      }).join("")}
+    </div>
+  `;
 }
 
 function formatSettingsFileStatus(file) {
@@ -1893,6 +2270,7 @@ function renderSettingsFileManagement() {
   const tabs = [
     [PRE_FATURA_FILE_CATEGORY, "Pré-Fatura"],
     [PACKAGE_MANAGEMENT_FILE_CATEGORY, "Gestão de Pacotes"],
+    [DEVIATION_PNR_FILE_CATEGORY, "Gestão de Desvios"],
   ];
   el.settingsFilesTabs.innerHTML = tabs
     .map(([category, label]) => `
@@ -1922,12 +2300,16 @@ function renderSettingsFileManagement() {
     return;
   }
   if (!files.length) {
-    el.settingsFilesList.innerHTML = `<div class="settings-files-empty">Nenhum arquivo de ${escapeHtml(getSettingsFileCategoryLabel(settingsFilesTab))} encontrado.</div>`;
+    el.settingsFilesList.innerHTML = `
+      ${settingsFilesTab === DEVIATION_PNR_FILE_CATEGORY ? renderDeviationSettingsCategories(0) : ""}
+      <div class="settings-files-empty">Nenhum arquivo de ${escapeHtml(getSettingsFileTabLabel(settingsFilesTab))} encontrado.</div>
+    `;
     return;
   }
 
   const allSelected = selectedCount === files.length;
   el.settingsFilesList.innerHTML = `
+    ${settingsFilesTab === DEVIATION_PNR_FILE_CATEGORY ? renderDeviationSettingsCategories(files.length) : ""}
     <label class="settings-files-select-all">
       <input type="checkbox" data-settings-file-select-all ${allSelected ? "checked" : ""} ${permissions.canDeleteFile ? "" : "disabled"}>
       <span class="type-filter__check" aria-hidden="true"></span>
@@ -1960,15 +2342,37 @@ function renderSettingsFileManagement() {
 }
 
 function renderTabs() {
+  removeDetachedDeviationMenus();
   el.sheetTabs.innerHTML = SHEET_TABS.map((sheet) => {
     const isActive = state.sheet === sheet ? "is-active" : "";
     const label = getSheetDisplayLabel(sheet);
+    if (sheet === DEVIATION_MANAGEMENT_VIEW) {
+      const categoryLabel = getDeviationCategoryLabel();
+      const categoryBadge = categoryLabel ? `<span class="sheet-tab__badge">${escapeHtml(categoryLabel)}</span>` : "";
+      return `
+        <span class="sheet-tab-wrapper sheet-tab-wrapper--deviation">
+          <button
+            type="button"
+            class="sheet-tab sheet-tab--deviation ${isActive}"
+            data-sheet="${escapeAttribute(sheet)}"
+            data-deviation-toggle
+            aria-haspopup="menu"
+            aria-expanded="${isDeviationCategoryMenuOpen ? "true" : "false"}"
+          >
+            <span class="sheet-tab__label">${escapeHtml(label)}</span>
+            ${categoryBadge}
+          </button>
+          ${renderDeviationCategoryMenu()}
+        </span>
+      `;
+    }
     return `
       <button type="button" class="sheet-tab ${isActive}" data-sheet="${escapeAttribute(sheet)}">
         ${escapeHtml(label)}
       </button>
     `;
   }).join("");
+  if (isDeviationCategoryMenuOpen) openDropdownPortal("deviation");
 }
 
 function renderAll() {
@@ -1977,12 +2381,13 @@ function renderAll() {
   renderTabs();
   const packageView = state.sheet === PACKAGE_MANAGEMENT_VIEW;
   const monthlyView = state.sheet === MONTHLY_BASE_VIEW;
+  const deviationView = state.sheet === DEVIATION_MANAGEMENT_VIEW;
   let filtered = [];
   let sorted = [];
   let paged = [];
   let summary = null;
   const packageRows = packageView ? getPackageManagementRowsForView() : [];
-  if (!monthlyView && !packageView) {
+  if (!monthlyView && !packageView && !deviationView) {
     filtered = getFilteredRows();
     sorted = sortRows(filtered);
     paged = paginateRows(sorted);
@@ -2003,6 +2408,16 @@ function renderAll() {
     return;
   }
 
+  if (deviationView) {
+    toggleDashboardView(monthlyView, packageView, deviationView);
+    renderDeviationManagementView();
+    renderFilterSummary();
+    updateTopbar(summary || undefined);
+    updateAccessControls();
+    persistState();
+    return;
+  }
+
   const dashboardState = getDashboardState(packageView ? packageRows : monthlyView ? allRows : filtered);
   if (dashboardState) {
     renderDashboardState(dashboardState);
@@ -2013,7 +2428,7 @@ function renderAll() {
     return;
   }
 
-  toggleDashboardView(monthlyView, packageView);
+  toggleDashboardView(monthlyView, packageView, deviationView);
   if (monthlyView) {
     renderMonthlyBaseEvolution();
   } else if (packageView) {
@@ -2033,7 +2448,7 @@ function renderAll() {
 }
 
 function renderCurrentTablePageOnly() {
-  if (state.sheet === MONTHLY_BASE_VIEW || state.appView !== "dashboard") {
+  if (state.sheet === MONTHLY_BASE_VIEW || state.sheet === DEVIATION_MANAGEMENT_VIEW || state.appView !== "dashboard") {
     renderAll();
     return;
   }
@@ -2413,13 +2828,788 @@ async function uploadProfileAvatar(file) {
   return data?.publicUrl || "";
 }
 
-function toggleDashboardView(monthlyView, packageView = false) {
+function toggleDashboardView(monthlyView, packageView = false, deviationView = false) {
   if (el.monthlyBaseView) el.monthlyBaseView.hidden = !monthlyView;
-  if (el.kpiGrid) el.kpiGrid.hidden = monthlyView;
-  if (el.tablePanel) el.tablePanel.hidden = monthlyView;
+  if (el.deviationManagementView) el.deviationManagementView.hidden = !deviationView;
+  if (el.kpiGrid) el.kpiGrid.hidden = monthlyView || deviationView;
+  if (el.tablePanel) el.tablePanel.hidden = monthlyView || deviationView;
   [el.insightGrid, el.comparisonPanel].forEach((node) => {
-    if (node) node.hidden = monthlyView || packageView;
+    if (node) node.hidden = monthlyView || packageView || deviationView;
   });
+}
+
+function normalizeDeviationCategory(value) {
+  if (!value) return null;
+  return DEVIATION_CATEGORIES.some((category) => category.key === value) ? value : null;
+}
+
+function getDeviationCategoryLabel(value = state.activeDesvioCategory) {
+  return DEVIATION_CATEGORIES.find((category) => category.key === value)?.label || "";
+}
+
+function getDeviationCategoryConfig(value) {
+  return DEVIATION_CATEGORIES.find((category) => category.key === value) || null;
+}
+
+function closeDeviationCategoryMenu(options = {}) {
+  if (!isDeviationCategoryMenuOpen) return;
+  isDeviationCategoryMenuOpen = false;
+  closeDropdownPortal("deviation");
+  if (options.render) renderTabs();
+}
+
+function openDeviationCategoryMenu() {
+  closePackageTypeMenu();
+  closeCustomFilterMenu("month");
+  closeCustomFilterMenu("period");
+  setSearchExpanded(false, { focus: false });
+  isDeviationCategoryMenuOpen = true;
+  renderTabs();
+}
+
+function toggleDeviationCategoryMenu() {
+  if (isDeviationCategoryMenuOpen) closeDeviationCategoryMenu({ render: true });
+  else openDeviationCategoryMenu();
+}
+
+function handleDeviationCategorySelection(categoryKey) {
+  const category = getDeviationCategoryConfig(categoryKey);
+  if (!category?.enabled) {
+    showToast("Categoria em desenvolvimento.", "info", 3200);
+    return;
+  }
+  closeTopFilterOverlays();
+  clearTransientDashboardStateForNavigation();
+  state.appView = "dashboard";
+  state.sheet = DEVIATION_MANAGEMENT_VIEW;
+  state.activeDesvioCategory = normalizeDeviationCategory(category.key);
+  state.page = 1;
+  isDeviationCategoryMenuOpen = false;
+  if (state.activeDesvioCategory === DEVIATION_CATEGORY_PNRS && shouldLoadPnrRowsForCurrentView()) {
+    isLoadingPnrRows = true;
+  }
+  persistState();
+  hydrateControls();
+  renderAll();
+  if (state.activeDesvioCategory === DEVIATION_CATEGORY_PNRS) {
+    void ensurePnrRowsLoaded(dashboardFileRecords).finally(() => {
+      isLoadingPnrRows = false;
+      hydrateControls();
+      renderAll();
+    });
+  }
+}
+
+function renderDeviationCategoryMenu() {
+  return `
+    <div class="deviation-category-menu" role="menu" ${isDeviationCategoryMenuOpen ? "" : "hidden"}>
+      ${DEVIATION_CATEGORIES.map((category) => {
+    const isActive = normalizeDeviationCategory(state.activeDesvioCategory) === category.key;
+    const itemState = [
+      "deviation-category-menu__item",
+      isActive ? "is-active" : "",
+      category.enabled ? "" : "is-disabled",
+    ].filter(Boolean).join(" ");
+    return `
+        <button
+          type="button"
+          class="${itemState}"
+          data-deviation-category="${escapeAttribute(category.key)}"
+          role="menuitem"
+          aria-disabled="${category.enabled ? "false" : "true"}"
+          aria-label="${escapeAttribute(category.enabled ? category.label : `${category.label} - Categoria em desenvolvimento`)}"
+        >
+          <span>${escapeHtml(category.label)}</span>
+          ${
+            category.enabled
+              ? isActive
+                ? `<span class="deviation-category-menu__status" aria-hidden="true">
+                    <svg viewBox="0 0 24 24">
+                      <path d="m5 12 4 4L19 6" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2"></path>
+                    </svg>
+                  </span>`
+                : ""
+              : `<span class="deviation-category-menu__status" aria-hidden="true">
+                  <svg viewBox="0 0 24 24">
+                    <path d="M7 11V8a5 5 0 0 1 10 0v3m-9 0h8a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2Z" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8"></path>
+                  </svg>
+                </span>`
+          }
+        </button>
+      `;
+  }).join("")}
+    </div>
+  `;
+}
+
+function renderDeviationManagementView() {
+  if (!el.deviationManagementView) return;
+  state.activeDesvioCategory = normalizeDeviationCategory(state.activeDesvioCategory);
+  if (state.activeDesvioCategory === DEVIATION_CATEGORY_PNRS) {
+    el.deviationManagementView.innerHTML = renderPnrPage();
+    return;
+  }
+  el.deviationManagementView.innerHTML = `
+    <article class="panel deviation-management-panel">
+      <div class="panel__header">
+        <div>
+          <h2>Gestão de Desvios</h2>
+          <p>Selecione uma categoria para visualizar os dados.</p>
+        </div>
+        <span class="panel__meta">${escapeHtml(getDeviationCategoryLabel())}</span>
+      </div>
+      <div class="deviation-management-placeholder">
+        <strong>Estrutura inicial criada</strong>
+        <p>A área de Gestão de Desvios está preparada para receber PNRs, Safety e Jurídico nas próximas etapas.</p>
+      </div>
+    </article>
+  `;
+}
+
+function getPnrRowsCacheKey() {
+  return [
+    pnrRowsLoadedKey,
+    pnrRows.length,
+    getPnrSelectedMonthKeys().join("|"),
+    state.pnrQuinzena || "all",
+    state.pnrStatus || "Todos",
+    state.pnrTipoOperacional || "Todos",
+    state.pnrEstacao || "Todos",
+    normalize(state.pnrQuery),
+  ].join("::");
+}
+
+function getPnrMonthOptions() {
+  const rowsKey = `${pnrRowsLoadedKey}:${pnrRows.length}`;
+  if (derivedDataCache.pnrMonthOptionsKey === rowsKey) return derivedDataCache.pnrMonthOptions;
+  const map = new Map();
+  pnrRows.forEach((row) => {
+    const period = getPnrPeriodFromBillingPeriod(row.sourcePeriodo || row.periodoFaturamentoOriginal || row.periodoFaturamento) || getPnrPeriodFromDate(row.dataCaso || row.periodoFaturamento);
+    const key = row.monthKey || period.monthKey;
+    if (!key) return;
+    map.set(key, {
+      key,
+      label: row.competencia || getPnrMonthFullLabel(period),
+      year: Number(row.ano || period.ano || String(key).slice(0, 4) || 0),
+      month: Number(row.mesNumero || period.mes || String(key).slice(5, 7) || 0),
+    });
+  });
+  const options = Array.from(map.values())
+    .sort((a, b) => (a.year - b.year) || (a.month - b.month));
+  derivedDataCache.pnrMonthOptionsKey = rowsKey;
+  derivedDataCache.pnrMonthOptions = options;
+  return options;
+}
+
+function getPnrSelectedMonthKeys() {
+  const options = getPnrMonthOptions();
+  const available = new Set(options.map((option) => option.key));
+  const selected = Array.isArray(state.pnrMonths) ? state.pnrMonths.filter((key) => available.has(key)) : [];
+  return selected.length ? selected : options.map((option) => option.key);
+}
+
+function normalizePnrSelectValue(value, fallback = "Todos") {
+  const text = String(value || "").trim();
+  return text || fallback;
+}
+
+function normalizePnrLookupId(value) {
+  return String(value || "")
+    .trim()
+    .replace(/[\u200B-\u200D\uFEFF]/g, "")
+    .replace(/\s+/g, "")
+    .replace(/[^\d]/g, "");
+}
+
+function getPnrDriverNameFromSourceRow(row) {
+  const driver = formatDriverName(
+    row?.motorista ||
+      row?.driver ||
+      row?.nomeMotorista ||
+      row?.nome_motorista ||
+      row?.nome_driver ||
+      row?.driver_name ||
+      row?.motoristaFormatado ||
+      row?.motorista_formatado ||
+      "",
+    "",
+  );
+  return driver && !isUnidentifiedDriverName(driver) ? driver : "";
+}
+
+function getPnrSourceDriverIds(row) {
+  return [
+    row?.idMotorista,
+    row?.id_motorista,
+    row?.idDriver,
+    row?.id_driver,
+    row?.driverId,
+    row?.driver_id,
+    row?.motoristaId,
+    row?.motorista_id,
+  ].map(normalizePnrLookupId).filter(Boolean);
+}
+
+function getPnrSourceEnvioIds(row) {
+  return [
+    ...(Array.isArray(row?.ids_vinculados) ? row.ids_vinculados : []),
+    ...(Array.isArray(row?.linked_ids) ? row.linked_ids : []),
+    row?.idEnvio,
+    row?.id_envio,
+    row?.id_de_envio,
+    row?.idPacote,
+    row?.id_pacote,
+    row?.idCaso,
+    row?.id_caso,
+    row?.envio,
+  ].map(normalizePnrLookupId).filter(Boolean);
+}
+
+function getPnrSourceRouteIds(row) {
+  return [
+    row?.idRota,
+    row?.id_rota,
+    row?.rota,
+    row?.n_rota,
+    row?.numeroRota,
+    row?.numero_rota,
+    row?.route,
+  ].map(normalizePnrLookupId).filter(Boolean);
+}
+
+function getPnrSourceBaseKey(row) {
+  return normalizeBase(row?.estacaoOrigem || row?.estacao_origem || row?.base || row?.base_normalizada || row?.svc || row?.station || "");
+}
+
+function addPnrDriverIndexValue(map, key, driverName) {
+  if (key && driverName && !map.has(key)) map.set(key, driverName);
+}
+
+function buildPnrDriverSourceIndex(rows) {
+  const index = {
+    byIdMotorista: new Map(),
+    byIdEnvio: new Map(),
+    byRota: new Map(),
+    byBaseRota: new Map(),
+  };
+  (Array.isArray(rows) ? rows : []).forEach((row) => {
+    const driverName = getPnrDriverNameFromSourceRow(row);
+    if (!driverName) return;
+    getPnrSourceDriverIds(row).forEach((id) => addPnrDriverIndexValue(index.byIdMotorista, id, driverName));
+    getPnrSourceEnvioIds(row).forEach((id) => addPnrDriverIndexValue(index.byIdEnvio, id, driverName));
+    const base = getPnrSourceBaseKey(row);
+    getPnrSourceRouteIds(row).forEach((rota) => {
+      addPnrDriverIndexValue(index.byRota, rota, driverName);
+      if (base) addPnrDriverIndexValue(index.byBaseRota, `${base}|${rota}`, driverName);
+    });
+  });
+  return index;
+}
+
+function getLoadedRowsForPnrDriverLookup(fileCategory) {
+  const rows = [];
+  (Array.isArray(library.datasets) ? library.datasets : []).forEach((dataset) => {
+    if (!dataset || dataset.source === "filtered" || !Array.isArray(dataset.rows)) return;
+    const category = dataset.fileCategory || getFileRecordCategory(dataset.remoteRecord || dataset);
+    if (category === fileCategory) rows.push(...dataset.rows);
+  });
+  if (fileCategory === PRE_FATURA_FILE_CATEGORY && Array.isArray(allRows)) rows.push(...allRows);
+  if (fileCategory === PACKAGE_MANAGEMENT_FILE_CATEGORY && Array.isArray(packageManagementRows)) rows.push(...packageManagementRows);
+  return rows;
+}
+
+function buildPnrDriverLookupIndexes() {
+  return {
+    preFatura: buildPnrDriverSourceIndex(getLoadedRowsForPnrDriverLookup(PRE_FATURA_FILE_CATEGORY)),
+    gestaoPacotes: buildPnrDriverSourceIndex(getLoadedRowsForPnrDriverLookup(PACKAGE_MANAGEMENT_FILE_CATEGORY)),
+  };
+}
+
+function lookupPnrDriverNameInIndex(row, index) {
+  const idMotorista = normalizePnrLookupId(row?.idMotorista);
+  const idEnvio = normalizePnrLookupId(row?.idEnvio);
+  const idRota = normalizePnrLookupId(row?.idRota);
+  const base = getPnrSourceBaseKey(row);
+  const baseRota = base && idRota ? `${base}|${idRota}` : "";
+  const lookups = [
+    ["ID do motorista", index.byIdMotorista, idMotorista],
+    ["ID de envio", index.byIdEnvio, idEnvio],
+    ["ID da rota", index.byRota, idRota],
+    ["Base + ID rota", index.byBaseRota, baseRota],
+  ];
+  for (const [method, map, key] of lookups) {
+    const driver = key ? map.get(key) : "";
+    if (driver && !isUnidentifiedDriverName(driver)) return { driver, method };
+  }
+  return null;
+}
+
+function enrichPnrRowWithDriverName(row, indexes = buildPnrDriverLookupIndexes()) {
+  const normalized = normalizePnrStoredRow(row);
+  if (!normalized) return null;
+  const existingName = getPnrDriverNameFromSourceRow({
+    motorista: normalized.nomeMotorista,
+    driver: normalized.nome_motorista,
+  });
+  const found =
+    existingName
+      ? { driver: existingName, method: normalized.motoristaMatchSource || "Arquivo PNR" }
+      : lookupPnrDriverNameInIndex(normalized, indexes.preFatura) ||
+        lookupPnrDriverNameInIndex(normalized, indexes.gestaoPacotes);
+  const sourcePrefix = found?.driver && !existingName
+    ? (lookupPnrDriverNameInIndex(normalized, indexes.preFatura)?.driver === found.driver ? "Pré-Fatura" : "Gestão de Pacotes")
+    : "";
+  const nomeMotorista = found?.driver || "";
+  const motoristaDisplay = nomeMotorista || (normalized.idMotorista ? `ID ${normalized.idMotorista}` : "");
+  return {
+    ...normalized,
+    nomeMotorista,
+    motoristaDisplay,
+    motoristaMatchSource: found?.method ? [sourcePrefix, found.method].filter(Boolean).join(" · ") : "",
+    _search: buildPnrSearchText({ ...normalized, nomeMotorista, motoristaDisplay }),
+  };
+}
+
+function enrichPnrRowsWithDriverNames(rows, indexes = buildPnrDriverLookupIndexes()) {
+  return (Array.isArray(rows) ? rows : [])
+    .map((row) => enrichPnrRowWithDriverName(row, indexes))
+    .filter(Boolean);
+}
+
+function getPnrDriverEnrichmentKey() {
+  const datasetKey = (Array.isArray(library.datasets) ? library.datasets : [])
+    .filter((dataset) => dataset?.source !== "filtered")
+    .map((dataset) => `${dataset.id || dataset.fileName || ""}:${dataset.fileCategory || getFileRecordCategory(dataset.remoteRecord || dataset)}:${dataset.rows?.length || 0}`)
+    .join("|");
+  return `${pnrRowsLoadedKey}:${pnrRows.length}:${allRows.length}:${packageManagementRowsLoadedKey}:${packageManagementRows.length}:${datasetKey}`;
+}
+
+function ensurePnrDriverEnrichment() {
+  const key = getPnrDriverEnrichmentKey();
+  if (pnrDriverEnrichmentKey === key) return;
+  const indexes = buildPnrDriverLookupIndexes();
+  pnrRows = dedupePnrRecords(enrichPnrRowsWithDriverNames(pnrRows, indexes)).rows;
+  pnrDriverEnrichmentKey = key;
+  derivedDataCache.pnrKey = "";
+  derivedDataCache.pnrRows = [];
+}
+
+function getPnrFilterOptions() {
+  ensurePnrDriverEnrichment();
+  const statuses = new Set();
+  const tipos = new Set();
+  const estacoes = new Set();
+  pnrRows.forEach((row) => {
+    if (row.statusNormalizado) statuses.add(row.statusNormalizado);
+    if (row.tipoOperacional) tipos.add(row.tipoOperacional);
+    if (row.estacaoOrigem) estacoes.add(row.estacaoOrigem);
+  });
+  return {
+    statuses: Array.from(statuses).sort((a, b) => a.localeCompare(b, "pt-BR", { sensitivity: "base" })),
+    tipos: Array.from(tipos).sort((a, b) => a.localeCompare(b, "pt-BR", { sensitivity: "base" })),
+    estacoes: Array.from(estacoes).sort((a, b) => a.localeCompare(b, "pt-BR", { numeric: true, sensitivity: "base" })),
+  };
+}
+
+function getFilteredPnrRows() {
+  ensurePnrDriverEnrichment();
+  const cacheKey = getPnrRowsCacheKey();
+  if (derivedDataCache.pnrKey === cacheKey) return derivedDataCache.pnrRows;
+  const selectedMonths = new Set(getPnrSelectedMonthKeys());
+  const selectedQuinzena = state.pnrQuinzena || "all";
+  const selectedStatus = normalizePnrSelectValue(state.pnrStatus);
+  const selectedTipo = normalizePnrSelectValue(state.pnrTipoOperacional);
+  const selectedEstacao = normalizePnrSelectValue(state.pnrEstacao);
+  const query = normalize(state.pnrQuery);
+  const rows = pnrRows.filter((row) => {
+    const monthKey = row.monthKey || getPnrPeriodFromBillingPeriod(row.sourcePeriodo || row.periodoFaturamentoOriginal || row.periodoFaturamento)?.monthKey || getPnrPeriodFromDate(row.dataCaso || row.periodoFaturamento).monthKey;
+    if (selectedMonths.size && !selectedMonths.has(monthKey)) return false;
+    if (selectedQuinzena !== "all" && getPeriodModeFromLabel(row.quinzena) !== selectedQuinzena) return false;
+    if (selectedStatus !== "Todos" && row.statusNormalizado !== selectedStatus) return false;
+    if (selectedTipo !== "Todos" && row.tipoOperacional !== selectedTipo) return false;
+    if (selectedEstacao !== "Todos" && row.estacaoOrigem !== selectedEstacao) return false;
+    if (query && !String(row._search || "").includes(query)) return false;
+    return true;
+  });
+  derivedDataCache.pnrKey = cacheKey;
+  derivedDataCache.pnrRows = rows;
+  return rows;
+}
+
+function buildPnrSummary(rows) {
+  const baseRows = Array.isArray(rows) ? rows : [];
+  const totalValue = baseRows.reduce((sum, row) => sum + Number(row.valorCompraNumerico || 0), 0);
+  const anulado = baseRows.filter((row) => row.statusNormalizado === "Anulado").length;
+  const faturamento = baseRows.filter((row) => row.statusNormalizado === "Enviado para faturamento").length;
+  return {
+    count: baseRows.length,
+    totalValue,
+    avgValue: baseRows.length ? totalValue / baseRows.length : 0,
+    anulado,
+    faturamento,
+    aberto: Math.max(0, baseRows.length - anulado - faturamento),
+  };
+}
+
+function buildPnrStatusRows(rows) {
+  const total = rows.length || 0;
+  const map = new Map();
+  rows.forEach((row) => {
+    const key = row.statusNormalizado || "Indefinido";
+    map.set(key, (map.get(key) || 0) + 1);
+  });
+  return Array.from(map.entries())
+    .map(([label, count]) => ({ label, count, share: total ? (count / total) * 100 : 0 }))
+    .sort((a, b) => b.count - a.count);
+}
+
+function buildPnrOperationRows(rows) {
+  const order = ["SVC", "XPT", "Indefinido"];
+  const total = rows.length || 0;
+  const map = new Map(order.map((label) => [label, 0]));
+  rows.forEach((row) => {
+    const key = order.includes(row.tipoOperacional) ? row.tipoOperacional : "Indefinido";
+    map.set(key, (map.get(key) || 0) + 1);
+  });
+  return Array.from(map.entries())
+    .map(([label, count]) => ({ label, count, share: total ? (count / total) * 100 : 0 }))
+    .sort((a, b) => order.indexOf(a.label) - order.indexOf(b.label));
+}
+
+function buildPnrRanking(rows, key, fallbackLabel = "Sem identificação") {
+  const total = rows.length || 0;
+  const map = new Map();
+  rows.forEach((row) => {
+    const label = String(row[key] || "").trim() || fallbackLabel;
+    const entry = map.get(label) || { label, count: 0, totalValue: 0 };
+    entry.count += 1;
+    entry.totalValue += Number(row.valorCompraNumerico || 0);
+    map.set(label, entry);
+  });
+  return Array.from(map.values())
+    .map((item) => ({ ...item, share: total ? (item.count / total) * 100 : 0 }))
+    .sort((a, b) => b.count - a.count || b.totalValue - a.totalValue)
+    .slice(0, 8);
+}
+
+function buildPnrDriverRanking(rows) {
+  const baseRows = Array.isArray(rows) ? rows : [];
+  const map = new Map();
+  baseRows.forEach((row) => {
+    const driverId = formatPnrId(row.idMotorista || "");
+    const driverName = getPnrDriverNameFromSourceRow({ motorista: row.nomeMotorista });
+    const label = driverName || (driverId ? `ID ${driverId}` : "");
+    if (!label) return;
+    const key = driverName ? normalizeDriverName(driverName) || label : `ID:${driverId}`;
+    const entry = map.get(key) || { label, detail: driverId && driverName ? `ID: ${driverId}` : "", count: 0, totalValue: 0 };
+    entry.count += 1;
+    entry.totalValue += Number(row.valorCompraNumerico || 0);
+    map.set(key, entry);
+  });
+  return Array.from(map.values())
+    .map((item) => ({ ...item, share: baseRows.length ? (item.count / baseRows.length) * 100 : 0 }))
+    .sort((a, b) => b.count - a.count || b.totalValue - a.totalValue || a.label.localeCompare(b.label, "pt-BR", { sensitivity: "base" }))
+    .slice(0, 8);
+}
+
+function buildPnrEvolutionRows(rows) {
+  const map = new Map();
+  rows.forEach((row) => {
+    const period = getPnrPeriodFromBillingPeriod(row.sourcePeriodo || row.periodoFaturamentoOriginal || row.periodoFaturamento) || getPnrPeriodFromDate(row.dataCaso || row.periodoFaturamento);
+    const key = row.monthKey || period.monthKey;
+    const item = map.get(key) || {
+      key,
+      label: row.competencia || getPnrMonthFullLabel(period),
+      year: Number(row.ano || period.ano || String(key).slice(0, 4) || 0),
+      month: Number(row.mesNumero || period.mes || String(key).slice(5, 7) || 0),
+      count: 0,
+      totalValue: 0,
+    };
+    item.count += 1;
+    item.totalValue += Number(row.valorCompraNumerico || 0);
+    map.set(key, item);
+  });
+  return Array.from(map.values()).sort((a, b) => (a.year - b.year) || (a.month - b.month));
+}
+
+function getPnrChronologicalSortParts(row) {
+  const period = getPnrPeriodFromBillingPeriod(row.sourcePeriodo || row.periodoFaturamentoOriginal || row.periodoFaturamento) || getPnrPeriodFromDate(row.dataCaso || row.periodoFaturamento);
+  return {
+    year: Number(row.ano || period.ano || 0),
+    month: Number(row.mesNumero || period.mes || 0),
+    quarter: getPeriodModeFromLabel(row.quinzena || period.quinzena) === "q2" ? 2 : 1,
+    dataCaso: row.dataCaso || "",
+    idCaso: row.idCaso || "",
+  };
+}
+
+function comparePnrChronologicalRows(a, b) {
+  const av = getPnrChronologicalSortParts(a);
+  const bv = getPnrChronologicalSortParts(b);
+  return (
+    (av.year - bv.year) ||
+    (av.month - bv.month) ||
+    (av.quarter - bv.quarter) ||
+    String(av.dataCaso).localeCompare(String(bv.dataCaso), "pt-BR", { numeric: true, sensitivity: "base" }) ||
+    String(av.idCaso).localeCompare(String(bv.idCaso), "pt-BR", { numeric: true, sensitivity: "base" })
+  );
+}
+
+function sortPnrRows(rows) {
+  const sortKey = rows.some((row) => Object.prototype.hasOwnProperty.call(row, state.sortKey)) ? state.sortKey : "";
+  const dir = state.sortDir === "desc" ? -1 : 1;
+  if (!sortKey) return rows.slice().sort(comparePnrChronologicalRows);
+  return rows.slice().sort((a, b) => {
+    if (sortKey === "competencia" || sortKey === "quinzena" || sortKey === "periodoLabel") return comparePnrChronologicalRows(a, b) * dir;
+    const av = sortKey === "valorCompraNumerico" ? Number(a[sortKey] || 0) : a[sortKey];
+    const bv = sortKey === "valorCompraNumerico" ? Number(b[sortKey] || 0) : b[sortKey];
+    if (typeof av === "number" && typeof bv === "number") return (av - bv) * dir;
+    return String(av || "").localeCompare(String(bv || ""), "pt-BR", { numeric: true, sensitivity: "base" }) * dir;
+  });
+}
+
+const PNR_TABLE_COLUMNS = [
+  { key: "idCaso", label: "ID DO CASO", width: 120, format: "text" },
+  { key: "dataCaso", label: "DATA DO CASO", width: 150, format: "date" },
+  { key: "statusNormalizado", label: "STATUS", width: 160, format: "status" },
+  { key: "periodoFaturamentoOriginal", label: "PERÍODO DE FATURAMENTO", width: 170, format: "text" },
+  { key: "dataPedidoRevisao", label: "DATA DO PEDIDO DE REVISÃO", width: 200, format: "date" },
+  { key: "pedidoRevisao", label: "PEDIDO DE REVISÃO", width: 180, format: "text" },
+  { key: "dataEncerramentoCaso", label: "DATA DE ENCERRAMENTO DO CASO", width: 220, format: "date" },
+  { key: "repAssistente", label: "REP - ASSISTENTE", width: 180, format: "text" },
+  { key: "comentarioEncerramento", label: "COMENTÁRIO DE ENCERRAMENTO", width: 260, format: "long" },
+  { key: "numeroPreFatura", label: "N° DA PRÉ-FATURA", width: 160, format: "text" },
+  { key: "idEnvio", label: "ID DE ENVIO", width: 150, format: "text" },
+  { key: "produtos", label: "PRODUTOS", width: 280, format: "long" },
+  { key: "valorCompraOriginal", label: "VALOR DA COMPRA", width: 150, format: "currencyText" },
+  { key: "repTransportadora", label: "REP TRANSPORTADORA", width: 180, format: "text" },
+  { key: "estacaoOrigem", label: "ESTAÇÃO DE ORIGEM", width: 160, format: "text" },
+  { key: "idRota", label: "ID DA ROTA", width: 140, format: "text" },
+  { key: "idMotorista", label: "ID DO MOTORISTA", width: 150, format: "text" },
+  { key: "dataEntrega", label: "DATA DE ENTREGA", width: 160, format: "date" },
+  { key: "idReclamacao", label: "ID DA RECLAMAÇÃO", width: 170, format: "text" },
+  { key: "mes", label: "MÊS", width: 120, format: "text" },
+  { key: "quinzenaRef", label: "QUINZENA REF.", width: 160, format: "text" },
+  { key: "valorCompraNumerico", label: "VAL. COMPRA", width: 140, format: "currency" },
+];
+
+function formatPnrTableCell(row, column) {
+  const value = row?.[column.key];
+  if (column.format === "date") return escapeHtml(formatDate(value));
+  if (column.format === "currency") return escapeHtml(currency.format(Number(value || 0)));
+  if (column.format === "currencyText") return escapeHtml(String(value || row?.valorCompraFormatado || currency.format(Number(row?.valorCompraNumerico || 0))));
+  if (column.format === "status") return `<span class="badge">${escapeHtml(value || "—")}</span>`;
+  return escapeHtml(value || "—");
+}
+
+function renderPnrFilterSelect(name, label, value, options, allLabel = "Todos") {
+  return `
+    <label class="pnr-filter-control">
+      <span>${escapeHtml(label)}</span>
+      <select data-pnr-filter="${escapeAttribute(name)}">
+        <option value="Todos"${value === "Todos" ? " selected" : ""}>${escapeHtml(allLabel)}</option>
+        ${options.map((option) => {
+          const optionValue = typeof option === "string" ? option : option.value;
+          const optionLabel = typeof option === "string" ? option : option.label;
+          return `<option value="${escapeAttribute(optionValue)}"${String(optionValue) === String(value) ? " selected" : ""}>${escapeHtml(optionLabel)}</option>`;
+        }).join("")}
+      </select>
+    </label>
+  `;
+}
+
+function renderPnrBarList(rows, options = {}) {
+  if (!rows.length) return emptyState("Sem dados", "Nenhum registro encontrado no recorte.");
+  const max = Math.max(...rows.map((row) => row.count), 1);
+  return `
+    <div class="pnr-bar-list">
+      ${rows.map((row) => `
+        <div class="pnr-bar-row pnr-tooltip-target" data-tooltip-title="${escapeAttribute(row.label)}" data-tooltip-lines="${escapeAttribute(`${integer.format(row.count)} casos|${formatPercent(row.share)} do recorte${options.showValue ? `|${currency.format(row.totalValue || 0)}` : ""}`)}">
+          <div class="pnr-bar-row__label">
+            <strong>${escapeHtml(row.label)}</strong>
+            <span>${integer.format(row.count)} · ${formatPercent(row.share)}</span>
+          </div>
+          <div class="pnr-bar-row__track"><span style="width:${Math.max(3, (row.count / max) * 100)}%"></span></div>
+        </div>
+      `).join("")}
+    </div>
+  `;
+}
+
+function renderPnrRankingList(rows, emptyTitle) {
+  if (!rows.length) return emptyState(emptyTitle, "Nenhum registro encontrado no recorte.");
+  return `
+    <div class="pnr-ranking-list">
+      ${rows.map((row, index) => `
+        <div class="pnr-ranking-row pnr-tooltip-target" data-tooltip-title="${escapeAttribute(row.label)}" data-tooltip-lines="${escapeAttribute(`${row.detail ? `${row.detail}|` : ""}${integer.format(row.count)} PNRs|${currency.format(row.totalValue)}|${formatPercent(row.share)} do recorte`)}">
+          <span class="pnr-ranking-row__index">${index + 1}</span>
+          <div>
+            <strong>${escapeHtml(row.label)}</strong>
+            <small>${escapeHtml(row.detail ? `${row.detail} · ` : "")}${integer.format(row.count)} casos · ${currency.format(row.totalValue)}</small>
+          </div>
+          <span>${formatPercent(row.share)}</span>
+        </div>
+      `).join("")}
+    </div>
+  `;
+}
+
+function renderPnrEvolution(rows) {
+  if (!rows.length) return emptyState("Sem evolução", "Nenhum mês encontrado no recorte.");
+  const max = Math.max(...rows.map((row) => row.count), 1);
+  return `
+    <div class="pnr-evolution-list">
+      ${rows.map((row) => `
+        <div class="pnr-evolution-row pnr-tooltip-target" data-tooltip-title="${escapeAttribute(row.label)}" data-tooltip-lines="${escapeAttribute(`${integer.format(row.count)} casos|${currency.format(row.totalValue)}`)}">
+          <span>${escapeHtml(row.label)}</span>
+          <div class="pnr-evolution-row__track"><span style="width:${Math.max(3, (row.count / max) * 100)}%"></span></div>
+          <strong>${integer.format(row.count)}</strong>
+          <small>${currency.format(row.totalValue)}</small>
+        </div>
+      `).join("")}
+    </div>
+  `;
+}
+
+function renderPnrTable(rows, allRows) {
+  const totalPages = Math.max(1, Math.ceil(allRows.length / state.pageSize));
+  state.page = Math.min(Math.max(1, state.page), totalPages);
+  const tableMinWidth = PNR_TABLE_COLUMNS.reduce((sum, column) => sum + column.width, 0);
+  return `
+    <article class="panel pnr-table-panel">
+      <div class="panel__header">
+        <div>
+          <h3>Tabela detalhada de PNRs</h3>
+          <p>${integer.format(allRows.length)} registros no recorte</p>
+        </div>
+        <label class="table-page-size">
+          Linhas por página
+          <select data-pnr-filter="pageSize">
+            ${[10, 15, 25, 50, 100].map((size) => `<option value="${size}"${Number(state.pageSize) === size ? " selected" : ""}>${size}</option>`).join("")}
+          </select>
+        </label>
+      </div>
+      <div class="table-wrap pnr-table-wrap">
+        <table style="min-width:${tableMinWidth}px">
+          <colgroup>
+            ${PNR_TABLE_COLUMNS.map((column) => `<col style="width:${column.width}px; min-width:${column.width}px">`).join("")}
+          </colgroup>
+          <thead>
+            <tr>
+              ${PNR_TABLE_COLUMNS.map((column) => `<th data-pnr-sort="${escapeAttribute(column.key)}" class="${column.format === "currency" || column.format === "currencyText" ? "is-right" : ""}">${escapeHtml(column.label)}</th>`).join("")}
+            </tr>
+          </thead>
+          <tbody>
+            ${rows.length ? rows.map((row) => `
+              <tr>
+                ${PNR_TABLE_COLUMNS.map((column) => `<td class="${column.format === "currency" || column.format === "currencyText" ? "is-right" : ""}">${formatPnrTableCell(row, column)}</td>`).join("")}
+              </tr>
+            `).join("") : `<tr><td colspan="${PNR_TABLE_COLUMNS.length}">${emptyState("Sem registros", "Ajuste os filtros ou carregue uma planilha de PNR.")}</td></tr>`}
+          </tbody>
+        </table>
+      </div>
+      <div class="pagination">
+        <button type="button" class="secondary-button" data-pnr-page="prev"${state.page <= 1 ? " disabled" : ""}>Anterior</button>
+        <span>Página ${integer.format(state.page)} de ${integer.format(totalPages)}</span>
+        <button type="button" class="secondary-button" data-pnr-page="next"${state.page >= totalPages ? " disabled" : ""}>Próxima</button>
+      </div>
+    </article>
+  `;
+}
+
+function renderPnrPage() {
+  const filteredRows = getFilteredPnrRows();
+  const sortedRows = sortPnrRows(filteredRows);
+  const pagedRows = paginateRows(sortedRows);
+  const monthOptions = getPnrMonthOptions();
+  const selectedMonths = getPnrSelectedMonthKeys();
+  const filterOptions = getPnrFilterOptions();
+  const summary = buildPnrSummary(filteredRows);
+  const cards = [
+    { label: "Total de PNRs", value: integer.format(summary.count), tone: "kpi-card--volume", delta: "Registros no recorte" },
+    { label: "Valor total dos produtos", value: currency.format(summary.totalValue), tone: "kpi-card--finance", delta: "Soma de valor da compra" },
+    { label: "Valor médio dos produtos", value: currency.format(summary.avgValue), tone: "kpi-card--neutral", delta: "Média por registro" },
+    { label: "Anulados", value: integer.format(summary.anulado), tone: "kpi-card--problem", delta: `${formatPercent(summary.count ? (summary.anulado / summary.count) * 100 : 0)} do recorte` },
+    { label: "Enviados para faturamento", value: integer.format(summary.faturamento), tone: "kpi-card--volume", delta: `${formatPercent(summary.count ? (summary.faturamento / summary.count) * 100 : 0)} do recorte` },
+    { label: "Status em aberto/análise", value: integer.format(summary.aberto), tone: "kpi-card--neutral", delta: "Status restantes no recorte" },
+  ];
+  const monthSelectOptions = monthOptions.map((option) => ({ value: option.key, label: option.label }));
+  const selectedMonthValue = selectedMonths.length === monthOptions.length ? "Todos" : selectedMonths[0] || "Todos";
+  const statusRows = buildPnrStatusRows(filteredRows);
+  const operationRows = buildPnrOperationRows(filteredRows);
+  const stationRows = buildPnrRanking(filteredRows, "estacaoOrigem", "Sem estação");
+  const driverRows = buildPnrDriverRanking(filteredRows);
+  const evolutionRows = buildPnrEvolutionRows(filteredRows);
+  const pnrLoadState = isLoadingPnrRows && !pnrRows.length
+    ? emptyState("Carregando PNRs", "Os registros processados estão sendo carregados.")
+    : !pnrRows.length
+      ? emptyState("Nenhum arquivo de PNR carregado", "Envie uma planilha de PNR em Configurações gerais para preencher esta visão.")
+      : "";
+  return `
+    <section class="pnr-page">
+      <article class="panel deviation-management-panel pnr-hero-panel">
+        <div class="panel__header">
+          <div>
+            <h2>Gestão de Desvios · PNRs</h2>
+            <p>Análise de casos PNR separada das bases de Pré-Fatura e Gestão de Pacotes.</p>
+          </div>
+          <span class="panel__meta">${integer.format(pnrRows.length)} registros carregados</span>
+        </div>
+        <div class="pnr-filter-bar">
+          <label class="pnr-search">
+            <span aria-hidden="true">
+              <svg viewBox="0 0 24 24"><path d="m21 21-4.35-4.35M10.8 18a7.2 7.2 0 1 1 0-14.4 7.2 7.2 0 0 1 0 14.4Z" fill="none" stroke="currentColor" stroke-linecap="round" stroke-width="2"></path></svg>
+            </span>
+            <input type="search" data-pnr-query value="${escapeAttribute(state.pnrQuery || "")}" placeholder="Buscar" autocomplete="off">
+          </label>
+          ${renderPnrFilterSelect("month", "Mês", selectedMonthValue, monthSelectOptions)}
+          <label class="pnr-filter-control">
+            <span>Quinzena</span>
+            <select data-pnr-filter="quinzena">
+              <option value="all"${(state.pnrQuinzena || "all") === "all" ? " selected" : ""}>Todas</option>
+              <option value="q1"${state.pnrQuinzena === "q1" ? " selected" : ""}>1ª quinzena</option>
+              <option value="q2"${state.pnrQuinzena === "q2" ? " selected" : ""}>2ª quinzena</option>
+            </select>
+          </label>
+          ${renderPnrFilterSelect("status", "Status", normalizePnrSelectValue(state.pnrStatus), filterOptions.statuses)}
+          ${renderPnrFilterSelect("tipo", "Tipo operacional", normalizePnrSelectValue(state.pnrTipoOperacional), filterOptions.tipos)}
+          ${renderPnrFilterSelect("estacao", "Estação de origem", normalizePnrSelectValue(state.pnrEstacao), filterOptions.estacoes)}
+          <button type="button" class="secondary-button" data-pnr-clear>Limpar</button>
+        </div>
+      </article>
+
+      ${pnrLoadState}
+
+      <section class="kpi-grid__group kpi-grid__group--main pnr-kpi-grid" aria-label="Cards principais de PNRs">
+        ${cards.map((card, index) => renderKpiCard(card, index)).join("")}
+      </section>
+
+      <section class="pnr-analysis-grid">
+        <article class="panel pnr-chart-panel">
+          <div class="panel__header"><div><h3>Distribuição por status</h3><p>Quantidade e percentual no recorte</p></div></div>
+          ${renderPnrBarList(statusRows)}
+        </article>
+        <article class="panel pnr-chart-panel">
+          <div class="panel__header"><div><h3>Casos por operação</h3><p>SVC, XPT e indefinidos pela estação de origem</p></div></div>
+          ${renderPnrBarList(operationRows)}
+        </article>
+        <article class="panel pnr-chart-panel">
+          <div class="panel__header"><div><h3>Estações com maior volume</h3><p>Ranking por estação de origem</p></div></div>
+          ${renderPnrRankingList(stationRows, "Sem estações")}
+        </article>
+        <article class="panel pnr-chart-panel">
+          <div class="panel__header"><div><h3>Motoristas com maior volume de PNR</h3><p>Nome localizado por cruzamento ou ID do motorista</p></div></div>
+          ${renderPnrRankingList(driverRows, "Sem motoristas")}
+        </article>
+        <article class="panel pnr-chart-panel pnr-chart-panel--wide">
+          <div class="panel__header"><div><h3>Evolução temporal</h3><p>Quantidade e valor total por mês</p></div></div>
+          ${renderPnrEvolution(evolutionRows)}
+        </article>
+      </section>
+
+      ${renderPnrTable(pagedRows, sortedRows)}
+    </section>
+  `;
 }
 
 function hasLoadedDashboardData() {
@@ -2466,6 +3656,7 @@ function setDashboardVisualState(type, options = {}) {
 function renderDashboardState(status) {
   const emptyStatus = typeof status === "string" ? getDashboardStateConfig(status) : status;
   if (el.monthlyBaseView) el.monthlyBaseView.hidden = true;
+  if (el.deviationManagementView) el.deviationManagementView.hidden = true;
   [el.insightGrid, el.comparisonPanel, el.tablePanel].forEach((node) => {
     if (node) node.hidden = true;
   });
@@ -2508,6 +3699,7 @@ function resetDashboardFilters() {
     tipo: "Todos",
     prefaturaTipo: "Todos",
     packageTipo: "Todos",
+    activeDesvioCategory: null,
     base: "Todos",
     motorista: "Todos",
     period: "month",
@@ -3636,6 +4828,59 @@ function hidePackageMixTooltip(segment) {
   }
   activePackageMixSegment = null;
   if (segment) setPackageMixSegmentState(segment, false);
+}
+
+function getPnrTooltip() {
+  let tooltip = document.getElementById("pnr-chart-tooltip");
+  if (tooltip) return tooltip;
+  tooltip = document.createElement("div");
+  tooltip.id = "pnr-chart-tooltip";
+  tooltip.className = "comparison-chart-tooltip pnr-chart-tooltip";
+  tooltip.setAttribute("role", "tooltip");
+  tooltip.hidden = true;
+  document.body.appendChild(tooltip);
+  return tooltip;
+}
+
+function showPnrTooltip(target, event) {
+  const tooltip = getPnrTooltip();
+  if (!tooltip) return;
+  const title = target.dataset.tooltipTitle || "";
+  const lines = String(target.dataset.tooltipLines || "").split("|").filter(Boolean);
+  tooltip.innerHTML = `
+    <strong>${escapeHtml(title)}</strong>
+    ${lines.map((line) => `<span>${escapeHtml(line)}</span>`).join("")}
+  `;
+  tooltip.hidden = false;
+  requestAnimationFrame(() => {
+    tooltip.classList.add("is-visible");
+  });
+  positionPnrTooltip(event);
+}
+
+function positionPnrTooltip(event) {
+  const tooltip = getPnrTooltip();
+  if (!tooltip || tooltip.hidden || !event) return;
+  const offset = 14;
+  const viewportPadding = 12;
+  const rect = tooltip.getBoundingClientRect();
+  const width = rect.width || Math.min(288, Math.max(220, window.innerWidth - 32));
+  const height = rect.height || 112;
+  let left = event.clientX + offset;
+  let top = event.clientY + offset;
+  if (left + width > window.innerWidth - viewportPadding) left = event.clientX - width - offset;
+  if (top + height > window.innerHeight - viewportPadding) top = event.clientY - height - offset;
+  tooltip.style.left = `${Math.max(viewportPadding, left)}px`;
+  tooltip.style.top = `${Math.max(viewportPadding, top)}px`;
+}
+
+function hidePnrTooltip() {
+  const tooltip = document.getElementById("pnr-chart-tooltip");
+  if (!tooltip) return;
+  tooltip.classList.remove("is-visible");
+  window.setTimeout(() => {
+    tooltip.hidden = true;
+  }, 150);
 }
 
 function renderPnrGoalSummary(filtered) {
@@ -6133,6 +7378,168 @@ function styleExcelRange(worksheet, range, style) {
   }
 }
 
+function pnrIsoToExcelDate(value) {
+  if (!value) return null;
+  const parsed = parseDateValue(value);
+  if (!parsed.iso) return null;
+  return new Date(`${parsed.iso}T00:00:00Z`);
+}
+
+function buildPnrBillingPeriodCode(row) {
+  const existing = String(row.periodoFaturamento || "").trim();
+  if (/^\d{6}Q[12]$/i.test(existing)) return existing.toUpperCase();
+  const period =
+    getPnrPeriodFromBillingPeriod(existing) ||
+    getPnrPeriodFromDate(row.dataCaso || row.periodoFaturamento || `${row.competencia || ""} ${row.quinzena || ""}`);
+  return buildPnrBillingPeriodFromPeriod({
+    ...period,
+    quinzena: row.quinzena || period.quinzena,
+  });
+}
+
+function getPnrMonthFormula(rowNumber) {
+  return `CHOOSE(VALUE(MID(D${rowNumber},5,2)),"Janeiro","Fevereiro","Março","Abril","Maio","Junho","Julho","Agosto","Setembro","Outubro","Novembro","Dezembro")`;
+}
+
+function getPnrQuinzenaFormula(rowNumber) {
+  return `IF(RIGHT(D${rowNumber},1)="1","01 a 15","16 a 31")&" "&CHOOSE(VALUE(MID(D${rowNumber},5,2)),"Janeiro","Fevereiro","Março","Abril","Maio","Junho","Julho","Agosto","Setembro","Outubro","Novembro","Dezembro")`;
+}
+
+function getPnrValueFormula(rowNumber) {
+  return `VALUE(SUBSTITUTE(SUBSTITUTE(M${rowNumber},"R$ ",""),".",","))`;
+}
+
+function getPnrMonthNameFromPeriod(row) {
+  const code = buildPnrBillingPeriodCode(row);
+  const monthIndex = Number(code.slice(4, 6)) - 1;
+  return MONTHS[monthIndex] ? capitalize(MONTHS[monthIndex]) : "";
+}
+
+function getPnrQuinzenaLabelFromPeriod(row) {
+  const code = buildPnrBillingPeriodCode(row);
+  const month = getPnrMonthNameFromPeriod(row);
+  return `${code.endsWith("Q2") ? "16 a 31" : "01 a 15"} ${month}`.trim();
+}
+
+function getPnrValorCompraText(row) {
+  const original = repairPnrText(row.valorCompraOriginal || row.valor_compra_original || row.valorCompra || row["VALOR DA COMPRA"] || "").trim();
+  if (original) return original;
+  return `R$ ${Number(row.valorCompraNumerico || 0).toFixed(2)}`;
+}
+
+function buildStandardizedPnrSheetRows(rows) {
+  return (Array.isArray(rows) ? rows : [])
+    .map(normalizePnrStoredRow)
+    .filter(Boolean)
+    .map((row, index) => {
+      const rowNumber = index + 2;
+      return [
+        row.idCaso || "",
+        pnrIsoToExcelDate(row.dataCaso),
+        row.statusOriginal || row.statusNormalizado || "",
+        buildPnrBillingPeriodCode(row),
+        pnrIsoToExcelDate(row.dataPedidoRevisao),
+        row.pedidoRevisao || "",
+        pnrIsoToExcelDate(row.dataEncerramentoCaso),
+        row.repAssistente || "",
+        row.comentarioEncerramento || "",
+        row.numeroPreFatura || "",
+        row.idEnvio || "",
+        row.produtos || "",
+        getPnrValorCompraText(row),
+        row.repTransportadora || "",
+        row.estacaoOrigem || "",
+        row.idRota || "",
+        row.idMotorista || "",
+        pnrIsoToExcelDate(row.dataEntrega),
+        row.idReclamacao || "",
+        { formula: getPnrMonthFormula(rowNumber), result: getPnrMonthNameFromPeriod(row) },
+        { formula: getPnrQuinzenaFormula(rowNumber), result: getPnrQuinzenaLabelFromPeriod(row) },
+        { formula: getPnrValueFormula(rowNumber), result: Number(row.valorCompraNumerico || 0) },
+      ];
+    });
+}
+
+function styleStandardizedPnrWorksheet(worksheet, rowCount) {
+  const headerFill = "0B5D42";
+  const headerBorder = "0A4E39";
+  worksheet.views = [{ state: "frozen", ySplit: 1, topLeftCell: "A2", activeCell: "A2" }];
+  worksheet.getRow(1).height = 22.5;
+  worksheet.getRow(1).eachCell((cell) => {
+    cell.font = { name: "Calibri", size: 9, bold: true, color: { argb: "FFFFFF" } };
+    cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: headerFill } };
+    cell.alignment = { horizontal: "center", vertical: "middle" };
+    cell.border = {
+      top: { style: "thin", color: { argb: headerBorder } },
+      left: { style: "thin", color: { argb: headerBorder } },
+      bottom: { style: "thin", color: { argb: headerBorder } },
+      right: { style: "thin", color: { argb: headerBorder } },
+    };
+  });
+  for (let rowNumber = 2; rowNumber <= rowCount + 1; rowNumber += 1) {
+    worksheet.getRow(rowNumber).height = 18;
+  }
+  [2, 5, 7, 18].forEach((colNumber) => {
+    worksheet.getColumn(colNumber).numFmt = "dd/mm/yyyy hh:mm";
+  });
+  [1, 10, 11, 16, 17, 19].forEach((colNumber) => {
+    worksheet.getColumn(colNumber).numFmt = "@";
+  });
+  worksheet.getColumn(22).numFmt = '[$R$ -416]#,##0.00';
+}
+
+async function buildStandardizedPnrWorkbookBlob(rows, originalName = "PNRs.xlsx") {
+  const ExcelJS = await loadExcelExportEngine();
+  const workbook = new ExcelJS.Workbook();
+  workbook.creator = "Painel de Inteligência";
+  workbook.created = new Date();
+  workbook.modified = new Date();
+  const worksheet = workbook.addWorksheet("PNRs", {
+    properties: { defaultRowHeight: 18 },
+    views: [{ state: "frozen", ySplit: 1, topLeftCell: "A2" }],
+  });
+  worksheet.columns = [
+    { width: 12.88 }, { width: 15 }, { width: 18.63 }, { width: 23.25 }, { width: 24 }, { width: 18.13 },
+    { width: 27.75 }, { width: 16.38 }, { width: 27.13 }, { width: 20 }, { width: 13.25 }, { width: 37.63 },
+    { width: 17.88 }, { width: 20.25 }, { width: 18.75 }, { width: 12.75 }, { width: 17 }, { width: 17 },
+    { width: 18.13 }, { width: 16 }, { width: 20 }, { width: 19 },
+  ];
+  const tableRows = buildStandardizedPnrSheetRows(rows);
+  const safeTableName = "Historico_de_PNRs";
+  worksheet.addTable({
+    name: safeTableName,
+    displayName: safeTableName,
+    ref: "A1",
+    headerRow: true,
+    totalsRow: false,
+    style: {
+      theme: "TableStyleMedium4",
+      showFirstColumn: false,
+      showLastColumn: false,
+      showRowStripes: true,
+      showColumnStripes: false,
+    },
+    columns: PNR_STANDARD_HEADERS.map((name) => ({ name, filterButton: true })),
+    rows: tableRows,
+  });
+  worksheet.autoFilter = {
+    from: "A1",
+    to: `V${Math.max(1, tableRows.length + 1)}`,
+  };
+  styleStandardizedPnrWorksheet(worksheet, tableRows.length);
+  workbook.subject = "Histórico de PNRs";
+  workbook.title = originalName;
+  const buffer = await workbook.xlsx.writeBuffer();
+  return new Blob([buffer], { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" });
+}
+
+async function buildStandardizedPnrUploadFile(originalFile, rows) {
+  const blob = await buildStandardizedPnrWorkbookBlob(rows, originalFile?.name || "Histórico de PNRs.xlsx");
+  const baseName = String(originalFile?.name || "Historico de PNRs.xlsx").replace(/\.[^.]+$/, "");
+  const fileName = `${baseName}.xlsx`;
+  return new File([blob], fileName, { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" });
+}
+
 async function addPackageExportLogo(worksheet, workbook) {
   console.log("[Excel] Inserindo logo");
   try {
@@ -6787,17 +8194,25 @@ function buildActivePeriodLabel(monthKey, periodMode, selectedFiles = []) {
 }
 
 function detectMonthFromRows(rows) {
-  const dated = rows.find((row) => row.data_normalizada || row.data_sort);
+  const dated = rows.find((row) => row.data_normalizada || row.data_sort || row.dataCaso || row.data_caso);
   if (!dated) return "";
-  const date = dated.data_normalizada ? new Date(`${dated.data_normalizada}T00:00:00Z`) : new Date(dated.data_sort);
+  const date = dated.data_normalizada
+    ? new Date(`${dated.data_normalizada}T00:00:00Z`)
+    : (dated.dataCaso || dated.data_caso)
+      ? new Date(`${dated.dataCaso || dated.data_caso}T00:00:00Z`)
+      : new Date(dated.data_sort);
   if (Number.isNaN(date.getTime())) return "";
   return MONTHS[date.getUTCMonth()] || "";
 }
 
 function detectYearFromRows(rows) {
-  const dated = rows.find((row) => row.data_normalizada || row.data_sort);
+  const dated = rows.find((row) => row.data_normalizada || row.data_sort || row.dataCaso || row.data_caso);
   if (!dated) return "";
-  const date = dated.data_normalizada ? new Date(`${dated.data_normalizada}T00:00:00Z`) : new Date(dated.data_sort);
+  const date = dated.data_normalizada
+    ? new Date(`${dated.data_normalizada}T00:00:00Z`)
+    : (dated.dataCaso || dated.data_caso)
+      ? new Date(`${dated.dataCaso || dated.data_caso}T00:00:00Z`)
+      : new Date(dated.data_sort);
   if (Number.isNaN(date.getTime())) return "";
   return String(date.getUTCFullYear());
 }
@@ -7557,6 +8972,562 @@ function hasPackageRecordMinimum({ valor, base, motorista, dataValue, rota, id, 
   return [base, motorista, dataValue, rota, id, decision?.value].some((value) => String(value || "").trim());
 }
 
+function repairPnrText(value) {
+  return String(value ?? "")
+    .replace(/PERÃ[ÍI]ODO/gi, "PERÍODO")
+    .replace(/REVISÃƒO/gi, "REVISÃO")
+    .replace(/RECLAMAÃ‡ÃƒO/gi, "RECLAMAÇÃO")
+    .replace(/ESTAÃ‡ÃƒO/gi, "ESTAÇÃO")
+    .replace(/NÂ°/gi, "N°")
+    .replace(/PRÃ‰-FATURA/gi, "PRÉ-FATURA")
+    .replace(/MÃŠS/gi, "MÊS")
+    .replace(/Ã‡/g, "Ç")
+    .replace(/Ã‰/g, "É")
+    .replace(/ÃŠ/g, "Ê")
+    .replace(/ÃÍ/g, "Í")
+    .replace(/Ã¡/g, "á")
+    .replace(/Ã©/g, "é")
+    .replace(/Ã­/g, "í")
+    .replace(/Ã³/g, "ó")
+    .replace(/Ãº/g, "ú")
+    .replace(/Ã£/g, "ã")
+    .replace(/Ãµ/g, "õ")
+    .replace(/Ã§/g, "ç");
+}
+
+function normalizePnrHeader(value) {
+  return normalizeText(repairPnrText(value)).replace(/\s+/g, " ").trim();
+}
+
+function titleCasePt(value) {
+  return String(value || "")
+    .toLowerCase()
+    .split(/\s+/)
+    .filter(Boolean)
+    .map((part, index) => (index > 0 && ["de", "da", "do", "das", "dos", "e", "em", "para"].includes(part) ? part : part.charAt(0).toUpperCase() + part.slice(1)))
+    .join(" ");
+}
+
+function normalizePnrStatus(value) {
+  const original = repairPnrText(value).trim();
+  const normalized = normalizeText(original);
+  if (!normalized) return "";
+  if (normalized.includes("ANULADO")) return "Anulado";
+  if (normalized.includes("ENVIADO") && normalized.includes("FATURAMENTO")) return "Enviado para faturamento";
+  if (normalized.includes("FATURADO")) return "Faturado";
+  if (normalized.includes("ANALISE") || normalized.includes("ANALISA")) return "Em análise";
+  if (normalized.includes("ABERTO")) return "Aberto";
+  return titleCasePt(original);
+}
+
+function parsePnrMoney(value) {
+  if (value == null || value === "") return 0;
+  if (typeof value === "number" && Number.isFinite(value)) return Number(value.toFixed(2));
+  let raw = String(value).replace(/[^\d,.-]/g, "").trim();
+  if (!raw) return 0;
+  const hasComma = raw.includes(",");
+  const hasDot = raw.includes(".");
+  if (hasComma && hasDot) {
+    const lastComma = raw.lastIndexOf(",");
+    const lastDot = raw.lastIndexOf(".");
+    raw = lastDot > lastComma
+      ? raw.replace(/,/g, "")
+      : raw.replace(/\./g, "").replace(",", ".");
+  }
+  else if (hasComma) raw = raw.replace(",", ".");
+  const parsed = Number(raw);
+  return Number.isFinite(parsed) ? Number(parsed.toFixed(2)) : 0;
+}
+
+function formatPnrId(value) {
+  if (value == null || value === "") return "";
+  if (typeof value === "number" && Number.isFinite(value)) return String(Math.trunc(value));
+  return repairPnrText(value)
+    .replace(/[\u200B-\u200D\uFEFF]/g, "")
+    .replace(/\.0+$/, "")
+    .trim();
+}
+
+function cleanPnrDedupePart(value) {
+  return formatPnrId(value)
+    .replace(/[\u200B-\u200D\uFEFF]/g, "")
+    .replace(/\s+/g, "")
+    .trim();
+}
+
+function getPnrDedupeKey(row) {
+  const idCaso = cleanPnrDedupePart(row?.idCaso || row?.id_caso || row?.["ID DO CASO"]);
+  const idEnvio = cleanPnrDedupePart(row?.idEnvio || row?.id_envio || row?.["ID DE ENVIO"]);
+  const idReclamacao = cleanPnrDedupePart(row?.idReclamacao || row?.id_reclamacao || row?.["ID DA RECLAMAÇÃO"]);
+  const periodo = cleanPnrDedupePart(
+    row?.sourcePeriodo ||
+      row?.source_periodo ||
+      row?.periodoFaturamentoOriginal ||
+      row?.periodo_faturamento_original ||
+      row?.periodoFaturamento ||
+      row?.periodo_faturamento ||
+      row?.["PERÍODO DE FATURAMENTO"] ||
+      row?.["PERIODO DE FATURAMENTO"],
+  );
+  if (!idCaso) return "";
+  if (idEnvio && idReclamacao && periodo) return `${idCaso}|${idEnvio}|${idReclamacao}|${periodo}`;
+  if (idEnvio && periodo) return `${idCaso}|${idEnvio}|${periodo}`;
+  if (periodo) return `${idCaso}|${periodo}`;
+  if (idEnvio && idReclamacao) return `${idCaso}|${idEnvio}|${idReclamacao}`;
+  if (idEnvio) return `${idCaso}|${idEnvio}`;
+  return idCaso;
+}
+
+function getPnrRowCompletenessScore(row) {
+  return [
+    row?.idCaso,
+    row?.idEnvio,
+    row?.idReclamacao,
+    row?.statusOriginal,
+    row?.statusNormalizado,
+    row?.periodoFaturamento,
+    row?.dataPedidoRevisao,
+    row?.pedidoRevisao,
+    row?.dataEncerramentoCaso,
+    row?.repAssistente,
+    row?.comentarioEncerramento,
+    row?.numeroPreFatura,
+    row?.produtos,
+    row?.valorCompraOriginal,
+    row?.repTransportadora,
+    row?.estacaoOrigem,
+    row?.idRota,
+    row?.idMotorista,
+    row?.dataEntrega,
+    row?.dataReclamacao,
+    row?.mes,
+    row?.quinzenaRef,
+    row?.valorCompraNumerico ? String(row.valorCompraNumerico) : "",
+  ].filter((value) => String(value ?? "").trim()).length;
+}
+
+function comparePnrDuplicateQuality(a, b) {
+  const aScore = getPnrRowCompletenessScore(a);
+  const bScore = getPnrRowCompletenessScore(b);
+  if (aScore !== bScore) return aScore - bScore;
+  const aClosed = parseDateValue(a?.dataEncerramentoCaso).ts || 0;
+  const bClosed = parseDateValue(b?.dataEncerramentoCaso).ts || 0;
+  if (aClosed !== bClosed) return aClosed - bClosed;
+  const aValue = Number(a?.valorCompraNumerico || 0);
+  const bValue = Number(b?.valorCompraNumerico || 0);
+  if (Boolean(aValue) !== Boolean(bValue)) return aValue ? 1 : -1;
+  return 0;
+}
+
+function mergePnrDuplicateRows(existing, incoming) {
+  const merged = { ...existing };
+  let changed = false;
+  if (incoming?.nomeMotorista && !existing?.nomeMotorista) {
+    merged.nomeMotorista = incoming.nomeMotorista;
+    merged.motoristaDisplay = incoming.motoristaDisplay || incoming.nomeMotorista;
+    merged.motoristaMatchSource = incoming.motoristaMatchSource || existing.motoristaMatchSource || "";
+    changed = true;
+  }
+  Object.entries(incoming || {}).forEach(([key, value]) => {
+    if (["nomeMotorista", "motoristaDisplay", "motoristaMatchSource"].includes(key) && merged.nomeMotorista) return;
+    if (value === undefined || value === null || value === "") return;
+    const currentValue = merged[key];
+    if (currentValue === undefined || currentValue === null || currentValue === "" || currentValue === "Indefinido" || currentValue === 0) {
+      if (currentValue !== value) {
+        merged[key] = value;
+        changed = true;
+      }
+    }
+  });
+  merged.dedupeKey = existing.dedupeKey || incoming.dedupeKey || getPnrDedupeKey(merged);
+  merged.valorCompraFormatado = currency.format(Number(merged.valorCompraNumerico || 0));
+  merged._search = buildPnrSearchText(merged);
+  return { row: merged, changed };
+}
+
+function dedupePnrRecords(rows) {
+  const deduped = [];
+  const byKey = new Map();
+  let duplicateRowsUpdated = 0;
+  let duplicateRowsSkipped = 0;
+  (Array.isArray(rows) ? rows : []).forEach((row, index) => {
+    const normalized = normalizePnrStoredRow(row);
+    if (!normalized) return;
+    const key = normalized.dedupeKey || getPnrDedupeKey(normalized) || `__pnr_row_${index}`;
+    normalized.dedupeKey = key;
+    if (!byKey.has(key)) {
+      byKey.set(key, normalized);
+      deduped.push(normalized);
+      return;
+    }
+    const previous = byKey.get(key);
+    const shouldUseIncomingAsBase = comparePnrDuplicateQuality(normalized, previous) > 0;
+    const merged = shouldUseIncomingAsBase
+      ? mergePnrDuplicateRows(normalized, previous)
+      : mergePnrDuplicateRows(previous, normalized);
+    if (merged.changed) duplicateRowsUpdated += 1;
+    else duplicateRowsSkipped += 1;
+    byKey.set(key, merged.row);
+    const previousIndex = deduped.indexOf(previous);
+    if (previousIndex >= 0) deduped[previousIndex] = merged.row;
+  });
+  return { rows: deduped, duplicateRowsUpdated, duplicateRowsSkipped };
+}
+
+function getPnrOperationalType(estacao) {
+  const code = normalizeText(estacao).replace(/[^A-Z0-9]/g, "");
+  if (code.startsWith("S")) return "SVC";
+  if (code.startsWith("E")) return "XPT";
+  return "Indefinido";
+}
+
+function getPnrPeriodFromDate(dateValue) {
+  const parsed = parseDateValue(dateValue);
+  const date = parsed.ts ? new Date(parsed.ts) : null;
+  const rawText = repairPnrText(dateValue);
+  const fallbackMonth = getMonthNumberFromAny(rawText);
+  const fallbackYear = detectYear(rawText);
+  const year = date ? date.getUTCFullYear() : Number(fallbackYear || new Date().getFullYear());
+  const monthIndex = date ? date.getUTCMonth() : Math.max(0, Number(fallbackMonth || 1) - 1);
+  const day = date ? date.getUTCDate() : detectQuinzena(rawText).includes("2") ? 16 : 1;
+  const monthNumberValue = String(monthIndex + 1).padStart(2, "0");
+  return {
+    competencia: `${MONTH_ABBR[monthIndex] || "JAN"}/${String(year).slice(2)}`,
+    mes: monthNumberValue,
+    ano: String(year),
+    quinzena: day <= 15 ? "1ª quinzena" : "2ª quinzena",
+    monthKey: `${year}-${monthNumberValue}`,
+  };
+}
+
+function getPnrPeriodFromBillingPeriod(value) {
+  const compact = normalizeText(repairPnrText(value)).replace(/\s+/g, "");
+  const match = compact.match(/(20\d{2})(0[1-9]|1[0-2])Q([12])/);
+  if (!match) return null;
+  const [, year, monthNumberValue, quarter] = match;
+  const monthIndex = Number(monthNumberValue) - 1;
+  return {
+    competencia: `${MONTH_ABBR[monthIndex] || "JAN"}/${String(year).slice(2)}`,
+    mes: monthNumberValue,
+    ano: String(year),
+    quinzena: quarter === "2" ? "2ª quinzena" : "1ª quinzena",
+    monthKey: `${year}-${monthNumberValue}`,
+  };
+}
+
+function buildPnrBillingPeriodFromPeriod(period) {
+  if (!period?.ano || !period?.mes) return "";
+  const quarter = getPeriodModeFromLabel(period.quinzena) === "q2" ? "Q2" : "Q1";
+  return `${period.ano}${period.mes}${quarter}`;
+}
+
+function getPnrMonthFullLabel(period) {
+  const monthIndex = Number(period?.mes || 0) - 1;
+  const monthName = MONTHS[monthIndex] ? capitalize(MONTHS[monthIndex]) : "";
+  return monthName && period?.ano ? `${monthName}/${period.ano}` : period?.competencia || "";
+}
+
+function getPnrQuinzenaDisplay(period) {
+  return getPeriodModeFromLabel(period?.quinzena) === "q2" ? "2ª Quinzena" : "1ª Quinzena";
+}
+
+function getPnrQuinzenaRef(period) {
+  const monthIndex = Number(period?.mes || 0) - 1;
+  const monthName = MONTHS[monthIndex] ? capitalize(MONTHS[monthIndex]) : "";
+  const range = getPeriodModeFromLabel(period?.quinzena) === "q2" ? "16 a 31" : "01 a 15";
+  return `${range} ${monthName}`.trim();
+}
+
+function getPnrPeriodLabel(period) {
+  const quinzena = getPnrQuinzenaDisplay(period);
+  const competencia = getPnrMonthFullLabel(period);
+  return [quinzena, competencia].filter(Boolean).join(" · ");
+}
+
+function getPnrCell(rowObject, ...headers) {
+  const normalizedHeaders = headers.map(normalizePnrHeader);
+  for (const header of headers) {
+    if (Object.prototype.hasOwnProperty.call(rowObject, header)) return rowObject[header];
+  }
+  for (const header of normalizedHeaders) {
+    if (Object.prototype.hasOwnProperty.call(rowObject, header)) return rowObject[header];
+  }
+  return "";
+}
+
+function buildPnrSearchText(row) {
+  return normalize([
+    row.idCaso,
+    row.idEnvio,
+    row.idReclamacao,
+    row.produtos,
+    row.estacaoOrigem,
+    row.idMotorista,
+    row.nomeMotorista,
+    row.motoristaDisplay,
+    row.statusNormalizado,
+    row.statusOriginal,
+    row.idRota,
+    row.competencia,
+    row.quinzena,
+    row.periodoLabel,
+    row.quinzenaRef,
+  ].join(" "));
+}
+
+function normalizePnrStoredRow(row) {
+  if (!row) return null;
+  const dataCaso = parseDateValue(row.dataCaso || row.data_caso || row["DATA DO CASO"]).iso;
+  const dataPedidoRevisao = parseDateValue(row.dataPedidoRevisao || row.data_pedido_revisao || row["DATA DO PEDIDO DE REVISÃO"]).iso;
+  const dataEncerramentoCaso = parseDateValue(row.dataEncerramentoCaso || row.data_encerramento_caso || row["DATA DE ENCERRAMENTO DO CASO"]).iso;
+  const dataEntrega = parseDateValue(row.dataEntrega || row.data_entrega || row["DATA DE ENTREGA"]).iso;
+  const dataReclamacao = parseDateValue(row.dataReclamacao || row.data_reclamacao || row["DATA DA RECLAMAÇÃO"]).iso;
+  const sourceFileName = repairPnrText(row.sourceFileName || row.source_file_name || row.arquivo_origem || row.file_name || "").trim();
+  const rawPeriodoFaturamento = repairPnrText(row.periodoFaturamentoOriginal || row.periodo_faturamento_original || row.periodoFaturamento || row.periodo_faturamento || row["PERÍODO DE FATURAMENTO"] || "").trim();
+  const sourcePeriodo = repairPnrText(row.sourcePeriodo || row.source_periodo || rawPeriodoFaturamento || "").trim();
+  const period =
+    getPnrPeriodFromBillingPeriod(sourcePeriodo) ||
+    getPnrPeriodFromBillingPeriod(sourceFileName) ||
+    getPnrPeriodFromDate(dataCaso || rawPeriodoFaturamento || sourceFileName);
+  const periodoOriginal = sourcePeriodo || buildPnrBillingPeriodFromPeriod(period);
+  const estacaoOrigem = repairPnrText(row.estacaoOrigem || row.estacao_origem || row["ESTAÇÃO DE ORIGEM"] || row["ESTACAO DE ORIGEM"] || row.origem || "").trim();
+  const statusOriginal = repairPnrText(row.statusOriginal || row.status_original || row.status || row.STATUS || "").trim();
+  const valorCompraOriginal = repairPnrText(row.valorCompraOriginal || row.valor_compra_original || row["VALOR DA COMPRA"] || "").trim();
+  const periodMonthName = getPnrMonthFullLabel(period).split("/")[0] || period.mes;
+  const rawMes = repairPnrText(row.mes || "").trim();
+  const mesDisplay = rawMes && !/^\d{1,2}$/.test(rawMes) ? rawMes : periodMonthName;
+  const rawCompetencia = repairPnrText(row.competencia || "").trim();
+  const competenciaDisplay = /\d{4}/.test(rawCompetencia) ? rawCompetencia : getPnrMonthFullLabel(period);
+  const rawQuinzena = repairPnrText(row.quinzena || "").trim();
+  const quinzenaDisplay = rawQuinzena && !/quinzena/i.test(rawQuinzena) ? rawQuinzena : getPnrQuinzenaDisplay(period);
+  const valorCompraNumerico = parsePnrMoney(
+    row.valorCompraNumerico ??
+      row.valor_compra_numerico ??
+      row["VAL. COMPRA"] ??
+      row["VAL COMPRA"] ??
+      row.valor_compra ??
+      valorCompraOriginal,
+  );
+  const nomeMotorista = getPnrDriverNameFromSourceRow({
+    motorista: row.nomeMotorista || row.nome_motorista || row.motorista || row.driver || row["NOME DO MOTORISTA"],
+  });
+  const normalized = {
+    idCaso: formatPnrId(row.idCaso || row.id_caso || row["ID DO CASO"]),
+    dataCaso,
+    tipo: repairPnrText(row.tipo || row.TIPO || "").trim(),
+    statusOriginal,
+    statusNormalizado: row.statusNormalizado || row.status_normalizado || normalizePnrStatus(statusOriginal),
+    periodoFaturamento: periodoOriginal,
+    periodoFaturamentoOriginal: periodoOriginal,
+    sourcePeriodo: periodoOriginal,
+    sourceFileName,
+    dataPedidoRevisao,
+    pedidoRevisao: repairPnrText(row.pedidoRevisao || row.pedido_revisao || row["PEDIDO DE REVISÃO"] || "").trim(),
+    dataEncerramentoCaso,
+    repAssistente: repairPnrText(row.repAssistente || row.rep_assistente || row["REP - ASSISTENTE"] || "").trim(),
+    comentarioEncerramento: repairPnrText(row.comentarioEncerramento || row.comentario_encerramento || row["COMENTÁRIO DE ENCERRAMENTO"] || "").trim(),
+    numeroPreFatura: formatPnrId(row.numeroPreFatura || row.numero_pre_fatura || row["Nº DA PRÉ-FATURA"] || row["N° DA PRÉ-FATURA"] || row["N DA PRÉ-FATURA"]),
+    idEnvio: formatPnrId(row.idEnvio || row.id_envio || row["ID DE ENVIO"] || row["ID ENVIO"]),
+    produtos: repairPnrText(row.produtos || row.PRODUTOS || row.produto || row.PRODUTO || "").trim(),
+    valorCompraOriginal,
+    valorCompraNumerico,
+    repTransportadora: repairPnrText(row.repTransportadora || row.rep_transportadora || row["REP TRANSPORTADORA"] || "").trim(),
+    idTransportadora: formatPnrId(row.idTransportadora || row.id_transportadora || row["ID DA TRANSPORTADORA"]),
+    transportadora: repairPnrText(row.transportadora || row.TRANSPORTADORA || "").trim(),
+    estacaoOrigem,
+    tipoOperacional: row.tipoOperacional || row.tipo_operacional || getPnrOperationalType(estacaoOrigem),
+    idRota: formatPnrId(row.idRota || row.id_rota || row["ID DA ROTA"] || row["ID ROTA"]),
+    idMotorista: formatPnrId(row.idMotorista || row.id_motorista || row["ID DO MOTORISTA"] || row["ID MOTORISTA"]),
+    nomeMotorista,
+    motoristaDisplay: row.motoristaDisplay || row.motorista_display || nomeMotorista || "",
+    motoristaMatchSource: row.motoristaMatchSource || row.motorista_match_source || "",
+    dataEntrega,
+    idReclamacao: formatPnrId(row.idReclamacao || row.id_reclamacao || row["ID DA RECLAMAÇÃO"] || row["ID DA RECLAMACAO"] || row["ID RECLAMAÇÃO"] || row["ID RECLAMACAO"]),
+    dataReclamacao,
+    mes: mesDisplay,
+    mesNumero: row.mesNumero || row.mes_numero || period.mes,
+    ano: row.ano || period.ano,
+    competencia: competenciaDisplay,
+    quinzena: quinzenaDisplay,
+    quinzenaRef: row.quinzenaRef || row.quinzena_ref || getPnrQuinzenaRef(period),
+    periodoLabel: row.periodoLabel || row.periodo_label || getPnrPeriodLabel(period),
+    monthKey: row.monthKey || row.month_key || period.monthKey,
+    file_category: DEVIATION_PNR_FILE_CATEGORY,
+    tipo_registro: DEVIATION_PNR_FILE_CATEGORY,
+    arquivo_origem: row.arquivo_origem || row.file_name || "",
+  };
+  normalized.dedupeKey = row.dedupeKey || row.dedupe_key || getPnrDedupeKey(normalized);
+  normalized.valorCompraFormatado = currency.format(normalized.valorCompraNumerico || 0);
+  normalized._search = buildPnrSearchText(normalized);
+  return normalized;
+}
+
+function workbookLooksLikePnr(workbook) {
+  return workbook?.SheetNames?.some((sheetName) => {
+    const sheet = workbook.Sheets[sheetName];
+    const matrix = XLSX.utils.sheet_to_json(sheet, { header: 1, raw: true, defval: null });
+    return matrix.slice(0, 12).some((row) => {
+      const headers = (row || []).map(normalizePnrHeader);
+      return headers.includes("ID DO CASO") && headers.includes("DATA DO CASO") && headers.includes("ID DE ENVIO");
+    });
+  });
+}
+
+function isPnrMasterFileName(fileName = "") {
+  const normalized = normalizeText(fileName);
+  return (
+    normalized.includes("MESTRE") ||
+    normalized.includes("ARQUIVO MESTRE") ||
+    normalized.includes("HISTORICO DE PNRS") ||
+    normalized.includes("HISTORICO PNR") ||
+    normalized.includes("BASE PNR") ||
+    normalized.includes("PNRS HISTORICO") ||
+    normalized.includes("PNR HISTORICO")
+  );
+}
+
+function getPnrCalculatedHeaderSet() {
+  return new Set(PNR_CALCULATED_HEADERS.map(normalizePnrHeader));
+}
+
+function getPnrSourceHeaders() {
+  const calculatedHeaders = getPnrCalculatedHeaderSet();
+  return PNR_STANDARD_HEADERS.filter((header) => !calculatedHeaders.has(normalizePnrHeader(header)));
+}
+
+function hasPnrCalculatedHeaders(headers = []) {
+  const normalizedHeaders = new Set((Array.isArray(headers) ? headers : []).map(normalizePnrHeader).filter(Boolean));
+  return PNR_CALCULATED_HEADERS.every((header) => normalizedHeaders.has(normalizePnrHeader(header)));
+}
+
+function validatePnrSourceHeaders(headers = [], options = {}) {
+  const normalizedHeaders = new Set((Array.isArray(headers) ? headers : []).map(normalizePnrHeader).filter(Boolean));
+  const missing = getPnrSourceHeaders().filter((header) => !normalizedHeaders.has(normalizePnrHeader(header)));
+  if (missing.length) {
+    const label = options.isMaster ? "Arquivo mestre inválido" : "Arquivo PNR inválido";
+    throw new Error(`${label}. A coluna ${missing[0]} não foi encontrada.`);
+  }
+}
+
+function isPnrSummaryRow(rowObject) {
+  const values = Object.values(rowObject || {}).map(normalizeText).filter(Boolean);
+  return values.some((text) =>
+    text === "TOTAL" ||
+      text === "TOTAIS" ||
+      text === "TOTAL GERAL" ||
+      text === "SUBTOTAL" ||
+      text === "SOMA" ||
+      text === "SOMATORIA" ||
+      text === "RESUMO" ||
+      text.startsWith("TOTAL ") ||
+      text.startsWith("SUBTOTAL ") ||
+      text.startsWith("SOMA ") ||
+      text.includes("VALOR TOTAL"),
+  );
+}
+
+function normalizePnrWorkbook(workbook, fileName = "") {
+  const records = [];
+  let skipped = 0;
+  const fileNameLooksMaster = isPnrMasterFileName(fileName);
+  let detectedMasterFile = fileNameLooksMaster;
+  const filePeriod = getPnrPeriodFromBillingPeriod(fileName);
+  workbook.SheetNames.forEach((sheetName) => {
+    const sheet = workbook.Sheets[sheetName];
+    const matrix = XLSX.utils.sheet_to_json(sheet, { header: 1, raw: false, defval: null });
+    const headerIndex = matrix.findIndex((row) => (row || []).map(normalizePnrHeader).includes("ID DO CASO"));
+    if (headerIndex < 0) return;
+    const rawHeaders = matrix[headerIndex] || [];
+    const sheetHasCalculatedColumns = hasPnrCalculatedHeaders(rawHeaders);
+    const sheetIsMaster = fileNameLooksMaster || sheetHasCalculatedColumns;
+    validatePnrSourceHeaders(rawHeaders, { isMaster: sheetIsMaster });
+    if (sheetIsMaster) detectedMasterFile = true;
+    const headers = rawHeaders.map(normalizePnrHeader);
+    matrix.slice(headerIndex + 1).forEach((row) => {
+      if (!row || row.every((cell) => cell === null || cell === "")) return;
+      const rowObject = {};
+      headers.forEach((header, index) => {
+        if (header) rowObject[header] = row[index];
+      });
+      if (isPnrSummaryRow(rowObject)) {
+        skipped += 1;
+        return;
+      }
+      const dataCaso = getPnrCell(rowObject, "DATA DO CASO");
+      const periodoFaturamento = getPnrCell(rowObject, "PERIODO DE FATURAMENTO", "PERÍODO DE FATURAMENTO");
+      const rowPeriod = getPnrPeriodFromBillingPeriod(periodoFaturamento);
+      const period = sheetIsMaster
+        ? rowPeriod || filePeriod || getPnrPeriodFromDate(dataCaso || periodoFaturamento || fileName)
+        : filePeriod || rowPeriod || getPnrPeriodFromDate(dataCaso || periodoFaturamento || fileName);
+      const resolvedBillingPeriod = sheetIsMaster
+        ? periodoFaturamento || buildPnrBillingPeriodFromPeriod(period)
+        : buildPnrBillingPeriodFromPeriod(filePeriod || period) || periodoFaturamento;
+      const mesValue = sheetHasCalculatedColumns ? getPnrCell(rowObject, "MES", "MÊS") : "";
+      const quinzenaRefValue = sheetHasCalculatedColumns ? getPnrCell(rowObject, "QUINZENA REF", "QUINZENA REF.") : "";
+      const valCompraValue = sheetHasCalculatedColumns ? getPnrCell(rowObject, "VAL. COMPRA", "VAL COMPRA") : "";
+      const normalized = normalizePnrStoredRow({
+        idCaso: getPnrCell(rowObject, "ID DO CASO"),
+        dataCaso,
+        tipo: getPnrCell(rowObject, "TIPO"),
+        statusOriginal: getPnrCell(rowObject, "STATUS"),
+        periodoFaturamento: resolvedBillingPeriod,
+        dataPedidoRevisao: getPnrCell(rowObject, "DATA DO PEDIDO DE REVISAO", "DATA DO PEDIDO DE REVISÃO"),
+        pedidoRevisao: getPnrCell(rowObject, "PEDIDO DE REVISAO", "PEDIDO DE REVISÃO"),
+        dataEncerramentoCaso: getPnrCell(rowObject, "DATA DE ENCERRAMENTO DO CASO"),
+        repAssistente: getPnrCell(rowObject, "REP - ASSISTENTE", "REP ASSISTENTE"),
+        comentarioEncerramento: getPnrCell(rowObject, "COMENTARIO DE ENCERRAMENTO", "COMENTÁRIO DE ENCERRAMENTO"),
+        numeroPreFatura: getPnrCell(rowObject, "Nº DA PRE-FATURA", "N DA PRE-FATURA", "N DA PRÉ-FATURA", "Nº DA PRÉ-FATURA"),
+        idEnvio: getPnrCell(rowObject, "ID DE ENVIO", "ID ENVIO", "ENVIO", "SHIPMENT ID", "SHIPMENT_ID"),
+        produtos: getPnrCell(rowObject, "PRODUTOS", "PRODUTO", "PRODUCTS", "PRODUCT"),
+        valorCompraOriginal: getPnrCell(rowObject, "VALOR DA COMPRA", "VALOR COMPRA", "VALOR DO PRODUTO", "VALOR PRODUTO", "VALOR"),
+        valorCompraNumerico: valCompraValue || getPnrCell(rowObject, "VAL. COMPRA", "VAL COMPRA", "VALOR DA COMPRA", "VALOR COMPRA", "VALOR DO PRODUTO", "VALOR PRODUTO", "VALOR"),
+        repTransportadora: getPnrCell(rowObject, "REP TRANSPORTADORA"),
+        idTransportadora: getPnrCell(rowObject, "ID DA TRANSPORTADORA"),
+        transportadora: getPnrCell(rowObject, "TRANSPORTADORA"),
+        estacaoOrigem: getPnrCell(rowObject, "ESTACAO DE ORIGEM", "ESTAÇÃO DE ORIGEM", "ESTACAO ORIGEM", "ESTAÇÃO ORIGEM", "ORIGEM", "ORIGIN STATION", "STATION"),
+        idRota: getPnrCell(rowObject, "ID DA ROTA", "ID ROTA", "ROTA", "ROUTE ID", "ROUTE_ID"),
+        idMotorista: getPnrCell(rowObject, "ID DO MOTORISTA", "ID MOTORISTA", "MOTORISTA", "DRIVER ID", "DRIVER_ID"),
+        nomeMotorista: getPnrCell(rowObject, "NOME DO MOTORISTA", "NOME MOTORISTA", "MOTORISTA NOME", "DRIVER NAME"),
+        dataEntrega: getPnrCell(rowObject, "DATA DE ENTREGA", "DATA ENTREGA", "DELIVERY DATE"),
+        idReclamacao: getPnrCell(rowObject, "ID DA RECLAMACAO", "ID DA RECLAMAÇÃO", "ID RECLAMACAO", "ID RECLAMAÇÃO", "RECLAMACAO", "RECLAMAÇÃO", "CLAIM ID", "CLAIM_ID"),
+        dataReclamacao: getPnrCell(rowObject, "DATA DA RECLAMACAO", "DATA DA RECLAMAÇÃO", "DATA RECLAMACAO", "DATA RECLAMAÇÃO", "CLAIM DATE"),
+        competencia: getPnrMonthFullLabel(period),
+        mes: mesValue || period.mes,
+        ano: period.ano,
+        quinzena: getPnrQuinzenaDisplay(period),
+        quinzenaRef: quinzenaRefValue || getPnrQuinzenaRef(period),
+        periodoLabel: getPnrPeriodLabel(period),
+        sourceFileName: fileName,
+        sourcePeriodo: resolvedBillingPeriod,
+        arquivo_origem: fileName,
+      });
+      if (!normalized.idCaso && !normalized.idEnvio && !normalized.idReclamacao) {
+        skipped += 1;
+        return;
+      }
+      records.push(normalized);
+    });
+  });
+  const deduped = dedupePnrRecords(records);
+  const years = deduped.rows
+    .map((row) => Number(row.ano || String(row.monthKey || "").slice(0, 4)))
+    .filter((year) => Number.isFinite(year) && year > 1900)
+    .sort((a, b) => a - b);
+  normalizePnrWorkbook.lastStats = {
+    originalRows: records.length + skipped,
+    consolidatedRows: deduped.rows.length,
+    totalRowsSkipped: skipped,
+    duplicateRowsUpdated: deduped.duplicateRowsUpdated,
+    duplicateRowsSkipped: deduped.duplicateRowsSkipped,
+    newRows: deduped.rows.length,
+    duplicateRowsRemoved: deduped.duplicateRowsUpdated + deduped.duplicateRowsSkipped,
+    isMasterFile: detectedMasterFile,
+    periodStartYear: years[0] || "",
+    periodEndYear: years[years.length - 1] || "",
+  };
+  return deduped.rows;
+}
+
 function normalizePackageManagementWorkbook(workbook, fileName = "") {
   const records = [];
   const period = identificarPeriodoGestaoPacotes(fileName);
@@ -7807,10 +9778,11 @@ async function calculateSha256FromBuffer(buffer) {
 }
 
 function buildUploadPeriodMetadata({ file, previewDataset, referenceYear, referenceMonth, periodLabel, periodType, packagePeriod, displayName, fileHash, previewStats }) {
-  const monthAbbr = packagePeriod?.mes || capitalize((getMonthAbbr(referenceMonth) || "").toLowerCase());
-  const year = packagePeriod?.ano || referenceYear || "";
-  const competencia = packagePeriod?.competencia || (monthAbbr && year ? `${monthAbbr}/${String(year).slice(-2)}` : "");
-  const quinzena = packagePeriod?.quinzena || periodLabel;
+  const firstRow = previewDataset.rows?.[0] || {};
+  const monthAbbr = packagePeriod?.mes || firstRow.competencia?.split("/")?.[0] || capitalize((getMonthAbbr(referenceMonth) || "").toLowerCase());
+  const year = packagePeriod?.ano || firstRow.ano || referenceYear || "";
+  const competencia = packagePeriod?.competencia || firstRow.competencia || (monthAbbr && year ? `${monthAbbr}/${String(year).slice(-2)}` : "");
+  const quinzena = packagePeriod?.quinzena || firstRow.quinzena || periodLabel;
   return {
     parsed_rows: previewDataset.rows.length,
     period_label: periodLabel,
@@ -7834,6 +9806,12 @@ function buildUploadPeriodMetadata({ file, previewDataset, referenceYear, refere
     original_rows: previewStats.originalRows || previewDataset.rows.length,
     consolidated_rows: previewStats.consolidatedRows || previewDataset.rows.length,
     duplicatesSkipped: previewStats.duplicatesSkipped || 0,
+    duplicate_rows_skipped: previewStats.duplicateRowsSkipped || 0,
+    duplicate_rows_updated: previewStats.duplicateRowsUpdated || 0,
+    duplicate_rows_removed: previewStats.duplicateRowsRemoved || 0,
+    pnr_master_file: previewStats.isMasterFile === true,
+    period_start_year: previewStats.periodStartYear || "",
+    period_end_year: previewStats.periodEndYear || "",
     linked_occurrences: previewStats.linkedOccurrences || 0,
     linked_ids_count: previewStats.linkedIds || 0,
     total_rows_skipped: previewStats.totalRowsSkipped || 0,
@@ -7906,6 +9884,8 @@ function removeDashboardFileRecordsFromMemory(records, exceptId = "") {
   dashboardFileRecords = dashboardFileRecords.filter((record) => !ids.has(record.id));
   library.datasets = (Array.isArray(library.datasets) ? library.datasets : []).filter((dataset) => !ids.has(dataset.id));
   packageManagementRowsLoadedKey = "";
+  pnrRowsLoadedKey = "";
+  pnrRows = [];
   resetDerivedDataCache();
 }
 
@@ -7953,7 +9933,7 @@ async function updateDuplicateDashboardFileRecord(record, uploadMetadata, previe
 
   if (error) throw error;
   if (shouldActivate) await deactivateOtherPreFaturaRecords(data.id);
-  await saveProcessedRowsForFile(data, previewDataset.rows);
+  const processedSaveResult = await saveProcessedRowsForFile(data, previewDataset.rows);
   mergeUploadedDatasetIntoMemory(data, previewDataset);
   return data;
 }
@@ -7969,13 +9949,26 @@ async function processDashboardFile(file, fileRecord = null, options = {}) {
     XLSX_PROCESS_TIMEOUT_MS,
     "Tempo limite excedido ao ler o arquivo Excel.",
   );
-  const workbook = XLSX.read(buffer, { type: "array", cellDates: true });
+  let workbook;
+  try {
+    workbook = XLSX.read(buffer, { type: "array", cellDates: true });
+  } catch (error) {
+    if (/\.xltx$/i.test(file?.name || fileRecord?.file_name || "")) {
+      throw new Error("Converta o arquivo para .xlsx padrão e tente novamente.");
+    }
+    throw error;
+  }
   const fileHash = options.calculateHash ? await calculateSha256FromBuffer(buffer) : fileRecord?.metadata?.file_hash || "";
   const fileName = fileRecord?.file_name || file.name;
-  const fileCategory = getFileRecordCategory(fileRecord || { file_name: fileName });
-  const rows = fileCategory === PACKAGE_MANAGEMENT_FILE_CATEGORY
-    ? normalizePackageManagementWorkbook(workbook, fileName)
-    : normalizeWorkbook(workbook);
+  let fileCategory = getFileRecordCategory(fileRecord || { file_name: fileName });
+  if (fileCategory === PRE_FATURA_FILE_CATEGORY && workbookLooksLikePnr(workbook)) {
+    fileCategory = DEVIATION_PNR_FILE_CATEGORY;
+  }
+  const rows = fileCategory === DEVIATION_PNR_FILE_CATEGORY
+    ? normalizePnrWorkbook(workbook, fileName)
+    : fileCategory === PACKAGE_MANAGEMENT_FILE_CATEGORY
+      ? normalizePackageManagementWorkbook(workbook, fileName)
+      : normalizeWorkbook(workbook);
   return {
     id: fileRecord?.id || makeDatasetId(file.name),
     fileName,
@@ -7988,6 +9981,37 @@ async function processDashboardFile(file, fileRecord = null, options = {}) {
     fileHash,
     rows,
   };
+}
+
+function getWorkbookStatsForCategory(fileCategory) {
+  if (fileCategory === DEVIATION_PNR_FILE_CATEGORY) return normalizePnrWorkbook.lastStats || {};
+  if (fileCategory === PACKAGE_MANAGEMENT_FILE_CATEGORY) return normalizePackageManagementWorkbook.lastStats || {};
+  return normalizeWorkbook.lastStats || {};
+}
+
+function applyUploadedFileState(previewDataset, uploadedPeriod) {
+  if (previewDataset.fileCategory === DEVIATION_PNR_FILE_CATEGORY) {
+    const pnrKey = previewDataset.rows?.[0]?.monthKey || uploadedPeriod?.key || "";
+    state.sheet = DEVIATION_MANAGEMENT_VIEW;
+    state.activeDesvioCategory = DEVIATION_CATEGORY_PNRS;
+    state.pnrMonths = pnrKey ? [pnrKey] : [];
+    state.pnrQuinzena = "all";
+    state.pnrStatus = "Todos";
+    state.pnrTipoOperacional = "Todos";
+    state.pnrEstacao = "Todos";
+    return;
+  }
+  state.sheet = previewDataset.fileCategory === PACKAGE_MANAGEMENT_FILE_CATEGORY ? PACKAGE_MANAGEMENT_VIEW : PRE_FATURA_VIEW;
+  if (previewDataset.fileCategory === PRE_FATURA_FILE_CATEGORY) {
+    state.monthFilter = uploadedPeriod.key;
+    state.period = uploadedPeriod.periodType;
+    state.prefaturaMonths = [uploadedPeriod.key];
+    state.prefaturaPeriod = uploadedPeriod.periodType;
+  } else {
+    const packageKey = getPackageManagementMonthKey(previewDataset.rows?.[0] || {});
+    if (packageKey) state.packageMonths = [packageKey];
+    state.packagePeriod = getPackageManagementPeriodType(previewDataset.rows?.[0] || {}) || "month";
+  }
 }
 
 async function uploadDashboardFile(file) {
@@ -8007,7 +10031,7 @@ async function uploadDashboardFile(file) {
   setDashboardVisualState("processing-file");
   updateDatasetMeta();
   const previewDataset = await processDashboardFile(file, null, { calculateHash: true });
-  const previewStats = previewDataset.fileCategory === PACKAGE_MANAGEMENT_FILE_CATEGORY ? (normalizePackageManagementWorkbook.lastStats || {}) : (normalizeWorkbook.lastStats || {});
+  const previewStats = getWorkbookStatsForCategory(previewDataset.fileCategory);
   if (!previewDataset.rows.length) {
     dashboardFilesLoading = false;
     setDashboardVisualState("");
@@ -8021,7 +10045,7 @@ async function uploadDashboardFile(file) {
   const packagePeriod = previewDataset.fileCategory === PACKAGE_MANAGEMENT_FILE_CATEGORY
     ? identificarPeriodoGestaoPacotes(file.name)
     : null;
-  const displayName = getDashboardFileDisplayName({
+  let displayName = getDashboardFileDisplayName({
     fileName: file.name,
     fileCategory: previewDataset.fileCategory,
     metadata: packagePeriod ? {
@@ -8029,6 +10053,9 @@ async function uploadDashboardFile(file) {
       competencia: packagePeriod.competencia,
     } : {},
   });
+  if (previewDataset.fileCategory === DEVIATION_PNR_FILE_CATEGORY && previewStats.isMasterFile) {
+    displayName = "PNRs · Base Mestre";
+  }
   const uploadMetadata = buildUploadPeriodMetadata({
     file,
     previewDataset,
@@ -8041,27 +10068,33 @@ async function uploadDashboardFile(file) {
     fileHash: previewDataset.fileHash,
     previewStats,
   });
+  let uploadFile = file;
+  if (previewDataset.fileCategory === DEVIATION_PNR_FILE_CATEGORY && !previewStats.isMasterFile) {
+    uploadFile = await buildStandardizedPnrUploadFile(file, previewDataset.rows);
+    uploadMetadata.standardized_storage = true;
+    uploadMetadata.storage_file_name = uploadFile.name;
+    uploadMetadata.storage_model = "Histórico de PNRs";
+  } else if (previewDataset.fileCategory === DEVIATION_PNR_FILE_CATEGORY) {
+    uploadMetadata.standardized_storage = false;
+    uploadMetadata.storage_model = "Arquivo mestre PNRs";
+  }
 
   const duplicatedRecord = await findDashboardFileByHash(previewDataset.fileCategory, previewDataset.fileHash);
   if (duplicatedRecord) {
     const data = await updateDuplicateDashboardFileRecord(duplicatedRecord, uploadMetadata, previewDataset);
-    const previousRecords = await findDashboardFilesByUploadMetadata(previewDataset.fileCategory, file.name, uploadMetadata);
+    let previousRecords = await findDashboardFilesByUploadMetadata(previewDataset.fileCategory, file.name, uploadMetadata);
+    if (previewDataset.fileCategory === DEVIATION_PNR_FILE_CATEGORY && previewStats.isMasterFile) {
+      const previousMasterRecords = dashboardFileRecords
+        .filter(isUsableDashboardFileRecord)
+        .filter((record) => getFileRecordCategory(record) === DEVIATION_PNR_FILE_CATEGORY && record.metadata?.pnr_master_file === true);
+      previousRecords = [...new Map([...previousRecords, ...previousMasterRecords].map((record) => [record.id, record])).values()];
+    }
     if (previousRecords.length) {
       await deactivateDashboardFileRecords(previousRecords, data.id);
       removeDashboardFileRecordsFromMemory(previousRecords, data.id);
     }
     const uploadedPeriod = getFileRecordPeriod(data);
-    state.sheet = previewDataset.fileCategory === PACKAGE_MANAGEMENT_FILE_CATEGORY ? PACKAGE_MANAGEMENT_VIEW : PRE_FATURA_VIEW;
-    if (previewDataset.fileCategory === PRE_FATURA_FILE_CATEGORY) {
-      state.monthFilter = uploadedPeriod.key;
-      state.period = uploadedPeriod.periodType;
-      state.prefaturaMonths = [uploadedPeriod.key];
-      state.prefaturaPeriod = uploadedPeriod.periodType;
-    } else {
-      const packageKey = getPackageManagementMonthKey(previewDataset.rows?.[0] || {});
-      if (packageKey) state.packageMonths = [packageKey];
-      state.packagePeriod = getPackageManagementPeriodType(previewDataset.rows?.[0] || {}) || "month";
-    }
+    applyUploadedFileState(previewDataset, uploadedPeriod);
     persistState();
     setDashboardVisualState("", { render: false });
     hydrateControls();
@@ -8078,17 +10111,27 @@ async function uploadDashboardFile(file) {
     return;
   }
 
-  const previousRecords = await findDashboardFilesByUploadMetadata(previewDataset.fileCategory, file.name, uploadMetadata);
-  const safeName = file.name
+  let previousRecords = await findDashboardFilesByUploadMetadata(previewDataset.fileCategory, file.name, uploadMetadata);
+  if (previewDataset.fileCategory === DEVIATION_PNR_FILE_CATEGORY && previewStats.isMasterFile) {
+    const previousMasterRecords = dashboardFileRecords
+      .filter(isUsableDashboardFileRecord)
+      .filter((record) => getFileRecordCategory(record) === DEVIATION_PNR_FILE_CATEGORY && record.metadata?.pnr_master_file === true);
+    previousRecords = [...new Map([...previousRecords, ...previousMasterRecords].map((record) => [record.id, record])).values()];
+  }
+  const safeName = uploadFile.name
     .normalize("NFD")
     .replace(/[\u0300-\u036f]/g, "")
     .replace(/[^\w.-]+/g, "_");
-  const storageFolder = previewDataset.fileCategory === PACKAGE_MANAGEMENT_FILE_CATEGORY ? "gestao-pacotes" : "pre-fatura";
+  const storageFolder = previewDataset.fileCategory === DEVIATION_PNR_FILE_CATEGORY
+    ? "gestao-desvios/pnrs"
+    : previewDataset.fileCategory === PACKAGE_MANAGEMENT_FILE_CATEGORY
+      ? "gestao-pacotes"
+      : "pre-fatura";
   const storagePath = `${storageFolder}/${referenceYear || "sem-ano"}/${referenceMonth || "sem-mes"}/${Date.now()}_${safeName}`;
 
   const { error: uploadError } = await window.supabaseClient.storage
     .from("dashboard-files")
-    .upload(storagePath, file, {
+    .upload(storagePath, uploadFile, {
       cacheControl: "3600",
       upsert: false,
     });
@@ -8104,7 +10147,7 @@ async function uploadDashboardFile(file) {
       file_name: file.name,
       storage_path: storagePath,
       file_type: previewDataset.fileCategory,
-      file_size: file.size,
+      file_size: uploadFile.size,
       uploaded_by: currentUser.id,
       uploaded_by_email: currentUser.email,
       reference_month: referenceMonth || "",
@@ -8131,20 +10174,10 @@ async function uploadDashboardFile(file) {
   if (previewDataset.fileCategory === PRE_FATURA_FILE_CATEGORY) {
     await deactivateOtherPreFaturaRecords(data.id);
   }
-  await saveProcessedRowsForFile(data, previewDataset.rows);
+  const processedSaveResult = await saveProcessedRowsForFile(data, previewDataset.rows);
 
   const uploadedPeriod = getFileRecordPeriod(data);
-  state.sheet = previewDataset.fileCategory === PACKAGE_MANAGEMENT_FILE_CATEGORY ? PACKAGE_MANAGEMENT_VIEW : PRE_FATURA_VIEW;
-  if (previewDataset.fileCategory === PRE_FATURA_FILE_CATEGORY) {
-    state.monthFilter = uploadedPeriod.key;
-    state.period = uploadedPeriod.periodType;
-    state.prefaturaMonths = [uploadedPeriod.key];
-    state.prefaturaPeriod = uploadedPeriod.periodType;
-  } else {
-    const packageKey = getPackageManagementMonthKey(previewDataset.rows?.[0] || {});
-    if (packageKey) state.packageMonths = [packageKey];
-    state.packagePeriod = getPackageManagementPeriodType(previewDataset.rows?.[0] || {}) || "month";
-  }
+  applyUploadedFileState(previewDataset, uploadedPeriod);
   persistState();
   mergeUploadedDatasetIntoMemory(data, previewDataset);
   setDashboardVisualState("", { render: false });
@@ -8160,6 +10193,21 @@ async function uploadDashboardFile(file) {
     linked_occurrences: data.metadata?.linked_occurrences || 0,
     linked_ids_count: data.metadata?.linked_ids_count || 0,
   });
+  if (previewDataset.fileCategory === DEVIATION_PNR_FILE_CATEGORY) {
+    const stats = getWorkbookStatsForCategory(DEVIATION_PNR_FILE_CATEGORY);
+    const inserted = processedSaveResult?.inserted ?? stats.newRows ?? previewDataset.rows.length;
+    const updated = processedSaveResult?.updated ?? stats.duplicateRowsUpdated ?? 0;
+    const ignored = processedSaveResult?.ignored ?? stats.duplicateRowsSkipped ?? 0;
+    if (stats.isMasterFile) {
+      const removed = stats.duplicateRowsRemoved ?? (stats.duplicateRowsSkipped || 0) + (stats.duplicateRowsUpdated || 0);
+      const periodText = stats.periodStartYear && stats.periodEndYear
+        ? `${stats.periodStartYear} até ${stats.periodEndYear}`
+        : "não identificado";
+      showToast(`Arquivo mestre processado. Registros lidos: ${integer.format(stats.originalRows || previewDataset.rows.length)}. Registros importados: ${integer.format(previewDataset.rows.length)}. Duplicados removidos: ${integer.format(removed)}. Registros atualizados: ${integer.format(updated)}. Período identificado: ${periodText}.`, removed ? "warn" : "good", 9000);
+    } else {
+      showToast(`Arquivo processado. Registros novos: ${inserted}. Registros atualizados: ${updated}. Duplicados ignorados: ${ignored}.`, "good", 7200);
+    }
+  }
 }
 
 function mergeUploadedDatasetIntoMemory(fileRecord, previewDataset) {
@@ -8212,6 +10260,7 @@ function mergeUploadedDatasetIntoMemory(fileRecord, previewDataset) {
     state.activeDatasetId = dataset.id;
   }
   rebuildPackageManagementRowsFromLibrary();
+  rebuildPnrRowsFromLibrary();
   resetDerivedDataCache();
   syncActiveDataset();
   updateDatasetMeta();
@@ -8226,6 +10275,17 @@ function rebuildPackageManagementRowsFromLibrary() {
     .filter(isUsableDashboardFileRecord)
     .filter((record) => getFileRecordCategory(record) === PACKAGE_MANAGEMENT_FILE_CATEGORY);
   packageManagementRowsLoadedKey = packageFiles.map((record) => `${record.id || record.file_name}:${record.updated_at || record.metadata?.last_loaded_at || ""}`).join("|") || "__empty";
+}
+
+function rebuildPnrRowsFromLibrary() {
+  const datasets = (Array.isArray(library.datasets) ? library.datasets : [])
+    .filter((dataset) => getFileRecordCategory(dataset.remoteRecord || dataset) === DEVIATION_PNR_FILE_CATEGORY)
+    .filter((dataset) => Array.isArray(dataset.rows) && dataset.rows.length);
+  pnrRows = dedupePnrRecords(datasets.flatMap((dataset) => dataset.rows.map(normalizePnrStoredRow).filter(Boolean))).rows;
+  const files = dashboardFileRecords
+    .filter(isUsableDashboardFileRecord)
+    .filter((record) => getFileRecordCategory(record) === DEVIATION_PNR_FILE_CATEGORY);
+  pnrRowsLoadedKey = files.map((record) => `${record.id || record.file_name}:${record.updated_at || record.metadata?.last_loaded_at || ""}`).join("|") || "__empty";
 }
 
 async function loadDashboardFilesFromSupabase(options = {}) {
@@ -8309,6 +10369,9 @@ async function loadDashboardFilesFromSupabase(options = {}) {
           .map((dataset) => [dataset.id, dataset]),
       );
       await loadPackageManagementRowsForCards(dashboardFileRecords, cachedDatasets);
+      if (shouldLoadPnrRowsForCurrentView(dashboardFileRecords)) {
+        await loadPnrRowsForView(dashboardFileRecords, cachedDatasets);
+      }
       activeDataset = buildEmptyDataset();
       allRows = [];
     } else {
@@ -8538,6 +10601,55 @@ async function loadPackageManagementRowsForCards(records, cachedDatasets = new M
   return datasets;
 }
 
+function getPnrFilesForView(records = dashboardFileRecords) {
+  return (Array.isArray(records) ? records : [])
+    .filter(isUsableDashboardFileRecord)
+    .filter((record) => getFileRecordCategory(record) === DEVIATION_PNR_FILE_CATEGORY);
+}
+
+function getPnrFilesLoadKey(records = dashboardFileRecords) {
+  const files = getPnrFilesForView(records);
+  return files.map((record) => `${record.id || record.file_name}:${record.updated_at || record.metadata?.last_loaded_at || ""}`).join("|") || "__empty";
+}
+
+function shouldLoadPnrRowsForCurrentView(records = dashboardFileRecords) {
+  if (state.appView !== "dashboard") return false;
+  if (state.sheet !== DEVIATION_MANAGEMENT_VIEW || state.activeDesvioCategory !== DEVIATION_CATEGORY_PNRS) return false;
+  return pnrRowsLoadedKey !== getPnrFilesLoadKey(records);
+}
+
+async function loadPnrRowsForView(records, cachedDatasets = new Map()) {
+  const files = getPnrFilesForView(records);
+  const loadKey = getPnrFilesLoadKey(records);
+  if (pnrRowsLoadedKey === loadKey) {
+    return (Array.isArray(library.datasets) ? library.datasets : []).filter((dataset) => dataset?.fileCategory === DEVIATION_PNR_FILE_CATEGORY);
+  }
+  const datasets = [];
+  isLoadingPnrRows = true;
+  try {
+    for (const fileRecord of files) {
+      const cached = cachedDatasets.get(fileRecord.id);
+      if (cached?.rows?.length) {
+        datasets.push(cached);
+        continue;
+      }
+      try {
+        const dataset = await loadRowsFromStorage(fileRecord);
+        if (dataset?.rows?.length) datasets.push(dataset);
+      } catch (error) {
+        console.error("[PNRS] Falha ao carregar arquivo:", fileRecord?.file_name, error);
+        showToast(`Falha ao carregar ${fileRecord?.file_name || "arquivo de PNR"}. Os demais arquivos continuarão.`, "warn", 6200);
+      }
+    }
+    pnrRows = dedupePnrRecords(datasets.flatMap((dataset) => dataset.rows.map(normalizePnrStoredRow).filter(Boolean))).rows;
+    pnrRowsLoadedKey = loadKey;
+    resetDerivedDataCache();
+    return datasets;
+  } finally {
+    isLoadingPnrRows = false;
+  }
+}
+
 async function ensurePackageManagementRowsLoaded(records = dashboardFileRecords) {
   const cachedDatasets = new Map(
     (Array.isArray(library.datasets) ? library.datasets : [])
@@ -8545,6 +10657,15 @@ async function ensurePackageManagementRowsLoaded(records = dashboardFileRecords)
       .map((dataset) => [dataset.id, dataset]),
   );
   return loadPackageManagementRowsForCards(records, cachedDatasets);
+}
+
+async function ensurePnrRowsLoaded(records = dashboardFileRecords) {
+  const cachedDatasets = new Map(
+    (Array.isArray(library.datasets) ? library.datasets : [])
+      .filter((dataset) => dataset?.source !== "filtered" && Array.isArray(dataset.rows))
+      .map((dataset) => [dataset.id, dataset]),
+  );
+  return loadPnrRowsForView(records, cachedDatasets);
 }
 
 function applyDashboardScopeFromLoadedDatasets() {
@@ -8564,12 +10685,13 @@ function applyDashboardScopeFromLoadedDatasets() {
   if (selectedDatasets.length !== selectedFiles.length) return false;
   const allHistoricalDatasets = categoryFiles.map((file) => datasetById.get(file.id)).filter(Boolean);
   const packageDatasets = library.datasets.filter((dataset) => dataset?.source !== "filtered" && dataset?.fileCategory === PACKAGE_MANAGEMENT_FILE_CATEGORY);
+  const pnrDatasets = library.datasets.filter((dataset) => dataset?.source !== "filtered" && dataset?.fileCategory === DEVIATION_PNR_FILE_CATEGORY);
   const rows = selectedDatasets.flatMap((dataset) => dataset.rows);
   if (!rows.length) return false;
   replaceDashboardData(rows, {
     selectedFiles,
     selectedDatasets,
-    allHistoricalDatasets: [...allHistoricalDatasets, ...packageDatasets],
+    allHistoricalDatasets: [...allHistoricalDatasets, ...packageDatasets, ...pnrDatasets],
     selectedMonth: state.prefaturaMonths.length === 1 ? state.prefaturaMonths[0] : "all",
     selectedPeriod: state.prefaturaPeriod || state.period,
     fileCategory: PRE_FATURA_FILE_CATEGORY,
@@ -8619,6 +10741,9 @@ async function loadDashboardDataByFilters(options = {}) {
         .map((dataset) => [dataset.id, dataset]),
     );
     const packageDatasets = await loadPackageManagementRowsForCards(dashboardFileRecords, cachedDatasets);
+    const pnrDatasets = shouldLoadPnrRowsForCurrentView(dashboardFileRecords)
+      ? await loadPnrRowsForView(dashboardFileRecords, cachedDatasets)
+      : library.datasets.filter((dataset) => dataset?.source !== "filtered" && dataset?.fileCategory === DEVIATION_PNR_FILE_CATEGORY);
     const currentFileCategory = PRE_FATURA_FILE_CATEGORY;
     const categoryFiles = dashboardFileRecords.filter((record) => getFileRecordCategory(record) === currentFileCategory);
     if (!categoryFiles.length) {
@@ -8667,7 +10792,7 @@ async function loadDashboardDataByFilters(options = {}) {
     replaceDashboardData(rows, {
       selectedFiles,
       selectedDatasets,
-      allHistoricalDatasets: [...allHistoricalDatasets, ...packageDatasets],
+      allHistoricalDatasets: [...allHistoricalDatasets, ...packageDatasets, ...pnrDatasets],
       selectedMonth: state.prefaturaMonths.length === 1 ? state.prefaturaMonths[0] : "all",
       selectedPeriod: state.prefaturaPeriod || state.period,
       fileCategory: currentFileCategory,
@@ -8694,6 +10819,7 @@ async function loadDashboardDataByFilters(options = {}) {
 }
 
 function getProcessedRecordsTable(fileCategory) {
+  if (fileCategory === DEVIATION_PNR_FILE_CATEGORY) return "desvios_pnr_records";
   return fileCategory === PACKAGE_MANAGEMENT_FILE_CATEGORY ? "gestao_pacotes_records" : "pre_fatura_records";
 }
 
@@ -8767,10 +10893,59 @@ function mapPackageRowToProcessedRecord(row, fileRecord) {
   };
 }
 
+function mapPnrRowToProcessedRecord(row, fileRecord) {
+  return {
+    file_id: fileRecord.id,
+    dedupe_key: row.dedupeKey || getPnrDedupeKey(row),
+    competencia: getFileCompetencia(fileRecord, row),
+    quinzena: getFileQuinzena(fileRecord, row),
+    tipo: row.tipo || "",
+    status_original: row.statusOriginal || "",
+    status_normalizado: row.statusNormalizado || "",
+    periodo_faturamento: row.periodoFaturamento || "",
+    periodo_faturamento_original: row.periodoFaturamentoOriginal || row.periodoFaturamento || "",
+    mes: row.mes || "",
+    ano: row.ano || "",
+    quinzena_ref: row.quinzenaRef || "",
+    periodo_label: row.periodoLabel || "",
+    source_file_name: row.sourceFileName || row.arquivo_origem || fileRecord.file_name || "",
+    source_periodo: row.sourcePeriodo || row.periodoFaturamentoOriginal || row.periodoFaturamento || "",
+    data_pedido_revisao: toDatabaseDate(row.dataPedidoRevisao),
+    pedido_revisao: row.pedidoRevisao || "",
+    data_encerramento_caso: toDatabaseDate(row.dataEncerramentoCaso),
+    rep_assistente: row.repAssistente || "",
+    comentario_encerramento: row.comentarioEncerramento || "",
+    numero_pre_fatura: row.numeroPreFatura || "",
+    id_envio: row.idEnvio || "",
+    produtos: row.produtos || "",
+    valor_compra: Number(row.valorCompraNumerico || 0),
+    rep_transportadora: row.repTransportadora || "",
+    id_transportadora: row.idTransportadora || "",
+    transportadora: row.transportadora || "",
+    estacao_origem: row.estacaoOrigem || "",
+    tipo_operacional: row.tipoOperacional || "",
+    id_rota: row.idRota || "",
+    id_motorista: row.idMotorista || "",
+    nome_motorista: row.nomeMotorista || "",
+    motorista_display: row.motoristaDisplay || "",
+    motorista_match_source: row.motoristaMatchSource || "",
+    data_caso: toDatabaseDate(row.dataCaso),
+    data_entrega: toDatabaseDate(row.dataEntrega),
+    id_reclamacao: row.idReclamacao || "",
+    data_reclamacao: toDatabaseDate(row.dataReclamacao),
+    raw_data: {
+      ...row,
+      file_category: DEVIATION_PNR_FILE_CATEGORY,
+      arquivo_origem: row.arquivo_origem || fileRecord.file_name,
+      competencia: getFileCompetencia(fileRecord, row),
+      quinzena: getFileQuinzena(fileRecord, row),
+    },
+  };
+}
+
 function mapRowToProcessedRecord(row, fileRecord, fileCategory) {
-  return fileCategory === PACKAGE_MANAGEMENT_FILE_CATEGORY
-    ? mapPackageRowToProcessedRecord(row, fileRecord)
-    : mapPreFaturaRowToProcessedRecord(row, fileRecord);
+  if (fileCategory === DEVIATION_PNR_FILE_CATEGORY) return mapPnrRowToProcessedRecord(row, fileRecord);
+  return fileCategory === PACKAGE_MANAGEMENT_FILE_CATEGORY ? mapPackageRowToProcessedRecord(row, fileRecord) : mapPreFaturaRowToProcessedRecord(row, fileRecord);
 }
 
 function mapProcessedPreFaturaRecord(record, fileRecord) {
@@ -8822,10 +10997,56 @@ function mapProcessedPackageRecord(record, fileRecord) {
   });
 }
 
+function mapProcessedPnrRecord(record, fileRecord) {
+  const raw = record.raw_data || {};
+  return normalizePnrStoredRow({
+    ...raw,
+    file_category: DEVIATION_PNR_FILE_CATEGORY,
+    arquivo_origem: raw.arquivo_origem || fileRecord.file_name,
+    competencia: record.competencia || raw.competencia || fileRecord.metadata?.competencia || "",
+    quinzena: record.quinzena || raw.quinzena || fileRecord.metadata?.quinzena || "",
+    dedupeKey: record.dedupe_key || raw.dedupeKey || raw.dedupe_key,
+    mes: record.mes || raw.mes,
+    ano: record.ano || raw.ano,
+    quinzenaRef: record.quinzena_ref || raw.quinzenaRef || raw.quinzena_ref,
+    periodoLabel: record.periodo_label || raw.periodoLabel || raw.periodo_label,
+    periodoFaturamentoOriginal: record.periodo_faturamento_original || raw.periodoFaturamentoOriginal || raw.periodo_faturamento_original || record.periodo_faturamento,
+    sourcePeriodo: record.source_periodo || raw.sourcePeriodo || raw.source_periodo || record.periodo_faturamento,
+    sourceFileName: record.source_file_name || raw.sourceFileName || raw.source_file_name || fileRecord.file_name,
+    tipo: record.tipo || raw.tipo,
+    statusOriginal: record.status_original || raw.statusOriginal,
+    statusNormalizado: record.status_normalizado || raw.statusNormalizado,
+    periodoFaturamento: record.periodo_faturamento || raw.periodoFaturamento,
+    dataPedidoRevisao: record.data_pedido_revisao || raw.dataPedidoRevisao,
+    pedidoRevisao: record.pedido_revisao || raw.pedidoRevisao,
+    dataEncerramentoCaso: record.data_encerramento_caso || raw.dataEncerramentoCaso,
+    repAssistente: record.rep_assistente || raw.repAssistente,
+    comentarioEncerramento: record.comentario_encerramento || raw.comentarioEncerramento,
+    numeroPreFatura: record.numero_pre_fatura || raw.numeroPreFatura,
+    idEnvio: record.id_envio || raw.idEnvio,
+    produtos: record.produtos || raw.produtos,
+    valorCompraOriginal: raw.valorCompraOriginal || raw.valor_compra_original || raw["VALOR DA COMPRA"],
+    valorCompraNumerico: Number(record.valor_compra ?? raw.valorCompraNumerico ?? 0),
+    repTransportadora: record.rep_transportadora || raw.repTransportadora,
+    idTransportadora: record.id_transportadora || raw.idTransportadora,
+    transportadora: record.transportadora || raw.transportadora,
+    estacaoOrigem: record.estacao_origem || raw.estacaoOrigem,
+    tipoOperacional: record.tipo_operacional || raw.tipoOperacional,
+    idRota: record.id_rota || raw.idRota,
+    idMotorista: record.id_motorista || raw.idMotorista,
+    nomeMotorista: record.nome_motorista || raw.nomeMotorista || raw.nome_motorista,
+    motoristaDisplay: record.motorista_display || raw.motoristaDisplay || raw.motorista_display,
+    motoristaMatchSource: record.motorista_match_source || raw.motoristaMatchSource || raw.motorista_match_source,
+    dataCaso: record.data_caso || raw.dataCaso,
+    dataEntrega: record.data_entrega || raw.dataEntrega,
+    idReclamacao: record.id_reclamacao || raw.idReclamacao,
+    dataReclamacao: record.data_reclamacao || raw.dataReclamacao,
+  });
+}
+
 function mapProcessedRecordToRow(record, fileRecord, fileCategory) {
-  return fileCategory === PACKAGE_MANAGEMENT_FILE_CATEGORY
-    ? mapProcessedPackageRecord(record, fileRecord)
-    : mapProcessedPreFaturaRecord(record, fileRecord);
+  if (fileCategory === DEVIATION_PNR_FILE_CATEGORY) return mapProcessedPnrRecord(record, fileRecord);
+  return fileCategory === PACKAGE_MANAGEMENT_FILE_CATEGORY ? mapProcessedPackageRecord(record, fileRecord) : mapProcessedPreFaturaRecord(record, fileRecord);
 }
 
 async function fetchAllProcessedRows(tableName, fileId) {
@@ -8875,48 +11096,112 @@ async function loadProcessedDatasetForFile(fileRecord) {
     });
   } catch (error) {
     if (isMissingProcessedRecordsTableError(error)) {
-      processedRecordsUnavailable = true;
-      console.warn("[PROCESSED RECORDS] Tabelas processadas indisponíveis; usando XLSX como fallback até aplicar a migração.", error);
+      if (fileCategory !== DEVIATION_PNR_FILE_CATEGORY) processedRecordsUnavailable = true;
+      console.warn("[PROCESSED RECORDS] Tabela processada indisponível; usando XLSX como fallback até aplicar a migração.", error);
       return null;
     }
     throw error;
   }
 }
 
+async function updateProcessedFileMetadata(fileRecord, payloadLength, extraMetadata = {}) {
+  const metadata = {
+    ...(fileRecord.metadata || {}),
+    processed_at: new Date().toISOString(),
+    processed_source: "normalized_records",
+    record_count: payloadLength,
+    parsed_rows: payloadLength,
+    ...extraMetadata,
+  };
+  await window.supabaseClient
+    .from("dashboard_files")
+    .update({
+      status: "processed",
+      metadata,
+      updated_at: new Date().toISOString(),
+    })
+    .eq("id", fileRecord.id);
+  Object.assign(fileRecord, { status: "processed", metadata });
+}
+
+async function fetchExistingPnrRecordsByDedupeKey(tableName, keys) {
+  const existing = new Map();
+  const uniqueKeys = [...new Set((Array.isArray(keys) ? keys : []).filter(Boolean))];
+  for (let index = 0; index < uniqueKeys.length; index += PROCESSED_RECORDS_BATCH_SIZE) {
+    const batch = uniqueKeys.slice(index, index + PROCESSED_RECORDS_BATCH_SIZE);
+    const { data, error } = await window.supabaseClient
+      .from(tableName)
+      .select("id,dedupe_key")
+      .in("dedupe_key", batch);
+    if (error) throw error;
+    (Array.isArray(data) ? data : []).forEach((record) => {
+      if (record?.dedupe_key) existing.set(record.dedupe_key, record.id);
+    });
+  }
+  return existing;
+}
+
+async function savePnrProcessedRowsForFile(fileRecord, tableName, payload) {
+  const rows = (Array.isArray(payload) ? payload : [])
+    .map((record) => ({
+      ...record,
+      dedupe_key: record.dedupe_key || getPnrDedupeKey(record.raw_data || record),
+    }))
+    .filter((record) => record.dedupe_key);
+  await window.supabaseClient.from(tableName).delete().eq("file_id", fileRecord.id);
+  const existingByKey = await fetchExistingPnrRecordsByDedupeKey(tableName, rows.map((record) => record.dedupe_key));
+  const updates = [];
+  const inserts = [];
+  rows.forEach((record) => {
+    const existingId = existingByKey.get(record.dedupe_key);
+    if (existingId) updates.push({ ...record, id: existingId });
+    else inserts.push(record);
+  });
+
+  for (let index = 0; index < updates.length; index += PROCESSED_RECORDS_BATCH_SIZE) {
+    const batch = updates.slice(index, index + PROCESSED_RECORDS_BATCH_SIZE);
+    const { error } = await window.supabaseClient.from(tableName).upsert(batch, { onConflict: "id" });
+    if (error) throw error;
+  }
+  for (let index = 0; index < inserts.length; index += PROCESSED_RECORDS_BATCH_SIZE) {
+    const batch = inserts.slice(index, index + PROCESSED_RECORDS_BATCH_SIZE);
+    const { error } = await window.supabaseClient.from(tableName).insert(batch);
+    if (error) throw error;
+  }
+
+  await updateProcessedFileMetadata(fileRecord, rows.length, {
+    records_new: inserts.length,
+    records_updated: updates.length,
+    duplicates_ignored: getWorkbookStatsForCategory(DEVIATION_PNR_FILE_CATEGORY).duplicateRowsSkipped || 0,
+    duplicate_rows_updated: getWorkbookStatsForCategory(DEVIATION_PNR_FILE_CATEGORY).duplicateRowsUpdated || 0,
+    duplicate_rows_removed: getWorkbookStatsForCategory(DEVIATION_PNR_FILE_CATEGORY).duplicateRowsRemoved || 0,
+  });
+  return { inserted: inserts.length, updated: updates.length, ignored: getWorkbookStatsForCategory(DEVIATION_PNR_FILE_CATEGORY).duplicateRowsSkipped || 0 };
+}
+
 async function saveProcessedRowsForFile(fileRecord, rows) {
   if (processedRecordsUnavailable || !canEdit() || !fileRecord?.id || !window.supabaseClient || !Array.isArray(rows)) return false;
   const fileCategory = getFileRecordCategory(fileRecord);
   const tableName = getProcessedRecordsTable(fileCategory);
-  const payload = rows
+  const rowsForProcessing = fileCategory === DEVIATION_PNR_FILE_CATEGORY ? enrichPnrRowsWithDriverNames(rows) : rows;
+  const payload = rowsForProcessing
     .map((row) => mapRowToProcessedRecord(row, fileRecord, fileCategory))
     .filter(Boolean);
   try {
+    if (fileCategory === DEVIATION_PNR_FILE_CATEGORY) {
+      return await savePnrProcessedRowsForFile(fileRecord, tableName, payload);
+    }
     await window.supabaseClient.from(tableName).delete().eq("file_id", fileRecord.id);
     for (let index = 0; index < payload.length; index += PROCESSED_RECORDS_BATCH_SIZE) {
       const batch = payload.slice(index, index + PROCESSED_RECORDS_BATCH_SIZE);
       const { error } = await window.supabaseClient.from(tableName).insert(batch);
       if (error) throw error;
     }
-    const metadata = {
-      ...(fileRecord.metadata || {}),
-      processed_at: new Date().toISOString(),
-      processed_source: "normalized_records",
-      record_count: payload.length,
-      parsed_rows: payload.length,
-    };
-    await window.supabaseClient
-      .from("dashboard_files")
-      .update({
-        status: "processed",
-        metadata,
-        updated_at: new Date().toISOString(),
-      })
-      .eq("id", fileRecord.id);
-    Object.assign(fileRecord, { status: "processed", metadata });
+    await updateProcessedFileMetadata(fileRecord, payload.length);
     return true;
   } catch (error) {
     if (isMissingProcessedRecordsTableError(error)) {
-      processedRecordsUnavailable = true;
+      if (fileCategory !== DEVIATION_PNR_FILE_CATEGORY) processedRecordsUnavailable = true;
       console.warn("[PROCESSED RECORDS] Não foi possível salvar linhas processadas; aplique a migração Supabase.", error);
       return false;
     }
@@ -8947,7 +11232,7 @@ async function loadRowsFromStorage(fileRecord) {
     type: getFileRecordMimeType(fileRecord, blob.type),
   });
   const dataset = await processDashboardFile(file, fileRecord);
-  const workbookStats = dataset.fileCategory === PACKAGE_MANAGEMENT_FILE_CATEGORY ? (normalizePackageManagementWorkbook.lastStats || {}) : (normalizeWorkbook.lastStats || {});
+  const workbookStats = getWorkbookStatsForCategory(dataset.fileCategory);
   const normalized = normalizeDatasetRecord({
     ...dataset,
     id: fileRecord.id,
@@ -9035,6 +11320,12 @@ async function updateDashboardFileParsedRows(fileRecord, parsedRows, stats = {})
     original_rows: stats.originalRows || fileRecord.metadata?.original_rows || parsedRows,
     consolidated_rows: stats.consolidatedRows || parsedRows,
     duplicatesSkipped: stats.duplicatesSkipped ?? fileRecord.metadata?.duplicatesSkipped ?? 0,
+    duplicate_rows_skipped: stats.duplicateRowsSkipped ?? fileRecord.metadata?.duplicate_rows_skipped ?? 0,
+    duplicate_rows_updated: stats.duplicateRowsUpdated ?? fileRecord.metadata?.duplicate_rows_updated ?? 0,
+    duplicate_rows_removed: stats.duplicateRowsRemoved ?? fileRecord.metadata?.duplicate_rows_removed ?? 0,
+    pnr_master_file: stats.isMasterFile === true || fileRecord.metadata?.pnr_master_file === true,
+    period_start_year: stats.periodStartYear || fileRecord.metadata?.period_start_year || "",
+    period_end_year: stats.periodEndYear || fileRecord.metadata?.period_end_year || "",
     linked_occurrences: stats.linkedOccurrences ?? fileRecord.metadata?.linked_occurrences ?? 0,
     linked_ids_count: stats.linkedIds ?? fileRecord.metadata?.linked_ids_count ?? 0,
     total_rows_skipped: stats.totalRowsSkipped ?? fileRecord.metadata?.total_rows_skipped ?? 0,
@@ -9145,6 +11436,8 @@ function clearDashboardData(options = {}) {
     dashboardFileRecords = [];
     packageManagementRows = [];
     packageManagementRowsLoadedKey = "";
+    pnrRows = [];
+    pnrRowsLoadedKey = "";
   }
   currentActiveFile = null;
   const preservedDatasets = preserveRecords
@@ -9441,6 +11734,8 @@ async function deleteDashboardFiles(fileRecords = []) {
     }
   }
 
+  await deleteProcessedRowsForDashboardFiles(records);
+
   const { error: dbError } = await window.supabaseClient
     .from("dashboard_files")
     .delete()
@@ -9466,6 +11761,8 @@ async function deleteDashboardFiles(fileRecords = []) {
   dashboardFileRecords = dashboardFileRecords.filter((record) => !deletedIds.has(record.id));
   library.datasets = (Array.isArray(library.datasets) ? library.datasets : []).filter((dataset) => !deletedIds.has(dataset.id));
   packageManagementRowsLoadedKey = "";
+  pnrRowsLoadedKey = "";
+  pnrRows = [];
   resetDerivedDataCache();
 
   const files = await loadDashboardFilesFromSupabase({ loadActive: true, render: true, validateStorage: true, showLoading: false });
@@ -9474,6 +11771,33 @@ async function deleteDashboardFiles(fileRecords = []) {
   }
   renderSettingsFileManagement();
   showToast(records.length === 1 ? "Arquivo excluído com sucesso." : "Arquivos excluídos com sucesso.", "good", 4200);
+}
+
+async function deleteProcessedRowsForDashboardFiles(records = []) {
+  if (!window.supabaseClient) return;
+  const grouped = new Map();
+  (Array.isArray(records) ? records : []).forEach((record) => {
+    const category = getFileRecordCategory(record);
+    const tableName = getProcessedRecordsTable(category);
+    if (!record?.id || !tableName) return;
+    if (!grouped.has(tableName)) grouped.set(tableName, []);
+    grouped.get(tableName).push(record.id);
+  });
+
+  for (const [tableName, ids] of grouped.entries()) {
+    const { error } = await window.supabaseClient
+      .from(tableName)
+      .delete()
+      .in("file_id", ids);
+    if (error) {
+      if (isMissingProcessedRecordsTableError(error)) {
+        console.warn(`[FILES] Tabela processada ${tableName} indisponível durante exclusão.`, error);
+        continue;
+      }
+      console.error(`[FILES] Erro ao remover registros processados de ${tableName}:`, error);
+      throw error;
+    }
+  }
 }
 
 
@@ -10155,11 +12479,12 @@ async function deleteSelectedSettingsFiles() {
     showToast("Selecione um arquivo antes de excluir.", "warn", 5000);
     return;
   }
-  const confirmed = window.confirm(
-    files.length === 1
-      ? "Excluir arquivo selecionado?\n\nEsta ação removerá o arquivo do painel e atualizará os indicadores. Essa ação não pode ser desfeita."
-      : `Excluir ${files.length} arquivos selecionados?\n\nEsta ação removerá os arquivos do painel e atualizará os indicadores. Essa ação não pode ser desfeita.`,
-  );
+  const isDeviationDeletion = settingsFilesTab === DEVIATION_PNR_FILE_CATEGORY;
+  const title = files.length === 1 ? "Excluir arquivo selecionado?" : `Excluir ${files.length} arquivos selecionados?`;
+  const message = isDeviationDeletion
+    ? "Esta ação removerá os arquivos da Gestão de Desvios e atualizará os indicadores da aba PNRs."
+    : "Esta ação removerá os arquivos do painel e atualizará os indicadores. Essa ação não pode ser desfeita.";
+  const confirmed = window.confirm(`${title}\n\n${message}${isDeviationDeletion ? "\n\nEssa ação não pode ser desfeita." : ""}`);
   if (!confirmed) return;
   await deleteDashboardFiles(files);
 }
@@ -10183,10 +12508,20 @@ function parseDateValue(value) {
   }
 
   const raw = String(value).trim();
-  const match = raw.match(/^(\d{2})[\/-](\d{2})[\/-](\d{4})$/);
+  const match = raw.match(/^(\d{2})[\/-](\d{2})[\/-](\d{4})(?:[ T](\d{1,2}):(\d{2}))?/);
   if (match) {
-    const [, d, m, y] = match;
-    const ts = Date.UTC(Number(y), Number(m) - 1, Number(d));
+    const [, d, m, y, hour = "0", minute = "0"] = match;
+    const ts = Date.UTC(Number(y), Number(m) - 1, Number(d), Number(hour), Number(minute));
+    return {
+      iso: `${y}-${m}-${d}`,
+      ts,
+    };
+  }
+
+  const isoMatch = raw.match(/^(\d{4})-(\d{2})-(\d{2})(?:[ T](\d{1,2}):(\d{2}))?/);
+  if (isoMatch) {
+    const [, y, m, d, hour = "0", minute = "0"] = isoMatch;
+    const ts = Date.UTC(Number(y), Number(m) - 1, Number(d), Number(hour), Number(minute));
     return {
       iso: `${y}-${m}-${d}`,
       ts,
@@ -10397,6 +12732,13 @@ function normalizeLoadedState(loadedState) {
   loadedState.packageMonths = Array.isArray(loadedState.packageMonths) ? loadedState.packageMonths : [];
   loadedState.prefaturaPeriod = normalizePeriodMode(loadedState.prefaturaPeriod || loadedState.period);
   loadedState.packagePeriod = normalizePeriodMode(loadedState.packagePeriod || "month");
+  loadedState.activeDesvioCategory = normalizeDeviationCategory(loadedState.activeDesvioCategory);
+  loadedState.pnrQuery = String(loadedState.pnrQuery || "");
+  loadedState.pnrMonths = Array.isArray(loadedState.pnrMonths) ? loadedState.pnrMonths : [];
+  loadedState.pnrQuinzena = ["all", "q1", "q2"].includes(loadedState.pnrQuinzena) ? loadedState.pnrQuinzena : "all";
+  loadedState.pnrStatus = normalizePnrSelectValue(loadedState.pnrStatus);
+  loadedState.pnrTipoOperacional = normalizePnrSelectValue(loadedState.pnrTipoOperacional);
+  loadedState.pnrEstacao = normalizePnrSelectValue(loadedState.pnrEstacao);
   loadedState.period = loadedState.prefaturaPeriod;
   loadedState.tipo = "Todos";
   return loadedState;
@@ -10438,9 +12780,11 @@ function normalizeDatasetRecord(dataset) {
   if (!dataset || !Array.isArray(dataset.rows)) return null;
   if (dataset.id === EMPTY_DATASET_ID || dataset.source === "empty") return buildEmptyDataset();
   const fileCategory = dataset.fileCategory || getFileRecordCategory(dataset.remoteRecord) || inferRowsFileCategory(dataset.rows);
-  const rows = fileCategory === PACKAGE_MANAGEMENT_FILE_CATEGORY
-    ? dataset.rows.map(normalizePackageManagementStoredRow).filter(Boolean)
-    : consolidateLinkedOccurrences(dataset.rows);
+  const rows = fileCategory === DEVIATION_PNR_FILE_CATEGORY
+    ? dataset.rows.map(normalizePnrStoredRow).filter(Boolean)
+    : fileCategory === PACKAGE_MANAGEMENT_FILE_CATEGORY
+      ? dataset.rows.map(normalizePackageManagementStoredRow).filter(Boolean)
+      : consolidateLinkedOccurrences(dataset.rows);
   return {
     id: String(dataset.id || makeDatasetId(dataset.fileName || "arquivo")),
     fileName: String(dataset.fileName || "arquivo.xlsx"),
@@ -10559,7 +12903,13 @@ function getDatasetQuarterMode(dataset) {
   const rows = Array.isArray(dataset?.rows) ? dataset.rows : [];
   const days = rows
     .map((row) => {
-      const date = row.data_normalizada ? new Date(`${row.data_normalizada}T00:00:00Z`) : row.data_sort ? new Date(row.data_sort) : null;
+      const date = row.data_normalizada
+        ? new Date(`${row.data_normalizada}T00:00:00Z`)
+        : (row.dataCaso || row.data_caso)
+          ? new Date(`${row.dataCaso || row.data_caso}T00:00:00Z`)
+          : row.data_sort
+            ? new Date(row.data_sort)
+            : null;
       return date && !Number.isNaN(date.getTime()) ? date.getUTCDate() : null;
     })
     .filter((day) => day != null);
