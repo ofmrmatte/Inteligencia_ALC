@@ -132,6 +132,8 @@ const STATE_DEFAULT = {
   pnrStatus: "Todos",
   pnrTipoOperacional: "Todos",
   pnrEstacao: "Todos",
+  pnrStatusMotorista: "Todos",
+  pnrFonteCruzamento: "Todos",
   base: "Todos",
   motorista: "Todos",
   period: "month",
@@ -833,6 +835,10 @@ function bindEvents() {
       state.pnrTipoOperacional = normalizePnrSelectValue(field.value);
     } else if (name === "estacao") {
       state.pnrEstacao = normalizePnrSelectValue(field.value);
+    } else if (name === "statusMotorista") {
+      state.pnrStatusMotorista = normalizePnrSelectValue(field.value);
+    } else if (name === "fonteCruzamento") {
+      state.pnrFonteCruzamento = normalizePnrSelectValue(field.value);
     }
     state.page = 1;
     resetDerivedDataCache();
@@ -848,6 +854,8 @@ function bindEvents() {
       state.pnrStatus = "Todos";
       state.pnrTipoOperacional = "Todos";
       state.pnrEstacao = "Todos";
+      state.pnrStatusMotorista = "Todos";
+      state.pnrFonteCruzamento = "Todos";
       state.page = 1;
       resetDerivedDataCache();
       persistState();
@@ -2975,6 +2983,8 @@ function getPnrRowsCacheKey() {
     state.pnrStatus || "Todos",
     state.pnrTipoOperacional || "Todos",
     state.pnrEstacao || "Todos",
+    state.pnrStatusMotorista || "Todos",
+    state.pnrFonteCruzamento || "Todos",
     normalize(state.pnrQuery),
   ].join("::");
 }
@@ -3077,15 +3087,96 @@ function getPnrSourceRouteIds(row) {
   ].map(normalizePnrLookupId).filter(Boolean);
 }
 
+function normalizarBasePnr(value) {
+  const text = normalizeText(value);
+  if (!text) return "";
+  const match = text.match(/\b[A-Z]{2,4}\d{1,3}\b/);
+  return match ? match[0] : text;
+}
+
+function identificarTipoBasePnr(base) {
+  const code = normalizarBasePnr(base);
+  if (code.startsWith("S")) return "SVC";
+  if (code.startsWith("E")) return "XPT";
+  return "Não identificada";
+}
+
+function getPnrSourceBaseValue(row) {
+  return row?.baseIdentificada ||
+    row?.base_identificada ||
+    row?.estacaoOrigem ||
+    row?.estacao_origem ||
+    row?.base ||
+    row?.base_normalizada ||
+    row?.codigo_base ||
+    row?.svc ||
+    row?.station ||
+    "";
+}
+
 function getPnrSourceBaseKey(row) {
-  return normalizeBase(row?.estacaoOrigem || row?.estacao_origem || row?.base || row?.base_normalizada || row?.svc || row?.station || "");
+  return normalizarBasePnr(getPnrSourceBaseValue(row));
 }
 
-function addPnrDriverIndexValue(map, key, driverName) {
-  if (key && driverName && !map.has(key)) map.set(key, driverName);
+function getPnrSourceDateTs(row) {
+  return parseDateValue(
+    row?.data_normalizada ||
+      row?.dataCaso ||
+      row?.data_caso ||
+      row?.data ||
+      row?.data_sort ||
+      row?.created_at ||
+      row?.updated_at ||
+      row?.arquivoData,
+  ).ts || 0;
 }
 
-function buildPnrDriverSourceIndex(rows) {
+function getPnrSourceYear(row) {
+  const ts = getPnrSourceDateTs(row);
+  if (ts) return new Date(ts).getUTCFullYear();
+  const year = Number(row?.ano || row?.reference_year || row?.metadata?.reference_year || detectYear(row?.competencia || row?.arquivo_origem || ""));
+  return Number.isFinite(year) ? year : 0;
+}
+
+function buildPnrCrossSourceInfo(row, sourceLabel) {
+  const driverName = getPnrDriverNameFromSourceRow(row);
+  const baseIdentificada = getPnrSourceBaseKey(row);
+  return {
+    driver: driverName,
+    baseIdentificada,
+    tipoBase: identificarTipoBasePnr(baseIdentificada),
+    nomeBaseOperacao: repairPnrText(getPnrSourceBaseValue(row)).trim(),
+    source: sourceLabel,
+    dateTs: getPnrSourceDateTs(row),
+    isRecent: getPnrSourceYear(row) >= 2026,
+  };
+}
+
+function isBetterPnrCrossSourceInfo(next, current) {
+  if (!current) return true;
+  const nextScore = [
+    next?.isRecent,
+    Boolean(next?.driver && !isUnidentifiedDriverName(next.driver)),
+    Boolean(next?.baseIdentificada),
+    next?.tipoBase && next.tipoBase !== "Não identificada",
+  ].filter(Boolean).length;
+  const currentScore = [
+    current?.isRecent,
+    Boolean(current?.driver && !isUnidentifiedDriverName(current.driver)),
+    Boolean(current?.baseIdentificada),
+    current?.tipoBase && current.tipoBase !== "Não identificada",
+  ].filter(Boolean).length;
+  if (nextScore !== currentScore) return nextScore > currentScore;
+  return Number(next?.dateTs || 0) > Number(current?.dateTs || 0);
+}
+
+function addPnrCrossIndexValue(map, key, info, method) {
+  if (!key || !info) return;
+  const next = { ...info, method };
+  if (isBetterPnrCrossSourceInfo(next, map.get(key))) map.set(key, next);
+}
+
+function buildPnrDriverSourceIndex(rows, sourceLabel) {
   const index = {
     byIdMotorista: new Map(),
     byIdEnvio: new Map(),
@@ -3093,14 +3184,14 @@ function buildPnrDriverSourceIndex(rows) {
     byBaseRota: new Map(),
   };
   (Array.isArray(rows) ? rows : []).forEach((row) => {
-    const driverName = getPnrDriverNameFromSourceRow(row);
-    if (!driverName) return;
-    getPnrSourceDriverIds(row).forEach((id) => addPnrDriverIndexValue(index.byIdMotorista, id, driverName));
-    getPnrSourceEnvioIds(row).forEach((id) => addPnrDriverIndexValue(index.byIdEnvio, id, driverName));
+    const info = buildPnrCrossSourceInfo(row, sourceLabel);
+    if (!info.driver && !info.baseIdentificada) return;
+    getPnrSourceDriverIds(row).forEach((id) => addPnrCrossIndexValue(index.byIdMotorista, id, info, "ID do motorista"));
+    getPnrSourceEnvioIds(row).forEach((id) => addPnrCrossIndexValue(index.byIdEnvio, id, info, "ID de envio"));
     const base = getPnrSourceBaseKey(row);
     getPnrSourceRouteIds(row).forEach((rota) => {
-      addPnrDriverIndexValue(index.byRota, rota, driverName);
-      if (base) addPnrDriverIndexValue(index.byBaseRota, `${base}|${rota}`, driverName);
+      addPnrCrossIndexValue(index.byRota, rota, info, "ID da rota");
+      if (base) addPnrCrossIndexValue(index.byBaseRota, `${base}|${rota}`, info, "Base + ID rota");
     });
   });
   return index;
@@ -3120,8 +3211,8 @@ function getLoadedRowsForPnrDriverLookup(fileCategory) {
 
 function buildPnrDriverLookupIndexes() {
   return {
-    preFatura: buildPnrDriverSourceIndex(getLoadedRowsForPnrDriverLookup(PRE_FATURA_FILE_CATEGORY)),
-    gestaoPacotes: buildPnrDriverSourceIndex(getLoadedRowsForPnrDriverLookup(PACKAGE_MANAGEMENT_FILE_CATEGORY)),
+    preFatura: buildPnrDriverSourceIndex(getLoadedRowsForPnrDriverLookup(PRE_FATURA_FILE_CATEGORY), "Pré-Fatura"),
+    gestaoPacotes: buildPnrDriverSourceIndex(getLoadedRowsForPnrDriverLookup(PACKAGE_MANAGEMENT_FILE_CATEGORY), "Gestão de Pacotes"),
   };
 }
 
@@ -3138,10 +3229,27 @@ function lookupPnrDriverNameInIndex(row, index) {
     ["Base + ID rota", index.byBaseRota, baseRota],
   ];
   for (const [method, map, key] of lookups) {
-    const driver = key ? map.get(key) : "";
-    if (driver && !isUnidentifiedDriverName(driver)) return { driver, method };
+    const info = key ? map.get(key) : null;
+    if (info?.driver || info?.baseIdentificada) return { ...info, method: info.method || method };
   }
   return null;
+}
+
+function getPnrFonteFromMatch(found) {
+  if (!found) return "Não identificado";
+  if (found.source === "Pré-Fatura" && found.method === "Base + ID rota") return "Cruzamento Automático";
+  if (found.source === "Gestão de Pacotes" && found.method === "Base + ID rota") return "Cruzamento Automático";
+  return found.source || "Cruzamento Automático";
+}
+
+function getPnrCrossObservation(found, directBase, statusMotorista) {
+  if (found?.source === "Pré-Fatura") return `Identificado por ${found.method || "cruzamento"} na Pré-Fatura`;
+  if (found?.source === "Gestão de Pacotes") return `Identificado por ${found.method || "cruzamento"} na Gestão de Pacotes`;
+  if (directBase) return "Identificado pela estação de origem do arquivo PNR";
+  if (statusMotorista === "ID não informado") return "ID do motorista não informado";
+  if (statusMotorista === "Driver possivelmente desligado") return "Driver possivelmente desligado";
+  if (statusMotorista === "Motorista não identificado") return "Origem não identificada nas bases atuais";
+  return "Registro histórico sem vínculo recente nas bases atuais";
 }
 
 function enrichPnrRowWithDriverName(row, indexes = buildPnrDriverLookupIndexes()) {
@@ -3151,22 +3259,47 @@ function enrichPnrRowWithDriverName(row, indexes = buildPnrDriverLookupIndexes()
     motorista: normalized.nomeMotorista,
     driver: normalized.nome_motorista,
   });
-  const found =
-    existingName
-      ? { driver: existingName, method: normalized.motoristaMatchSource || "Arquivo PNR" }
-      : lookupPnrDriverNameInIndex(normalized, indexes.preFatura) ||
-        lookupPnrDriverNameInIndex(normalized, indexes.gestaoPacotes);
-  const sourcePrefix = found?.driver && !existingName
-    ? (lookupPnrDriverNameInIndex(normalized, indexes.preFatura)?.driver === found.driver ? "Pré-Fatura" : "Gestão de Pacotes")
-    : "";
-  const nomeMotorista = found?.driver || "";
+  const crossFound = lookupPnrDriverNameInIndex(normalized, indexes.preFatura) ||
+    lookupPnrDriverNameInIndex(normalized, indexes.gestaoPacotes);
+  const found = crossFound?.driver && crossFound.isRecent
+    ? crossFound
+    : existingName
+      ? { driver: existingName, method: normalized.motoristaMatchSource || "Arquivo PNR", source: "Gestão de Desvios", isRecent: false }
+      : crossFound;
+  const directBase = normalizarBasePnr(normalized.baseIdentificada || normalized.estacaoOrigem);
+  const baseIdentificada = directBase || found?.baseIdentificada || "";
+  const tipoBase = identificarTipoBasePnr(baseIdentificada);
+  const nomeMotorista = found?.driver && !isUnidentifiedDriverName(found.driver) ? found.driver : "";
   const motoristaDisplay = nomeMotorista || (normalized.idMotorista ? `ID ${normalized.idMotorista}` : "");
+  const statusMotorista = found?.driver && found.isRecent
+    ? "Vínculo recente identificado"
+    : found?.driver || existingName
+      ? "Sem vínculo recente identificado"
+      : normalized.idMotorista
+        ? "Driver possivelmente desligado"
+        : normalized.idMotorista === ""
+          ? "ID não informado"
+          : "Motorista não identificado";
+  const fonteCruzamento = found?.driver || found?.baseIdentificada
+    ? getPnrFonteFromMatch(found)
+    : directBase
+      ? "Gestão de Desvios"
+      : "Não identificado";
+  const observacaoCruzamento = getPnrCrossObservation(found, directBase, statusMotorista);
   return {
     ...normalized,
+    tipoOcorrencia: "PNR",
+    tipoBase,
+    tipoOperacional: tipoBase,
+    baseIdentificada,
+    nomeBaseOperacao: normalized.nomeBaseOperacao || found?.nomeBaseOperacao || normalized.estacaoOrigem || "",
     nomeMotorista,
     motoristaDisplay,
-    motoristaMatchSource: found?.method ? [sourcePrefix, found.method].filter(Boolean).join(" · ") : "",
-    _search: buildPnrSearchText({ ...normalized, nomeMotorista, motoristaDisplay }),
+    statusMotorista,
+    fonteCruzamento,
+    observacaoCruzamento,
+    motoristaMatchSource: found?.method ? [fonteCruzamento, found.method].filter(Boolean).join(" · ") : fonteCruzamento,
+    _search: buildPnrSearchText({ ...normalized, tipoOcorrencia: "PNR", tipoBase, baseIdentificada, nomeMotorista, motoristaDisplay, statusMotorista, fonteCruzamento, observacaoCruzamento }),
   };
 }
 
@@ -3199,15 +3332,21 @@ function getPnrFilterOptions() {
   const statuses = new Set();
   const tipos = new Set();
   const estacoes = new Set();
+  const statusMotoristas = new Set();
+  const fontesCruzamento = new Set();
   pnrRows.forEach((row) => {
     if (row.statusNormalizado) statuses.add(row.statusNormalizado);
-    if (row.tipoOperacional) tipos.add(row.tipoOperacional);
+    if (row.tipoBase || row.tipoOperacional) tipos.add(row.tipoBase || row.tipoOperacional);
     if (row.estacaoOrigem) estacoes.add(row.estacaoOrigem);
+    if (row.statusMotorista) statusMotoristas.add(row.statusMotorista);
+    if (row.fonteCruzamento) fontesCruzamento.add(row.fonteCruzamento);
   });
   return {
     statuses: Array.from(statuses).sort((a, b) => a.localeCompare(b, "pt-BR", { sensitivity: "base" })),
     tipos: Array.from(tipos).sort((a, b) => a.localeCompare(b, "pt-BR", { sensitivity: "base" })),
     estacoes: Array.from(estacoes).sort((a, b) => a.localeCompare(b, "pt-BR", { numeric: true, sensitivity: "base" })),
+    statusMotoristas: Array.from(statusMotoristas).sort((a, b) => a.localeCompare(b, "pt-BR", { sensitivity: "base" })),
+    fontesCruzamento: Array.from(fontesCruzamento).sort((a, b) => a.localeCompare(b, "pt-BR", { sensitivity: "base" })),
   };
 }
 
@@ -3220,14 +3359,18 @@ function getFilteredPnrRows() {
   const selectedStatus = normalizePnrSelectValue(state.pnrStatus);
   const selectedTipo = normalizePnrSelectValue(state.pnrTipoOperacional);
   const selectedEstacao = normalizePnrSelectValue(state.pnrEstacao);
+  const selectedStatusMotorista = normalizePnrSelectValue(state.pnrStatusMotorista);
+  const selectedFonteCruzamento = normalizePnrSelectValue(state.pnrFonteCruzamento);
   const query = normalize(state.pnrQuery);
   const rows = pnrRows.filter((row) => {
     const monthKey = row.monthKey || getPnrPeriodFromBillingPeriod(row.sourcePeriodo || row.periodoFaturamentoOriginal || row.periodoFaturamento)?.monthKey || getPnrPeriodFromDate(row.dataCaso || row.periodoFaturamento).monthKey;
     if (selectedMonths.size && !selectedMonths.has(monthKey)) return false;
     if (selectedQuinzena !== "all" && getPeriodModeFromLabel(row.quinzena) !== selectedQuinzena) return false;
     if (selectedStatus !== "Todos" && row.statusNormalizado !== selectedStatus) return false;
-    if (selectedTipo !== "Todos" && row.tipoOperacional !== selectedTipo) return false;
+    if (selectedTipo !== "Todos" && (row.tipoBase || row.tipoOperacional) !== selectedTipo) return false;
     if (selectedEstacao !== "Todos" && row.estacaoOrigem !== selectedEstacao) return false;
+    if (selectedStatusMotorista !== "Todos" && row.statusMotorista !== selectedStatusMotorista) return false;
+    if (selectedFonteCruzamento !== "Todos" && row.fonteCruzamento !== selectedFonteCruzamento) return false;
     if (query && !String(row._search || "").includes(query)) return false;
     return true;
   });
@@ -3264,11 +3407,12 @@ function buildPnrStatusRows(rows) {
 }
 
 function buildPnrOperationRows(rows) {
-  const order = ["SVC", "XPT", "Indefinido"];
+  const order = ["SVC", "XPT", "Não identificada"];
   const total = rows.length || 0;
   const map = new Map(order.map((label) => [label, 0]));
   rows.forEach((row) => {
-    const key = order.includes(row.tipoOperacional) ? row.tipoOperacional : "Indefinido";
+    const value = row.tipoBase || row.tipoOperacional;
+    const key = order.includes(value) ? value : "Não identificada";
     map.set(key, (map.get(key) || 0) + 1);
   });
   return Array.from(map.entries())
@@ -3391,6 +3535,13 @@ const PNR_TABLE_COLUMNS = [
   { key: "mes", label: "MÊS", width: 120, format: "text" },
   { key: "quinzenaRef", label: "QUINZENA REF.", width: 160, format: "text" },
   { key: "valorCompraNumerico", label: "VAL. COMPRA", width: 140, format: "currency" },
+  { key: "tipoOcorrencia", label: "TIPO DA OCORRÊNCIA", width: 170, format: "text" },
+  { key: "tipoBase", label: "TIPO DE BASE", width: 140, format: "text" },
+  { key: "baseIdentificada", label: "BASE IDENTIFICADA", width: 170, format: "text" },
+  { key: "motoristaDisplay", label: "MOTORISTA", width: 220, format: "text" },
+  { key: "statusMotorista", label: "STATUS DO MOTORISTA", width: 220, format: "text" },
+  { key: "fonteCruzamento", label: "FONTE DO CRUZAMENTO", width: 190, format: "text" },
+  { key: "observacaoCruzamento", label: "OBSERVAÇÃO", width: 280, format: "long" },
 ];
 
 function formatPnrTableCell(row, column) {
@@ -3572,7 +3723,9 @@ function renderPnrPage() {
             </select>
           </label>
           ${renderPnrFilterSelect("status", "Status", normalizePnrSelectValue(state.pnrStatus), filterOptions.statuses)}
-          ${renderPnrFilterSelect("tipo", "Tipo operacional", normalizePnrSelectValue(state.pnrTipoOperacional), filterOptions.tipos)}
+          ${renderPnrFilterSelect("tipo", "Tipo de base", normalizePnrSelectValue(state.pnrTipoOperacional), filterOptions.tipos)}
+          ${renderPnrFilterSelect("statusMotorista", "Status do motorista", normalizePnrSelectValue(state.pnrStatusMotorista), filterOptions.statusMotoristas)}
+          ${renderPnrFilterSelect("fonteCruzamento", "Fonte do cruzamento", normalizePnrSelectValue(state.pnrFonteCruzamento), filterOptions.fontesCruzamento)}
           ${renderPnrFilterSelect("estacao", "Estação de origem", normalizePnrSelectValue(state.pnrEstacao), filterOptions.estacoes)}
           <button type="button" class="secondary-button" data-pnr-clear>Limpar</button>
         </div>
@@ -3590,7 +3743,7 @@ function renderPnrPage() {
           ${renderPnrBarList(statusRows)}
         </article>
         <article class="panel pnr-chart-panel">
-          <div class="panel__header"><div><h3>Casos por operação</h3><p>SVC, XPT e indefinidos pela estação de origem</p></div></div>
+          <div class="panel__header"><div><h3>PNRs por tipo de base</h3><p>SVC, XPT e bases não identificadas pela origem</p></div></div>
           ${renderPnrBarList(operationRows)}
         </article>
         <article class="panel pnr-chart-panel">
@@ -9175,10 +9328,7 @@ function dedupePnrRecords(rows) {
 }
 
 function getPnrOperationalType(estacao) {
-  const code = normalizeText(estacao).replace(/[^A-Z0-9]/g, "");
-  if (code.startsWith("S")) return "SVC";
-  if (code.startsWith("E")) return "XPT";
-  return "Indefinido";
+  return identificarTipoBasePnr(estacao);
 }
 
 function getPnrPeriodFromDate(dateValue) {
@@ -9265,6 +9415,13 @@ function buildPnrSearchText(row) {
     row.idMotorista,
     row.nomeMotorista,
     row.motoristaDisplay,
+    row.tipoOcorrencia,
+    row.tipoBase,
+    row.baseIdentificada,
+    row.nomeBaseOperacao,
+    row.statusMotorista,
+    row.fonteCruzamento,
+    row.observacaoCruzamento,
     row.statusNormalizado,
     row.statusOriginal,
     row.idRota,
@@ -9291,6 +9448,8 @@ function normalizePnrStoredRow(row) {
     getPnrPeriodFromDate(dataCaso || rawPeriodoFaturamento || sourceFileName);
   const periodoOriginal = sourcePeriodo || buildPnrBillingPeriodFromPeriod(period);
   const estacaoOrigem = repairPnrText(row.estacaoOrigem || row.estacao_origem || row["ESTAÇÃO DE ORIGEM"] || row["ESTACAO DE ORIGEM"] || row.origem || "").trim();
+  const baseIdentificada = normalizarBasePnr(row.baseIdentificada || row.base_identificada || estacaoOrigem);
+  const tipoBase = row.tipoBase || row.tipo_base || row.tipoOperacional || row.tipo_operacional || identificarTipoBasePnr(baseIdentificada);
   const statusOriginal = repairPnrText(row.statusOriginal || row.status_original || row.status || row.STATUS || "").trim();
   const valorCompraOriginal = repairPnrText(row.valorCompraOriginal || row.valor_compra_original || row["VALOR DA COMPRA"] || "").trim();
   const periodMonthName = getPnrMonthFullLabel(period).split("/")[0] || period.mes;
@@ -9335,12 +9494,19 @@ function normalizePnrStoredRow(row) {
     idTransportadora: formatPnrId(row.idTransportadora || row.id_transportadora || row["ID DA TRANSPORTADORA"]),
     transportadora: repairPnrText(row.transportadora || row.TRANSPORTADORA || "").trim(),
     estacaoOrigem,
-    tipoOperacional: row.tipoOperacional || row.tipo_operacional || getPnrOperationalType(estacaoOrigem),
+    tipoOcorrencia: "PNR",
+    tipoBase: tipoBase === "Indefinido" ? "Não identificada" : tipoBase,
+    tipoOperacional: tipoBase === "Indefinido" ? "Não identificada" : tipoBase,
+    baseIdentificada,
+    nomeBaseOperacao: repairPnrText(row.nomeBaseOperacao || row.nome_base_operacao || row.base || estacaoOrigem || "").trim(),
     idRota: formatPnrId(row.idRota || row.id_rota || row["ID DA ROTA"] || row["ID ROTA"]),
     idMotorista: formatPnrId(row.idMotorista || row.id_motorista || row["ID DO MOTORISTA"] || row["ID MOTORISTA"]),
     nomeMotorista,
     motoristaDisplay: row.motoristaDisplay || row.motorista_display || nomeMotorista || "",
-    motoristaMatchSource: row.motoristaMatchSource || row.motorista_match_source || "",
+    statusMotorista: row.statusMotorista || row.status_motorista || (nomeMotorista ? "Sem vínculo recente identificado" : ""),
+    fonteCruzamento: row.fonteCruzamento || row.fonte_cruzamento || "",
+    observacaoCruzamento: row.observacaoCruzamento || row.observacao_cruzamento || "",
+    motoristaMatchSource: row.motoristaMatchSource || row.motorista_match_source || row.fonteCruzamento || row.fonte_cruzamento || "",
     dataEntrega,
     idReclamacao: formatPnrId(row.idReclamacao || row.id_reclamacao || row["ID DA RECLAMAÇÃO"] || row["ID DA RECLAMACAO"] || row["ID RECLAMAÇÃO"] || row["ID RECLAMACAO"]),
     dataReclamacao,
@@ -9999,6 +10165,8 @@ function applyUploadedFileState(previewDataset, uploadedPeriod) {
     state.pnrStatus = "Todos";
     state.pnrTipoOperacional = "Todos";
     state.pnrEstacao = "Todos";
+    state.pnrStatusMotorista = "Todos";
+    state.pnrFonteCruzamento = "Todos";
     return;
   }
   state.sheet = previewDataset.fileCategory === PACKAGE_MANAGEMENT_FILE_CATEGORY ? PACKAGE_MANAGEMENT_VIEW : PRE_FATURA_VIEW;
@@ -10923,11 +11091,18 @@ function mapPnrRowToProcessedRecord(row, fileRecord) {
     id_transportadora: row.idTransportadora || "",
     transportadora: row.transportadora || "",
     estacao_origem: row.estacaoOrigem || "",
+    tipo_ocorrencia: "PNR",
+    tipo_base: row.tipoBase || row.tipoOperacional || "",
+    base_identificada: row.baseIdentificada || "",
+    nome_base_operacao: row.nomeBaseOperacao || "",
     tipo_operacional: row.tipoOperacional || "",
     id_rota: row.idRota || "",
     id_motorista: row.idMotorista || "",
     nome_motorista: row.nomeMotorista || "",
     motorista_display: row.motoristaDisplay || "",
+    status_motorista: row.statusMotorista || "",
+    fonte_cruzamento: row.fonteCruzamento || "",
+    observacao_cruzamento: row.observacaoCruzamento || "",
     motorista_match_source: row.motoristaMatchSource || "",
     data_caso: toDatabaseDate(row.dataCaso),
     data_entrega: toDatabaseDate(row.dataEntrega),
@@ -11031,11 +11206,18 @@ function mapProcessedPnrRecord(record, fileRecord) {
     idTransportadora: record.id_transportadora || raw.idTransportadora,
     transportadora: record.transportadora || raw.transportadora,
     estacaoOrigem: record.estacao_origem || raw.estacaoOrigem,
-    tipoOperacional: record.tipo_operacional || raw.tipoOperacional,
+    tipoOcorrencia: record.tipo_ocorrencia || raw.tipoOcorrencia,
+    tipoBase: record.tipo_base || raw.tipoBase,
+    tipoOperacional: record.tipo_base || record.tipo_operacional || raw.tipoBase || raw.tipoOperacional,
+    baseIdentificada: record.base_identificada || raw.baseIdentificada,
+    nomeBaseOperacao: record.nome_base_operacao || raw.nomeBaseOperacao,
     idRota: record.id_rota || raw.idRota,
     idMotorista: record.id_motorista || raw.idMotorista,
     nomeMotorista: record.nome_motorista || raw.nomeMotorista || raw.nome_motorista,
     motoristaDisplay: record.motorista_display || raw.motoristaDisplay || raw.motorista_display,
+    statusMotorista: record.status_motorista || raw.statusMotorista || raw.status_motorista,
+    fonteCruzamento: record.fonte_cruzamento || raw.fonteCruzamento || raw.fonte_cruzamento,
+    observacaoCruzamento: record.observacao_cruzamento || raw.observacaoCruzamento || raw.observacao_cruzamento,
     motoristaMatchSource: record.motorista_match_source || raw.motoristaMatchSource || raw.motorista_match_source,
     dataCaso: record.data_caso || raw.dataCaso,
     dataEntrega: record.data_entrega || raw.dataEntrega,
@@ -12739,6 +12921,8 @@ function normalizeLoadedState(loadedState) {
   loadedState.pnrStatus = normalizePnrSelectValue(loadedState.pnrStatus);
   loadedState.pnrTipoOperacional = normalizePnrSelectValue(loadedState.pnrTipoOperacional);
   loadedState.pnrEstacao = normalizePnrSelectValue(loadedState.pnrEstacao);
+  loadedState.pnrStatusMotorista = normalizePnrSelectValue(loadedState.pnrStatusMotorista);
+  loadedState.pnrFonteCruzamento = normalizePnrSelectValue(loadedState.pnrFonteCruzamento);
   loadedState.period = loadedState.prefaturaPeriod;
   loadedState.tipo = "Todos";
   return loadedState;
