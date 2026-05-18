@@ -859,15 +859,20 @@ function bindEvents() {
     }
 
     const filterOption = event.target.closest("[data-pnr-filter-option]");
-    if (filterOption) {
+    if (filterOption && filterOption.tagName !== "INPUT") {
       event.preventDefault();
       applyPnrFilterValue(filterOption.dataset.pnrFilterOption, filterOption.dataset.value || "Todos");
       return;
     }
 
-    if (!event.target.closest("[data-pnr-filter-control]")) closePnrFilterMenus();
+    if (!event.target.closest("[data-pnr-filter-control]") && !isDropdownPortalTarget(event.target)) closePnrFilterMenus();
   });
   document.addEventListener("change", (event) => {
+    const pnrOption = event.target.closest("[data-pnr-filter-option]");
+    if (pnrOption) {
+      applyPnrFilterOptionChange(pnrOption);
+      return;
+    }
     const field = event.target.closest("[data-pnr-filter]");
     if (!field) return;
     const name = field.dataset.pnrFilter;
@@ -1203,13 +1208,16 @@ function getSheetDisplayLabel(sheet) {
 }
 
 function closePnrFilterMenus() {
+  if (activePnrFilterMenu) closeDropdownPortal(`pnr:${activePnrFilterMenu}`, { focus: false });
   activePnrFilterMenu = "";
   document.querySelectorAll("[data-pnr-filter-menu]").forEach((menu) => {
     menu.hidden = true;
+    menu.removeAttribute("data-dropdown-portal-menu");
   });
   document.querySelectorAll("[data-pnr-filter-toggle]").forEach((button) => {
     button.setAttribute("aria-expanded", "false");
   });
+  if (String(activeDropdownPortalKind || "").startsWith("pnr:")) activeDropdownPortalKind = "";
 }
 
 function togglePnrFilterMenu(name) {
@@ -1223,6 +1231,76 @@ function togglePnrFilterMenu(name) {
   if (!menu || !button) return;
   menu.hidden = false;
   button.setAttribute("aria-expanded", "true");
+  openDropdownPortal(`pnr:${nextOpen}`);
+}
+
+function getPnrFilterSelectedValues(value, availableValues = []) {
+  const available = (Array.isArray(availableValues) ? availableValues : []).map(String).filter(Boolean);
+  const source = Array.isArray(value)
+    ? value
+    : String(value || "")
+      .split(/[,+;|]/)
+      .map((item) => item.trim())
+      .filter(Boolean);
+  const selected = source
+    .map(String)
+    .filter((item) => item && item !== "Todos" && item !== "all");
+  const filtered = available.length ? selected.filter((item) => available.includes(item)) : selected;
+  const unique = [...new Set(filtered)];
+  if (!unique.length) return [];
+  if (available.length && unique.length >= available.length) return [];
+  return unique;
+}
+
+function setPnrFilterStateValue(name, values = []) {
+  const next = Array.isArray(values) ? values.filter(Boolean) : [];
+  if (name === "month") {
+    state.pnrMonths = next;
+  } else if (name === "quinzena") {
+    state.pnrQuinzena = next.length ? next : "all";
+  } else if (name === "status") {
+    state.pnrStatus = next.length ? next : "Todos";
+  } else if (name === "tipo") {
+    state.pnrTipoOperacional = next.length ? next : "Todos";
+  } else if (name === "estacao") {
+    state.pnrEstacao = next.length ? next : "Todos";
+  } else if (name === "statusMotorista") {
+    state.pnrStatusMotorista = next.length ? next : "Todos";
+  } else if (name === "fonteCruzamento") {
+    state.pnrFonteCruzamento = next.length ? next : "Todos";
+  }
+}
+
+function getPnrFilterSelectionLabel(value, options = [], allLabel = "Todos") {
+  const normalizedOptions = (Array.isArray(options) ? options : []).map((option) => ({
+    value: String(typeof option === "string" ? option : option.value),
+    label: String(typeof option === "string" ? option : option.label),
+  })).filter((option) => option.value && option.value !== "Todos" && option.value !== "all");
+  const values = getPnrFilterSelectedValues(value, normalizedOptions.map((option) => option.value));
+  if (!values.length) return allLabel;
+  if (values.length === 1) {
+    return normalizedOptions.find((option) => option.value === values[0])?.label || values[0];
+  }
+  return `${values.length} selecionados`;
+}
+
+function applyPnrFilterOptionChange(input) {
+  const name = input?.dataset?.pnrFilterOption;
+  if (!name) return;
+  const menu = input.closest("[data-pnr-filter-menu]");
+  const allInputs = Array.from(menu?.querySelectorAll("[data-pnr-filter-option]") || []);
+  const specificInputs = allInputs.filter((item) => item.value !== "Todos" && item.value !== "all");
+  const checkedSpecific = specificInputs.filter((item) => item.checked).map((item) => item.value);
+  const nextValues = input.value === "Todos" || input.value === "all"
+    ? []
+    : checkedSpecific.length >= specificInputs.length
+      ? []
+      : checkedSpecific;
+  setPnrFilterStateValue(name, nextValues);
+  state.page = 1;
+  activePnrFilterMenu = name;
+  persistState();
+  renderAll();
 }
 
 function applyPnrFilterValue(name, value) {
@@ -1235,21 +1313,7 @@ function applyPnrFilterValue(name, value) {
     renderPnrTableOnly();
     return;
   }
-  if (name === "month") {
-    state.pnrMonths = value === "Todos" ? [] : [value];
-  } else if (name === "quinzena") {
-    state.pnrQuinzena = value || "all";
-  } else if (name === "status") {
-    state.pnrStatus = normalizePnrSelectValue(value);
-  } else if (name === "tipo") {
-    state.pnrTipoOperacional = normalizePnrSelectValue(value);
-  } else if (name === "estacao") {
-    state.pnrEstacao = normalizePnrSelectValue(value);
-  } else if (name === "statusMotorista") {
-    state.pnrStatusMotorista = normalizePnrSelectValue(value);
-  } else if (name === "fonteCruzamento") {
-    state.pnrFonteCruzamento = normalizePnrSelectValue(value);
-  }
+  setPnrFilterStateValue(name, value === "Todos" || value === "all" ? [] : [value]);
   state.page = 1;
   closePnrFilterMenus();
   persistState();
@@ -1294,6 +1358,18 @@ function getDropdownPortalConfig(kind) {
       trigger,
       menu: document.querySelector(".deviation-category-menu"),
       minWidth: 280,
+      align: "left",
+      focusTarget: trigger,
+    };
+  }
+  if (String(kind || "").startsWith("pnr:")) {
+    const name = String(kind).slice(4);
+    const trigger = document.querySelector(`[data-pnr-filter-toggle="${CSS.escape(name)}"]`);
+    return {
+      kind,
+      trigger,
+      menu: document.querySelector(`[data-pnr-filter-menu="${CSS.escape(name)}"]`),
+      minWidth: 220,
       align: "left",
       focusTarget: trigger,
     };
@@ -1368,12 +1444,14 @@ function closeDropdownPortal(kind = activeDropdownPortalKind, options = {}) {
     config.menu.style.zIndex = "";
   }
   config?.trigger?.setAttribute("aria-expanded", "false");
+  if (String(kind || "").startsWith("pnr:") && activePnrFilterMenu === String(kind).slice(4)) activePnrFilterMenu = "";
   if (activeDropdownPortalKind === kind) activeDropdownPortalKind = "";
   if (options.focus) config?.focusTarget?.focus?.();
 }
 
 function closeAllFloatingDropdowns(options = {}) {
   ["type", "month", "period", "deviation"].forEach((kind) => closeDropdownPortal(kind, options));
+  closePnrFilterMenus();
   isDeviationCategoryMenuOpen = false;
 }
 
@@ -1477,6 +1555,7 @@ function closePackageTypeMenu() {
 
 function openPackageTypeMenu() {
   if (!el.typeFilterMenu || !el.typeFilterToggle) return;
+  closePnrFilterMenus();
   closeDeviationCategoryMenu({ render: true });
   closeCustomFilterMenu("month");
   closeCustomFilterMenu("period");
@@ -1645,6 +1724,7 @@ function openCustomFilterMenu(kind) {
   const menu = kind === "month" ? el.monthFilterMenu : el.periodFilterMenu;
   const toggle = kind === "month" ? el.monthFilterToggle : el.periodFilterToggle;
   if (!menu || !toggle) return;
+  closePnrFilterMenus();
   closeDeviationCategoryMenu({ render: true });
   closePackageTypeMenu();
   if (kind !== "month") closeCustomFilterMenu("month");
@@ -3029,6 +3109,7 @@ function closeDeviationCategoryMenu(options = {}) {
 }
 
 function openDeviationCategoryMenu() {
+  closePnrFilterMenus();
   closePackageTypeMenu();
   closeCustomFilterMenu("month");
   closeCustomFilterMenu("period");
@@ -3118,6 +3199,7 @@ function renderDeviationManagementView() {
   if (state.activeDesvioCategory === DEVIATION_CATEGORY_PNRS) {
     try {
       el.deviationManagementView.innerHTML = renderPnrPage();
+      if (activePnrFilterMenu) window.requestAnimationFrame(() => openDropdownPortal(`pnr:${activePnrFilterMenu}`));
     } catch (error) {
       console.error("Erro ao renderizar Gestão de Desvios / PNRs:", error);
       console.error("Stack:", error?.stack);
@@ -3160,12 +3242,12 @@ function getPnrRowsCacheKey() {
     pnrRowsLoadedKey,
     pnrRows.length,
     getPnrSelectedMonthKeys().join("|"),
-    state.pnrQuinzena || "all",
-    state.pnrStatus || "Todos",
-    state.pnrTipoOperacional || "Todos",
-    state.pnrEstacao || "Todos",
-    state.pnrStatusMotorista || "Todos",
-    state.pnrFonteCruzamento || "Todos",
+    getPnrFilterSelectedValues(state.pnrQuinzena, ["q1", "q2"]).join("|") || "all",
+    getPnrFilterSelectedValues(state.pnrStatus).join("|") || "Todos",
+    getPnrFilterSelectedValues(state.pnrTipoOperacional).join("|") || "Todos",
+    getPnrFilterSelectedValues(state.pnrEstacao).join("|") || "Todos",
+    getPnrFilterSelectedValues(state.pnrStatusMotorista).join("|") || "Todos",
+    getPnrFilterSelectedValues(state.pnrFonteCruzamento).join("|") || "Todos",
     normalize(state.pnrQuery),
   ].join("::");
 }
@@ -3559,22 +3641,22 @@ function getFilteredPnrRows() {
   const cacheKey = getPnrRowsCacheKey();
   if (derivedDataCache.pnrKey === cacheKey) return derivedDataCache.pnrRows;
   const selectedMonths = new Set(getPnrSelectedMonthKeys());
-  const selectedQuinzena = state.pnrQuinzena || "all";
-  const selectedStatus = normalizePnrSelectValue(state.pnrStatus);
-  const selectedTipo = normalizePnrSelectValue(state.pnrTipoOperacional);
-  const selectedEstacao = normalizePnrSelectValue(state.pnrEstacao);
-  const selectedStatusMotorista = normalizePnrSelectValue(state.pnrStatusMotorista);
-  const selectedFonteCruzamento = normalizePnrSelectValue(state.pnrFonteCruzamento);
+  const selectedQuinzenas = new Set(getPnrFilterSelectedValues(state.pnrQuinzena, ["q1", "q2"]));
+  const selectedStatuses = new Set(getPnrFilterSelectedValues(state.pnrStatus));
+  const selectedTipos = new Set(getPnrFilterSelectedValues(state.pnrTipoOperacional));
+  const selectedEstacoes = new Set(getPnrFilterSelectedValues(state.pnrEstacao));
+  const selectedStatusMotoristas = new Set(getPnrFilterSelectedValues(state.pnrStatusMotorista));
+  const selectedFontesCruzamento = new Set(getPnrFilterSelectedValues(state.pnrFonteCruzamento));
   const query = normalize(state.pnrQuery);
   const rows = pnrRows.filter((row) => {
     const monthKey = row.monthKey || getPnrPeriodFromBillingPeriod(row.sourcePeriodo || row.periodoFaturamentoOriginal || row.periodoFaturamento)?.monthKey || getPnrPeriodFromDate(row.dataCaso || row.periodoFaturamento).monthKey;
     if (selectedMonths.size && !selectedMonths.has(monthKey)) return false;
-    if (selectedQuinzena !== "all" && getPeriodModeFromLabel(row.quinzena) !== selectedQuinzena) return false;
-    if (selectedStatus !== "Todos" && row.statusNormalizado !== selectedStatus) return false;
-    if (selectedTipo !== "Todos" && (row.tipoBase || row.tipoOperacional) !== selectedTipo) return false;
-    if (selectedEstacao !== "Todos" && row.estacaoOrigem !== selectedEstacao) return false;
-    if (selectedStatusMotorista !== "Todos" && row.statusMotorista !== selectedStatusMotorista) return false;
-    if (selectedFonteCruzamento !== "Todos" && row.fonteCruzamento !== selectedFonteCruzamento) return false;
+    if (selectedQuinzenas.size && !selectedQuinzenas.has(getPeriodModeFromLabel(row.quinzena))) return false;
+    if (selectedStatuses.size && !selectedStatuses.has(row.statusNormalizado)) return false;
+    if (selectedTipos.size && !selectedTipos.has(row.tipoBase || row.tipoOperacional)) return false;
+    if (selectedEstacoes.size && !selectedEstacoes.has(row.estacaoOrigem)) return false;
+    if (selectedStatusMotoristas.size && !selectedStatusMotoristas.has(row.statusMotorista)) return false;
+    if (selectedFontesCruzamento.size && !selectedFontesCruzamento.has(row.fonteCruzamento)) return false;
     if (query && !String(row._search || "").includes(query)) return false;
     return true;
   });
@@ -3774,27 +3856,56 @@ function formatPnrTableCell(row, column) {
 }
 
 function renderPnrFilterSelect(name, label, value, options, allLabel = "Todos") {
-  const normalizedValue = String(value || "Todos");
   const sourceOptions = (Array.isArray(options) ? options : []).map((option) => ({
-    value: typeof option === "string" ? option : option.value,
-    label: typeof option === "string" ? option : option.label,
+    value: String(typeof option === "string" ? option : option.value),
+    label: String(typeof option === "string" ? option : option.label),
   })).filter((option) => option.value !== undefined && option.value !== null);
-  const hasDefaultOption = sourceOptions.some((option) => ["Todos", "all", normalizedValue].includes(String(option.value)));
-  const normalizedOptions = (hasDefaultOption ? sourceOptions : [{ value: "Todos", label: allLabel }, ...sourceOptions]);
-  const selected = normalizedOptions.find((option) => String(option.value) === normalizedValue) || normalizedOptions[0];
+  if (name === "pageSize") {
+    const normalizedValue = String(value || "15");
+    const selected = sourceOptions.find((option) => option.value === normalizedValue) || sourceOptions[0];
+    const isOpen = activePnrFilterMenu === name;
+    return `
+      <div class="pnr-filter-control pnr-filter-dropdown" data-pnr-filter-control="${escapeAttribute(name)}">
+        <span>${escapeHtml(label)}</span>
+        <button type="button" class="pnr-filter-button" data-pnr-filter-toggle="${escapeAttribute(name)}" aria-haspopup="listbox" aria-expanded="${isOpen ? "true" : "false"}">
+          <strong>${escapeHtml(selected?.label || allLabel)}</strong>
+          <svg viewBox="0 0 20 20" aria-hidden="true"><path d="m5 7 5 5 5-5" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8"></path></svg>
+        </button>
+        <div class="pnr-filter-menu" data-pnr-filter-menu="${escapeAttribute(name)}" role="listbox" ${isOpen ? "" : "hidden"}>
+          ${sourceOptions.map((option) => {
+            const selectedClass = option.value === normalizedValue ? " is-active" : "";
+            return `<button type="button" class="pnr-filter-option${selectedClass}" data-pnr-filter-option="${escapeAttribute(name)}" data-value="${escapeAttribute(option.value)}" role="option" aria-selected="${selectedClass ? "true" : "false"}">${escapeHtml(option.label)}</button>`;
+          }).join("")}
+        </div>
+      </div>
+    `;
+  }
+  const specificOptions = sourceOptions.filter((option) => option.value !== "Todos" && option.value !== "all");
+  const selectedValues = getPnrFilterSelectedValues(value, specificOptions.map((option) => option.value));
+  const selectedSet = new Set(selectedValues);
+  const allSelected = !selectedValues.length;
+  const buttonLabel = getPnrFilterSelectionLabel(value, specificOptions, allLabel);
   const isOpen = activePnrFilterMenu === name;
   return `
     <div class="pnr-filter-control pnr-filter-dropdown" data-pnr-filter-control="${escapeAttribute(name)}">
       <span>${escapeHtml(label)}</span>
       <button type="button" class="pnr-filter-button" data-pnr-filter-toggle="${escapeAttribute(name)}" aria-haspopup="listbox" aria-expanded="${isOpen ? "true" : "false"}">
-        <strong>${escapeHtml(selected?.label || allLabel)}</strong>
+        <strong>${escapeHtml(buttonLabel)}</strong>
         <svg viewBox="0 0 20 20" aria-hidden="true"><path d="m5 7 5 5 5-5" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8"></path></svg>
       </button>
-      <div class="pnr-filter-menu" data-pnr-filter-menu="${escapeAttribute(name)}" role="listbox" ${isOpen ? "" : "hidden"}>
-        ${normalizedOptions.map((option) => {
-          const selectedClass = String(option.value) === normalizedValue ? " is-active" : "";
-          return `<button type="button" class="pnr-filter-option${selectedClass}" data-pnr-filter-option="${escapeAttribute(name)}" data-value="${escapeAttribute(option.value)}" role="option" aria-selected="${selectedClass ? "true" : "false"}">${escapeHtml(option.label)}</button>`;
-        }).join("")}
+      <div class="pnr-filter-menu type-filter__menu" data-pnr-filter-menu="${escapeAttribute(name)}" role="menu" ${isOpen ? "" : "hidden"}>
+        <label class="type-filter__option custom-filter__option pnr-filter-option">
+          <input type="checkbox" value="Todos" data-pnr-filter-option="${escapeAttribute(name)}" ${allSelected ? "checked" : ""}>
+          <span class="type-filter__check" aria-hidden="true"></span>
+          <span>${escapeHtml(allLabel)}</span>
+        </label>
+        ${specificOptions.map((option) => `
+          <label class="type-filter__option custom-filter__option pnr-filter-option">
+            <input type="checkbox" value="${escapeAttribute(option.value)}" data-pnr-filter-option="${escapeAttribute(name)}" ${!allSelected && selectedSet.has(option.value) ? "checked" : ""}>
+            <span class="type-filter__check" aria-hidden="true"></span>
+            <span>${escapeHtml(option.label)}</span>
+          </label>
+        `).join("")}
       </div>
     </div>
   `;
@@ -3944,7 +4055,6 @@ function renderPnrTableOnly() {
 function renderPnrPage() {
   const { filteredRows, sortedRows, pagedRows } = getPnrTableViewModel();
   const monthOptions = getPnrMonthOptions();
-  const selectedMonths = getPnrSelectedMonthKeys();
   const filterOptions = getPnrFilterOptions();
   const analysis = getPnrAnalysisData(filteredRows);
   const { summary, statusRows, operationRows, stationRows, driverRows, evolutionRows } = analysis;
@@ -3957,7 +4067,6 @@ function renderPnrPage() {
     { label: "Status em aberto/análise", value: integer.format(summary.aberto), tone: "kpi-card--neutral", delta: "Status restantes no recorte" },
   ];
   const monthSelectOptions = monthOptions.map((option) => ({ value: option.key, label: option.label }));
-  const selectedMonthValue = selectedMonths.length === monthOptions.length ? "Todos" : selectedMonths[0] || "Todos";
   const pnrLoadState = isLoadingPnrRows && !pnrRows.length
     ? emptyState("Carregando PNRs", "Os registros processados estão sendo carregados.")
     : !pnrRows.length
@@ -3981,19 +4090,18 @@ function renderPnrPage() {
               </button>
               <input type="search" data-pnr-query value="${escapeAttribute(state.pnrQuery || "")}" placeholder="Buscar" autocomplete="off">
             </div>
-            ${renderPnrFilterSelect("month", "Mês", selectedMonthValue, monthSelectOptions)}
+            ${renderPnrFilterSelect("month", "Mês", state.pnrMonths, monthSelectOptions)}
             ${renderPnrFilterSelect("quinzena", "Quinzena", state.pnrQuinzena || "all", [
-              { value: "all", label: "Todas" },
               { value: "q1", label: "1ª quinzena" },
               { value: "q2", label: "2ª quinzena" },
-            ], "Todas")}
-            ${renderPnrFilterSelect("status", "Status", normalizePnrSelectValue(state.pnrStatus), filterOptions.statuses)}
-            ${renderPnrFilterSelect("tipo", "Tipo de base", normalizePnrSelectValue(state.pnrTipoOperacional), filterOptions.tipos)}
+            ])}
+            ${renderPnrFilterSelect("status", "Status", state.pnrStatus, filterOptions.statuses)}
+            ${renderPnrFilterSelect("tipo", "Tipo de base", state.pnrTipoOperacional, filterOptions.tipos)}
           </div>
           <div class="pnr-filter-row pnr-filter-row--secondary">
-            ${renderPnrFilterSelect("statusMotorista", "Status do motorista", normalizePnrSelectValue(state.pnrStatusMotorista), filterOptions.statusMotoristas)}
-            ${renderPnrFilterSelect("fonteCruzamento", "Fonte do cruzamento", normalizePnrSelectValue(state.pnrFonteCruzamento), filterOptions.fontesCruzamento)}
-            ${renderPnrFilterSelect("estacao", "Estação de origem", normalizePnrSelectValue(state.pnrEstacao), filterOptions.estacoes)}
+            ${renderPnrFilterSelect("statusMotorista", "Status do motorista", state.pnrStatusMotorista, filterOptions.statusMotoristas)}
+            ${renderPnrFilterSelect("fonteCruzamento", "Fonte do cruzamento", state.pnrFonteCruzamento, filterOptions.fontesCruzamento)}
+            ${renderPnrFilterSelect("estacao", "Estação de origem", state.pnrEstacao, filterOptions.estacoes)}
             <button type="button" class="secondary-button" data-pnr-clear>Limpar</button>
           </div>
         </div>
@@ -13209,12 +13317,14 @@ function normalizeLoadedState(loadedState) {
   loadedState.activeDesvioCategory = normalizeDeviationCategory(loadedState.activeDesvioCategory);
   loadedState.pnrQuery = String(loadedState.pnrQuery || "");
   loadedState.pnrMonths = Array.isArray(loadedState.pnrMonths) ? loadedState.pnrMonths : [];
-  loadedState.pnrQuinzena = ["all", "q1", "q2"].includes(loadedState.pnrQuinzena) ? loadedState.pnrQuinzena : "all";
-  loadedState.pnrStatus = normalizePnrSelectValue(loadedState.pnrStatus);
-  loadedState.pnrTipoOperacional = normalizePnrSelectValue(loadedState.pnrTipoOperacional);
-  loadedState.pnrEstacao = normalizePnrSelectValue(loadedState.pnrEstacao);
-  loadedState.pnrStatusMotorista = normalizePnrSelectValue(loadedState.pnrStatusMotorista);
-  loadedState.pnrFonteCruzamento = normalizePnrSelectValue(loadedState.pnrFonteCruzamento);
+  loadedState.pnrQuinzena = Array.isArray(loadedState.pnrQuinzena)
+    ? getPnrFilterSelectedValues(loadedState.pnrQuinzena, ["q1", "q2"])
+    : ["all", "q1", "q2"].includes(loadedState.pnrQuinzena) ? loadedState.pnrQuinzena : "all";
+  loadedState.pnrStatus = Array.isArray(loadedState.pnrStatus) ? loadedState.pnrStatus : normalizePnrSelectValue(loadedState.pnrStatus);
+  loadedState.pnrTipoOperacional = Array.isArray(loadedState.pnrTipoOperacional) ? loadedState.pnrTipoOperacional : normalizePnrSelectValue(loadedState.pnrTipoOperacional);
+  loadedState.pnrEstacao = Array.isArray(loadedState.pnrEstacao) ? loadedState.pnrEstacao : normalizePnrSelectValue(loadedState.pnrEstacao);
+  loadedState.pnrStatusMotorista = Array.isArray(loadedState.pnrStatusMotorista) ? loadedState.pnrStatusMotorista : normalizePnrSelectValue(loadedState.pnrStatusMotorista);
+  loadedState.pnrFonteCruzamento = Array.isArray(loadedState.pnrFonteCruzamento) ? loadedState.pnrFonteCruzamento : normalizePnrSelectValue(loadedState.pnrFonteCruzamento);
   loadedState.period = loadedState.prefaturaPeriod;
   loadedState.tipo = "Todos";
   return loadedState;

@@ -6540,6 +6540,7 @@ body:not([data-theme="light"]) .global-search-filter {
 }
 
 .type-filter__menu[data-dropdown-portal-menu],
+.pnr-filter-menu[data-dropdown-portal-menu],
 .deviation-category-menu[data-dropdown-portal-menu] {
   position: fixed !important;
   top: auto;
