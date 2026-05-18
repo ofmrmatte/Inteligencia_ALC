@@ -2308,11 +2308,55 @@ function getSettingsFileTabLabel(category) {
   return getSettingsFileCategoryLabel(category);
 }
 
+function isPnrMasterDashboardFile(file = {}) {
+  if (getFileRecordCategory(file) !== DEVIATION_PNR_FILE_CATEGORY) return false;
+  const metadata = file.metadata || {};
+  if (
+    metadata.pnr_master_file === true ||
+    metadata.isMasterFile === true ||
+    metadata.is_master_file === true ||
+    metadata.is_master === true
+  ) {
+    return true;
+  }
+  const text = [
+    file.file_name,
+    file.fileName,
+    file.label,
+    metadata.original_name,
+    metadata.display_name,
+    metadata.fileDisplayName,
+    metadata.file_display_name,
+    metadata.fileDescription,
+    metadata.file_description,
+    metadata.storage_model,
+  ].filter(Boolean).join(" ");
+  if (isPnrMasterFileName(text)) return true;
+  const periodCollections = [
+    metadata.source_periods,
+    metadata.periods,
+    metadata.competencias,
+    metadata.competence_keys,
+  ];
+  return periodCollections.some((value) => Array.isArray(value) && value.length > 1);
+}
+
 function formatSettingsFilePeriod(file) {
   const period = getFileRecordPeriod(file);
   const periodLabel = getPeriodModeLabel(period.periodType || "month");
   const monthLabel = categoryAwareFullMonthLabel(file, period);
   return `${periodLabel} · ${monthLabel}`;
+}
+
+function getSettingsFilePrimaryLabel(file) {
+  if (isPnrMasterDashboardFile(file)) return "Base mestre";
+  const category = getSettingsFileCategoryLabel(getFileRecordCategory(file));
+  return `${category} · ${formatSettingsFilePeriod(file)}`;
+}
+
+function getSettingsFileSecondaryLabel(file) {
+  if (isPnrMasterDashboardFile(file)) return "PNRs · Histórico consolidado";
+  return getDashboardFileDisplayName(file);
 }
 
 function categoryAwareFullMonthLabel(file, period = getFileRecordPeriod(file)) {
@@ -2407,7 +2451,8 @@ function renderSettingsFileManagement() {
     </label>
     <div class="settings-files-items">
       ${files.map((file) => {
-        const category = getSettingsFileCategoryLabel(getFileRecordCategory(file));
+        const primaryLabel = getSettingsFilePrimaryLabel(file);
+        const secondaryLabel = getSettingsFileSecondaryLabel(file);
         const checked = selectedSettingsFileIds.has(file.id);
         const uploaded = file.created_at ? formatDateTime(file.created_at) : "Data não informada";
         const rows = getSettingsFileRowsLabel(file);
@@ -2417,8 +2462,8 @@ function renderSettingsFileManagement() {
             <input type="checkbox" value="${escapeAttribute(file.id)}" data-settings-file-id ${checked ? "checked" : ""} ${permissions.canDeleteFile ? "" : "disabled"}>
             <span class="type-filter__check" aria-hidden="true"></span>
             <span class="settings-file-row__content">
-              <strong>${escapeHtml(category)} · ${escapeHtml(formatSettingsFilePeriod(file))}</strong>
-              <span>${escapeHtml(getDashboardFileDisplayName(file))}</span>
+              <strong>${escapeHtml(primaryLabel)}</strong>
+              <span>${escapeHtml(secondaryLabel)}</span>
               <small>Enviado em ${escapeHtml(uploaded)} · ${escapeHtml(rows)}</small>
             </span>
             <span class="settings-file-row__status">${escapeHtml(status)}</span>
@@ -10197,6 +10242,11 @@ function buildUploadPeriodMetadata({ file, previewDataset, referenceYear, refere
     mime_type: file.type || "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
     original_name: file.name,
     display_name: displayName,
+    fileDisplayName: previewDataset.fileCategory === DEVIATION_PNR_FILE_CATEGORY && previewStats.isMasterFile === true ? "Base mestre" : displayName,
+    fileCategory: previewDataset.fileCategory === DEVIATION_PNR_FILE_CATEGORY ? "PNRs" : getSettingsFileCategoryLabel(previewDataset.fileCategory),
+    fileDescription: previewDataset.fileCategory === DEVIATION_PNR_FILE_CATEGORY && previewStats.isMasterFile === true ? "Histórico consolidado" : "",
+    isMasterFile: previewDataset.fileCategory === DEVIATION_PNR_FILE_CATEGORY && previewStats.isMasterFile === true,
+    is_master_file: previewDataset.fileCategory === DEVIATION_PNR_FILE_CATEGORY && previewStats.isMasterFile === true,
     competencia,
     quinzena,
     mes: monthAbbr || "",
@@ -10460,7 +10510,7 @@ async function uploadDashboardFile(file) {
     } : {},
   });
   if (previewDataset.fileCategory === DEVIATION_PNR_FILE_CATEGORY && previewStats.isMasterFile) {
-    displayName = "PNRs · Base Mestre";
+    displayName = "Base mestre";
   }
   const uploadMetadata = buildUploadPeriodMetadata({
     file,
@@ -11744,6 +11794,8 @@ async function updateDashboardFileParsedRows(fileRecord, parsedRows, stats = {})
     duplicate_rows_updated: stats.duplicateRowsUpdated ?? fileRecord.metadata?.duplicate_rows_updated ?? 0,
     duplicate_rows_removed: stats.duplicateRowsRemoved ?? fileRecord.metadata?.duplicate_rows_removed ?? 0,
     pnr_master_file: stats.isMasterFile === true || fileRecord.metadata?.pnr_master_file === true,
+    isMasterFile: stats.isMasterFile === true || fileRecord.metadata?.pnr_master_file === true || fileRecord.metadata?.isMasterFile === true,
+    is_master_file: stats.isMasterFile === true || fileRecord.metadata?.pnr_master_file === true || fileRecord.metadata?.is_master_file === true,
     period_start_year: stats.periodStartYear || fileRecord.metadata?.period_start_year || "",
     period_end_year: stats.periodEndYear || fileRecord.metadata?.period_end_year || "",
     linked_occurrences: stats.linkedOccurrences ?? fileRecord.metadata?.linked_occurrences ?? 0,
@@ -11758,6 +11810,8 @@ async function updateDashboardFileParsedRows(fileRecord, parsedRows, stats = {})
     mime_type: getFileRecordMimeType(fileRecord),
     original_name: fileRecord.metadata?.original_name || fileRecord.file_name,
     display_name: fileRecord.metadata?.display_name || getDashboardFileDisplayName(fileRecord),
+    fileDisplayName: stats.isMasterFile === true || fileRecord.metadata?.pnr_master_file === true || fileRecord.metadata?.isMasterFile === true ? "Base mestre" : fileRecord.metadata?.fileDisplayName || fileRecord.metadata?.display_name || getDashboardFileDisplayName(fileRecord),
+    fileDescription: stats.isMasterFile === true || fileRecord.metadata?.pnr_master_file === true || fileRecord.metadata?.isMasterFile === true ? "Histórico consolidado" : fileRecord.metadata?.fileDescription || "",
     competencia: fileRecord.metadata?.competencia || packagePeriod?.competencia || "",
     quinzena: fileRecord.metadata?.quinzena || packagePeriod?.quinzena || "",
     mes: fileRecord.metadata?.mes || packagePeriod?.mes || "",
