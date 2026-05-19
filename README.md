@@ -131,48 +131,13 @@ O painel agora suporta leitura por tabelas processadas para evitar baixar e repr
 npm run db:migrate:processed-records
 ```
 
-Depois rode uma sincronizacao pontual para preencher as tabelas a partir dos arquivos locais:
-
-```powershell
-npm run sync:dashboard:once
-```
-
 Tabelas criadas:
 
 - `pre_fatura_records`
 - `gestao_pacotes_records`
 - `dashboard_metrics_cache`
 
-Se as tabelas ainda nao existirem, o dashboard continua funcionando pelo fallback antigo de XLSX, mas o ganho de desempenho so entra depois da migracao e do backfill.
-
-### Execucao
-
-Rodar em modo continuo:
-
-```powershell
-npm run sync:dashboard
-```
-
-Rodar uma sincronizacao pontual e encerrar:
-
-```powershell
-npm run sync:dashboard:once
-```
-
-### Regras do sincronizador
-
-- Monitora arquivos `.xlsx` e `.xls`.
-- Ignora arquivos temporarios do Excel, como `~$arquivo.xlsx`.
-- Aguarda o arquivo estabilizar antes do upload.
-- Calcula SHA-256 para evitar duplicidade.
-- Arquivos da pasta de Pre-Fatura recebem `file_type = PRE_FATURA` e sao enviados para `pre-fatura/`.
-- Arquivos da pasta de Gestao de Pacotes recebem `file_type = GESTAO_PACOTES` e sao enviados para `gestao-pacotes/`.
-- Extrai mes, ano e quinzena pelo nome do arquivo.
-- Salva metadados como `file_hash`, `original_name`, `display_name`, `competencia`, `quinzena`, `size_bytes`, `last_modified_local` e `synced_at`.
-- Quando as tabelas processadas existem, processa o Excel uma vez e grava os registros normalizados em `pre_fatura_records` ou `gestao_pacotes_records`.
-- Se uma nova versao do mesmo arquivo for detectada, registros anteriores equivalentes sao marcados como inativos e uma nova versao e registrada.
-- Exclusao local nao remove arquivos do Supabase por padrao. Para ativar, defina `SYNC_DELETE=true` no `.env`.
-- Com `SYNC_DELETE=true`, ao apagar um Excel da pasta local, o sincronizador remove do Storage e da tabela `dashboard_files` os registros correspondentes ao mesmo tipo, nome original, competencia e quinzena.
+Se as tabelas ainda nao existirem, o dashboard exibe estado controlado e solicita nova importacao pelo upload do painel.
 
 ## Arquivos principais
 
@@ -182,8 +147,8 @@ npm run sync:dashboard:once
 - `authService.js`: autenticacao, sessao, perfil e permissoes via Supabase Auth.
 - `app.js`: logica do dashboard, filtros, rankings, graficos, upload, relatorio e permissoes.
 - `styles.css`: estilos, tema claro/escuro e responsividade.
-- `scripts/dashboard-local-sync.mjs`: sincronizador local das pastas Windows com Supabase Storage e `dashboard_files`.
 - `scripts/apply-processed-records-migration.mjs`: aplica a migracao das tabelas de registros processados quando `SUPABASE_DB_URL` ou `DATABASE_URL` estiver configurada.
+- `scripts/cleanup-unused-supabase-processes.mjs`: gera relatorio e aplica limpeza segura de metadados/processos obsoletos do Supabase.
 - `assets/vendor/xlsx.full.min.js`: biblioteca usada para leitura dos arquivos Excel no navegador.
 
 ## Relatorios

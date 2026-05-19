@@ -21,6 +21,36 @@ const PRE_FATURA_FILE_CATEGORY = "PRE_FATURA";
 const PACKAGE_MANAGEMENT_FILE_CATEGORY = "GESTAO_PACOTES";
 const DEVIATION_PNR_FILE_CATEGORY = "DESVIOS_PNR";
 const DEVIATION_CATEGORY_PNRS = "PNRS";
+const DASHBOARD_MODULE_KEYS = {
+  preFatura: "pre-fatura",
+  evolucao: "evolucao-mensal",
+  pacotes: "gestao-pacotes",
+  desviosPnr: "gestao-desvios-pnr",
+};
+const DASHBOARD_MODULE_LABELS = {
+  [DASHBOARD_MODULE_KEYS.preFatura]: "Pré-Fatura",
+  [DASHBOARD_MODULE_KEYS.evolucao]: "Evolução Mensal",
+  [DASHBOARD_MODULE_KEYS.pacotes]: "Gestão de Pacotes",
+  [DASHBOARD_MODULE_KEYS.desviosPnr]: "Gestão de Desvios / PNRs",
+};
+const DASHBOARD_EMPTY_STATE_COPY = {
+  [DASHBOARD_MODULE_KEYS.preFatura]: {
+    title: "Base de Pré-Fatura ainda não importada.",
+    description: "Envie um arquivo XLSX ou CSV para alimentar este módulo.",
+  },
+  [DASHBOARD_MODULE_KEYS.pacotes]: {
+    title: "Base de Gestão de Pacotes ainda não importada.",
+    description: "Envie um arquivo XLSX ou CSV para alimentar este módulo.",
+  },
+  [DASHBOARD_MODULE_KEYS.desviosPnr]: {
+    title: "Base de PNRs ainda não importada.",
+    description: "Envie um arquivo XLSX ou CSV para alimentar este módulo.",
+  },
+  [DASHBOARD_MODULE_KEYS.evolucao]: {
+    title: "Sem dados disponíveis para evolução.",
+    description: "Importe as bases necessárias para gerar os indicadores.",
+  },
+};
 const DEVIATION_CATEGORIES = [
   { key: "SAFETY_OCORRENCIAS", label: "Safety - Ocorrências", enabled: false },
   { key: "SAFETY_MULTAS", label: "Safety - Multas", enabled: false },
@@ -63,11 +93,20 @@ const DEFAULT_PNR_GOAL_SETTINGS = {
   goal_type: "loss_limit",
 };
 const DEFAULT_PNR_GOAL_LIMIT = DEFAULT_PNR_GOAL_SETTINGS.monthly_goal;
-const SUPABASE_QUERY_TIMEOUT_MS = 25000;
+const SUPABASE_QUERY_TIMEOUT_MS = 30000;
 const STORAGE_DOWNLOAD_TIMEOUT_MS = 45000;
 const XLSX_PROCESS_TIMEOUT_MS = 60000;
+const KEEP_RAW_UPLOADS_IN_STORAGE = false;
+const PROCESSED_ONLY_STORAGE_PREFIX = "processed-only";
 const PROCESSED_RECORDS_BATCH_SIZE = 500;
 const PROCESSED_RECORDS_PAGE_SIZE = 1000;
+const PNR_REMOTE_QUERY_DEBOUNCE_MS = 400;
+const PNR_REMOTE_RPC = "desvios_pnr_dashboard";
+const PNR_SUMMARY_RPC = "desvios_pnr_summary";
+const PNR_TABLE_RPC = "desvios_pnr_table";
+const PNR_METRICS_REFRESH_RPC = "refresh_desvios_pnr_metrics_summary";
+const PNR_LIGHT_CACHE_VERSION = "pnr-dashboard-light-cache-v3";
+const PNR_LIGHT_CACHE_KEY = "alc-pnr-dashboard-light-cache-v1";
 let processedRecordsUnavailable = false;
 let isExportingPackageExcel = false;
 const SHEET_ORDER = ["SVC PERDIDOS", "XPT PERDIDOS", "PNR"];
@@ -134,6 +173,8 @@ const STATE_DEFAULT = {
   pnrEstacao: "Todos",
   pnrStatusMotorista: "Todos",
   pnrFonteCruzamento: "Todos",
+  pnrMotorista: "Todos",
+  pnrRota: "Todos",
   base: "Todos",
   motorista: "Todos",
   period: "month",
@@ -192,6 +233,31 @@ let dashboardFilesLoading = false;
 let dashboardVisualState = "loading-session";
 let hasInitialLoadCompleted = false;
 let isLoadingDashboardData = false;
+const moduleLoadingState = {
+  [DASHBOARD_MODULE_KEYS.preFatura]: false,
+  [DASHBOARD_MODULE_KEYS.evolucao]: false,
+  [DASHBOARD_MODULE_KEYS.pacotes]: false,
+  [DASHBOARD_MODULE_KEYS.desviosPnr]: false,
+};
+let dashboardLastError = null;
+const dashboardImportState = {
+  active: false,
+  moduleKey: "",
+  fileName: "",
+  fileType: "",
+  stage: "",
+  progress: 0,
+  sheetName: "",
+  sheetIndex: 0,
+  sheetCount: 0,
+  rowsRead: 0,
+  rowsImported: 0,
+  duplicatesIgnored: 0,
+  ignoredSheets: [],
+  importedSheets: [],
+  status: "",
+  updatedAt: "",
+};
 let isRefreshingFilesList = false;
 let dashboardPermissionTimer = null;
 let liveClockTimer = null;
@@ -227,6 +293,40 @@ let packageManagementRowsLoadedKey = "";
 let pnrRowsLoadedKey = "";
 let pnrDriverEnrichmentKey = "";
 let isLoadingPnrRows = false;
+let pnrRemoteRequestId = 0;
+let pnrRemoteDebounceTimer = null;
+const pnrRemoteState = {
+  key: "",
+  source: "",
+  rows: [],
+  total: 0,
+  summary: null,
+  statusRows: [],
+  operationRows: [],
+  stationRows: [],
+  driverRows: [],
+  evolutionRows: [],
+  monthOptions: [],
+  filterOptions: {
+    statuses: [],
+    tipos: [],
+    estacoes: [],
+    statusMotoristas: [],
+    fontesCruzamento: [],
+    motoristas: [],
+    rotas: [],
+  },
+  summaryKey: "",
+  tableKey: "",
+  cacheSignature: "",
+  cacheMeta: null,
+  lastProcessedAt: "",
+  processingStatus: "",
+  loadingSummary: false,
+  loadingCharts: false,
+  loadingTable: false,
+  error: "",
+};
 const derivedDataCache = {
   prefaturaKey: "",
   prefaturaRows: [],
@@ -276,26 +376,63 @@ function resetPnrRuntimeCache(options = {}) {
   derivedDataCache.pnrMonthOptionsKey = "";
   derivedDataCache.pnrMonthOptions = [];
   if (options.includeProcessed) pnrDriverEnrichmentKey = "";
+  resetPnrRemoteState();
+}
+
+function resetPnrRemoteState(options = {}) {
+  pnrRemoteState.key = "";
+  pnrRemoteState.source = "";
+  pnrRemoteState.rows = [];
+  pnrRemoteState.total = 0;
+  pnrRemoteState.summary = null;
+  pnrRemoteState.statusRows = [];
+  pnrRemoteState.operationRows = [];
+  pnrRemoteState.stationRows = [];
+  pnrRemoteState.driverRows = [];
+  pnrRemoteState.evolutionRows = [];
+  if (options.keepOptions !== true) {
+    pnrRemoteState.monthOptions = [];
+    pnrRemoteState.filterOptions = {
+      statuses: [],
+      tipos: [],
+      estacoes: [],
+      statusMotoristas: [],
+      fontesCruzamento: [],
+      motoristas: [],
+      rotas: [],
+    };
+  }
+  pnrRemoteState.cacheSignature = "";
+  pnrRemoteState.cacheMeta = null;
+  pnrRemoteState.lastProcessedAt = "";
+  pnrRemoteState.processingStatus = "";
+  pnrRemoteState.loadingSummary = false;
+  pnrRemoteState.loadingCharts = false;
+  pnrRemoteState.loadingTable = false;
+  pnrRemoteState.error = "";
+  pnrRemoteState.summaryKey = "";
+  pnrRemoteState.tableKey = "";
 }
 
 const DASHBOARD_STATE_CONFIG = {
   "loading-session": {
     state: "loading-session",
-    title: "Carregando sessão",
-    description: "Estamos verificando seu acesso ao painel.",
+    title: "Carregando dados...",
+    description: "Estamos consultando a base do painel. Isso pode levar alguns instantes.",
     loading: true,
   },
   "loading-files": {
     state: "loading-files",
-    title: "Carregando arquivos salvos",
-    description: "Buscando arquivos vinculados ao dashboard.",
+    title: "Carregando dados...",
+    description: "Estamos consultando a base do painel. Isso pode levar alguns instantes.",
     loading: true,
   },
   "processing-file": {
     state: "processing-file",
-    title: "Processando arquivo",
-    description: "Estamos lendo os dados e atualizando os indicadores.",
+    title: "Importando arquivo...",
+    description: "Os dados estão sendo extraídos e salvos na base do painel.",
     loading: true,
+    importing: true,
   },
   "not-authenticated": {
     state: "not-authenticated",
@@ -306,10 +443,10 @@ const DASHBOARD_STATE_CONFIG = {
   },
   "no-active-file": {
     state: "no-active-file",
-    title: "Nenhum arquivo ativo",
-    description: "Nenhum arquivo foi encontrado. Faça upload de um arquivo para iniciar a análise.",
+    title: "Base ainda não importada.",
+    description: "Envie um arquivo XLSX ou CSV para alimentar este módulo.",
     action: "upload",
-    actionLabel: "Enviar arquivo",
+    actionLabel: "Importar arquivo",
   },
   "no-filter-results": {
     state: "no-filter-results",
@@ -320,10 +457,11 @@ const DASHBOARD_STATE_CONFIG = {
   },
   "supabase-error": {
     state: "supabase-error",
-    title: "Erro ao carregar dados",
-    description: "Não foi possível conectar ao Supabase. Verifique sua conexão ou tente novamente.",
+    title: "Não foi possível carregar esta seção.",
+    description: "As demais áreas do painel continuam disponíveis. Tente novamente ou verifique os dados importados.",
     action: "retry",
     actionLabel: "Tentar novamente",
+    error: true,
   },
   "permission-denied": {
     state: "permission-denied",
@@ -355,7 +493,7 @@ async function bootstrapDashboard() {
   hydrateControls();
   applyTheme(state.theme);
   if (!allRows.length) {
-    showToast("Nenhum arquivo carregado. Faça upload de um arquivo para iniciar.", "info", 5200);
+    showToast("Base ainda não importada. Envie um arquivo XLSX ou CSV para iniciar.", "info", 5200);
   }
   renderAll();
   updateTopbar();
@@ -840,7 +978,8 @@ function bindEvents() {
       state.page = 1;
       persistState();
       renderAll();
-    }, 300);
+      schedulePnrRemoteRefresh({ reason: "search" });
+    }, PNR_REMOTE_QUERY_DEBOUNCE_MS);
   });
   document.addEventListener("click", (event) => {
     const searchToggle = event.target.closest("[data-pnr-search-toggle]");
@@ -889,21 +1028,34 @@ function bindEvents() {
       state.pnrEstacao = "Todos";
       state.pnrStatusMotorista = "Todos";
       state.pnrFonteCruzamento = "Todos";
+      state.pnrMotorista = "Todos";
+      state.pnrRota = "Todos";
       state.page = 1;
       closePnrFilterMenus();
       persistState();
       renderAll();
+      schedulePnrRemoteRefresh({ reason: "clear" });
+      return;
+    }
+    const reprocess = event.target.closest("[data-pnr-reprocess]");
+    if (reprocess) {
+      closePnrFilterMenus();
+      pnrRemoteState.error = "";
+      persistState();
+      renderAll();
+      schedulePnrRemoteRefresh({ immediate: true, force: true, reason: "manual" });
       return;
     }
     const pageButton = event.target.closest("[data-pnr-page]");
     if (pageButton) {
-      const totalRows = getFilteredPnrRows().length;
+      const totalRows = getPnrCurrentTotalRows();
       const totalPages = Math.max(1, Math.ceil(totalRows / state.pageSize));
       state.page = pageButton.dataset.pnrPage === "next"
         ? Math.min(totalPages, state.page + 1)
         : Math.max(1, state.page - 1);
       persistState();
       renderPnrTableOnly();
+      schedulePnrRemoteRefresh({ reason: "page" });
       return;
     }
     const sortHeader = event.target.closest("[data-pnr-sort]");
@@ -917,6 +1069,7 @@ function bindEvents() {
       }
       persistState();
       renderPnrTableOnly();
+      schedulePnrRemoteRefresh({ reason: "sort" });
     }
   });
   document.addEventListener("pointerover", (event) => {
@@ -1266,8 +1419,12 @@ function setPnrFilterStateValue(name, values = []) {
     state.pnrEstacao = next.length ? next : "Todos";
   } else if (name === "statusMotorista") {
     state.pnrStatusMotorista = next.length ? next : "Todos";
-  } else if (name === "fonteCruzamento") {
-    state.pnrFonteCruzamento = next.length ? next : "Todos";
+    } else if (name === "fonteCruzamento") {
+      state.pnrFonteCruzamento = next.length ? next : "Todos";
+  } else if (name === "motorista") {
+    state.pnrMotorista = next.length ? next : "Todos";
+  } else if (name === "rota") {
+    state.pnrRota = next.length ? next : "Todos";
   }
 }
 
@@ -1301,6 +1458,7 @@ function applyPnrFilterOptionChange(input) {
   activePnrFilterMenu = name;
   persistState();
   renderAll();
+  schedulePnrRemoteRefresh({ reason: "filter" });
 }
 
 function applyPnrFilterValue(name, value) {
@@ -1311,6 +1469,7 @@ function applyPnrFilterValue(name, value) {
     closePnrFilterMenus();
     persistState();
     renderPnrTableOnly();
+    schedulePnrRemoteRefresh({ reason: "pageSize" });
     return;
   }
   setPnrFilterStateValue(name, value === "Todos" || value === "all" ? [] : [value]);
@@ -1318,6 +1477,7 @@ function applyPnrFilterValue(name, value) {
   closePnrFilterMenus();
   persistState();
   renderAll();
+  schedulePnrRemoteRefresh({ reason: "filter" });
 }
 
 function getDropdownPortalConfig(kind) {
@@ -1833,6 +1993,9 @@ function isDashboardFileCategory(value) {
 }
 
 function withTimeout(promise, timeoutMs, message) {
+  if (window.dashboardCacheService?.withTimeout) {
+    return window.dashboardCacheService.withTimeout(promise, timeoutMs, message);
+  }
   let timeoutId = null;
   const timeout = new Promise((_, reject) => {
     timeoutId = window.setTimeout(() => reject(new Error(message)), timeoutMs);
@@ -1847,6 +2010,29 @@ function identificarTipoArquivo(nomeArquivo) {
   if (nome.includes("GESTAO DE PACOTES")) return PACKAGE_MANAGEMENT_FILE_CATEGORY;
   if (nome.includes("DESVIOS PNR") || nome.includes("PNRS") || /\bPNR\b/.test(nome)) return DEVIATION_PNR_FILE_CATEGORY;
   return PRE_FATURA_FILE_CATEGORY;
+}
+
+function isCsvFile(fileOrName) {
+  const name = String(fileOrName?.name || fileOrName?.file_name || fileOrName || "");
+  const type = String(fileOrName?.type || fileOrName?.mime_type || "").toLowerCase();
+  return /\.csv$/i.test(name) || type.includes("text/csv") || type.includes("application/csv");
+}
+
+function isSpreadsheetImportFile(fileOrName) {
+  const name = String(fileOrName?.name || fileOrName?.file_name || fileOrName || "");
+  const type = String(fileOrName?.type || fileOrName?.mime_type || "").toLowerCase();
+  return /\.(csv|xlsx|xls|xltx)$/i.test(name) ||
+    type.includes("text/csv") ||
+    type.includes("spreadsheet") ||
+    type.includes("ms-excel");
+}
+
+function getUploadFileCategory(fileName = "") {
+  const currentCategory = getCurrentFileCategory();
+  if (currentCategory === DEVIATION_PNR_FILE_CATEGORY || currentCategory === PACKAGE_MANAGEMENT_FILE_CATEGORY || currentCategory === PRE_FATURA_FILE_CATEGORY) {
+    return currentCategory;
+  }
+  return identificarTipoArquivo(fileName);
 }
 
 function getFileRecordCategory(fileRecord) {
@@ -2233,12 +2419,12 @@ function updateDatasetMeta() {
   if (el.datasetCount) el.datasetCount.textContent = `${integer.format(totalFiles)} arquivo${totalFiles === 1 ? "" : "s"}`;
   if (el.datasetNote) {
     if (dashboardFilesLoading) {
-      el.datasetNote.textContent = "Carregando arquivo ativo...";
+      el.datasetNote.textContent = "Consultando base do painel...";
     } else if (active && active.id !== EMPTY_DATASET_ID) {
       const source = currentActiveFile ? `Arquivo salvo no Supabase: ${getDashboardFileDisplayName(currentActiveFile)}.` : "O mês completo é consolidado automaticamente.";
       el.datasetNote.textContent = `${integer.format(allRows.length)} registros no recorte atual. ${source}`;
     } else {
-      el.datasetNote.textContent = currentUser ? "Nenhum arquivo carregado. Faça upload de um arquivo para iniciar." : "Faça login para carregar o arquivo ativo salvo.";
+      el.datasetNote.textContent = currentUser ? "Base ainda não importada. Envie um arquivo XLSX ou CSV para alimentar o painel." : "Faça login para carregar a base salva.";
     }
   }
 }
@@ -2248,15 +2434,31 @@ function getDeletableDatasets() {
 }
 
 function isUsableDashboardFileRecord(record) {
-  return Boolean(record && record.id && record.storage_path && record.status !== "missing_storage");
+  return Boolean(record && record.id && (record.storage_path || hasPersistedRowsMetadata(record)));
 }
 
 function isDashboardFileActive(file) {
   if (!file) return false;
   const status = normalizeText(file.status || file.metadata?.status || "");
   if (file.deleted_at || file.deletedAt) return false;
-  if (["DELETED", "REMOVIDO", "MISSING STORAGE", "MISSING_STORAGE", "EMPTY OR PARSE ERROR", "EMPTY_OR_PARSE_ERROR", "SUPERSEDED", "SUBSTITUIDO", "SUBSTITUÍDO"].includes(status)) return false;
-  return Boolean(file.id && file.storage_path);
+  if (["DELETED", "REMOVIDO", "EMPTY OR PARSE ERROR", "EMPTY_OR_PARSE_ERROR", "SUPERSEDED", "SUBSTITUIDO", "SUBSTITUÍDO"].includes(status)) return false;
+  if (["MISSING STORAGE", "MISSING_STORAGE"].includes(status)) return hasPersistedRowsMetadata(file);
+  return Boolean(file.id && (file.storage_path || hasPersistedRowsMetadata(file)));
+}
+
+function hasPersistedRowsMetadata(fileRecord) {
+  const metadata = fileRecord?.metadata || {};
+  const candidates = [
+    metadata.record_count,
+    metadata.parsed_rows,
+    metadata.consolidated_rows,
+    metadata.row_count,
+    fileRecord?.row_count,
+  ];
+  return candidates.some((value) => {
+    const number = Number(value);
+    return Number.isFinite(number) && number > 0;
+  });
 }
 
 function getFileRowsCount(fileRecord, dataset = null) {
@@ -2379,7 +2581,7 @@ function getSettingsFilesForActiveTab() {
 }
 
 function getSettingsFileCategoryLabel(category) {
-  if (category === DEVIATION_PNR_FILE_CATEGORY) return "PNRs";
+  if (category === DEVIATION_PNR_FILE_CATEGORY) return "Base Mestre";
   return category === PACKAGE_MANAGEMENT_FILE_CATEGORY ? "Gestão de Pacotes" : "Pré-Fatura";
 }
 
@@ -2435,7 +2637,7 @@ function getSettingsFilePrimaryLabel(file) {
 }
 
 function getSettingsFileSecondaryLabel(file) {
-  if (isPnrMasterDashboardFile(file)) return "PNRs · Histórico consolidado";
+  if (isPnrMasterDashboardFile(file)) return "Histórico consolidado";
   return getDashboardFileDisplayName(file);
 }
 
@@ -2598,6 +2800,7 @@ function renderAll() {
 function renderDashboardRenderError(error) {
   console.error("Erro ao renderizar dashboard:", error);
   console.error("Stack:", error?.stack);
+  dashboardLastError = error;
   try {
     state.sheet = SHEET_TABS.includes(state.sheet) ? state.sheet : PRE_FATURA_VIEW;
     state.appView = "dashboard";
@@ -2606,14 +2809,7 @@ function renderDashboardRenderError(error) {
     toggleDashboardView(false, false, false);
     if (el.kpiGrid) {
       el.kpiGrid.hidden = false;
-      el.kpiGrid.innerHTML = `
-        <article class="wait-card wait-card--error">
-          <div>
-            <strong>Não foi possível carregar esta seção.</strong>
-            <p>O painel principal continua disponível. Verifique o console para o erro técnico.</p>
-          </div>
-        </article>
-      `;
+      el.kpiGrid.innerHTML = renderDashboardErrorState(getDashboardStateConfig("supabase-error"));
     }
     if (el.insights) el.insights.innerHTML = "";
     if (el.monthlyComparison) el.monthlyComparison.innerHTML = "";
@@ -3208,13 +3404,13 @@ function renderDeviationManagementView() {
           <div class="panel__header">
             <div>
               <h2>Gestão de Desvios · PNRs</h2>
-              <p>Não foi possível carregar esta seção.</p>
+              <p>As demais áreas do painel continuam disponíveis.</p>
             </div>
           </div>
-          <div class="deviation-management-placeholder">
-            <strong>Erro controlado na seção de PNRs</strong>
-            <p>As demais abas do painel continuam disponíveis. Verifique o console para o erro técnico.</p>
-          </div>
+          <article class="panel pnr-status-panel pnr-status-panel--error">
+            <strong>Não foi possível carregar a seção de PNRs.</strong>
+            <span>As demais áreas do painel continuam disponíveis. Verifique o console para detalhes técnicos.</span>
+          </article>
         </article>
       `;
     }
@@ -3253,6 +3449,8 @@ function getPnrRowsCacheKey() {
 }
 
 function getPnrMonthOptions() {
+  if (pnrRemoteState.monthOptions.length) return pnrRemoteState.monthOptions;
+  if (hasPnrRemoteData() && !pnrRows.length) return buildPnrMonthOptionsFromFiles();
   const rowsKey = `${pnrRowsLoadedKey}:${pnrRows.length}`;
   if (derivedDataCache.pnrMonthOptionsKey === rowsKey) return derivedDataCache.pnrMonthOptions;
   const map = new Map();
@@ -3272,6 +3470,21 @@ function getPnrMonthOptions() {
   derivedDataCache.pnrMonthOptionsKey = rowsKey;
   derivedDataCache.pnrMonthOptions = options;
   return options;
+}
+
+function buildPnrMonthOptionsFromFiles(records = dashboardFileRecords) {
+  const map = new Map();
+  getPnrFilesForView(records).forEach((record) => {
+    const period = getFileRecordPeriod(record);
+    if (!period?.key || period.key === "all") return;
+    map.set(period.key, {
+      key: period.key,
+      label: record.metadata?.competencia || period.label || period.key,
+      year: Number(String(period.key).slice(0, 4) || 0),
+      month: Number(String(period.key).slice(5, 7) || 0),
+    });
+  });
+  return Array.from(map.values()).sort((a, b) => (a.year - b.year) || (a.month - b.month));
 }
 
 function getPnrSelectedMonthKeys() {
@@ -3607,6 +3820,7 @@ function ensurePnrDriverEnrichment() {
 }
 
 function getPnrFilterOptions() {
+  if (hasPnrRemoteData() || pnrRemoteState.monthOptions.length) return pnrRemoteState.filterOptions;
   ensurePnrDriverEnrichment();
   const cacheKey = `${pnrDriverEnrichmentKey}:${pnrRowsLoadedKey}:${pnrRows.length}`;
   if (derivedDataCache.pnrFilterOptionsKey === cacheKey && derivedDataCache.pnrFilterOptions) {
@@ -3837,9 +4051,7 @@ const PNR_TABLE_COLUMNS = [
   { key: "idEnvio", label: "ID de Envio", width: 140, format: "text" },
   { key: "idReclamacao", label: "ID da Reclamação", width: 165, format: "text" },
   { key: "valorCompraNumerico", label: "Valor da Compra", width: 145, format: "currency" },
-  { key: "estacaoOrigem", label: "Estação de Origem", width: 210, format: "text" },
-  { key: "idRota", label: "ID da Rota", width: 125, format: "text" },
-  { key: "idMotorista", label: "ID do Motorista", width: 150, format: "text" },
+  { key: "estacaoOrigem", label: "Estação de Origem", width: 250, format: "station" },
   { key: "dataEntrega", label: "Data da Entrega", width: 150, format: "date" },
   { key: "dataReclamacao", label: "Data da Reclamação", width: 170, format: "date" },
   { key: "dataEncerramentoCaso", label: "Data de Encerramento", width: 185, format: "date" },
@@ -3852,6 +4064,19 @@ function formatPnrTableCell(row, column) {
   if (column.format === "currency") return escapeHtml(currency.format(Number(value || 0)));
   if (column.format === "currencyText") return escapeHtml(String(value || row?.valorCompraFormatado || currency.format(Number(row?.valorCompraNumerico || 0))));
   if (column.format === "status") return `<span class="badge">${escapeHtml(value || "—")}</span>`;
+  if (column.format === "station") {
+    const details = [
+      row?.tipoBase || row?.tipoOperacional || "",
+      row?.idRota ? `Rota ${row.idRota}` : "",
+      row?.idMotorista ? `Motorista ${row.idMotorista}` : "",
+    ].filter(Boolean);
+    return `
+      <div class="pnr-station-cell">
+        <strong>${escapeHtml(value || "—")}</strong>
+        ${details.length ? `<span>${escapeHtml(details.join(" · "))}</span>` : ""}
+      </div>
+    `;
+  }
   return escapeHtml(value || "—");
 }
 
@@ -3975,18 +4200,21 @@ function renderPnrEvolution(rows) {
 }
 
 function renderPnrTable(rows, allRows) {
-  const totalPages = Math.max(1, Math.ceil(allRows.length / state.pageSize));
+  const totalRows = Array.isArray(allRows) ? allRows.length : Number(allRows || 0);
+  const totalPages = Math.max(1, Math.ceil(totalRows / state.pageSize));
   state.page = Math.min(Math.max(1, state.page), totalPages);
   const tableMinWidth = PNR_TABLE_COLUMNS.reduce((sum, column) => sum + column.width, 0);
+  const isInitialLoading = pnrRemoteState.loadingTable && !rows.length && !totalRows;
   return `
     <article class="panel pnr-table-panel" data-pnr-table-panel>
       <div class="panel__header">
         <div>
           <h3>Tabela detalhada de PNRs</h3>
-          <p>${integer.format(allRows.length)} registros no recorte</p>
+          <p>${isInitialLoading ? "Carregando página atual..." : `${integer.format(totalRows)} registros no recorte`}</p>
         </div>
         ${renderPnrPageSizeControl()}
       </div>
+      ${isInitialLoading ? renderDashboardSkeletonTable(6, 7) : `
       <div class="table-wrap pnr-table-wrap">
         <table style="min-width:${tableMinWidth}px">
           <colgroup>
@@ -4007,7 +4235,7 @@ function renderPnrTable(rows, allRows) {
         </table>
       </div>
       <div class="table-footer">
-        <div>${allRows.length ? `${integer.format((state.page - 1) * state.pageSize + 1)}-${integer.format(Math.min(state.page * state.pageSize, allRows.length))}` : "0-0"} de ${integer.format(allRows.length)}</div>
+        <div>${totalRows ? `${integer.format((state.page - 1) * state.pageSize + 1)}-${integer.format(Math.min(state.page * state.pageSize, totalRows))}` : "0-0"} de ${integer.format(totalRows)}</div>
         <div class="pagination">
           <button type="button" class="secondary-button secondary-button--icon" data-pnr-page="prev"${state.page <= 1 ? " disabled" : ""} aria-label="Página anterior" title="Página anterior">
             <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m15 6-6 6 6 6" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2"></path></svg>
@@ -4018,6 +4246,7 @@ function renderPnrTable(rows, allRows) {
           </button>
         </div>
       </div>
+      `}
     </article>
   `;
 }
@@ -4033,8 +4262,12 @@ function renderPnrTableOnly() {
     return;
   }
   try {
-    const { sortedRows, pagedRows } = getPnrTableViewModel();
-    tablePanel.outerHTML = renderPnrTable(pagedRows, sortedRows);
+    if (hasPnrRemoteData() || pnrRemoteState.loadingTable) {
+      tablePanel.outerHTML = renderPnrTable(pnrRemoteState.rows, pnrRemoteState.total);
+    } else {
+      const { sortedRows, pagedRows } = getPnrTableViewModel();
+      tablePanel.outerHTML = renderPnrTable(pagedRows, sortedRows);
+    }
   } catch (error) {
     console.error("Erro ao atualizar tabela de PNRs:", error);
     console.error("Stack:", error?.stack);
@@ -4052,11 +4285,110 @@ function renderPnrTableOnly() {
   }
 }
 
+function renderPnrRemoteLoadingOnly() {
+  if (state.sheet !== DEVIATION_MANAGEMENT_VIEW || state.activeDesvioCategory !== DEVIATION_CATEGORY_PNRS || state.appView !== "dashboard") return;
+  const tablePanel = el.deviationManagementView?.querySelector("[data-pnr-table-panel]");
+  if (tablePanel && hasPnrRemoteData()) {
+    tablePanel.outerHTML = renderPnrTable(pnrRemoteState.rows, pnrRemoteState.total);
+  }
+}
+
+function renderPnrSkeleton(title = "Carregando", description = "Consultando dados processados.") {
+  return `
+    <div class="dashboard-module-skeleton">
+      <strong>${escapeHtml(title)}</strong>
+      <span>${escapeHtml(description)}</span>
+      ${renderDashboardSkeletonChart(title)}
+    </div>
+  `;
+}
+
+function renderPnrProcessingPanel({ hasFiles, totalRows }) {
+  const meta = pnrRemoteState.cacheMeta || readPnrLightCache();
+  const lastProcessedAt = pnrRemoteState.lastProcessedAt || meta?.lastUpdatedAt || meta?.savedAt || "";
+  const hasData = hasPnrRemoteData() && Number(totalRows || 0) > 0;
+  if (!hasFiles) {
+    return `
+      <article class="panel pnr-status-panel pnr-status-panel--empty">
+        <strong>Base de PNRs ainda não importada.</strong>
+        <span>Envie um arquivo XLSX ou CSV para alimentar este módulo.</span>
+      </article>
+    `;
+  }
+  if (pnrRemoteState.error) {
+    if (hasData) {
+      return `
+        <article class="panel pnr-status-panel pnr-status-panel--error">
+          <div>
+            <strong>Não foi possível atualizar os dados agora.</strong>
+            <span>Exibindo última versão carregada. As demais áreas do painel continuam disponíveis.</span>
+          </div>
+          <button type="button" class="secondary-button" data-pnr-reprocess>Atualizar</button>
+        </article>
+      `;
+    }
+    return `
+      <article class="panel pnr-status-panel pnr-status-panel--error">
+        <strong>Não foi possível carregar a seção de PNRs.</strong>
+        <span>As demais áreas do painel continuam disponíveis. Verifique o console para detalhes técnicos.</span>
+        <button type="button" class="secondary-button" data-pnr-reprocess>Atualizar</button>
+      </article>
+    `;
+  }
+  if (pnrRemoteState.loadingSummary || pnrRemoteState.loadingCharts || pnrRemoteState.loadingTable) {
+    if (hasData) {
+      return renderDashboardUpdatingBadge(DASHBOARD_MODULE_KEYS.desviosPnr);
+    }
+    const countText = Number(totalRows || 0) > 0
+      ? `${integer.format(Math.min(Number(totalRows || 0), Number(state.pageSize || 15)))} de ${integer.format(Number(totalRows || 0))} registros analisados`
+      : "Consultando registros processados";
+    return `
+      <article class="panel pnr-status-panel pnr-status-panel--processing dashboard-state-card dashboard-state-card--loading" aria-live="polite">
+        <div>
+          <strong>Carregando dados...</strong>
+          <span>Estamos consultando a base do painel. ${escapeHtml(countText)}.</span>
+        </div>
+        <div class="pnr-progress" aria-hidden="true"><span></span></div>
+      </article>
+    `;
+  }
+  if (hasData) {
+    return `
+      <article class="panel pnr-status-panel pnr-status-panel--ready">
+        <div>
+          <strong>Dados carregados do Supabase</strong>
+          <span>${escapeHtml(lastProcessedAt ? `Última atualização: ${formatDateTime(lastProcessedAt)}` : "Atualizando dados processados pelo banco.")}</span>
+        </div>
+        <button type="button" class="secondary-button" data-pnr-reprocess>Atualizar</button>
+      </article>
+    `;
+  }
+  return "";
+}
+
 function renderPnrPage() {
-  const { filteredRows, sortedRows, pagedRows } = getPnrTableViewModel();
+  const hasRemoteFiles = getPnrRemoteFileIds().length > 0;
+  if (hasRemoteFiles && !hasPnrRemoteData() && !pnrRemoteState.loadingTable && !pnrRemoteState.error) {
+    applyPnrLightCacheIfAvailable(buildPnrCacheSignature());
+  }
+  const shouldUseRemote = hasRemoteFiles && (hasPnrRemoteData() || pnrRemoteState.loadingSummary || pnrRemoteState.loadingCharts || pnrRemoteState.loadingTable || !pnrRows.length);
+  if (hasRemoteFiles && !pnrRemoteState.source && !pnrRemoteState.loadingTable && !pnrRemoteState.error) {
+    schedulePnrRemoteRefresh({ immediate: true });
+  }
+  const localTableView = shouldUseRemote ? { filteredRows: [], sortedRows: [], pagedRows: [] } : getPnrTableViewModel();
+  const { filteredRows, sortedRows, pagedRows } = localTableView;
   const monthOptions = getPnrMonthOptions();
   const filterOptions = getPnrFilterOptions();
-  const analysis = getPnrAnalysisData(filteredRows);
+  const analysis = shouldUseRemote && pnrRemoteState.summary
+    ? {
+      summary: pnrRemoteState.summary,
+      statusRows: pnrRemoteState.statusRows,
+      operationRows: pnrRemoteState.operationRows,
+      stationRows: pnrRemoteState.stationRows,
+      driverRows: pnrRemoteState.driverRows,
+      evolutionRows: pnrRemoteState.evolutionRows,
+    }
+    : getPnrAnalysisData(filteredRows);
   const { summary, statusRows, operationRows, stationRows, driverRows, evolutionRows } = analysis;
   const cards = [
     { label: "Total de PNRs", value: integer.format(summary.count), tone: "kpi-card--volume", delta: "Registros no recorte" },
@@ -4067,11 +4399,25 @@ function renderPnrPage() {
     { label: "Status em aberto/análise", value: integer.format(summary.aberto), tone: "kpi-card--neutral", delta: "Status restantes no recorte" },
   ];
   const monthSelectOptions = monthOptions.map((option) => ({ value: option.key, label: option.label }));
-  const pnrLoadState = isLoadingPnrRows && !pnrRows.length
-    ? emptyState("Carregando PNRs", "Os registros processados estão sendo carregados.")
-    : !pnrRows.length
-      ? emptyState("Nenhum arquivo de PNR carregado", "Envie uma planilha de PNR em Configurações gerais para preencher esta visão.")
-      : "";
+  const totalLoadedRows = shouldUseRemote ? Number(pnrRemoteState.total || 0) : pnrRows.length;
+  const pnrLoadState = renderPnrProcessingPanel({ hasFiles: hasRemoteFiles || Boolean(pnrRows.length), totalRows: totalLoadedRows });
+  const noPnrBase = !hasRemoteFiles && !pnrRows.length && !pnrRemoteState.loadingTable && !pnrRemoteState.loadingSummary && !pnrRemoteState.loadingCharts && !pnrRemoteState.error;
+  if (noPnrBase) {
+    return `
+      <section class="pnr-page">
+        <article class="panel deviation-management-panel pnr-hero-panel">
+          <div class="panel__header">
+            <div>
+              <h2>Gestão de Desvios · PNRs</h2>
+              <p>Análise de casos PNR separada das bases de Pré-Fatura e Gestão de Pacotes.</p>
+            </div>
+            <span class="panel__meta">Sem base importada</span>
+          </div>
+        </article>
+        ${renderDashboardEmptyState(getModuleEmptyStateConfig(DASHBOARD_MODULE_KEYS.desviosPnr))}
+      </section>
+    `;
+  }
   return `
     <section class="pnr-page">
       <article class="panel deviation-management-panel pnr-hero-panel">
@@ -4080,7 +4426,7 @@ function renderPnrPage() {
             <h2>Gestão de Desvios · PNRs</h2>
             <p>Análise de casos PNR separada das bases de Pré-Fatura e Gestão de Pacotes.</p>
           </div>
-          <span class="panel__meta">${integer.format(pnrRows.length)} registros carregados</span>
+          <span class="panel__meta">${integer.format(totalLoadedRows)} registros carregados</span>
         </div>
         <div class="pnr-filter-bar">
           <div class="pnr-filter-row pnr-filter-row--primary">
@@ -4102,6 +4448,8 @@ function renderPnrPage() {
             ${renderPnrFilterSelect("statusMotorista", "Status do motorista", state.pnrStatusMotorista, filterOptions.statusMotoristas)}
             ${renderPnrFilterSelect("fonteCruzamento", "Fonte do cruzamento", state.pnrFonteCruzamento, filterOptions.fontesCruzamento)}
             ${renderPnrFilterSelect("estacao", "Estação de origem", state.pnrEstacao, filterOptions.estacoes)}
+            ${renderPnrFilterSelect("motorista", "Motorista", state.pnrMotorista, filterOptions.motoristas)}
+            ${renderPnrFilterSelect("rota", "Rota", state.pnrRota, filterOptions.rotas)}
             <button type="button" class="secondary-button" data-pnr-clear>Limpar</button>
           </div>
         </div>
@@ -4110,33 +4458,33 @@ function renderPnrPage() {
       ${pnrLoadState}
 
       <section class="kpi-grid__group kpi-grid__group--main pnr-kpi-grid" aria-label="Cards principais de PNRs">
-        ${cards.map((card, index) => renderKpiCard(card, index)).join("")}
+        ${pnrRemoteState.loadingSummary && !summary.count ? Array.from({ length: 6 }).map((_, index) => renderDashboardSkeletonCard(index)).join("") : cards.map((card, index) => renderKpiCard(card, index)).join("")}
       </section>
 
       <section class="pnr-analysis-grid">
         <article class="panel pnr-chart-panel">
           <div class="panel__header"><div><h3>Distribuição por status</h3><p>Quantidade e percentual no recorte</p></div></div>
-          ${renderPnrBarList(statusRows)}
+          ${pnrRemoteState.loadingCharts && !statusRows.length ? renderPnrSkeleton("Carregando gráfico", "Buscando agregados por status.") : renderPnrBarList(statusRows)}
         </article>
         <article class="panel pnr-chart-panel">
           <div class="panel__header"><div><h3>PNRs por tipo de base</h3><p>SVC, XPT e bases não identificadas pela origem</p></div></div>
-          ${renderPnrBarList(operationRows)}
+          ${pnrRemoteState.loadingCharts && !operationRows.length ? renderPnrSkeleton("Carregando gráfico", "Buscando agregados por tipo de base.") : renderPnrBarList(operationRows)}
         </article>
         <article class="panel pnr-chart-panel">
           <div class="panel__header"><div><h3>Estações com maior volume</h3><p>Ranking por estação de origem</p></div></div>
-          ${renderPnrRankingList(stationRows, "Sem estações")}
+          ${pnrRemoteState.loadingCharts && !stationRows.length ? renderPnrSkeleton("Carregando ranking", "Buscando top 10 estações.") : renderPnrRankingList(stationRows, "Sem estações")}
         </article>
         <article class="panel pnr-chart-panel">
           <div class="panel__header"><div><h3>Motoristas com maior volume de PNR</h3><p>Nome localizado por cruzamento ou ID do motorista</p></div></div>
-          ${renderPnrRankingList(driverRows, "Sem motoristas")}
+          ${pnrRemoteState.loadingCharts && !driverRows.length ? renderPnrSkeleton("Carregando ranking", "Buscando top 10 motoristas.") : renderPnrRankingList(driverRows, "Sem motoristas")}
         </article>
         <article class="panel pnr-chart-panel pnr-chart-panel--wide">
           <div class="panel__header"><div><h3>Evolução temporal</h3><p>Quantidade e valor total por mês</p></div></div>
-          ${renderPnrEvolution(evolutionRows)}
+          ${pnrRemoteState.loadingCharts && !evolutionRows.length ? renderPnrSkeleton("Carregando evolução", "Buscando meses agregados.") : renderPnrEvolution(evolutionRows)}
         </article>
       </section>
 
-      ${renderPnrTable(pagedRows, sortedRows)}
+      ${renderPnrTable(shouldUseRemote ? pnrRemoteState.rows : pagedRows, shouldUseRemote ? pnrRemoteState.total : sortedRows)}
     </section>
   `;
 }
@@ -4145,23 +4493,298 @@ function hasLoadedDashboardData() {
   return activeDataset && activeDataset.id !== EMPTY_DATASET_ID && Array.isArray(allRows) && allRows.length > 0;
 }
 
+function getDashboardModuleKeyForSheet(sheet = state.sheet) {
+  if (sheet === PACKAGE_MANAGEMENT_VIEW) return DASHBOARD_MODULE_KEYS.pacotes;
+  if (sheet === MONTHLY_BASE_VIEW) return DASHBOARD_MODULE_KEYS.evolucao;
+  if (sheet === DEVIATION_MANAGEMENT_VIEW) return DASHBOARD_MODULE_KEYS.desviosPnr;
+  return DASHBOARD_MODULE_KEYS.preFatura;
+}
+
+function logDashboardState(prefix, moduleKey, message, details) {
+  const label = moduleKey ? `${prefix}[${moduleKey}]` : prefix;
+  if (details === undefined) console.info(label, message);
+  else console.info(label, message, details);
+}
+
+function getModuleEmptyStateConfig(moduleKey = getDashboardModuleKeyForSheet()) {
+  const copy = DASHBOARD_EMPTY_STATE_COPY[moduleKey] || DASHBOARD_EMPTY_STATE_COPY[DASHBOARD_MODULE_KEYS.preFatura];
+  return {
+    ...getDashboardStateConfig("no-active-file"),
+    ...copy,
+    moduleKey,
+    action: moduleKey === DASHBOARD_MODULE_KEYS.evolucao ? "" : "upload",
+    actionLabel: moduleKey === DASHBOARD_MODULE_KEYS.evolucao ? "" : "Importar arquivo",
+  };
+}
+
+function getDashboardHasModuleData(moduleKey = getDashboardModuleKeyForSheet()) {
+  if (moduleKey === DASHBOARD_MODULE_KEYS.pacotes) return packageManagementRows.length > 0;
+  if (moduleKey === DASHBOARD_MODULE_KEYS.evolucao) return getEvolutionSourceDatasets().length > 0;
+  if (moduleKey === DASHBOARD_MODULE_KEYS.desviosPnr) return getPnrRemoteFileIds().length > 0 || pnrRows.length > 0 || hasPnrRemoteData();
+  return hasLoadedDashboardData();
+}
+
+function setDashboardImportState(patch = {}, options = {}) {
+  Object.assign(dashboardImportState, {
+    ...patch,
+    active: patch.active ?? true,
+    updatedAt: new Date().toISOString(),
+  });
+  const moduleKey = dashboardImportState.moduleKey || getDashboardModuleKeyForSheet();
+  logDashboardState("[Dashboard Import]", moduleKey, dashboardImportState.stage || "atualização de importação", {
+    fileName: dashboardImportState.fileName,
+    progress: dashboardImportState.progress,
+    sheet: dashboardImportState.sheetName,
+    rowsRead: dashboardImportState.rowsRead,
+    rowsImported: dashboardImportState.rowsImported,
+  });
+  if (options.render !== false && dashboardVisualState === "processing-file" && state.appView === "dashboard") {
+    renderAll();
+  }
+}
+
+function finishDashboardImportState(summary = {}) {
+  setDashboardImportState({
+    ...summary,
+    active: false,
+    stage: "Importação concluída.",
+    progress: 100,
+    status: "processed",
+  }, { render: false });
+}
+
+function showDashboardImportSummary(metadata = {}, dataset = {}, options = {}) {
+  const moduleKey = getDashboardModuleKeyForFileCategory(dataset.fileCategory || metadata.file_category || metadata.semantic_file_type || PRE_FATURA_FILE_CATEGORY);
+  const moduleLabel = DASHBOARD_MODULE_LABELS[moduleKey] || "Painel";
+  const fileName = metadata.original_name || metadata.file_name || dataset.fileName || dashboardImportState.fileName || "arquivo";
+  const sheetCount = Number(metadata.sheet_count || dataset.workbookSheetCount || dashboardImportState.sheetCount || 1);
+  const importedSheets = Array.isArray(metadata.imported_sheets) ? metadata.imported_sheets : dashboardImportState.importedSheets || [];
+  const ignoredSheets = Array.isArray(metadata.ignored_sheets) ? metadata.ignored_sheets : dashboardImportState.ignoredSheets || [];
+  const rowsRead = Number(metadata.total_rows_read || dashboardImportState.rowsRead || dataset.rows?.length || 0);
+  const rowsImported = Number(metadata.total_rows_imported || options.rowsImported || dashboardImportState.rowsImported || dataset.rows?.length || 0);
+  const duplicatesIgnored = Number(metadata.duplicate_rows_skipped || options.duplicatesIgnored || dashboardImportState.duplicatesIgnored || 0);
+  const rawStorageMessage = KEEP_RAW_UPLOADS_IN_STORAGE
+    ? "Dados salvos na base do painel."
+    : "Arquivo usado apenas para extração. Dados salvos no banco.";
+  const message = [
+    "Importação concluída.",
+    `Arquivo: ${fileName}.`,
+    `Módulo: ${moduleLabel}.`,
+    `Abas lidas: ${integer.format(sheetCount)}.`,
+    `Abas importadas: ${integer.format(importedSheets.length || (sheetCount ? 1 : 0))}.`,
+    `Abas ignoradas: ${integer.format(ignoredSheets.length)}.`,
+    `Linhas lidas: ${integer.format(rowsRead)}.`,
+    `Registros importados: ${integer.format(rowsImported)}.`,
+    `Duplicados ignorados: ${integer.format(duplicatesIgnored)}.`,
+    "Status: processado.",
+    rawStorageMessage,
+  ].join(" ");
+  console.info("[Dashboard Import] Resumo final", {
+    fileName,
+    moduleKey,
+    sheetCount,
+    importedSheets,
+    ignoredSheets,
+    rowsRead,
+    rowsImported,
+    duplicatesIgnored,
+    rawFileDeleted: !KEEP_RAW_UPLOADS_IN_STORAGE,
+  });
+  showToast(message, "good", sheetCount > 1 ? 11000 : 8200);
+}
+
+function resetDashboardImportState() {
+  Object.assign(dashboardImportState, {
+    active: false,
+    moduleKey: "",
+    fileName: "",
+    fileType: "",
+    stage: "",
+    progress: 0,
+    sheetName: "",
+    sheetIndex: 0,
+    sheetCount: 0,
+    rowsRead: 0,
+    rowsImported: 0,
+    duplicatesIgnored: 0,
+    ignoredSheets: [],
+    importedSheets: [],
+    status: "",
+    updatedAt: "",
+  });
+}
+
+function renderDashboardUpdatingBadge(moduleKey = getDashboardModuleKeyForSheet(), text = "Atualizando dados em segundo plano...") {
+  if (!moduleLoadingState[moduleKey]) return "";
+  return `
+    <div class="dashboard-updating-badge" role="status" aria-live="polite">
+      <span class="dashboard-updating-badge__dot" aria-hidden="true"></span>
+      <span>${escapeHtml(text)}</span>
+    </div>
+  `;
+}
+
+function renderDashboardSkeletonCard(index = 0) {
+  return `
+    <article class="dashboard-skeleton dashboard-skeleton-card" style="--reveal-index:${index}" aria-hidden="true">
+      <span class="dashboard-skeleton__line dashboard-skeleton__line--short"></span>
+      <span class="dashboard-skeleton__value"></span>
+      <span class="dashboard-skeleton__line"></span>
+    </article>
+  `;
+}
+
+function renderDashboardSkeletonChart(title = "Carregando gráfico") {
+  return `
+    <div class="dashboard-skeleton dashboard-skeleton-chart" aria-label="${escapeAttribute(title)}">
+      <span class="dashboard-skeleton__line dashboard-skeleton__line--short"></span>
+      <div class="dashboard-skeleton-chart__bars" aria-hidden="true">
+        <span style="height:62%"></span>
+        <span style="height:38%"></span>
+        <span style="height:76%"></span>
+        <span style="height:48%"></span>
+        <span style="height:58%"></span>
+      </div>
+    </div>
+  `;
+}
+
+function renderDashboardSkeletonTable(rows = 6, columns = 6) {
+  return `
+    <div class="dashboard-skeleton dashboard-skeleton-table" aria-label="Carregando tabela">
+      ${Array.from({ length: rows }).map(() => `
+        <div class="dashboard-skeleton-table__row" style="--columns:${columns}">
+          ${Array.from({ length: columns }).map(() => "<span></span>").join("")}
+        </div>
+      `).join("")}
+    </div>
+  `;
+}
+
+function renderDashboardLoadingState(status) {
+  return `
+    <article class="dashboard-state-card dashboard-state-card--loading" aria-live="polite">
+      <div class="dashboard-state-card__header">
+        <span class="dashboard-state-card__icon" aria-hidden="true">${renderDashboardStateIcon("loading")}</span>
+        <div>
+          <strong>${escapeHtml(status.title || "Carregando dados...")}</strong>
+          <p>${escapeHtml(status.description || "Estamos consultando a base do painel. Isso pode levar alguns instantes.")}</p>
+        </div>
+      </div>
+      <div class="dashboard-state-progress" aria-hidden="true"><span></span></div>
+      <section class="dashboard-state-skeleton-grid" aria-label="Prévia do carregamento">
+        ${Array.from({ length: 4 }).map((_, index) => renderDashboardSkeletonCard(index)).join("")}
+      </section>
+      ${renderDashboardSkeletonChart("Carregando área de gráfico")}
+      ${renderDashboardSkeletonTable(5, 5)}
+    </article>
+  `;
+}
+
+function renderDashboardImportingState(status) {
+  const progress = Math.max(4, Math.min(100, Number(dashboardImportState.progress || 12)));
+  const moduleLabel = DASHBOARD_MODULE_LABELS[dashboardImportState.moduleKey] || DASHBOARD_MODULE_LABELS[getDashboardModuleKeyForSheet()] || "Painel";
+  const ignoredCount = Array.isArray(dashboardImportState.ignoredSheets) ? dashboardImportState.ignoredSheets.length : 0;
+  const importedCount = Array.isArray(dashboardImportState.importedSheets) ? dashboardImportState.importedSheets.length : 0;
+  return `
+    <article class="dashboard-state-card dashboard-state-card--importing" aria-live="polite">
+      <div class="dashboard-state-card__header">
+        <span class="dashboard-state-card__icon" aria-hidden="true">${renderDashboardStateIcon("import")}</span>
+        <div>
+          <strong>${escapeHtml(status.title || "Importando arquivo...")}</strong>
+          <p>${escapeHtml(dashboardImportState.stage || status.description || "Preparando arquivo...")}</p>
+        </div>
+      </div>
+      <div class="dashboard-state-progress" aria-hidden="true"><span style="width:${progress}%"></span></div>
+      <div class="dashboard-import-details">
+        <span><strong>Arquivo</strong>${escapeHtml(dashboardImportState.fileName || "Arquivo selecionado")}</span>
+        <span><strong>Módulo</strong>${escapeHtml(moduleLabel)}</span>
+        <span><strong>Formato</strong>${escapeHtml((dashboardImportState.fileType || "").toUpperCase() || "XLSX/CSV")}</span>
+        <span><strong>Abas</strong>${integer.format(Number(dashboardImportState.sheetCount || 0))}${dashboardImportState.sheetName ? ` · ${escapeHtml(dashboardImportState.sheetName)}` : ""}</span>
+        <span><strong>Linhas lidas</strong>${integer.format(Number(dashboardImportState.rowsRead || 0))}</span>
+        <span><strong>Importados</strong>${integer.format(Number(dashboardImportState.rowsImported || 0))}</span>
+        <span><strong>Duplicados ignorados</strong>${integer.format(Number(dashboardImportState.duplicatesIgnored || 0))}</span>
+        <span><strong>Abas importadas</strong>${integer.format(importedCount)}</span>
+        <span><strong>Abas ignoradas</strong>${integer.format(ignoredCount)}</span>
+      </div>
+      <p class="dashboard-state-card__note">Arquivo usado apenas para extração. Dados salvos no banco.</p>
+    </article>
+  `;
+}
+
+function renderDashboardEmptyState(status) {
+  return `
+    <article class="dashboard-state-card dashboard-state-card--empty">
+      <div class="dashboard-state-card__header">
+        <span class="dashboard-state-card__icon" aria-hidden="true">${renderDashboardStateIcon("empty")}</span>
+        <div>
+          <strong>${escapeHtml(status.title)}</strong>
+          <p>${escapeHtml(status.description)}</p>
+        </div>
+      </div>
+      ${status.action ? `<button class="secondary-button" type="button" data-empty-action="${escapeAttribute(status.action)}">${escapeHtml(status.actionLabel || "Importar arquivo")}</button>` : ""}
+    </article>
+  `;
+}
+
+function renderDashboardErrorState(status) {
+  const details = dashboardLastError ? `${dashboardLastError.message || dashboardLastError}` : "";
+  return `
+    <article class="dashboard-state-card dashboard-state-card--error">
+      <div class="dashboard-state-card__header">
+        <span class="dashboard-state-card__icon" aria-hidden="true">${renderDashboardStateIcon("error")}</span>
+        <div>
+          <strong>${escapeHtml(status.title || "Não foi possível carregar esta seção.")}</strong>
+          <p>${escapeHtml(status.description || "As demais áreas do painel continuam disponíveis. Tente novamente ou verifique os dados importados.")}</p>
+        </div>
+      </div>
+      <div class="dashboard-state-card__actions">
+        <button class="secondary-button" type="button" data-empty-action="retry">Tentar novamente</button>
+        ${details ? `<details class="dashboard-error-details"><summary>Ver detalhes técnicos</summary><pre>${escapeHtml(details)}</pre></details>` : ""}
+      </div>
+    </article>
+  `;
+}
+
+function renderDashboardStateIcon(kind) {
+  if (kind === "error") {
+    return `<svg viewBox="0 0 24 24"><path d="M12 8v5m0 4h.01M10.3 4.6 2.7 18a2 2 0 0 0 1.7 3h15.2a2 2 0 0 0 1.7-3L13.7 4.6a2 2 0 0 0-3.4 0Z" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8"></path></svg>`;
+  }
+  if (kind === "import") {
+    return `<svg viewBox="0 0 24 24"><path d="M12 3v12m0 0 4-4m-4 4-4-4M5 19h14" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8"></path></svg>`;
+  }
+  if (kind === "loading") {
+    return `<svg viewBox="0 0 24 24"><path d="M21 12a9 9 0 1 1-2.64-6.36" fill="none" stroke="currentColor" stroke-linecap="round" stroke-width="1.8"></path></svg>`;
+  }
+  return `<svg viewBox="0 0 24 24"><path d="M4 7h16M4 12h10M4 17h7" fill="none" stroke="currentColor" stroke-linecap="round" stroke-width="1.8"></path></svg>`;
+}
+
 function getDashboardState(filteredRows = null) {
-  if (dashboardVisualState) return getDashboardStateConfig(dashboardVisualState);
+  const moduleKey = getDashboardModuleKeyForSheet();
+  if (dashboardVisualState) {
+    const config = { ...getDashboardStateConfig(dashboardVisualState), moduleKey };
+    logDashboardState("[Dashboard State]", moduleKey, config.state, { loading: Boolean(config.loading) });
+    return config;
+  }
   if (!currentUser) return getDashboardStateConfig("not-authenticated");
-  const hasData = state.sheet === PACKAGE_MANAGEMENT_VIEW ? packageManagementRows.length > 0 : hasLoadedDashboardData();
+  const hasData = getDashboardHasModuleData(moduleKey);
   if (!hasData) {
-    const config = getDashboardStateConfig("no-active-file");
+    const config = getModuleEmptyStateConfig(moduleKey);
+    logDashboardState("[Dashboard Empty]", moduleKey, "base vazia confirmada");
     if (!canEdit()) {
       return {
         ...config,
-        description: "Nenhum arquivo foi encontrado. Solicite a um administrador o envio de um arquivo.",
+        description: "Nenhum arquivo foi encontrado. Solicite a um administrador o envio de um arquivo XLSX ou CSV.",
         action: "",
         actionLabel: "",
       };
     }
     return config;
   }
-  if (Array.isArray(filteredRows) && !filteredRows.length) return getDashboardStateConfig("no-filter-results");
+  if (Array.isArray(filteredRows) && !filteredRows.length) {
+    logDashboardState("[Dashboard Empty]", moduleKey, "sem resultados para filtros atuais");
+    return getDashboardStateConfig("no-filter-results");
+  }
   return null;
 }
 
@@ -4171,6 +4794,14 @@ function getDashboardStateConfig(type) {
 
 function setDashboardVisualState(type, options = {}) {
   dashboardVisualState = type || "";
+  if (options.error) dashboardLastError = options.error;
+  if (!type && options.clearError !== false) dashboardLastError = null;
+  logDashboardState(
+    type && DASHBOARD_STATE_CONFIG[type]?.error ? "[Dashboard Error]" : type ? "[Dashboard Loading]" : "[Dashboard State]",
+    getDashboardModuleKeyForSheet(),
+    type || "dados disponíveis",
+    { render: options.render !== false },
+  );
   if (options.render === false) {
     updateDatasetMeta();
     return;
@@ -4191,24 +4822,14 @@ function renderDashboardState(status) {
   });
   if (el.kpiGrid) {
     el.kpiGrid.hidden = false;
-    el.kpiGrid.innerHTML = `
-      <article class="dashboard-wait-card dashboard-wait-card--${escapeAttribute(emptyStatus.state)}">
-        <div class="dashboard-wait-card__visual" aria-hidden="true">
-          <span></span>
-          <span></span>
-          <span></span>
-        </div>
-        <div class="dashboard-wait-card__copy">
-          <strong>${escapeHtml(emptyStatus.title)}</strong>
-          <p>${escapeHtml(emptyStatus.description)}</p>
-          ${
-            emptyStatus.action
-              ? `<button class="secondary-button" type="button" data-empty-action="${escapeAttribute(emptyStatus.action)}">${escapeHtml(emptyStatus.actionLabel || "Continuar")}</button>`
-                : ""
-          }
-        </div>
-      </article>
-    `;
+    const html = emptyStatus.importing
+      ? renderDashboardImportingState(emptyStatus)
+      : emptyStatus.loading
+        ? renderDashboardLoadingState(emptyStatus)
+        : emptyStatus.error
+          ? renderDashboardErrorState(emptyStatus)
+          : renderDashboardEmptyState(emptyStatus);
+    el.kpiGrid.innerHTML = html;
   }
 }
 
@@ -4254,7 +4875,7 @@ async function retryDashboardLoad() {
     await loadCurrentSession({ showSessionWarning: true });
   } catch (error) {
     console.error("Erro ao tentar recarregar dashboard:", error);
-    setDashboardVisualState("supabase-error");
+    setDashboardVisualState("supabase-error", { error });
   }
 }
 
@@ -4871,6 +5492,7 @@ function renderKpis(summary) {
   `;
 
   el.kpiGrid.innerHTML = `
+    ${renderDashboardUpdatingBadge(DASHBOARD_MODULE_KEYS.preFatura)}
     <section class="kpi-grid__group kpi-grid__group--main" aria-label="Cards principais da Pré-Fatura">
       ${mainCards.map((card, index) => renderCard(card, index)).join("")}
     </section>
@@ -5104,6 +5726,7 @@ function renderPackageManagementView(pagedRows, allPackageRows) {
   const prefaturaRows = filterPrefaturaRowsByTypes(allRows, state.packageTipo);
   const cards = buildPackageManagementKpiCards(allPackageRows, prefaturaRows);
   el.kpiGrid.innerHTML = `
+    ${renderDashboardUpdatingBadge(DASHBOARD_MODULE_KEYS.pacotes)}
     <section class="kpi-grid__group kpi-grid__group--package" aria-label="Cards de Gestão de Pacotes">
       ${cards.map((card, index) => renderKpiCard(card, index)).join("")}
     </section>
@@ -5829,6 +6452,7 @@ function renderMonthlyBaseEvolution() {
         <span class="panel__meta">${integer.format(datasets.length)} competências</span>
       </div>
     </div>
+    ${renderDashboardUpdatingBadge(DASHBOARD_MODULE_KEYS.evolucao)}
     <div class="monthly-tower-grid">
       ${sheets.map((sheet, index) => renderSheetEvolutionCard(sheet, datasets, index)).join("")}
     </div>
@@ -9986,20 +10610,39 @@ function isPnrSummaryRow(rowObject) {
 function normalizePnrWorkbook(workbook, fileName = "") {
   const records = [];
   let skipped = 0;
+  const importedSheets = [];
+  const ignoredSheets = [];
+  let totalRowsRead = 0;
   const fileNameLooksMaster = isPnrMasterFileName(fileName);
   let detectedMasterFile = fileNameLooksMaster;
   const filePeriod = getPnrPeriodFromBillingPeriod(fileName);
   workbook.SheetNames.forEach((sheetName) => {
     const sheet = workbook.Sheets[sheetName];
     const matrix = XLSX.utils.sheet_to_json(sheet, { header: 1, raw: false, defval: null });
+    if (!matrix.length) {
+      ignoredSheets.push({ sheetName, reason: "Aba vazia", rowsRead: 0, importedRows: 0, ignoredRows: 0 });
+      return;
+    }
     const headerIndex = matrix.findIndex((row) => (row || []).map(normalizePnrHeader).includes("ID DO CASO"));
-    if (headerIndex < 0) return;
+    if (headerIndex < 0) {
+      ignoredSheets.push({ sheetName, reason: "Cabeçalho PNR não encontrado", rowsRead: Math.max(matrix.length - 1, 0), importedRows: 0, ignoredRows: Math.max(matrix.length - 1, 0) });
+      return;
+    }
     const rawHeaders = matrix[headerIndex] || [];
     const sheetHasCalculatedColumns = hasPnrCalculatedHeaders(rawHeaders);
     const sheetIsMaster = fileNameLooksMaster || sheetHasCalculatedColumns;
-    validatePnrSourceHeaders(rawHeaders, { isMaster: sheetIsMaster });
+    try {
+      validatePnrSourceHeaders(rawHeaders, { isMaster: sheetIsMaster });
+    } catch (error) {
+      ignoredSheets.push({ sheetName, reason: error.message || "Cabeçalho PNR inválido", rowsRead: Math.max(matrix.length - headerIndex - 1, 0), importedRows: 0, ignoredRows: Math.max(matrix.length - headerIndex - 1, 0) });
+      return;
+    }
     if (sheetIsMaster) detectedMasterFile = true;
     const headers = rawHeaders.map(normalizePnrHeader);
+    const sheetStartCount = records.length;
+    let sheetSkipped = 0;
+    const rowsRead = Math.max(matrix.length - headerIndex - 1, 0);
+    totalRowsRead += rowsRead;
     matrix.slice(headerIndex + 1).forEach((row) => {
       if (!row || row.every((cell) => cell === null || cell === "")) return;
       const rowObject = {};
@@ -10008,6 +10651,7 @@ function normalizePnrWorkbook(workbook, fileName = "") {
       });
       if (isPnrSummaryRow(rowObject)) {
         skipped += 1;
+        sheetSkipped += 1;
         return;
       }
       const dataCaso = getPnrCell(rowObject, "DATA DO CASO");
@@ -10060,10 +10704,18 @@ function normalizePnrWorkbook(workbook, fileName = "") {
       });
       if (!normalized.idCaso && !normalized.idEnvio && !normalized.idReclamacao) {
         skipped += 1;
+        sheetSkipped += 1;
         return;
       }
+      normalized.sheetName = sheetName;
       records.push(normalized);
     });
+    const importedRows = records.length - sheetStartCount;
+    if (importedRows) {
+      importedSheets.push({ sheetName, rowsRead, importedRows, ignoredRows: sheetSkipped });
+    } else {
+      ignoredSheets.push({ sheetName, reason: "Nenhuma linha PNR válida", rowsRead, importedRows: 0, ignoredRows: rowsRead });
+    }
   });
   const deduped = dedupePnrRecords(records);
   const years = deduped.rows
@@ -10073,6 +10725,15 @@ function normalizePnrWorkbook(workbook, fileName = "") {
   normalizePnrWorkbook.lastStats = {
     originalRows: records.length + skipped,
     consolidatedRows: deduped.rows.length,
+    sheetCount: workbook.SheetNames.length,
+    importedSheets,
+    ignoredSheets,
+    importedSheetNames: importedSheets.map((sheet) => sheet.sheetName),
+    ignoredSheetNames: ignoredSheets.map((sheet) => sheet.sheetName),
+    totalRowsRead: totalRowsRead || records.length + skipped,
+    totalRowsImported: deduped.rows.length,
+    sheetsImported: importedSheets.length,
+    sheetsIgnored: ignoredSheets.length,
     totalRowsSkipped: skipped,
     duplicateRowsUpdated: deduped.duplicateRowsUpdated,
     duplicateRowsSkipped: deduped.duplicateRowsSkipped,
@@ -10089,16 +10750,21 @@ function normalizePackageManagementWorkbook(workbook, fileName = "") {
   const records = [];
   const period = identificarPeriodoGestaoPacotes(fileName);
   const ignoredSheets = [];
+  const importedSheets = [];
   let totalRowsSkipped = 0;
+  let totalRowsRead = 0;
   workbook.SheetNames.forEach((sheetName) => {
-    const sheetType = identificarAbaGestao(sheetName);
+    const sheetType = identificarAbaGestao(sheetName) || (workbook.SheetNames.length === 1 ? identificarAbaGestao(fileName) || "ALINHAMENTO" : null);
     if (!sheetType) {
-      ignoredSheets.push(sheetName);
+      ignoredSheets.push({ sheetName, reason: "Aba de Gestão de Pacotes não reconhecida", rowsRead: 0, importedRows: 0, ignoredRows: 0 });
       return;
     }
     const sheet = workbook.Sheets[sheetName];
     const matrix = XLSX.utils.sheet_to_json(sheet, { header: 1, raw: true, defval: null });
-    if (!matrix.length) return;
+    if (!matrix.length) {
+      ignoredSheets.push({ sheetName, reason: "Aba vazia", rowsRead: 0, importedRows: 0, ignoredRows: 0 });
+      return;
+    }
     const headerIndex = findPackageHeaderRow(matrix);
     const headers = (matrix[headerIndex] || []).map((value) => String(value || "").trim());
     const idx = {
@@ -10112,11 +10778,16 @@ function normalizePackageManagementWorkbook(workbook, fileName = "") {
       evidencia2: findHeaderIndex(headers, ["EVIDENCIA 2", "EVIDÊNCIA 2"]),
       canal: findHeaderIndex(headers, ["CANAL"]),
     };
+    const sheetStartCount = records.length;
+    let sheetSkipped = 0;
+    const rowsRead = Math.max(matrix.length - headerIndex - 1, 0);
+    totalRowsRead += rowsRead;
     for (let i = headerIndex + 1; i < matrix.length; i += 1) {
       const row = matrix[i];
       if (!row || row.every((cell) => cell == null || String(cell).trim() === "")) continue;
       if (isPackageTotalRow(row)) {
         totalRowsSkipped += 1;
+        sheetSkipped += 1;
         continue;
       }
       const decision = findDecisionInfo(headers, row, sheetType);
@@ -10165,13 +10836,34 @@ function normalizePackageManagementWorkbook(workbook, fileName = "") {
       };
       if (!isPackageManagementDetailRow(normalized)) {
         totalRowsSkipped += 1;
+        sheetSkipped += 1;
         continue;
       }
       normalized._search = buildPackageManagementSearchText(normalized);
       records.push(normalized);
     }
+    const importedRows = records.length - sheetStartCount;
+    if (importedRows) {
+      importedSheets.push({ sheetName, rowsRead, importedRows, ignoredRows: sheetSkipped });
+    } else {
+      ignoredSheets.push({ sheetName, reason: "Nenhuma linha válida importada", rowsRead, importedRows: 0, ignoredRows: rowsRead });
+    }
   });
-  normalizePackageManagementWorkbook.lastStats = { originalRows: records.length + totalRowsSkipped, consolidatedRows: records.length, duplicatesSkipped: 0, ignoredSheets, totalRowsSkipped };
+  normalizePackageManagementWorkbook.lastStats = {
+    originalRows: records.length + totalRowsSkipped,
+    consolidatedRows: records.length,
+    duplicatesSkipped: 0,
+    sheetCount: workbook.SheetNames.length,
+    importedSheets,
+    ignoredSheets,
+    importedSheetNames: importedSheets.map((sheet) => sheet.sheetName),
+    ignoredSheetNames: ignoredSheets.map((sheet) => sheet.sheetName),
+    totalRowsRead: totalRowsRead || records.length + totalRowsSkipped,
+    totalRowsImported: records.length,
+    sheetsImported: importedSheets.length,
+    sheetsIgnored: ignoredSheets.length,
+    totalRowsSkipped,
+  };
   return records;
 }
 
@@ -10213,11 +10905,18 @@ function buildPackageManagementSearchText(row) {
 
 function normalizeWorkbook(workbook) {
   const records = [];
+  const importedSheets = [];
+  const ignoredSheets = [];
+  let totalRowsRead = 0;
+  let totalRowsSkipped = 0;
 
   workbook.SheetNames.forEach((sheetName) => {
     const sheet = workbook.Sheets[sheetName];
     const matrix = XLSX.utils.sheet_to_json(sheet, { header: 1, raw: true, defval: null });
-    if (!matrix.length) return;
+    if (!matrix.length) {
+      ignoredSheets.push({ sheetName, reason: "Aba vazia", rowsRead: 0, importedRows: 0, ignoredRows: 0 });
+      return;
+    }
 
     const headers = (matrix[0] || []).map((value) => String(value || "").trim());
     const idx = {
@@ -10231,13 +10930,25 @@ function normalizeWorkbook(workbook) {
       valor: findHeaderIndex(headers, ["VALOR"]),
       descricao: findHeaderIndex(headers, ["DESCRIÇÃO"]),
     };
+    if (idx.base < 0 || idx.valor < 0) {
+      ignoredSheets.push({ sheetName, reason: "Cabeçalho de Pré-Fatura não reconhecido", rowsRead: Math.max(matrix.length - 1, 0), importedRows: 0, ignoredRows: Math.max(matrix.length - 1, 0) });
+      return;
+    }
+    const sheetStartCount = records.length;
+    let sheetSkipped = 0;
+    const rowsRead = Math.max(matrix.length - 1, 0);
+    totalRowsRead += rowsRead;
 
     for (let i = 1; i < matrix.length; i += 1) {
       const row = matrix[i];
       if (!row || row.every((cell) => cell == null || String(cell).trim() === "")) continue;
 
       const base = readCell(row, idx.base);
-      if (!base || normalize(base) === "total") continue;
+      if (!base || normalize(base) === "total") {
+        totalRowsSkipped += 1;
+        sheetSkipped += 1;
+        continue;
+      }
 
       const motorista = readCell(row, idx.motorista);
       const placa = readCell(row, idx.placa);
@@ -10277,11 +10988,136 @@ function normalizeWorkbook(workbook) {
       normalized._search = buildRowSearchText(normalized);
       records.push(normalized);
     }
+    const importedRows = records.length - sheetStartCount;
+    if (importedRows) {
+      importedSheets.push({ sheetName, rowsRead, importedRows, ignoredRows: sheetSkipped });
+    } else {
+      ignoredSheets.push({ sheetName, reason: "Nenhuma linha válida importada", rowsRead, importedRows: 0, ignoredRows: rowsRead });
+    }
   });
 
   const consolidated = consolidateLinkedOccurrences(records);
-  normalizeWorkbook.lastStats = consolidateLinkedOccurrences.lastStats;
+  normalizeWorkbook.lastStats = {
+    ...(consolidateLinkedOccurrences.lastStats || {}),
+    sheetCount: workbook.SheetNames.length,
+    importedSheets,
+    ignoredSheets,
+    importedSheetNames: importedSheets.map((sheet) => sheet.sheetName),
+    ignoredSheetNames: ignoredSheets.map((sheet) => sheet.sheetName),
+    totalRowsRead: totalRowsRead || records.length + totalRowsSkipped,
+    totalRowsImported: consolidated.length,
+    sheetsImported: importedSheets.length,
+    sheetsIgnored: ignoredSheets.length,
+    totalRowsSkipped: (consolidateLinkedOccurrences.lastStats?.totalRowsSkipped || 0) + totalRowsSkipped,
+  };
   return consolidated;
+}
+
+function decodeCsvBuffer(buffer) {
+  const bytes = buffer instanceof ArrayBuffer ? new Uint8Array(buffer) : new Uint8Array(buffer || []);
+  try {
+    return new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+  } catch (error) {
+    try {
+      return new TextDecoder("windows-1252").decode(bytes);
+    } catch (fallbackError) {
+      return new TextDecoder("latin1").decode(bytes);
+    }
+  }
+}
+
+function countCsvDelimiter(line, delimiter) {
+  let count = 0;
+  let inQuotes = false;
+  for (let index = 0; index < line.length; index += 1) {
+    const char = line[index];
+    if (char === '"') {
+      if (inQuotes && line[index + 1] === '"') {
+        index += 1;
+      } else {
+        inQuotes = !inQuotes;
+      }
+    } else if (!inQuotes && char === delimiter) {
+      count += 1;
+    }
+  }
+  return count;
+}
+
+function detectCsvDelimiter(text) {
+  const firstLine = String(text || "").split(/\r?\n/).find((line) => line.trim()) || "";
+  const separatorDeclaration = firstLine.match(/^\uFEFF?sep\s*=\s*([,;\t|])/i);
+  if (separatorDeclaration) return separatorDeclaration[1];
+  const sample = String(text || "").split(/\r?\n/).filter((line) => line.trim()).slice(0, 20);
+  const candidates = [",", ";", "\t", "|"];
+  const scores = candidates.map((delimiter) => ({
+    delimiter,
+    score: sample.reduce((total, line) => total + countCsvDelimiter(line, delimiter), 0),
+  }));
+  scores.sort((a, b) => b.score - a.score);
+  return scores[0]?.score > 0 ? scores[0].delimiter : ",";
+}
+
+function parseCsvText(text, delimiter = ",") {
+  const rows = [];
+  let row = [];
+  let value = "";
+  let inQuotes = false;
+  const normalized = String(text || "").replace(/^\uFEFF/, "");
+  let index = 0;
+  if (/^sep\s*=/i.test(normalized.split(/\r?\n/, 1)[0] || "")) {
+    index = (normalized.indexOf("\n") + 1) || 0;
+  }
+  for (; index < normalized.length; index += 1) {
+    const char = normalized[index];
+    if (char === '"') {
+      if (inQuotes && normalized[index + 1] === '"') {
+        value += '"';
+        index += 1;
+      } else {
+        inQuotes = !inQuotes;
+      }
+    } else if (!inQuotes && char === delimiter) {
+      row.push(value);
+      value = "";
+    } else if (!inQuotes && (char === "\n" || char === "\r")) {
+      if (char === "\r" && normalized[index + 1] === "\n") index += 1;
+      row.push(value);
+      if (row.some((cell) => String(cell || "").trim() !== "")) rows.push(row);
+      row = [];
+      value = "";
+    } else {
+      value += char;
+    }
+  }
+  row.push(value);
+  if (row.some((cell) => String(cell || "").trim() !== "")) rows.push(row);
+  return rows;
+}
+
+async function buildWorkbookFromCsvBuffer(buffer, fileName) {
+  const engineReady = await loadWorkbookEngine();
+  if (!engineReady || !window.XLSX?.utils?.aoa_to_sheet) {
+    throw new Error("Não foi possível ler o CSV porque o parser local não carregou.");
+  }
+  const text = decodeCsvBuffer(buffer);
+  const delimiter = detectCsvDelimiter(text);
+  const matrix = parseCsvText(text, delimiter);
+  const sheetName = identificarTipoArquivo(fileName) === PACKAGE_MANAGEMENT_FILE_CATEGORY
+    ? "ALINHAMENTO"
+    : "CSV";
+  const worksheet = XLSX.utils.aoa_to_sheet(matrix);
+  return {
+    workbook: {
+      SheetNames: [sheetName],
+      Sheets: { [sheetName]: worksheet },
+    },
+    stats: {
+      delimiter,
+      rows: Math.max(matrix.length - 1, 0),
+      encoding: "utf-8/windows-1252",
+    },
+  };
 }
 
 async function handleUpload(event) {
@@ -10306,10 +11142,10 @@ async function handleUpload(event) {
     }
 
     if (successCount) {
-      showToast(successCount === 1 ? "Arquivo salvo e carregado com sucesso." : `${successCount} arquivos salvos no Supabase.`, "good", 5200);
+      showToast(successCount === 1 ? "Arquivo processado com sucesso. Os dados foram salvos na base do painel." : `${successCount} arquivos processados e salvos na base do painel.`, "good", 6200);
     }
     if (failures.length) {
-      const firstError = failures[0].error?.message || "Nao foi possivel salvar esse Excel.";
+      const firstError = failures[0].error?.message || "Não foi possível processar esse arquivo.";
       showToast(failures.length === files.length ? firstError : `${failures.length} arquivo(s) falharam. Os demais foram carregados.`, "error", 7200);
     }
   } finally {
@@ -10340,10 +11176,12 @@ function buildUploadPeriodMetadata({ file, previewDataset, referenceYear, refere
   const year = packagePeriod?.ano || firstRow.ano || referenceYear || "";
   const competencia = packagePeriod?.competencia || firstRow.competencia || (monthAbbr && year ? `${monthAbbr}/${String(year).slice(-2)}` : "");
   const quinzena = packagePeriod?.quinzena || firstRow.quinzena || periodLabel;
+  const detectedPeriodType = normalizePeriodMode(getPeriodModeFromLabel(packagePeriod?.quinzena) || periodType);
+  const detectedReferenceMonth = getMonthNumberFromAny(packagePeriod?.mes) || referenceMonth || "";
   return {
     parsed_rows: previewDataset.rows.length,
-    period_label: periodLabel,
-    period_type: periodType,
+    period_label: packagePeriod?.quinzena ? getPeriodModeLabel(detectedPeriodType) : periodLabel,
+    period_type: detectedPeriodType,
     file_category: previewDataset.fileCategory,
     semantic_file_type: previewDataset.fileCategory,
     file_type: previewDataset.fileCategory,
@@ -10351,7 +11189,7 @@ function buildUploadPeriodMetadata({ file, previewDataset, referenceYear, refere
     original_name: file.name,
     display_name: displayName,
     fileDisplayName: previewDataset.fileCategory === DEVIATION_PNR_FILE_CATEGORY && previewStats.isMasterFile === true ? "Base mestre" : displayName,
-    fileCategory: previewDataset.fileCategory === DEVIATION_PNR_FILE_CATEGORY ? "PNRs" : getSettingsFileCategoryLabel(previewDataset.fileCategory),
+    fileCategory: previewDataset.fileCategory === DEVIATION_PNR_FILE_CATEGORY ? "Base Mestre" : getSettingsFileCategoryLabel(previewDataset.fileCategory),
     fileDescription: previewDataset.fileCategory === DEVIATION_PNR_FILE_CATEGORY && previewStats.isMasterFile === true ? "Histórico consolidado" : "",
     isMasterFile: previewDataset.fileCategory === DEVIATION_PNR_FILE_CATEGORY && previewStats.isMasterFile === true,
     is_master_file: previewDataset.fileCategory === DEVIATION_PNR_FILE_CATEGORY && previewStats.isMasterFile === true,
@@ -10359,12 +11197,23 @@ function buildUploadPeriodMetadata({ file, previewDataset, referenceYear, refere
     quinzena,
     mes: monthAbbr || "",
     ano: year || "",
-    reference_month: referenceMonth || "",
+    reference_month: detectedReferenceMonth,
     reference_year: referenceYear || "",
     file_hash: fileHash,
     size_bytes: file.size,
     uploaded_at: new Date().toISOString(),
     sync_source: "manual-upload",
+    source_format: previewDataset.sourceFormat || (isCsvFile(file) ? "csv" : "xlsx"),
+    file_format: previewDataset.sourceFormat || (isCsvFile(file) ? "csv" : "xlsx"),
+    sheet_count: previewStats.sheetCount || previewDataset.workbookSheetCount || 1,
+    imported_sheets: previewStats.importedSheetNames || [],
+    ignored_sheets: previewStats.ignoredSheets || [],
+    total_rows_read: previewStats.totalRowsRead || previewStats.originalRows || previewDataset.rows.length,
+    total_rows_imported: previewStats.totalRowsImported || previewStats.consolidatedRows || previewDataset.rows.length,
+    csv_delimiter: previewDataset.csvStats?.delimiter || "",
+    csv_detected_rows: previewDataset.csvStats?.rows || "",
+    raw_file_deleted: !KEEP_RAW_UPLOADS_IN_STORAGE,
+    storage_mode: KEEP_RAW_UPLOADS_IN_STORAGE ? "raw-file" : "processed-only",
     original_rows: previewStats.originalRows || previewDataset.rows.length,
     consolidated_rows: previewStats.consolidatedRows || previewDataset.rows.length,
     duplicatesSkipped: previewStats.duplicatesSkipped || 0,
@@ -10391,6 +11240,70 @@ async function findDashboardFileByHash(fileCategory, fileHash) {
 
   if (error) throw error;
   return Array.isArray(data) && data.length ? data[0] : null;
+}
+
+function getDashboardModuleKeyForFileCategory(fileCategory) {
+  if (fileCategory === DEVIATION_PNR_FILE_CATEGORY) return DASHBOARD_MODULE_KEYS.desviosPnr;
+  if (fileCategory === PACKAGE_MANAGEMENT_FILE_CATEGORY) return DASHBOARD_MODULE_KEYS.pacotes;
+  return DASHBOARD_MODULE_KEYS.preFatura;
+}
+
+async function findProcessedDashboardFile(moduleKey, fileHash) {
+  if (!window.supabaseClient || !moduleKey || !fileHash) return null;
+  const { data, error } = await window.supabaseClient
+    .from("processed_dashboard_files")
+    .select("*")
+    .eq("module_key", moduleKey)
+    .eq("file_hash", fileHash)
+    .maybeSingle();
+  if (error) {
+    console.warn("[Painel Cache] Controle processed_dashboard_files indisponível.", error);
+    return null;
+  }
+  return data || null;
+}
+
+async function upsertProcessedDashboardFile({ moduleKey, fileRecord, fileHash, rowCount, competencia, status = "processed", storagePath = "", rawFileDeleted = false, metadata = {} }) {
+  if (!window.supabaseClient || !moduleKey || !fileHash || !fileRecord) return;
+  const payload = {
+    module_key: moduleKey,
+    file_name: fileRecord.file_name || fileRecord.fileName || metadata.original_name || "",
+    file_hash: fileHash,
+    file_size: Number(fileRecord.file_size || metadata.size_bytes || 0) || null,
+    last_modified: metadata.last_modified || metadata.uploaded_at || fileRecord.updated_at || "",
+    competencia: competencia || metadata.competencia || "",
+    row_count: Number(rowCount || metadata.record_count || metadata.parsed_rows || 0) || 0,
+    status,
+    processed_at: new Date().toISOString(),
+    storage_path: storagePath || fileRecord.storage_path || metadata.storage_path || "",
+    raw_file_deleted: rawFileDeleted === true || metadata.raw_file_deleted === true,
+    metadata: {
+      ...metadata,
+      storage_path: storagePath || fileRecord.storage_path || metadata.storage_path || "",
+      raw_file_deleted: rawFileDeleted === true || metadata.raw_file_deleted === true,
+    },
+  };
+  const { error } = await window.supabaseClient
+    .from("processed_dashboard_files")
+    .upsert(payload, { onConflict: "module_key,file_hash" });
+  if (error) console.warn("[Painel Cache] Não foi possível atualizar processed_dashboard_files.", error);
+}
+
+async function getPersistedProcessedRowsCount(fileRecord) {
+  if (!window.supabaseClient || !fileRecord?.id) return 0;
+  try {
+    const tableName = getProcessedRecordsTable(getFileRecordCategory(fileRecord));
+    const { count, error } = await window.supabaseClient
+      .from(tableName)
+      .select("id", { count: "exact", head: true })
+      .eq("file_id", fileRecord.id);
+    if (error) throw error;
+    return Number(count || 0);
+  } catch (error) {
+    if (isMissingProcessedRecordsTableError(error)) return 0;
+    console.warn("[Painel Cache] Não foi possível contar registros processados do arquivo.", error);
+    return 0;
+  }
 }
 
 async function findDashboardFilesByUploadMetadata(fileCategory, fileName, metadata) {
@@ -10496,41 +11409,83 @@ async function updateDuplicateDashboardFileRecord(record, uploadMetadata, previe
   if (error) throw error;
   if (shouldActivate) await deactivateOtherPreFaturaRecords(data.id);
   const processedSaveResult = await saveProcessedRowsForFile(data, previewDataset.rows);
+  await upsertProcessedDashboardFile({
+    moduleKey: getDashboardModuleKeyForFileCategory(fileCategory),
+    fileRecord: data,
+    fileHash: nextMetadata.file_hash || previewDataset.fileHash,
+    rowCount: previewDataset.rows.length,
+    competencia: nextMetadata.competencia,
+    metadata: nextMetadata,
+  });
   mergeUploadedDatasetIntoMemory(data, previewDataset);
   return data;
 }
 
 async function processDashboardFile(file, fileRecord = null, options = {}) {
-  const engineReady = await loadWorkbookEngine();
-  if (!engineReady || !window.XLSX || typeof window.XLSX.read !== "function") {
-    throw new Error("Não foi possível ler o Excel porque o parser local não carregou.");
-  }
-
+  setDashboardImportState({
+    fileName: fileRecord?.file_name || file.name,
+    fileType: isCsvFile(file || file.name) ? "csv" : "xlsx",
+    stage: "Preparando arquivo...",
+    progress: Math.max(8, Number(dashboardImportState.progress || 0)),
+  }, { render: false });
   const buffer = await withTimeout(
     file.arrayBuffer(),
     XLSX_PROCESS_TIMEOUT_MS,
-    "Tempo limite excedido ao ler o arquivo Excel.",
+    "Tempo limite excedido ao ler o arquivo.",
   );
+  const fileName = fileRecord?.file_name || file.name;
+  const isCsv = isCsvFile(file || fileName);
   let workbook;
-  try {
-    workbook = XLSX.read(buffer, { type: "array", cellDates: true });
-  } catch (error) {
-    if (/\.xltx$/i.test(file?.name || fileRecord?.file_name || "")) {
-      throw new Error("Converta o arquivo para .xlsx padrão e tente novamente.");
+  let csvStats = null;
+  if (isCsv) {
+    setDashboardImportState({ stage: "Lendo arquivo CSV...", progress: 18 }, { render: true });
+    const csvResult = await buildWorkbookFromCsvBuffer(buffer, fileName);
+    workbook = csvResult.workbook;
+    csvStats = csvResult.stats;
+  } else {
+    setDashboardImportState({ stage: "Lendo arquivo XLSX...", progress: 18 }, { render: true });
+    showToast("Lendo arquivo XLSX...", "info", 2600);
+    const engineReady = await loadWorkbookEngine();
+    if (!engineReady || !window.XLSX || typeof window.XLSX.read !== "function") {
+      throw new Error("Não foi possível ler o Excel porque o parser local não carregou.");
     }
-    throw error;
+    workbook = XLSX.read(buffer, { type: "array", cellDates: true });
+    setDashboardImportState({
+      stage: workbook.SheetNames.length > 1 ? "Arquivo com múltiplas abas detectado." : "Detectando abas...",
+      progress: 28,
+      sheetCount: workbook.SheetNames.length,
+    }, { render: true });
+    showToast(`Detectando abas: ${workbook.SheetNames.length} encontrada(s).`, "info", 2800);
   }
   const fileHash = options.calculateHash ? await calculateSha256FromBuffer(buffer) : fileRecord?.metadata?.file_hash || "";
-  const fileName = fileRecord?.file_name || file.name;
-  let fileCategory = getFileRecordCategory(fileRecord || { file_name: fileName });
+  let fileCategory = options.fileCategory || getFileRecordCategory(fileRecord || { file_name: fileName });
   if (fileCategory === PRE_FATURA_FILE_CATEGORY && workbookLooksLikePnr(workbook)) {
     fileCategory = DEVIATION_PNR_FILE_CATEGORY;
   }
+  setDashboardImportState({
+    moduleKey: getDashboardModuleKeyForFileCategory(fileCategory),
+    stage: workbook.SheetNames.length > 1 ? `Processando aba 1 de ${workbook.SheetNames.length}: ${workbook.SheetNames[0] || "Aba 1"}` : "Normalizando colunas...",
+    progress: 40,
+    sheetName: workbook.SheetNames[0] || "",
+    sheetIndex: workbook.SheetNames.length ? 1 : 0,
+    sheetCount: workbook.SheetNames.length,
+  }, { render: true });
+  showToast("Normalizando colunas...", "info", 2600);
   const rows = fileCategory === DEVIATION_PNR_FILE_CATEGORY
     ? normalizePnrWorkbook(workbook, fileName)
     : fileCategory === PACKAGE_MANAGEMENT_FILE_CATEGORY
       ? normalizePackageManagementWorkbook(workbook, fileName)
       : normalizeWorkbook(workbook);
+  const stats = getWorkbookStatsForCategory(fileCategory);
+  setDashboardImportState({
+    stage: "Validando registros...",
+    progress: 56,
+    rowsRead: stats.totalRowsRead || stats.originalRows || rows.length,
+    rowsImported: stats.totalRowsImported || stats.consolidatedRows || rows.length,
+    duplicatesIgnored: stats.duplicatesSkipped || stats.duplicateRowsSkipped || 0,
+    ignoredSheets: stats.ignoredSheets || [],
+    importedSheets: stats.importedSheetNames || [],
+  }, { render: true });
   return {
     id: fileRecord?.id || makeDatasetId(file.name),
     fileName,
@@ -10541,6 +11496,9 @@ async function processDashboardFile(file, fileRecord = null, options = {}) {
     remoteRecord: fileRecord,
     storagePath: fileRecord?.storage_path || "",
     fileHash,
+    sourceFormat: isCsv ? "csv" : "xlsx",
+    workbookSheetCount: workbook.SheetNames.length,
+    csvStats,
     rows,
   };
 }
@@ -10590,23 +11548,160 @@ async function uploadDashboardFile(file) {
     showToast("Faça login para acessar esta função.", "warn", 5200);
     return;
   }
+  if (!isSpreadsheetImportFile(file)) {
+    showToast("Formatos aceitos: XLSX e CSV.", "warn", 5200);
+    return;
+  }
 
   dashboardFilesLoading = true;
+  resetDashboardImportState();
+  setDashboardImportState({
+    active: true,
+    moduleKey: getDashboardModuleKeyForFileCategory(getUploadFileCategory(file.name)),
+    fileName: file.name,
+    fileType: isCsvFile(file) ? "csv" : "xlsx",
+    stage: "Preparando arquivo...",
+    progress: 6,
+  }, { render: false });
   setDashboardVisualState("processing-file");
   updateDatasetMeta();
-  const previewDataset = await processDashboardFile(file, null, { calculateHash: true });
+  showToast(isCsvFile(file) ? "Lendo CSV..." : "Lendo arquivo XLSX...", "info", 3200);
+  setDashboardImportState({ stage: "Calculando assinatura do arquivo...", progress: 10 }, { render: true });
+  const preflightBuffer = await withTimeout(
+    file.arrayBuffer(),
+    XLSX_PROCESS_TIMEOUT_MS,
+    "Tempo limite excedido ao ler o arquivo para validação.",
+  );
+  const preflightHash = await calculateSha256FromBuffer(preflightBuffer);
+  const guessedFileCategory = getUploadFileCategory(file.name);
+  const moduleKey = getDashboardModuleKeyForFileCategory(guessedFileCategory);
+  setDashboardImportState({ moduleKey, stage: "Verificando duplicidade...", progress: 14 }, { render: true });
+  window.dashboardCacheService?.log?.(moduleKey, "upload recebido", {
+    fileName: file.name,
+    size: file.size,
+    hash: preflightHash,
+  });
+  const alreadyProcessed = await findProcessedDashboardFile(moduleKey, preflightHash);
+  const duplicatedBeforeParse = await findDashboardFileByHash(guessedFileCategory, preflightHash);
+  const duplicatedProcessedRowsCount = duplicatedBeforeParse ? await getPersistedProcessedRowsCount(duplicatedBeforeParse) : 0;
+  const alreadyProcessedRowsCount = Number(alreadyProcessed?.row_count || 0);
+  if (alreadyProcessedRowsCount > 0 || duplicatedProcessedRowsCount > 0) {
+    window.dashboardCacheService?.log?.(moduleKey, "arquivo já processado; evitando reprocessamento", {
+      fileName: file.name,
+      hash: preflightHash,
+      controlRows: alreadyProcessedRowsCount,
+      persistedRows: duplicatedProcessedRowsCount,
+    });
+    showToast("Arquivo já processado. Dados carregados da base.", "info", 5200);
+    dashboardFilesLoading = false;
+    finishDashboardImportState({ status: "already-processed" });
+    showDashboardImportSummary({
+      original_name: file.name,
+      total_rows_imported: alreadyProcessedRowsCount || duplicatedProcessedRowsCount,
+      total_rows_read: alreadyProcessedRowsCount || duplicatedProcessedRowsCount,
+      sheet_count: 1,
+    }, { fileCategory: guessedFileCategory }, { rowsImported: alreadyProcessedRowsCount || duplicatedProcessedRowsCount });
+    setDashboardVisualState("", { render: false });
+    await loadDashboardFilesFromSupabase({ loadActive: true, render: true, validateStorage: false, showLoading: false });
+    return;
+  }
+  if (duplicatedBeforeParse) {
+    window.dashboardCacheService?.log?.(moduleKey, "arquivo cadastrado sem registros persistidos; processando cadastro existente", {
+      fileName: file.name,
+      hash: preflightHash,
+      fileId: duplicatedBeforeParse.id,
+    });
+    showToast("Arquivo já cadastrado. Processando registros pendentes da base...", "info", 5200);
+    setDashboardImportState({ stage: "Processando cadastro existente...", progress: 22 }, { render: true });
+    const pendingDataset = await processDashboardFile(file, duplicatedBeforeParse, { calculateHash: false, fileCategory: guessedFileCategory });
+    if (!pendingDataset.rows.length) {
+      dashboardFilesLoading = false;
+      setDashboardVisualState("");
+      updateDatasetMeta();
+      throw new Error("Nenhuma aba válida foi encontrada no arquivo. Verifique se o arquivo contém colunas reconhecidas para este módulo.");
+    }
+    const pendingPeriod = getDatasetPeriod(pendingDataset);
+    const pendingStats = getWorkbookStatsForCategory(pendingDataset.fileCategory);
+    const [pendingReferenceYear, pendingReferenceMonth] = String(pendingPeriod.key || "").split("-");
+    const pendingNamedPeriod = pendingDataset.fileCategory === PACKAGE_MANAGEMENT_FILE_CATEGORY || pendingDataset.fileCategory === DEVIATION_PNR_FILE_CATEGORY
+      ? identificarPeriodoGestaoPacotes(file.name)
+      : null;
+    const pendingPeriodType = normalizePeriodMode(getPeriodModeFromLabel(pendingNamedPeriod?.quinzena) || getDatasetQuarterMode(pendingDataset));
+    const pendingDisplayName = getDashboardFileDisplayName({
+      fileName: file.name,
+      fileCategory: pendingDataset.fileCategory,
+      metadata: pendingNamedPeriod ? {
+        quinzena: pendingNamedPeriod.quinzena,
+        competencia: pendingNamedPeriod.competencia,
+      } : {},
+    });
+    const pendingMetadata = buildUploadPeriodMetadata({
+      file,
+      previewDataset: pendingDataset,
+      referenceYear: pendingNamedPeriod?.ano || pendingReferenceYear,
+      referenceMonth: getMonthNumberFromAny(pendingNamedPeriod?.mes) || pendingReferenceMonth,
+      periodLabel: getPeriodModeLabel(pendingPeriodType),
+      periodType: pendingPeriodType,
+      packagePeriod: pendingNamedPeriod,
+      displayName: pendingDisplayName,
+      fileHash: preflightHash,
+      previewStats: pendingStats,
+    });
+    Object.assign(pendingMetadata, {
+      file_hash: preflightHash,
+      duplicate_processing_repaired_at: new Date().toISOString(),
+    });
+    duplicatedBeforeParse.metadata = {
+      ...(duplicatedBeforeParse.metadata || {}),
+      ...pendingMetadata,
+    };
+    duplicatedBeforeParse.file_type = pendingDataset.fileCategory;
+    duplicatedBeforeParse.file_size = file.size;
+    setDashboardImportState({ stage: "Gravando dados no Supabase...", progress: 74 }, { render: true });
+    const processedSaveResult = await saveProcessedRowsForFile(duplicatedBeforeParse, pendingDataset.rows);
+    setDashboardImportState({ stage: "Atualizando indicadores...", progress: 88 }, { render: true });
+    await upsertProcessedDashboardFile({
+      moduleKey: getDashboardModuleKeyForFileCategory(pendingDataset.fileCategory),
+      fileRecord: duplicatedBeforeParse,
+      fileHash: preflightHash,
+      rowCount: pendingDataset.rows.length,
+      competencia: pendingMetadata.competencia,
+      status: processedSaveResult ? "processed" : "pending",
+      metadata: pendingMetadata,
+    });
+    finishDashboardImportState({
+      rowsImported: pendingDataset.rows.length,
+      status: processedSaveResult ? "processed" : "pending",
+    });
+    showDashboardImportSummary(pendingMetadata, pendingDataset, { rowsImported: pendingDataset.rows.length });
+    showToast("Registros pendentes processados e incorporados à base.", "good", 5200);
+    dashboardFilesLoading = false;
+    setDashboardVisualState("", { render: false });
+    await loadDashboardFilesFromSupabase({ loadActive: true, render: true, validateStorage: false, showLoading: false });
+    return;
+  }
+  showToast("Novo arquivo identificado. Processando e incorporando à base...", "info", 4200);
+  setDashboardImportState({ stage: "Novo arquivo identificado. Processando e incorporando à base...", progress: 20 }, { render: true });
+  const previewDataset = await processDashboardFile(file, null, { calculateHash: true, fileCategory: guessedFileCategory });
+  showToast("Normalizando colunas...", "info", 3000);
   const previewStats = getWorkbookStatsForCategory(previewDataset.fileCategory);
   if (!previewDataset.rows.length) {
     dashboardFilesLoading = false;
     setDashboardVisualState("");
     updateDatasetMeta();
-    throw new Error("O arquivo não possui registros válidos para carregar.");
+    const stats = getWorkbookStatsForCategory(previewDataset.fileCategory);
+    console.warn("[UPLOAD] Nenhuma aba válida encontrada.", {
+      fileName: file.name,
+      sheetCount: stats.sheetCount || previewDataset.workbookSheetCount || 0,
+      ignoredSheets: stats.ignoredSheets || [],
+    });
+    throw new Error("Nenhuma aba válida foi encontrada no arquivo. Verifique se o arquivo contém colunas reconhecidas para este módulo.");
   }
   const period = getDatasetPeriod(previewDataset);
   const [referenceYear, referenceMonth] = String(period.key || "").split("-");
   const periodType = getDatasetQuarterMode(previewDataset);
   const periodLabel = getPeriodModeLabel(periodType);
-  const packagePeriod = previewDataset.fileCategory === PACKAGE_MANAGEMENT_FILE_CATEGORY
+  const packagePeriod = previewDataset.fileCategory === PACKAGE_MANAGEMENT_FILE_CATEGORY || previewDataset.fileCategory === DEVIATION_PNR_FILE_CATEGORY
     ? identificarPeriodoGestaoPacotes(file.name)
     : null;
   let displayName = getDashboardFileDisplayName({
@@ -10633,7 +11728,7 @@ async function uploadDashboardFile(file) {
     previewStats,
   });
   let uploadFile = file;
-  if (previewDataset.fileCategory === DEVIATION_PNR_FILE_CATEGORY && !previewStats.isMasterFile) {
+  if (KEEP_RAW_UPLOADS_IN_STORAGE && previewDataset.fileCategory === DEVIATION_PNR_FILE_CATEGORY && !previewStats.isMasterFile) {
     uploadFile = await buildStandardizedPnrUploadFile(file, previewDataset.rows);
     uploadMetadata.standardized_storage = true;
     uploadMetadata.storage_file_name = uploadFile.name;
@@ -10671,6 +11766,17 @@ async function uploadDashboardFile(file) {
       period_label: data.period_label,
       file_hash: previewDataset.fileHash,
     });
+    finishDashboardImportState({
+      rowsImported: uploadMetadata.total_rows_imported || previewDataset.rows.length,
+      duplicatesIgnored: uploadMetadata.duplicate_rows_skipped || 0,
+      importedSheets: uploadMetadata.imported_sheets || [],
+      ignoredSheets: uploadMetadata.ignored_sheets || [],
+      status: "processed",
+    });
+    showDashboardImportSummary(uploadMetadata, previewDataset, {
+      rowsImported: uploadMetadata.total_rows_imported || previewDataset.rows.length,
+      duplicatesIgnored: uploadMetadata.duplicate_rows_skipped || 0,
+    });
     showToast("Arquivo já existia no painel. Os metadados foram atualizados sem duplicar.", "info", 5200);
     return;
   }
@@ -10691,20 +11797,26 @@ async function uploadDashboardFile(file) {
     : previewDataset.fileCategory === PACKAGE_MANAGEMENT_FILE_CATEGORY
       ? "gestao-pacotes"
       : "pre-fatura";
-  const storagePath = `${storageFolder}/${referenceYear || "sem-ano"}/${referenceMonth || "sem-mes"}/${Date.now()}_${safeName}`;
+  const storagePath = KEEP_RAW_UPLOADS_IN_STORAGE
+    ? `${storageFolder}/${referenceYear || "sem-ano"}/${referenceMonth || "sem-mes"}/${Date.now()}_${safeName}`
+    : `${PROCESSED_ONLY_STORAGE_PREFIX}/${storageFolder}/${referenceYear || "sem-ano"}/${referenceMonth || "sem-mes"}/${Date.now()}_${safeName}`;
 
-  const { error: uploadError } = await window.supabaseClient.storage
-    .from("dashboard-files")
-    .upload(storagePath, uploadFile, {
-      cacheControl: "3600",
-      upsert: false,
-    });
+  if (KEEP_RAW_UPLOADS_IN_STORAGE) {
+    const { error: uploadError } = await window.supabaseClient.storage
+      .from("dashboard-files")
+      .upload(storagePath, uploadFile, {
+        cacheControl: "3600",
+        upsert: false,
+      });
 
-  if (uploadError) {
-    console.error("Erro no upload:", uploadError);
-    throw new Error("Erro ao salvar arquivo no Supabase Storage.");
+    if (uploadError) {
+      console.error("Erro no upload:", uploadError);
+      throw new Error("Erro ao salvar arquivo no Supabase Storage.");
+    }
   }
 
+  showToast("Gravando dados no Supabase...", "info", 3600);
+  setDashboardImportState({ stage: "Gravando dados no Supabase...", progress: 74 }, { render: true });
   const { data, error } = await window.supabaseClient
     .from("dashboard_files")
     .insert({
@@ -10719,7 +11831,7 @@ async function uploadDashboardFile(file) {
       period_label: periodLabel,
       period_type: periodType,
       is_active: previewDataset.fileCategory === PRE_FATURA_FILE_CATEGORY,
-      status: "loaded",
+      status: "processing",
       metadata: uploadMetadata,
     })
     .select()
@@ -10727,7 +11839,7 @@ async function uploadDashboardFile(file) {
 
   if (error) {
     console.error("Erro ao salvar metadados:", error);
-    await window.supabaseClient.storage.from("dashboard-files").remove([storagePath]);
+    if (KEEP_RAW_UPLOADS_IN_STORAGE) await window.supabaseClient.storage.from("dashboard-files").remove([storagePath]);
     throw new Error("Arquivo enviado, mas houve erro ao salvar o registro.");
   }
 
@@ -10738,7 +11850,30 @@ async function uploadDashboardFile(file) {
   if (previewDataset.fileCategory === PRE_FATURA_FILE_CATEGORY) {
     await deactivateOtherPreFaturaRecords(data.id);
   }
+  setDashboardImportState({ stage: "Validando registros persistidos...", progress: 82 }, { render: true });
   const processedSaveResult = await saveProcessedRowsForFile(data, previewDataset.rows);
+  showToast("Atualizando indicadores...", "info", 3000);
+  setDashboardImportState({ stage: "Atualizando indicadores...", progress: 90 }, { render: true });
+  await upsertProcessedDashboardFile({
+    moduleKey: getDashboardModuleKeyForFileCategory(previewDataset.fileCategory),
+    fileRecord: data,
+    fileHash: previewDataset.fileHash,
+    rowCount: previewDataset.rows.length,
+    competencia: uploadMetadata.competencia,
+    storagePath,
+    rawFileDeleted: !KEEP_RAW_UPLOADS_IN_STORAGE,
+    metadata: uploadMetadata,
+  });
+  console.info("[UPLOAD] Resumo da importação", {
+    fileName: file.name,
+    sourceFormat: uploadMetadata.source_format,
+    sheetCount: uploadMetadata.sheet_count,
+    importedSheets: uploadMetadata.imported_sheets,
+    ignoredSheets: uploadMetadata.ignored_sheets,
+    totalRowsRead: uploadMetadata.total_rows_read,
+    totalRowsImported: uploadMetadata.total_rows_imported,
+    rawFileDeleted: uploadMetadata.raw_file_deleted,
+  });
 
   const uploadedPeriod = getFileRecordPeriod(data);
   applyUploadedFileState(previewDataset, uploadedPeriod);
@@ -10757,6 +11892,24 @@ async function uploadDashboardFile(file) {
     linked_occurrences: data.metadata?.linked_occurrences || 0,
     linked_ids_count: data.metadata?.linked_ids_count || 0,
   });
+  if (!KEEP_RAW_UPLOADS_IN_STORAGE) {
+    showToast("Arquivo de origem não foi mantido no Storage após processamento seguro.", "info", 5200);
+  }
+  finishDashboardImportState({
+    rowsRead: uploadMetadata.total_rows_read || previewDataset.rows.length,
+    rowsImported: uploadMetadata.total_rows_imported || previewDataset.rows.length,
+    duplicatesIgnored: uploadMetadata.duplicate_rows_skipped || 0,
+    importedSheets: uploadMetadata.imported_sheets || [],
+    ignoredSheets: uploadMetadata.ignored_sheets || [],
+    status: "processed",
+  });
+  showDashboardImportSummary(uploadMetadata, previewDataset, {
+    rowsImported: uploadMetadata.total_rows_imported || previewDataset.rows.length,
+    duplicatesIgnored: uploadMetadata.duplicate_rows_skipped || 0,
+  });
+  if (Number(uploadMetadata.sheet_count || 0) > 1) {
+    showToast(`Importação concluída. Abas encontradas: ${uploadMetadata.sheet_count}. Abas importadas: ${(uploadMetadata.imported_sheets || []).length}. Abas ignoradas: ${(uploadMetadata.ignored_sheets || []).length}. Registros importados: ${integer.format(uploadMetadata.total_rows_imported || previewDataset.rows.length)}.`, "good", 7600);
+  }
   if (previewDataset.fileCategory === DEVIATION_PNR_FILE_CATEGORY) {
     const stats = getWorkbookStatsForCategory(DEVIATION_PNR_FILE_CATEGORY);
     const inserted = processedSaveResult?.inserted ?? stats.newRows ?? previewDataset.rows.length;
@@ -10815,7 +11968,7 @@ function mergeUploadedDatasetIntoMemory(fileRecord, previewDataset) {
     importedAt: normalizedRecord.created_at,
     remoteRecord: normalizedRecord,
     storagePath: normalizedRecord.storage_path,
-    rows: previewDataset.rows,
+    rows: fileCategory === DEVIATION_PNR_FILE_CATEGORY ? [] : previewDataset.rows,
   });
   if (!dataset) return;
   upsertDataset(dataset);
@@ -10842,14 +11995,12 @@ function rebuildPackageManagementRowsFromLibrary() {
 }
 
 function rebuildPnrRowsFromLibrary() {
-  const datasets = (Array.isArray(library.datasets) ? library.datasets : [])
-    .filter((dataset) => getFileRecordCategory(dataset.remoteRecord || dataset) === DEVIATION_PNR_FILE_CATEGORY)
-    .filter((dataset) => Array.isArray(dataset.rows) && dataset.rows.length);
-  pnrRows = dedupePnrRecords(datasets.flatMap((dataset) => dataset.rows.map(normalizePnrStoredRow).filter(Boolean))).rows;
+  pnrRows = [];
   const files = dashboardFileRecords
     .filter(isUsableDashboardFileRecord)
     .filter((record) => getFileRecordCategory(record) === DEVIATION_PNR_FILE_CATEGORY);
   pnrRowsLoadedKey = files.map((record) => `${record.id || record.file_name}:${record.updated_at || record.metadata?.last_loaded_at || ""}`).join("|") || "__empty";
+  resetPnrRemoteState();
 }
 
 async function loadDashboardFilesFromSupabase(options = {}) {
@@ -10878,7 +12029,7 @@ async function loadDashboardFilesFromSupabase(options = {}) {
     if (error) {
       console.error("Erro ao buscar arquivos:", error);
       showToast("Erro ao carregar arquivos salvos.", "warn", 5200);
-      if (didSetLoadingState || !hasLoadedDashboardData()) setDashboardVisualState("supabase-error", { render: false });
+      if (didSetLoadingState || !hasLoadedDashboardData()) setDashboardVisualState("supabase-error", { render: false, error });
       if (!hasLoadedDashboardData()) {
         clearDashboardData({ render: false, preserveRecords: false });
       }
@@ -10924,7 +12075,16 @@ async function loadDashboardFilesFromSupabase(options = {}) {
     };
     state.activeDatasetId = library.activeDatasetId;
 
-    if (loadActive && activeFile) {
+    if (loadActive && state.sheet === DEVIATION_MANAGEMENT_VIEW && state.activeDesvioCategory === DEVIATION_CATEGORY_PNRS) {
+      window.dashboardCacheService?.log?.(DASHBOARD_MODULE_KEYS.desviosPnr, "carga inicial independente da aba PNR");
+      activeDataset = buildEmptyDataset();
+      allRows = [];
+      if (shouldLoadPnrRowsForCurrentView(dashboardFileRecords)) {
+        void loadPnrRowsForView(dashboardFileRecords, new Map()).catch((error) => {
+          console.error("[Gestão Desvios PNR] Falha ao iniciar carga independente:", error);
+        });
+      }
+    } else if (loadActive && activeFile) {
       await loadDashboardDataByFilters({ files: dashboardFileRecords, render: false, silent: true, showLoading: shouldShowLoading });
     } else if (loadActive) {
       const cachedDatasets = new Map(
@@ -10946,7 +12106,7 @@ async function loadDashboardFilesFromSupabase(options = {}) {
   } catch (error) {
     console.error("[FILES] Falha ao carregar arquivos salvos:", error);
     showToast(error.message || "Não foi possível carregar os arquivos. Tente atualizar novamente.", "error", 6200);
-    if (didSetLoadingState || !hasLoadedDashboardData()) setDashboardVisualState("supabase-error", { render: false });
+    if (didSetLoadingState || !hasLoadedDashboardData()) setDashboardVisualState("supabase-error", { render: false, error });
     return dashboardFileRecords;
   } finally {
     dashboardFilesLoading = false;
@@ -11099,6 +12259,21 @@ async function hydrateDashboardFileMetadata(records, options = {}) {
 async function validateDashboardFileRecords(records) {
   const validRecords = [];
   for (const record of records) {
+    const persistedRows = await getPersistedProcessedRowsCount(record);
+    if (persistedRows > 0) {
+      validRecords.push(record);
+      continue;
+    }
+    const storagePath = String(record.storage_path || "");
+    const rawFileDeleted = record.metadata?.raw_file_deleted === true || storagePath.startsWith(`${PROCESSED_ONLY_STORAGE_PREFIX}/`);
+    if (rawFileDeleted) {
+      console.info("[Painel Cache] Registro sem linhas persistidas e sem arquivo bruto. Aguardando nova importação.", {
+        fileName: record.file_name,
+        fileType: getFileRecordCategory(record),
+      });
+      validRecords.push(record);
+      continue;
+    }
     const { error } = await window.supabaseClient.storage
       .from("dashboard-files")
       .download(record.storage_path);
@@ -11182,32 +12357,347 @@ function shouldLoadPnrRowsForCurrentView(records = dashboardFileRecords) {
   return pnrRowsLoadedKey !== getPnrFilesLoadKey(records);
 }
 
+function getPnrCurrentTotalRows() {
+  if (hasPnrRemoteData() || pnrRemoteState.total) return Number(pnrRemoteState.total || 0);
+  return getFilteredPnrRows().length;
+}
+
+function hasPnrRemoteData() {
+  return pnrRemoteState.source === "remote" || pnrRemoteState.source === "local-cache";
+}
+
+function getPnrRemoteFileIds(records = dashboardFileRecords) {
+  return getPnrFilesForView(records).map((record) => record.id).filter(Boolean);
+}
+
+function buildPnrCacheSignature(records = dashboardFileRecords) {
+  if (window.dashboardCacheService?.buildFilesSignature) {
+    return window.dashboardCacheService.buildFilesSignature(DASHBOARD_MODULE_KEYS.desviosPnr, getPnrFilesForView(records));
+  }
+  const files = getPnrFilesForView(records).map((record) => {
+    const metadata = record.metadata || {};
+    return [
+      record.id || "",
+      record.file_name || "",
+      record.file_size || metadata.size_bytes || "",
+      record.updated_at || metadata.last_loaded_at || metadata.processed_at || "",
+      metadata.file_hash || "",
+      metadata.record_count || metadata.parsed_rows || metadata.consolidated_rows || "",
+      metadata.competencia || record.reference_year || "",
+      metadata.reference_month || record.reference_month || "",
+      metadata.period_type || record.period_type || "",
+    ].join(":");
+  }).sort();
+  return `${PNR_LIGHT_CACHE_VERSION}::${files.join("|") || "__empty"}`;
+}
+
+function buildPnrRemotePayload(records = dashboardFileRecords) {
+  const filterOptions = pnrRemoteState.filterOptions || {};
+  const basePayload = {
+    p_file_ids: getPnrRemoteFileIds(records),
+    p_month_keys: getPnrFilterSelectedValues(state.pnrMonths, pnrRemoteState.monthOptions.map((option) => option.key)),
+    p_quinzenas: getPnrFilterSelectedValues(state.pnrQuinzena, ["q1", "q2"]),
+    p_statuses: getPnrFilterSelectedValues(state.pnrStatus, filterOptions.statuses),
+    p_tipos: getPnrFilterSelectedValues(state.pnrTipoOperacional, filterOptions.tipos),
+    p_estacoes: getPnrFilterSelectedValues(state.pnrEstacao, filterOptions.estacoes),
+    p_status_motoristas: getPnrFilterSelectedValues(state.pnrStatusMotorista, filterOptions.statusMotoristas),
+    p_fontes: getPnrFilterSelectedValues(state.pnrFonteCruzamento, filterOptions.fontesCruzamento),
+    p_motoristas: getPnrFilterSelectedValues(state.pnrMotorista, filterOptions.motoristas),
+    p_rotas: getPnrFilterSelectedValues(state.pnrRota, filterOptions.rotas),
+    p_search: String(state.pnrQuery || "").trim(),
+  };
+  return {
+    ...basePayload,
+    p_page: Math.max(1, Number(state.page || 1)),
+    p_page_size: Math.min(100, Math.max(10, Number(state.pageSize || 15))),
+    p_sort_key: String(state.sortKey || ""),
+    p_sort_dir: state.sortDir === "asc" ? "asc" : "desc",
+  };
+}
+
+function buildPnrSummaryPayload(records = dashboardFileRecords) {
+  const payload = buildPnrRemotePayload(records);
+  const {
+    p_page,
+    p_page_size,
+    p_sort_key,
+    p_sort_dir,
+    ...summaryPayload
+  } = payload;
+  return summaryPayload;
+}
+
+function buildPnrTablePayload(records = dashboardFileRecords) {
+  return buildPnrRemotePayload(records);
+}
+
+function getPnrRemoteKey(records = dashboardFileRecords, mode = "table") {
+  const payload = mode === "summary" ? buildPnrSummaryPayload(records) : buildPnrTablePayload(records);
+  return JSON.stringify({ signature: buildPnrCacheSignature(records), payload });
+}
+
+function readPnrLightCache() {
+  const central = window.dashboardCacheService?.get?.(DASHBOARD_MODULE_KEYS.desviosPnr);
+  if (central) return central;
+  try {
+    const cache = JSON.parse(window.localStorage.getItem(PNR_LIGHT_CACHE_KEY) || "null");
+    return cache?.version === PNR_LIGHT_CACHE_VERSION ? cache : null;
+  } catch (error) {
+    return null;
+  }
+}
+
+function writePnrLightCache(cache) {
+  if (window.dashboardCacheService?.set) {
+    window.dashboardCacheService.set(DASHBOARD_MODULE_KEYS.desviosPnr, cache);
+    return;
+  }
+  try {
+    window.localStorage.setItem(PNR_LIGHT_CACHE_KEY, JSON.stringify({
+      ...cache,
+      version: PNR_LIGHT_CACHE_VERSION,
+      savedAt: new Date().toISOString(),
+    }));
+  } catch (error) {
+    // localStorage can be unavailable in restrictive browser modes.
+  }
+}
+
+function applyPnrLightCacheIfAvailable(signature) {
+  const cache = readPnrLightCache();
+  if (!cache || cache.signature !== signature || !cache.summary) return false;
+  pnrRemoteState.source = "local-cache";
+  pnrRemoteState.summary = cache.summary;
+  pnrRemoteState.statusRows = Array.isArray(cache.statusRows) ? cache.statusRows : [];
+  pnrRemoteState.operationRows = Array.isArray(cache.operationRows) ? cache.operationRows : [];
+  pnrRemoteState.stationRows = Array.isArray(cache.stationRows) ? cache.stationRows : [];
+  pnrRemoteState.driverRows = Array.isArray(cache.driverRows) ? cache.driverRows : [];
+  pnrRemoteState.evolutionRows = Array.isArray(cache.evolutionRows) ? cache.evolutionRows : [];
+  pnrRemoteState.monthOptions = Array.isArray(cache.monthOptions) ? cache.monthOptions : [];
+  pnrRemoteState.filterOptions = cache.filterOptions || pnrRemoteState.filterOptions;
+  pnrRemoteState.rows = [];
+  pnrRemoteState.total = Number(cache.total || cache.summary.count || 0);
+  pnrRemoteState.lastProcessedAt = cache.lastUpdatedAt || cache.savedAt || "";
+  pnrRemoteState.cacheMeta = cache;
+  return true;
+}
+
+function normalizePnrRemoteOptionList(values) {
+  return (Array.isArray(values) ? values : [])
+    .map((item) => (typeof item === "string" ? item : item?.value || item?.label || ""))
+    .map(String)
+    .map((item) => item.trim())
+    .filter(Boolean);
+}
+
+function applyPnrRemoteTable(payload) {
+  pnrRemoteState.source = "remote";
+  pnrRemoteState.rows = (Array.isArray(payload?.rows) ? payload.rows : [])
+    .map((record) => mapProcessedPnrRecord(record, { file_name: record?.source_file_name || "" }))
+    .filter(Boolean);
+  pnrRemoteState.total = Number(payload?.total || pnrRemoteState.summary?.count || 0);
+  pnrRemoteState.lastProcessedAt = payload?.cachedAt || payload?.processedAt || pnrRemoteState.lastProcessedAt || new Date().toISOString();
+}
+
+function applyPnrRemoteSummary(payload) {
+  const summary = payload?.summary || {};
+  const options = payload?.filterOptions || payload?.filter_options || {};
+  pnrRemoteState.source = "remote";
+  pnrRemoteState.total = Number(payload?.total || summary.count || 0);
+  pnrRemoteState.summary = {
+    count: Number(summary.count || 0),
+    totalValue: Number(summary.totalValue ?? summary.total_value ?? 0),
+    avgValue: Number(summary.avgValue ?? summary.avg_value ?? 0),
+    anulado: Number(summary.anulado || 0),
+    faturamento: Number(summary.faturamento || 0),
+    aberto: Number(summary.aberto || 0),
+  };
+  pnrRemoteState.statusRows = Array.isArray(payload?.statusRows || payload?.status_rows) ? (payload.statusRows || payload.status_rows) : [];
+  pnrRemoteState.operationRows = Array.isArray(payload?.operationRows || payload?.operation_rows) ? (payload.operationRows || payload.operation_rows) : [];
+  pnrRemoteState.stationRows = Array.isArray(payload?.stationRows || payload?.station_rows) ? (payload.stationRows || payload.station_rows) : [];
+  pnrRemoteState.driverRows = Array.isArray(payload?.driverRows || payload?.driver_rows) ? (payload.driverRows || payload.driver_rows) : [];
+  pnrRemoteState.evolutionRows = Array.isArray(payload?.evolutionRows || payload?.evolution_rows) ? (payload.evolutionRows || payload.evolution_rows) : [];
+  pnrRemoteState.monthOptions = (Array.isArray(payload?.monthOptions || payload?.month_options) ? (payload.monthOptions || payload.month_options) : [])
+    .map((option) => ({
+      key: String(option.key || ""),
+      label: String(option.label || option.key || ""),
+      year: Number(option.year || 0),
+      month: Number(option.month || 0),
+    }))
+    .filter((option) => option.key);
+  pnrRemoteState.filterOptions = {
+    statuses: normalizePnrRemoteOptionList(options.statuses),
+    tipos: normalizePnrRemoteOptionList(options.tipos),
+    estacoes: normalizePnrRemoteOptionList(options.estacoes),
+    statusMotoristas: normalizePnrRemoteOptionList(options.statusMotoristas || options.status_motoristas),
+    fontesCruzamento: normalizePnrRemoteOptionList(options.fontesCruzamento || options.fontes_cruzamento),
+    motoristas: normalizePnrRemoteOptionList(options.motoristas),
+    rotas: normalizePnrRemoteOptionList(options.rotas),
+  };
+  pnrRemoteState.lastProcessedAt = payload?.cachedAt || payload?.processedAt || new Date().toISOString();
+  pnrRemoteState.cacheMeta = readPnrLightCache();
+}
+
+function applyPnrRemoteDashboard(payload) {
+  applyPnrRemoteSummary(payload);
+  applyPnrRemoteTable(payload);
+}
+
+function setPnrRemoteLoading(value) {
+  pnrRemoteState.loadingSummary = value;
+  pnrRemoteState.loadingCharts = value;
+  pnrRemoteState.loadingTable = value;
+  pnrRemoteState.processingStatus = value ? "Processando dados de PNRs em segundo plano..." : "";
+}
+
+async function refreshPnrRemoteDashboard(options = {}) {
+  if (state.appView !== "dashboard" || state.sheet !== DEVIATION_MANAGEMENT_VIEW || state.activeDesvioCategory !== DEVIATION_CATEGORY_PNRS) return;
+  if (!window.supabaseClient || !getPnrRemoteFileIds().length) {
+    resetPnrRemoteState();
+    return;
+  }
+  const moduleKey = DASHBOARD_MODULE_KEYS.desviosPnr;
+  const summaryKey = getPnrRemoteKey(dashboardFileRecords, "summary");
+  const tableKey = getPnrRemoteKey(dashboardFileRecords, "table");
+  const tableOnly = ["page", "pageSize", "sort"].includes(options.reason) && pnrRemoteState.summary;
+  const shouldLoadSummary = options.force === true || !tableOnly || pnrRemoteState.summaryKey !== summaryKey;
+  const shouldLoadTable = options.force === true || pnrRemoteState.tableKey !== tableKey || !pnrRemoteState.rows.length;
+  if (!shouldLoadSummary && !shouldLoadTable && pnrRemoteState.source === "remote") return;
+  const requestId = ++pnrRemoteRequestId;
+  pnrRemoteState.key = tableKey;
+  pnrRemoteState.cacheSignature = summaryKey;
+  pnrRemoteState.error = "";
+  if (shouldLoadSummary && options.force !== true && applyPnrLightCacheIfAvailable(summaryKey)) {
+    pnrRemoteState.summaryKey = summaryKey;
+    window.dashboardCacheService?.log?.(moduleKey, "origem dos dados: cache local", { signature: summaryKey });
+    hydrateControls();
+    renderAll();
+  }
+  pnrRemoteState.loadingSummary = shouldLoadSummary;
+  pnrRemoteState.loadingCharts = shouldLoadSummary;
+  pnrRemoteState.loadingTable = shouldLoadTable;
+  pnrRemoteState.processingStatus = (shouldLoadSummary || shouldLoadTable) ? "Processando dados de PNRs em segundo plano..." : "";
+  moduleLoadingState[moduleKey] = true;
+  renderPnrRemoteLoadingOnly();
+  try {
+    if (shouldLoadSummary) {
+      const summaryPayload = buildPnrSummaryPayload();
+      window.dashboardCacheService?.log?.(moduleKey, "origem dos dados: Supabase RPC resumo", { rpc: PNR_SUMMARY_RPC, payload: summaryPayload });
+      const start = performance.now();
+      const { data, error } = await withTimeout(
+        window.supabaseClient.rpc(PNR_SUMMARY_RPC, summaryPayload),
+        SUPABASE_QUERY_TIMEOUT_MS,
+        "Tempo limite excedido ao consultar resumo de PNRs.",
+      );
+      if (requestId !== pnrRemoteRequestId) return;
+      if (error) throw error;
+      window.dashboardCacheService?.log?.(moduleKey, "resumo RPC recebido", {
+        ms: Math.round(performance.now() - start),
+        total: data?.total || 0,
+      });
+      applyPnrRemoteSummary(data || {});
+      pnrRemoteState.summaryKey = summaryKey;
+      pnrRemoteState.loadingSummary = false;
+      pnrRemoteState.loadingCharts = false;
+      hydrateControls();
+      renderAll();
+    }
+    if (shouldLoadTable) {
+      const tablePayload = buildPnrTablePayload();
+      window.dashboardCacheService?.log?.(moduleKey, "origem dos dados: Supabase RPC tabela", { rpc: PNR_TABLE_RPC, payload: tablePayload });
+      const start = performance.now();
+      const { data, error } = await withTimeout(
+        window.supabaseClient.rpc(PNR_TABLE_RPC, tablePayload),
+        SUPABASE_QUERY_TIMEOUT_MS,
+        "Tempo limite excedido ao consultar tabela de PNRs.",
+      );
+      if (requestId !== pnrRemoteRequestId) return;
+      if (error) throw error;
+      window.dashboardCacheService?.log?.(moduleKey, "tabela RPC recebida", {
+        ms: Math.round(performance.now() - start),
+        rows: Array.isArray(data?.rows) ? data.rows.length : 0,
+        total: data?.total || 0,
+      });
+      applyPnrRemoteTable(data || {});
+      pnrRemoteState.tableKey = tableKey;
+    }
+    pnrRemoteState.source = "remote";
+    const lightCache = {
+      signature: summaryKey,
+      status: "loaded",
+      lastUpdatedAt: new Date().toISOString(),
+      total: pnrRemoteState.total,
+      filters: {
+        months: state.pnrMonths,
+        quinzena: state.pnrQuinzena,
+        status: state.pnrStatus,
+        tipo: state.pnrTipoOperacional,
+        estacao: state.pnrEstacao,
+        statusMotorista: state.pnrStatusMotorista,
+        fonteCruzamento: state.pnrFonteCruzamento,
+        motorista: state.pnrMotorista,
+        rota: state.pnrRota,
+      },
+      competencia: pnrRemoteState.monthOptions.map((option) => option.label).filter(Boolean).join(", "),
+      summary: pnrRemoteState.summary,
+      statusRows: pnrRemoteState.statusRows,
+      operationRows: pnrRemoteState.operationRows,
+      stationRows: pnrRemoteState.stationRows,
+      driverRows: pnrRemoteState.driverRows,
+      evolutionRows: pnrRemoteState.evolutionRows,
+      monthOptions: pnrRemoteState.monthOptions,
+      filterOptions: pnrRemoteState.filterOptions,
+    };
+    pnrRemoteState.cacheMeta = lightCache;
+    pnrRemoteState.lastProcessedAt = lightCache.lastUpdatedAt;
+    writePnrLightCache(lightCache);
+  } catch (error) {
+    if (requestId !== pnrRemoteRequestId) return;
+    console.error("[PNRS] Falha ao carregar dados paginados/agregados:", error);
+    console.error("[Gestão Desvios PNR] Erro completo:", error);
+    pnrRemoteState.error = error?.message || "Não foi possível consultar PNRs processados.";
+    pnrRemoteState.source = pnrRemoteState.source === "local-cache" ? "local-cache" : "";
+    pnrRemoteState.cacheMeta = readPnrLightCache();
+  } finally {
+    if (requestId === pnrRemoteRequestId) {
+      moduleLoadingState[moduleKey] = false;
+      setPnrRemoteLoading(false);
+      hydrateControls();
+      renderAll();
+    }
+  }
+}
+
+function schedulePnrRemoteRefresh(options = {}) {
+  window.clearTimeout(pnrRemoteDebounceTimer);
+  pnrRemoteDebounceTimer = window.setTimeout(() => {
+    void refreshPnrRemoteDashboard({ force: options.force === true, reason: options.reason || "" });
+  }, options.immediate ? 0 : PNR_REMOTE_QUERY_DEBOUNCE_MS);
+}
+
 async function loadPnrRowsForView(records, cachedDatasets = new Map()) {
   const files = getPnrFilesForView(records);
   const loadKey = getPnrFilesLoadKey(records);
   if (pnrRowsLoadedKey === loadKey) {
     return (Array.isArray(library.datasets) ? library.datasets : []).filter((dataset) => dataset?.fileCategory === DEVIATION_PNR_FILE_CATEGORY);
   }
-  const datasets = [];
+  const datasets = files.map((fileRecord) => normalizeDatasetRecord({
+    id: fileRecord.id,
+    fileName: fileRecord.file_name,
+    label: getDashboardFileDisplayName(fileRecord),
+    source: "supabase",
+    importedAt: fileRecord.created_at,
+    remoteRecord: fileRecord,
+    storagePath: fileRecord.storage_path,
+    fileCategory: DEVIATION_PNR_FILE_CATEGORY,
+    rows: [],
+  })).filter(Boolean);
   isLoadingPnrRows = true;
   try {
-    for (const fileRecord of files) {
-      const cached = cachedDatasets.get(fileRecord.id);
-      if (cached?.rows?.length) {
-        datasets.push(cached);
-        continue;
-      }
-      try {
-        const dataset = await loadRowsFromStorage(fileRecord);
-        if (dataset?.rows?.length) datasets.push(dataset);
-      } catch (error) {
-        console.error("[PNRS] Falha ao carregar arquivo:", fileRecord?.file_name, error);
-        showToast(`Falha ao carregar ${fileRecord?.file_name || "arquivo de PNR"}. Os demais arquivos continuarão.`, "warn", 6200);
-      }
-    }
-    pnrRows = dedupePnrRecords(datasets.flatMap((dataset) => dataset.rows.map(normalizePnrStoredRow).filter(Boolean))).rows;
+    pnrRows = [];
     pnrRowsLoadedKey = loadKey;
     resetDerivedDataCache();
+    schedulePnrRemoteRefresh({ immediate: true, force: true });
     return datasets;
   } finally {
     isLoadingPnrRows = false;
@@ -11273,8 +12763,13 @@ async function loadDashboardDataByFilters(options = {}) {
   const shouldRender = options.render !== false;
   const shouldShowLoading = options.showLoading ?? (!hasInitialLoadCompleted || !hasLoadedDashboardData());
   isLoadingDashboardData = true;
-  dashboardFilesLoading = true;
-  if (shouldShowLoading) setDashboardVisualState("processing-file", { render: shouldRender });
+  moduleLoadingState[DASHBOARD_MODULE_KEYS.preFatura] = true;
+  dashboardFilesLoading = shouldShowLoading;
+  if (shouldShowLoading && !hasLoadedDashboardData()) setDashboardVisualState("loading-files", { render: shouldRender });
+  window.dashboardCacheService?.log?.(DASHBOARD_MODULE_KEYS.preFatura, "início da carga", {
+    showLoading: shouldShowLoading,
+    hasData: hasLoadedDashboardData(),
+  });
   updateDatasetMeta();
   try {
     const files = Array.isArray(options.files) ? options.files : await loadDashboardFilesFromSupabase({ loadActive: false, render: false, validateStorage: false, showLoading: false });
@@ -11304,10 +12799,20 @@ async function loadDashboardDataByFilters(options = {}) {
         .filter((dataset) => dataset?.source !== "filtered" && Array.isArray(dataset.rows) && dataset.rows.length)
         .map((dataset) => [dataset.id, dataset]),
     );
-    const packageDatasets = await loadPackageManagementRowsForCards(dashboardFileRecords, cachedDatasets);
-    const pnrDatasets = shouldLoadPnrRowsForCurrentView(dashboardFileRecords)
-      ? await loadPnrRowsForView(dashboardFileRecords, cachedDatasets)
-      : library.datasets.filter((dataset) => dataset?.source !== "filtered" && dataset?.fileCategory === DEVIATION_PNR_FILE_CATEGORY);
+    const packageDatasets = library.datasets.filter((dataset) => dataset?.source !== "filtered" && dataset?.fileCategory === PACKAGE_MANAGEMENT_FILE_CATEGORY);
+    const pnrDatasets = library.datasets.filter((dataset) => dataset?.source !== "filtered" && dataset?.fileCategory === DEVIATION_PNR_FILE_CATEGORY);
+    void Promise.allSettled([
+      loadPackageManagementRowsForCards(dashboardFileRecords, cachedDatasets),
+      shouldLoadPnrRowsForCurrentView(dashboardFileRecords)
+        ? loadPnrRowsForView(dashboardFileRecords, cachedDatasets)
+        : Promise.resolve(pnrDatasets),
+    ]).then((results) => {
+      results.forEach((result, index) => {
+        if (result.status === "rejected") {
+          console.error(index === 0 ? "[Gestão de Pacotes] Falha na carga em segundo plano:" : "[Gestão Desvios PNR] Falha na carga em segundo plano:", result.reason);
+        }
+      });
+    });
     const currentFileCategory = PRE_FATURA_FILE_CATEGORY;
     const categoryFiles = dashboardFileRecords.filter((record) => getFileRecordCategory(record) === currentFileCategory);
     if (!categoryFiles.length) {
@@ -11373,11 +12878,12 @@ async function loadDashboardDataByFilters(options = {}) {
   } catch (error) {
     console.error("[DASHBOARD] Falha ao carregar dados processados:", error);
     showToast(error.message || "Não foi possível carregar os dados. Tente atualizar novamente.", "error", 6200);
-    setDashboardVisualState("supabase-error", { render: false });
+    if (!hasLoadedDashboardData()) setDashboardVisualState("supabase-error", { render: false, error });
   } finally {
+    moduleLoadingState[DASHBOARD_MODULE_KEYS.preFatura] = false;
     dashboardFilesLoading = false;
     isLoadingDashboardData = false;
-    if (shouldShowLoading && dashboardVisualState === "processing-file") setDashboardVisualState("", { render: false });
+    if (shouldShowLoading && dashboardVisualState === "loading-files") setDashboardVisualState("", { render: false });
     updateDatasetMeta();
   }
 }
@@ -11419,11 +12925,19 @@ function mapPreFaturaRowToProcessedRecord(row, fileRecord) {
     valor: Number(row.valor_numerico || 0),
     aba_origem: division,
     raw_data: {
-      ...row,
       file_category: PRE_FATURA_FILE_CATEGORY,
       arquivo_origem: row.arquivo_origem || fileRecord.file_name,
       competencia: getFileCompetencia(fileRecord, row),
       quinzena: getFileQuinzena(fileRecord, row),
+      tipo_desconto: row.tipo_desconto || row.tipo_registro || "",
+      tipo_registro: row.tipo_registro || "",
+      cidade_base: row.cidade_base || "",
+      sigla_base: row.sigla_base || "",
+      descricao: row.descricao || "",
+      ids_vinculados: Array.isArray(row.ids_vinculados) ? row.ids_vinculados : [],
+      quantidade_ids: Number(row.quantidade_ids || 0),
+      linked_ids_count: Number(row.linked_ids_count || row.quantidade_ids || 0),
+      ocorrencias: Number(row.ocorrencias || 1),
     },
   };
 }
@@ -11448,11 +12962,20 @@ function mapPackageRowToProcessedRecord(row, fileRecord) {
     observacao: row.evidencia_1 || row.evidencia_2 || row.observacao || "",
     aba_origem: row.aba_gestao || row.aba_gestao_label || "",
     raw_data: {
-      ...row,
       file_category: PACKAGE_MANAGEMENT_FILE_CATEGORY,
       arquivo_origem: row.arquivo_origem || fileRecord.file_name,
       competencia: getFileCompetencia(fileRecord, row),
       quinzena: getFileQuinzena(fileRecord, row),
+      categoria_label: row.categoria_label || PACKAGE_CATEGORY_LABELS[category] || "",
+      tipo_desconto: row.tipo_desconto || PACKAGE_CATEGORY_LABELS[category] || "",
+      aba_gestao: row.aba_gestao || "",
+      aba_gestao_label: row.aba_gestao_label || "",
+      id_caso: row.id_caso || "",
+      id_pacote: row.id_pacote || row.id_caso || "",
+      evidencia_1: row.evidencia_1 || "",
+      evidencia_2: row.evidencia_2 || "",
+      canal: row.canal || "",
+      ocorrencias: Number(row.ocorrencias || 1),
     },
   };
 }
@@ -11481,7 +13004,7 @@ function mapPnrRowToProcessedRecord(row, fileRecord) {
     comentario_encerramento: row.comentarioEncerramento || "",
     numero_pre_fatura: row.numeroPreFatura || "",
     id_envio: row.idEnvio || "",
-    produtos: row.produtos || "",
+    produtos: "",
     valor_compra: Number(row.valorCompraNumerico || 0),
     rep_transportadora: row.repTransportadora || "",
     id_transportadora: row.idTransportadora || "",
@@ -11504,13 +13027,7 @@ function mapPnrRowToProcessedRecord(row, fileRecord) {
     data_entrega: toDatabaseDate(row.dataEntrega),
     id_reclamacao: row.idReclamacao || "",
     data_reclamacao: toDatabaseDate(row.dataReclamacao),
-    raw_data: {
-      ...row,
-      file_category: DEVIATION_PNR_FILE_CATEGORY,
-      arquivo_origem: row.arquivo_origem || fileRecord.file_name,
-      competencia: getFileCompetencia(fileRecord, row),
-      quinzena: getFileQuinzena(fileRecord, row),
-    },
+    raw_data: {},
   };
 }
 
@@ -11719,6 +13236,22 @@ async function fetchExistingPnrRecordsByDedupeKey(tableName, keys) {
   return existing;
 }
 
+async function refreshPnrMetricsSummaryForFile(fileId) {
+  if (!window.supabaseClient || !fileId) return;
+  const start = performance.now();
+  const { data, error } = await withTimeout(
+    window.supabaseClient.rpc(PNR_METRICS_REFRESH_RPC, { p_file_ids: [fileId] }),
+    SUPABASE_QUERY_TIMEOUT_MS,
+    "Tempo limite excedido ao atualizar agregados de PNRs.",
+  );
+  if (error) throw error;
+  console.info("[Gestão Desvios PNR] agregados atualizados", {
+    fileId,
+    groups: Number(data || 0),
+    ms: Math.round(performance.now() - start),
+  });
+}
+
 async function savePnrProcessedRowsForFile(fileRecord, tableName, payload) {
   const rows = (Array.isArray(payload) ? payload : [])
     .map((record) => ({
@@ -11754,6 +13287,7 @@ async function savePnrProcessedRowsForFile(fileRecord, tableName, payload) {
     duplicate_rows_updated: getWorkbookStatsForCategory(DEVIATION_PNR_FILE_CATEGORY).duplicateRowsUpdated || 0,
     duplicate_rows_removed: getWorkbookStatsForCategory(DEVIATION_PNR_FILE_CATEGORY).duplicateRowsRemoved || 0,
   });
+  await refreshPnrMetricsSummaryForFile(fileRecord.id);
   return { inserted: inserts.length, updated: updates.length, ignored: getWorkbookStatsForCategory(DEVIATION_PNR_FILE_CATEGORY).duplicateRowsSkipped || 0 };
 }
 
@@ -11788,9 +13322,19 @@ async function saveProcessedRowsForFile(fileRecord, rows) {
   }
 }
 
-async function loadRowsFromStorage(fileRecord) {
+async function loadRowsFromStorage(fileRecord, options = {}) {
+  const allowStorageFallback = options.allowStorageFallback === true;
   const processedDataset = await loadProcessedDatasetForFile(fileRecord);
   if (processedDataset?.rows?.length) return processedDataset;
+
+  if (!allowStorageFallback) {
+    console.info("[Painel Cache] Base persistida ausente; Storage bruto não será relido automaticamente.", {
+      fileName: fileRecord?.file_name,
+      fileType: getFileRecordCategory(fileRecord),
+      status: fileRecord?.status,
+    });
+    return null;
+  }
 
   const { data: blob, error } = await withTimeout(
     window.supabaseClient.storage
@@ -11885,6 +13429,24 @@ function replaceDashboardData(rows, context = {}) {
   state.fileName = label;
   state.page = 1;
   syncActiveDataset();
+  const moduleKey = fileCategory === PACKAGE_MANAGEMENT_FILE_CATEGORY
+    ? DASHBOARD_MODULE_KEYS.pacotes
+    : DASHBOARD_MODULE_KEYS.preFatura;
+  window.dashboardCacheService?.set?.(moduleKey, {
+    status: "loaded",
+    signature: window.dashboardCacheService?.buildFilesSignature?.(moduleKey, selectedFiles) || "",
+    total: consolidatedRows.length,
+    lastCompetencia: label,
+    filters: {
+      month: context.selectedMonth || "all",
+      period: context.selectedPeriod || "month",
+      tipo: state.tipo,
+    },
+    summary: {
+      rowCount: consolidatedRows.length,
+      filesCount: selectedFiles.length,
+    },
+  });
 }
 
 async function updateDashboardFileParsedRows(fileRecord, parsedRows, stats = {}) {
@@ -11991,7 +13553,7 @@ async function loadActiveDashboardFile() {
       console.error("Erro ao buscar arquivo ativo:", error);
       showToast("Erro ao carregar arquivo ativo.", "warn", 5200);
       dashboardFilesLoading = false;
-      setDashboardVisualState("supabase-error", { render: false });
+      setDashboardVisualState("supabase-error", { render: false, error });
       clearDashboardData({ render: true, preserveRecords: false });
       return;
     }
@@ -12065,11 +13627,25 @@ async function loadFileFromStorage(fileRecord, options = {}) {
 
   clearDashboardData({ render: false, preserveRecords: true });
   dashboardFilesLoading = true;
-  setDashboardVisualState("processing-file", { render });
+  setDashboardVisualState("loading-files", { render });
   updateDatasetMeta();
   let dataset = skipDownloadDataset;
   try {
     if (!dataset) {
+      dataset = await loadProcessedDatasetForFile(fileRecord);
+    }
+    if (!dataset && options.allowStorageFallback !== true) {
+      console.info("[Painel Cache] Arquivo bruto não será relido do Storage; aguardando base persistida.", {
+        fileName: fileRecord.file_name,
+        fileType: getFileRecordCategory(fileRecord),
+      });
+      dashboardFilesLoading = false;
+      setDashboardVisualState("no-active-file", { render: false });
+      clearDashboardData({ render, preserveRecords: true });
+      if (!silent) showToast("Base ainda não importada. Envie um arquivo XLSX ou CSV para alimentar este módulo.", "info", 6200);
+      return;
+    }
+    if (!dataset && options.allowStorageFallback === true) {
       const { data: blob, error } = await window.supabaseClient.storage
         .from("dashboard-files")
         .download(fileRecord.storage_path);
@@ -12216,11 +13792,11 @@ async function loadFileFromStorage(fileRecord, options = {}) {
     console.error("Erro ao processar arquivo do Storage:", error);
     showToast("Não foi possível processar o arquivo salvo.", "error", 6200);
     dashboardFilesLoading = false;
-    setDashboardVisualState("supabase-error", { render: false });
+    setDashboardVisualState("supabase-error", { render: false, error });
     clearDashboardData({ render });
   } finally {
     dashboardFilesLoading = false;
-    if (dashboardVisualState === "processing-file") setDashboardVisualState("", { render: false });
+    if (dashboardVisualState === "loading-files") setDashboardVisualState("", { render: false });
     updateDatasetMeta();
   }
 }
@@ -12609,7 +14185,8 @@ async function loadCurrentSession(options = {}) {
     knownUsers = [];
     auditLogs = [];
     globalGoalSettings = getDefaultGoalSettings();
-    if (shouldShowLoading || !hasLoadedDashboardData()) setDashboardVisualState("supabase-error", { render: false });
+    const clientError = new Error("Cliente Supabase indisponível.");
+    if (shouldShowLoading || !hasLoadedDashboardData()) setDashboardVisualState("supabase-error", { render: false, error: clientError });
     updateAccessControls();
     renderAccountPage();
     renderAll();
@@ -12646,7 +14223,7 @@ async function loadCurrentSession(options = {}) {
     auditLogs = [];
     globalGoalSettings = getDefaultGoalSettings();
     clearDashboardData({ render: false, preserveRecords: false });
-    if (shouldShowLoading || !hasLoadedDashboardData()) setDashboardVisualState("supabase-error", { render: false });
+    if (shouldShowLoading || !hasLoadedDashboardData()) setDashboardVisualState("supabase-error", { render: false, error });
     updateAccessControls();
     renderAccountPage();
     renderAll();
@@ -13325,6 +14902,8 @@ function normalizeLoadedState(loadedState) {
   loadedState.pnrEstacao = Array.isArray(loadedState.pnrEstacao) ? loadedState.pnrEstacao : normalizePnrSelectValue(loadedState.pnrEstacao);
   loadedState.pnrStatusMotorista = Array.isArray(loadedState.pnrStatusMotorista) ? loadedState.pnrStatusMotorista : normalizePnrSelectValue(loadedState.pnrStatusMotorista);
   loadedState.pnrFonteCruzamento = Array.isArray(loadedState.pnrFonteCruzamento) ? loadedState.pnrFonteCruzamento : normalizePnrSelectValue(loadedState.pnrFonteCruzamento);
+  loadedState.pnrMotorista = Array.isArray(loadedState.pnrMotorista) ? loadedState.pnrMotorista : normalizePnrSelectValue(loadedState.pnrMotorista);
+  loadedState.pnrRota = Array.isArray(loadedState.pnrRota) ? loadedState.pnrRota : normalizePnrSelectValue(loadedState.pnrRota);
   loadedState.period = loadedState.prefaturaPeriod;
   loadedState.tipo = "Todos";
   return loadedState;
