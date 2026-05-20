@@ -17,6 +17,8 @@ const PRE_FATURA_VIEW = "Pré-Fatura";
 const MONTHLY_BASE_VIEW = "Evolução mensal";
 const PACKAGE_MANAGEMENT_VIEW = "Gestão de Pacotes";
 const DEVIATION_MANAGEMENT_VIEW = "Gestão de Desvios";
+const PREFATURA_VIEW_OVERVIEW = "overview";
+const PREFATURA_VIEW_EVOLUTION = "evolucao_mensal";
 const PRE_FATURA_FILE_CATEGORY = "PRE_FATURA";
 const PACKAGE_MANAGEMENT_FILE_CATEGORY = "GESTAO_PACOTES";
 const DEVIATION_PNR_FILE_CATEGORY = "DESVIOS_PNR";
@@ -59,6 +61,10 @@ const DEVIATION_CATEGORIES = [
   { key: "SAFETY_RELATOS", label: "Safety - Relatos", enabled: false },
   { key: DEVIATION_CATEGORY_PNRS, label: "PNRs", enabled: true },
   { key: "JURIDICO", label: "Jurídico", enabled: false },
+];
+const PREFATURA_CATEGORIES = [
+  { key: PREFATURA_VIEW_OVERVIEW, label: "Visão geral", enabled: true },
+  { key: PREFATURA_VIEW_EVOLUTION, label: "Evolução mensal", enabled: true },
 ];
 const PNR_STANDARD_HEADERS = [
   "ID DO CASO",
@@ -118,7 +124,7 @@ const PNR_LIGHT_CACHE_KEY = "alc-pnr-dashboard-light-cache-v1";
 let processedRecordsUnavailable = false;
 let isExportingPackageExcel = false;
 const SHEET_ORDER = ["SVC PERDIDOS", "XPT PERDIDOS", "PNR"];
-const SHEET_TABS = [PRE_FATURA_VIEW, MONTHLY_BASE_VIEW, PACKAGE_MANAGEMENT_VIEW, DEVIATION_MANAGEMENT_VIEW];
+const SHEET_TABS = [PRE_FATURA_VIEW, PACKAGE_MANAGEMENT_VIEW, DEVIATION_MANAGEMENT_VIEW];
 const SHEET_DISPLAY_LABELS = {
   [PRE_FATURA_VIEW]: "Pré-Fatura",
   Todos: "Todos",
@@ -165,6 +171,7 @@ const SETOR_OPTIONS = ["LOSS", "Operação", "Administrativo", "Financeiro", "Qu
 const STATE_DEFAULT = {
   query: "",
   sheet: PRE_FATURA_VIEW,
+  preFaturaView: PREFATURA_VIEW_OVERVIEW,
   tipo: "Todos",
   prefaturaTipo: "Todos",
   packageTipo: "Todos",
@@ -293,8 +300,10 @@ let activeEvolutionTooltipBar = null;
 let packageMixTooltipHideTimer = null;
 let activePackageMixSegment = null;
 let donutTooltipHideTimer = null;
+let isPreFaturaCategoryMenuOpen = false;
 let isDeviationCategoryMenuOpen = false;
 let activePnrFilterMenu = "";
+let isPnrSearchExpanded = false;
 let activeDropdownPortalKind = "";
 let chartViewportObserver = null;
 let chartAnimationFrame = 0;
@@ -567,6 +576,8 @@ function cacheDom() {
   el.syncStatus = document.getElementById("sync-status");
   el.viewToolbar = document.querySelector(".view-toolbar");
   el.sheetTabs = document.getElementById("sheet-tabs");
+  el.globalPeriodFilters = document.querySelector(".global-period-filters");
+  el.pnrToolbarFilters = document.getElementById("pnr-toolbar-filters");
   el.monthlyBaseView = document.getElementById("monthly-base-view");
   el.deviationManagementView = document.getElementById("deviation-management-view");
   el.insightGrid = document.querySelector(".insight-grid");
@@ -966,12 +977,14 @@ function bindEvents() {
         event.target.closest("#type-filter") ||
         event.target.closest("#month-filter") ||
         event.target.closest("#period-filter") ||
+        event.target.closest(".sheet-tab-wrapper--prefatura") ||
         event.target.closest(".sheet-tab-wrapper--deviation") ||
         isDropdownPortalTarget(event.target)
       ) return;
       closePackageTypeMenu();
       closeCustomFilterMenu("month");
       closeCustomFilterMenu("period");
+      closePreFaturaCategoryMenu({ render: true });
       closeDeviationCategoryMenu({ render: true });
     });
   }
@@ -991,11 +1004,12 @@ function bindEvents() {
   document.addEventListener("input", (event) => {
     const input = event.target.closest("[data-pnr-query]");
     if (!input) return;
+    state.pnrQuery = input.value || "";
+    state.page = 1;
+    persistState();
+    setPnrSearchExpanded(Boolean(state.pnrQuery), { focus: false });
     window.clearTimeout(pnrSearchDebounceTimer);
     pnrSearchDebounceTimer = window.setTimeout(() => {
-      state.pnrQuery = input.value || "";
-      state.page = 1;
-      persistState();
       renderAll();
       schedulePnrRemoteRefresh({ reason: "search" });
     }, PNR_REMOTE_QUERY_DEBOUNCE_MS);
@@ -1004,8 +1018,8 @@ function bindEvents() {
     const searchToggle = event.target.closest("[data-pnr-search-toggle]");
     if (searchToggle) {
       const control = searchToggle.closest("[data-pnr-search-control]");
-      control?.classList.add("is-expanded");
-      window.setTimeout(() => control?.querySelector("[data-pnr-query]")?.focus(), 20);
+      const shouldExpand = !control?.classList.contains("is-expanded");
+      setPnrSearchExpanded(shouldExpand, { control, focus: shouldExpand });
       return;
     }
 
@@ -1051,6 +1065,7 @@ function bindEvents() {
       state.pnrRota = "Todos";
       state.page = 1;
       closePnrFilterMenus();
+      setPnrSearchExpanded(false, { focus: false });
       persistState();
       renderAll();
       schedulePnrRemoteRefresh({ reason: "clear" });
@@ -1130,6 +1145,20 @@ function bindEvents() {
   });
 
   el.sheetTabs.addEventListener("click", (event) => {
+    const preFaturaCategory = event.target.closest("[data-prefatura-category]");
+    if (preFaturaCategory) {
+      event.preventDefault();
+      handlePreFaturaCategorySelection(preFaturaCategory.dataset.prefaturaCategory);
+      return;
+    }
+
+    const preFaturaToggle = event.target.closest("[data-prefatura-toggle]");
+    if (preFaturaToggle) {
+      event.preventDefault();
+      togglePreFaturaCategoryMenu();
+      return;
+    }
+
     const deviationCategory = event.target.closest("[data-deviation-category]");
     if (deviationCategory) {
       event.preventDefault();
@@ -1151,6 +1180,7 @@ function bindEvents() {
     clearTransientDashboardStateForNavigation();
     state.appView = "dashboard";
     state.sheet = button.dataset.sheet;
+    if (state.sheet === PRE_FATURA_VIEW) state.preFaturaView = PREFATURA_VIEW_OVERVIEW;
     state.page = 1;
     persistState();
     hydrateControls();
@@ -1175,8 +1205,9 @@ function bindEvents() {
   });
 
   document.addEventListener("click", (event) => {
-    if (!isDeviationCategoryMenuOpen) return;
-    if (event.target.closest(".sheet-tab-wrapper--deviation") || isDropdownPortalTarget(event.target)) return;
+    if (!isDeviationCategoryMenuOpen && !isPreFaturaCategoryMenuOpen) return;
+    if (event.target.closest(".sheet-tab-wrapper--deviation") || event.target.closest(".sheet-tab-wrapper--prefatura") || isDropdownPortalTarget(event.target)) return;
+    closePreFaturaCategoryMenu({ render: true });
     closeDeviationCategoryMenu({ render: true });
   });
 
@@ -1184,17 +1215,30 @@ function bindEvents() {
     if (event.key !== "Escape") return;
     if (activeDropdownPortalKind) {
       const closingKind = activeDropdownPortalKind;
-      if (closingKind === "deviation") closeDeviationCategoryMenu({ render: true });
+      if (closingKind === "prefatura") closePreFaturaCategoryMenu({ render: true });
+      else if (closingKind === "deviation") closeDeviationCategoryMenu({ render: true });
       else closeDropdownPortal(closingKind, { focus: true });
       event.preventDefault();
       return;
     }
-    if (!isDeviationCategoryMenuOpen) return;
+    if (!isDeviationCategoryMenuOpen && !isPreFaturaCategoryMenuOpen) return;
+    if (isPreFaturaCategoryMenuOpen) {
+      closePreFaturaCategoryMenu({ render: true });
+      el.sheetTabs?.querySelector("[data-prefatura-toggle]")?.focus();
+      event.preventDefault();
+      return;
+    }
     closeDeviationCategoryMenu({ render: true });
     el.sheetTabs?.querySelector("[data-deviation-toggle]")?.focus();
   });
 
   document.addEventListener("click", (event) => {
+    const preFaturaCategory = event.target.closest("body > .prefatura-category-menu [data-prefatura-category]");
+    if (preFaturaCategory) {
+      event.preventDefault();
+      handlePreFaturaCategorySelection(preFaturaCategory.dataset.prefaturaCategory);
+      return;
+    }
     const deviationCategory = event.target.closest("body > .deviation-category-menu [data-deviation-category]");
     if (!deviationCategory) return;
     event.preventDefault();
@@ -1530,12 +1574,27 @@ function getDropdownPortalConfig(kind) {
       focusTarget: el.periodFilterToggle,
     };
   }
-  if (kind === "deviation") {
-    const trigger = el.sheetTabs?.querySelector("[data-deviation-toggle]");
+  if (kind === "prefatura") {
+    const trigger = el.sheetTabs?.querySelector("[data-prefatura-toggle]");
+    const localMenu = el.sheetTabs?.querySelector(".sheet-tab-wrapper--prefatura .prefatura-category-menu");
+    const portalMenu = document.querySelector('[data-dropdown-portal-menu="prefatura"]');
     return {
       kind,
       trigger,
-      menu: document.querySelector(".deviation-category-menu"),
+      menu: portalMenu || localMenu || document.querySelector(".prefatura-category-menu"),
+      minWidth: 230,
+      align: "left",
+      focusTarget: trigger,
+    };
+  }
+  if (kind === "deviation") {
+    const trigger = el.sheetTabs?.querySelector("[data-deviation-toggle]");
+    const localMenu = el.sheetTabs?.querySelector(".sheet-tab-wrapper--deviation .deviation-category-menu");
+    const portalMenu = document.querySelector('[data-dropdown-portal-menu="deviation"]');
+    return {
+      kind,
+      trigger,
+      menu: portalMenu || localMenu || document.querySelector(".deviation-category-menu:not(.prefatura-category-menu)"),
       minWidth: 280,
       align: "left",
       focusTarget: trigger,
@@ -1544,10 +1603,12 @@ function getDropdownPortalConfig(kind) {
   if (String(kind || "").startsWith("pnr:")) {
     const name = String(kind).slice(4);
     const trigger = document.querySelector(`[data-pnr-filter-toggle="${CSS.escape(name)}"]`);
+    const control = trigger?.closest?.("[data-pnr-filter-control]");
+    const localMenu = control?.querySelector?.(`[data-pnr-filter-menu="${CSS.escape(name)}"]`);
     return {
       kind,
       trigger,
-      menu: document.querySelector(`[data-pnr-filter-menu="${CSS.escape(name)}"]`),
+      menu: localMenu || document.querySelector(`[data-pnr-filter-menu="${CSS.escape(name)}"]`),
       minWidth: 220,
       align: "left",
       focusTarget: trigger,
@@ -1629,14 +1690,22 @@ function closeDropdownPortal(kind = activeDropdownPortalKind, options = {}) {
 }
 
 function closeAllFloatingDropdowns(options = {}) {
-  ["type", "month", "period", "deviation"].forEach((kind) => closeDropdownPortal(kind, options));
+  ["type", "month", "period", "prefatura", "deviation"].forEach((kind) => closeDropdownPortal(kind, options));
   closePnrFilterMenus();
+  isPreFaturaCategoryMenuOpen = false;
   isDeviationCategoryMenuOpen = false;
 }
 
 function removeDetachedDeviationMenus() {
+  document.querySelectorAll("body > .prefatura-category-menu").forEach((menu) => menu.remove());
   document.querySelectorAll("body > .deviation-category-menu").forEach((menu) => menu.remove());
+  if (activeDropdownPortalKind === "prefatura") activeDropdownPortalKind = "";
   if (activeDropdownPortalKind === "deviation") activeDropdownPortalKind = "";
+}
+
+function removeDetachedPnrFilterMenus() {
+  document.querySelectorAll("body > [data-pnr-filter-menu], body > [data-dropdown-portal-menu^=\"pnr:\"]").forEach((menu) => menu.remove());
+  if (String(activeDropdownPortalKind || "").startsWith("pnr:")) activeDropdownPortalKind = "";
 }
 
 function getCurrentFileCategory(sheet = state.sheet) {
@@ -1957,8 +2026,10 @@ function closeTopFilterOverlays() {
   closePackageTypeMenu();
   closeCustomFilterMenu("month");
   closeCustomFilterMenu("period");
+  closePreFaturaCategoryMenu();
   closeDeviationCategoryMenu();
   setSearchExpanded(false, { focus: false });
+  setPnrSearchExpanded(false, { focus: false });
   if (el.searchInput && !state.query) el.searchInput.blur();
 }
 
@@ -2262,6 +2333,24 @@ function setSearchExpanded(expanded, options = {}) {
   }
 }
 
+function setPnrSearchExpanded(expanded, options = {}) {
+  const control = options.control || document.querySelector("[data-pnr-search-control]");
+  isPnrSearchExpanded = Boolean(expanded);
+  if (!control) return;
+  const shouldExpand = isPnrSearchExpanded;
+  const input = control.querySelector("[data-pnr-query]");
+  const toggle = control.querySelector("[data-pnr-search-toggle]");
+  control.classList.toggle("is-expanded", shouldExpand);
+  toggle?.setAttribute("aria-expanded", shouldExpand ? "true" : "false");
+  if (shouldExpand && options.focus !== false) {
+    input?.focus?.({ preventScroll: true });
+    window.setTimeout(() => input?.focus?.({ preventScroll: true }), 20);
+  } else if (!shouldExpand) {
+    input?.blur();
+    toggle?.blur();
+  }
+}
+
 function scheduleSearchRender(delay = 320) {
   clearTimeout(searchDebounceTimer);
   searchDebounceTimer = window.setTimeout(() => {
@@ -2301,20 +2390,29 @@ function hydrateControls() {
   renderTabs();
 }
 
-function updateGlobalPeriodFiltersVisibility(isEvolutionView = state.sheet === MONTHLY_BASE_VIEW) {
+function updateGlobalPeriodFiltersVisibility(isEvolutionView = state.sheet === MONTHLY_BASE_VIEW || (state.sheet === PRE_FATURA_VIEW && state.preFaturaView === PREFATURA_VIEW_EVOLUTION)) {
+  const isPnrDeviationView = state.sheet === DEVIATION_MANAGEMENT_VIEW && state.activeDesvioCategory === DEVIATION_CATEGORY_PNRS;
   const hideDataFilters = isEvolutionView || state.sheet === DEVIATION_MANAGEMENT_VIEW;
   const searchFilter = el.searchInput?.closest(".global-search-filter");
   const monthFilter = el.monthFilter || el.monthSelect?.closest(".global-period-filter");
   const periodFilter = el.periodFilter || el.periodSelect?.closest(".global-period-filter");
   const typeFilter = el.typeFilter;
+  const pnrToolbarFilters = ensurePnrToolbarFilters();
   [monthFilter, periodFilter].forEach((filter) => {
     if (filter) filter.hidden = hideDataFilters;
   });
   if (searchFilter) searchFilter.hidden = hideDataFilters;
   if (typeFilter) typeFilter.hidden = hideDataFilters;
+  if (el.globalPeriodFilters) el.globalPeriodFilters.hidden = hideDataFilters;
+  if (pnrToolbarFilters) {
+    pnrToolbarFilters.hidden = !isPnrDeviationView;
+    pnrToolbarFilters.innerHTML = isPnrDeviationView ? renderPnrFilterControls() : "";
+  }
   if (el.viewToolbar) {
-    el.viewToolbar.classList.toggle("is-evolution-view", hideDataFilters);
+    el.viewToolbar.classList.toggle("is-evolution-view", isEvolutionView || (state.sheet === DEVIATION_MANAGEMENT_VIEW && !isPnrDeviationView));
+    el.viewToolbar.classList.toggle("is-prefatura-evolution-view", state.sheet === PRE_FATURA_VIEW && state.preFaturaView === PREFATURA_VIEW_EVOLUTION);
     el.viewToolbar.classList.toggle("is-package-view", state.sheet === PACKAGE_MANAGEMENT_VIEW);
+    el.viewToolbar.classList.toggle("is-pnr-view", isPnrDeviationView);
   }
 }
 
@@ -2775,29 +2873,50 @@ function renderTabs() {
   el.sheetTabs.innerHTML = SHEET_TABS.map((sheet) => {
     const isActive = state.sheet === sheet ? "is-active" : "";
     const label = getSheetDisplayLabel(sheet);
-    if (sheet === DEVIATION_MANAGEMENT_VIEW) {
+    if (sheet === PRE_FATURA_VIEW) {
+      const categoryLabel = getPreFaturaCategoryLabel();
       return `
-        <span class="sheet-tab-wrapper sheet-tab-wrapper--deviation">
+        <span class="sheet-tab-wrapper sheet-tab-wrapper--prefatura">
           <button
             type="button"
-            class="sheet-tab sheet-tab--deviation ${isActive}"
+            class="sheet-tab dashboard-tab-button sheet-tab--prefatura ${isActive}"
+            data-sheet="${escapeAttribute(sheet)}"
+            data-prefatura-toggle
+            aria-haspopup="menu"
+            aria-expanded="${isPreFaturaCategoryMenuOpen ? "true" : "false"}"
+          >
+            <span class="sheet-tab__label">${escapeHtml(label)}</span>
+            ${sheet === state.sheet ? `<span class="sheet-tab__badge">${escapeHtml(categoryLabel)}</span>` : ""}
+          </button>
+          ${renderPreFaturaCategoryMenu()}
+        </span>
+      `;
+    }
+    if (sheet === DEVIATION_MANAGEMENT_VIEW) {
+      return `
+        <span class="sheet-tab-wrapper sheet-tab-wrapper--deviation${isDeviationCategoryMenuOpen ? " is-menu-open" : ""}">
+          <button
+            type="button"
+            class="sheet-tab dashboard-tab-button sheet-tab--deviation ${isActive}"
             data-sheet="${escapeAttribute(sheet)}"
             data-deviation-toggle
             aria-haspopup="menu"
             aria-expanded="${isDeviationCategoryMenuOpen ? "true" : "false"}"
           >
             <span class="sheet-tab__label">${escapeHtml(label)}</span>
+            ${sheet === state.sheet && state.activeDesvioCategory === DEVIATION_CATEGORY_PNRS ? '<span class="sheet-tab__badge">PNR</span>' : ""}
           </button>
           ${renderDeviationCategoryMenu()}
         </span>
       `;
     }
     return `
-      <button type="button" class="sheet-tab ${isActive}" data-sheet="${escapeAttribute(sheet)}">
+      <button type="button" class="sheet-tab dashboard-tab-button ${isActive}" data-sheet="${escapeAttribute(sheet)}">
         ${escapeHtml(label)}
       </button>
     `;
   }).join("");
+  if (isPreFaturaCategoryMenuOpen) openDropdownPortal("prefatura");
   if (isDeviationCategoryMenuOpen) openDropdownPortal("deviation");
 }
 
@@ -2836,9 +2955,10 @@ function renderDashboardRenderError(error) {
 function renderAllUnsafe() {
   resetChartAnimationObservers();
   syncActiveDataset();
+  state.preFaturaView = normalizePreFaturaView(state.preFaturaView);
   renderTabs();
   const packageView = state.sheet === PACKAGE_MANAGEMENT_VIEW;
-  const monthlyView = state.sheet === MONTHLY_BASE_VIEW;
+  const monthlyView = state.sheet === MONTHLY_BASE_VIEW || (state.sheet === PRE_FATURA_VIEW && state.preFaturaView === PREFATURA_VIEW_EVOLUTION);
   const deviationView = state.sheet === DEVIATION_MANAGEMENT_VIEW;
   let filtered = [];
   let sorted = [];
@@ -2906,7 +3026,8 @@ function renderAllUnsafe() {
 }
 
 function renderCurrentTablePageOnly() {
-  if (state.sheet === MONTHLY_BASE_VIEW || state.sheet === DEVIATION_MANAGEMENT_VIEW || state.appView !== "dashboard") {
+  const monthlyView = state.sheet === MONTHLY_BASE_VIEW || (state.sheet === PRE_FATURA_VIEW && state.preFaturaView === PREFATURA_VIEW_EVOLUTION);
+  if (monthlyView || state.sheet === DEVIATION_MANAGEMENT_VIEW || state.appView !== "dashboard") {
     renderAll();
     return;
   }
@@ -3296,6 +3417,102 @@ function toggleDashboardView(monthlyView, packageView = false, deviationView = f
   });
 }
 
+function normalizePreFaturaView(value) {
+  return PREFATURA_CATEGORIES.some((category) => category.key === value) ? value : PREFATURA_VIEW_OVERVIEW;
+}
+
+function getPreFaturaCategoryLabel(value = state.preFaturaView) {
+  return PREFATURA_CATEGORIES.find((category) => category.key === normalizePreFaturaView(value))?.label || "Visão geral";
+}
+
+function getPreFaturaCategoryConfig(value) {
+  return PREFATURA_CATEGORIES.find((category) => category.key === value) || null;
+}
+
+function closePreFaturaCategoryMenu(options = {}) {
+  if (!isPreFaturaCategoryMenuOpen) return;
+  isPreFaturaCategoryMenuOpen = false;
+  closeDropdownPortal("prefatura");
+  if (options.render) renderTabs();
+}
+
+function openPreFaturaCategoryMenu() {
+  closePnrFilterMenus();
+  setPnrSearchExpanded(false, { focus: false });
+  closePackageTypeMenu();
+  closeCustomFilterMenu("month");
+  closeCustomFilterMenu("period");
+  closeDeviationCategoryMenu();
+  setSearchExpanded(false, { focus: false });
+  isPreFaturaCategoryMenuOpen = true;
+  renderTabs();
+}
+
+function togglePreFaturaCategoryMenu() {
+  if (isPreFaturaCategoryMenuOpen) closePreFaturaCategoryMenu({ render: true });
+  else openPreFaturaCategoryMenu();
+}
+
+function handlePreFaturaCategorySelection(categoryKey) {
+  const category = getPreFaturaCategoryConfig(categoryKey);
+  if (!category?.enabled) {
+    showToast("Categoria em desenvolvimento.", "info", 3200);
+    return;
+  }
+  closeTopFilterOverlays();
+  clearTransientDashboardStateForNavigation();
+  state.appView = "dashboard";
+  state.sheet = PRE_FATURA_VIEW;
+  state.preFaturaView = normalizePreFaturaView(category.key);
+  state.page = 1;
+  isPreFaturaCategoryMenuOpen = false;
+  persistState();
+  hydrateControls();
+  renderAll();
+}
+
+function renderPreFaturaCategoryMenu() {
+  return `
+    <div class="deviation-category-menu prefatura-category-menu" role="menu" ${isPreFaturaCategoryMenuOpen ? "" : "hidden"}>
+      ${PREFATURA_CATEGORIES.map((category) => {
+    const isActive = normalizePreFaturaView(state.preFaturaView) === category.key;
+    const itemState = [
+      "deviation-category-menu__item",
+      isActive ? "is-active" : "",
+      category.enabled ? "" : "is-disabled",
+    ].filter(Boolean).join(" ");
+    return `
+        <button
+          type="button"
+          class="${itemState}"
+          data-prefatura-category="${escapeAttribute(category.key)}"
+          role="menuitem"
+          aria-disabled="${category.enabled ? "false" : "true"}"
+          aria-label="${escapeAttribute(category.enabled ? category.label : `${category.label} - Categoria em desenvolvimento`)}"
+        >
+          <span>${escapeHtml(category.label)}</span>
+          ${
+            category.enabled
+              ? isActive
+                ? `<span class="deviation-category-menu__status" aria-hidden="true">
+                    <svg viewBox="0 0 24 24">
+                      <path d="m5 12 4 4L19 6" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2"></path>
+                    </svg>
+                  </span>`
+                : ""
+              : `<span class="deviation-category-menu__status" aria-hidden="true">
+                  <svg viewBox="0 0 24 24">
+                    <path d="M7 11V8a5 5 0 0 1 10 0v3m-9 0h8a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2Z" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8"></path>
+                  </svg>
+                </span>`
+          }
+        </button>
+      `;
+  }).join("")}
+    </div>
+  `;
+}
+
 function normalizeDeviationCategory(value) {
   if (!value) return null;
   return DEVIATION_CATEGORIES.some((category) => category.key === value) ? value : null;
@@ -3318,6 +3535,7 @@ function closeDeviationCategoryMenu(options = {}) {
 
 function openDeviationCategoryMenu() {
   closePnrFilterMenus();
+  setPnrSearchExpanded(false, { focus: false });
   closePackageTypeMenu();
   closeCustomFilterMenu("month");
   closeCustomFilterMenu("period");
@@ -3406,24 +3624,16 @@ function renderDeviationManagementView() {
   state.activeDesvioCategory = normalizeDeviationCategory(state.activeDesvioCategory);
   if (state.activeDesvioCategory === DEVIATION_CATEGORY_PNRS) {
     try {
+      removeDetachedPnrFilterMenus();
       el.deviationManagementView.innerHTML = renderPnrPage();
       if (activePnrFilterMenu) window.requestAnimationFrame(() => openDropdownPortal(`pnr:${activePnrFilterMenu}`));
     } catch (error) {
       console.error("Erro ao renderizar Gestão de Desvios / PNRs:", error);
       console.error("Stack:", error?.stack);
       el.deviationManagementView.innerHTML = `
-        <article class="panel deviation-management-panel">
-          <div class="panel__header">
-            <div>
-              <h2>Gestão de Desvios · PNRs</h2>
-              <p>As demais áreas do painel continuam disponíveis.</p>
-            </div>
-          </div>
-          <article class="panel pnr-status-panel pnr-status-panel--error">
-            <strong>Não foi possível carregar a seção de PNRs.</strong>
-            <span>As demais áreas do painel continuam disponíveis. Verifique o console para detalhes técnicos.</span>
-          </article>
-        </article>
+        <section class="pnr-page">
+          ${renderDashboardErrorState(getDashboardStateConfig("supabase-error"))}
+        </section>
       `;
     }
     return;
@@ -3452,10 +3662,7 @@ function getPnrRowsCacheKey() {
     getPnrSelectedMonthKeys().join("|"),
     getPnrFilterSelectedValues(state.pnrQuinzena, ["q1", "q2"]).join("|") || "all",
     getPnrFilterSelectedValues(state.pnrStatus).join("|") || "Todos",
-    getPnrFilterSelectedValues(state.pnrTipoOperacional).join("|") || "Todos",
     getPnrFilterSelectedValues(state.pnrEstacao).join("|") || "Todos",
-    getPnrFilterSelectedValues(state.pnrStatusMotorista).join("|") || "Todos",
-    getPnrFilterSelectedValues(state.pnrFonteCruzamento).join("|") || "Todos",
     normalize(state.pnrQuery),
   ].join("::");
 }
@@ -3869,20 +4076,14 @@ function getFilteredPnrRows() {
   const selectedMonths = new Set(getPnrSelectedMonthKeys());
   const selectedQuinzenas = new Set(getPnrFilterSelectedValues(state.pnrQuinzena, ["q1", "q2"]));
   const selectedStatuses = new Set(getPnrFilterSelectedValues(state.pnrStatus));
-  const selectedTipos = new Set(getPnrFilterSelectedValues(state.pnrTipoOperacional));
   const selectedEstacoes = new Set(getPnrFilterSelectedValues(state.pnrEstacao));
-  const selectedStatusMotoristas = new Set(getPnrFilterSelectedValues(state.pnrStatusMotorista));
-  const selectedFontesCruzamento = new Set(getPnrFilterSelectedValues(state.pnrFonteCruzamento));
   const query = normalize(state.pnrQuery);
   const rows = pnrRows.filter((row) => {
     const monthKey = row.monthKey || getPnrPeriodFromBillingPeriod(row.sourcePeriodo || row.periodoFaturamentoOriginal || row.periodoFaturamento)?.monthKey || getPnrPeriodFromDate(row.dataCaso || row.periodoFaturamento).monthKey;
     if (selectedMonths.size && !selectedMonths.has(monthKey)) return false;
     if (selectedQuinzenas.size && !selectedQuinzenas.has(getPeriodModeFromLabel(row.quinzena))) return false;
     if (selectedStatuses.size && !selectedStatuses.has(row.statusNormalizado)) return false;
-    if (selectedTipos.size && !selectedTipos.has(row.tipoBase || row.tipoOperacional)) return false;
     if (selectedEstacoes.size && !selectedEstacoes.has(row.estacaoOrigem)) return false;
-    if (selectedStatusMotoristas.size && !selectedStatusMotoristas.has(row.statusMotorista)) return false;
-    if (selectedFontesCruzamento.size && !selectedFontesCruzamento.has(row.fonteCruzamento)) return false;
     if (query && !String(row._search || "").includes(query)) return false;
     return true;
   });
@@ -4092,7 +4293,14 @@ function formatPnrTableCell(row, column) {
   return escapeHtml(value || "—");
 }
 
+function getDashboardFilterSizeClass(name) {
+  if (name === "month" || name === "pageSize") return "dashboard-filter-sm";
+  if (name === "estacao" || name === "base" || name === "origem") return "dashboard-filter-lg";
+  return "dashboard-filter-md";
+}
+
 function renderPnrFilterSelect(name, label, value, options, allLabel = "Todos") {
+  const sizeClass = getDashboardFilterSizeClass(name);
   const sourceOptions = (Array.isArray(options) ? options : []).map((option) => ({
     value: String(typeof option === "string" ? option : option.value),
     label: String(typeof option === "string" ? option : option.label),
@@ -4102,16 +4310,16 @@ function renderPnrFilterSelect(name, label, value, options, allLabel = "Todos") 
     const selected = sourceOptions.find((option) => option.value === normalizedValue) || sourceOptions[0];
     const isOpen = activePnrFilterMenu === name;
     return `
-      <div class="pnr-filter-control pnr-filter-dropdown" data-pnr-filter-control="${escapeAttribute(name)}">
+      <div class="pnr-filter-control pnr-filter-dropdown dashboard-filter-select ${sizeClass}" data-pnr-filter-control="${escapeAttribute(name)}">
         <span>${escapeHtml(label)}</span>
         <button type="button" class="pnr-filter-button" data-pnr-filter-toggle="${escapeAttribute(name)}" aria-haspopup="listbox" aria-expanded="${isOpen ? "true" : "false"}">
           <strong>${escapeHtml(selected?.label || allLabel)}</strong>
           <svg viewBox="0 0 20 20" aria-hidden="true"><path d="m5 7 5 5 5-5" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8"></path></svg>
         </button>
-        <div class="pnr-filter-menu" data-pnr-filter-menu="${escapeAttribute(name)}" role="listbox" ${isOpen ? "" : "hidden"}>
+        <div class="pnr-filter-menu dashboard-filter-dropdown" data-pnr-filter-menu="${escapeAttribute(name)}" role="listbox" ${isOpen ? "" : "hidden"}>
           ${sourceOptions.map((option) => {
             const selectedClass = option.value === normalizedValue ? " is-active" : "";
-            return `<button type="button" class="pnr-filter-option${selectedClass}" data-pnr-filter-option="${escapeAttribute(name)}" data-value="${escapeAttribute(option.value)}" role="option" aria-selected="${selectedClass ? "true" : "false"}">${escapeHtml(option.label)}</button>`;
+            return `<button type="button" class="pnr-filter-option dashboard-filter-option${selectedClass}" data-pnr-filter-option="${escapeAttribute(name)}" data-value="${escapeAttribute(option.value)}" role="option" aria-selected="${selectedClass ? "true" : "false"}">${escapeHtml(option.label)}</button>`;
           }).join("")}
         </div>
       </div>
@@ -4124,25 +4332,28 @@ function renderPnrFilterSelect(name, label, value, options, allLabel = "Todos") 
   const buttonLabel = getPnrFilterSelectionLabel(value, specificOptions, allLabel);
   const isOpen = activePnrFilterMenu === name;
   return `
-    <div class="pnr-filter-control pnr-filter-dropdown" data-pnr-filter-control="${escapeAttribute(name)}">
+    <div class="pnr-filter-control pnr-filter-dropdown dashboard-filter-select ${sizeClass}" data-pnr-filter-control="${escapeAttribute(name)}">
       <span>${escapeHtml(label)}</span>
       <button type="button" class="pnr-filter-button" data-pnr-filter-toggle="${escapeAttribute(name)}" aria-haspopup="listbox" aria-expanded="${isOpen ? "true" : "false"}">
         <strong>${escapeHtml(buttonLabel)}</strong>
         <svg viewBox="0 0 20 20" aria-hidden="true"><path d="m5 7 5 5 5-5" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8"></path></svg>
       </button>
-      <div class="pnr-filter-menu type-filter__menu" data-pnr-filter-menu="${escapeAttribute(name)}" role="menu" ${isOpen ? "" : "hidden"}>
-        <label class="type-filter__option custom-filter__option pnr-filter-option">
+      <div class="pnr-filter-menu type-filter__menu dashboard-filter-dropdown" data-pnr-filter-menu="${escapeAttribute(name)}" role="menu" ${isOpen ? "" : "hidden"}>
+        <label class="type-filter__option custom-filter__option pnr-filter-option dashboard-filter-option${allSelected ? " is-selected" : ""}">
           <input type="checkbox" value="Todos" data-pnr-filter-option="${escapeAttribute(name)}" ${allSelected ? "checked" : ""}>
           <span class="type-filter__check" aria-hidden="true"></span>
           <span>${escapeHtml(allLabel)}</span>
         </label>
-        ${specificOptions.map((option) => `
-          <label class="type-filter__option custom-filter__option pnr-filter-option">
-            <input type="checkbox" value="${escapeAttribute(option.value)}" data-pnr-filter-option="${escapeAttribute(name)}" ${!allSelected && selectedSet.has(option.value) ? "checked" : ""}>
+        ${specificOptions.map((option) => {
+          const isSelected = !allSelected && selectedSet.has(option.value);
+          return `
+          <label class="type-filter__option custom-filter__option pnr-filter-option dashboard-filter-option${isSelected ? " is-selected" : ""}">
+            <input type="checkbox" value="${escapeAttribute(option.value)}" data-pnr-filter-option="${escapeAttribute(name)}" ${isSelected ? "checked" : ""}>
             <span class="type-filter__check" aria-hidden="true"></span>
             <span>${escapeHtml(option.label)}</span>
           </label>
-        `).join("")}
+        `;
+        }).join("")}
       </div>
     </div>
   `;
@@ -4156,6 +4367,50 @@ function renderPnrPageSizeControl() {
     [10, 15, 25, 50, 100].map((size) => ({ value: String(size), label: String(size) })),
     "15",
   );
+}
+
+function ensurePnrToolbarFilters() {
+  if (el.pnrToolbarFilters) return el.pnrToolbarFilters;
+  if (!el.viewToolbar) return null;
+  const toolbar = document.createElement("div");
+  toolbar.id = "pnr-toolbar-filters";
+  toolbar.className = "pnr-toolbar-filters";
+  toolbar.setAttribute("aria-label", "Filtros de PNRs");
+  toolbar.hidden = true;
+  el.viewToolbar.appendChild(toolbar);
+  el.pnrToolbarFilters = toolbar;
+  return toolbar;
+}
+
+function renderPnrFilterControls() {
+  const monthSelectOptions = getPnrMonthOptions().map((option) => ({ value: option.key, label: option.label }));
+  const filterOptions = getPnrFilterOptions();
+  const pnrSearchOpen = Boolean(state.pnrQuery || isPnrSearchExpanded);
+  return `
+    <div class="pnr-filter-bar">
+      <div class="pnr-filter-row dashboard-filter-bar">
+        <div class="pnr-search global-search-filter dashboard-search-button dashboard-filter-xs${pnrSearchOpen ? " is-expanded" : ""}" data-pnr-search-control>
+          <button type="button" class="global-search-filter__button" data-pnr-search-toggle aria-label="Pesquisar PNRs" aria-expanded="${pnrSearchOpen ? "true" : "false"}">
+            <svg viewBox="0 0 20 20"><path d="M8.8 4.2a4.6 4.6 0 1 0 0 9.2 4.6 4.6 0 0 0 0-9.2Zm3.35 7.95 3.65 3.65" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.55"></path></svg>
+          </button>
+          <input type="search" data-pnr-query value="${escapeAttribute(state.pnrQuery || "")}" placeholder="Buscar" autocomplete="off">
+        </div>
+        ${renderPnrFilterSelect("month", "Mês", state.pnrMonths, monthSelectOptions)}
+        ${renderPnrFilterSelect("quinzena", "Quinzena", state.pnrQuinzena || "all", [
+          { value: "q1", label: "1ª quinzena" },
+          { value: "q2", label: "2ª quinzena" },
+        ])}
+        ${renderPnrFilterSelect("status", "Status", state.pnrStatus, filterOptions.statuses)}
+        ${renderPnrFilterSelect("estacao", "Origem", state.pnrEstacao, filterOptions.estacoes)}
+        <button type="button" class="secondary-button dashboard-clear-button dashboard-filter-action" data-pnr-clear aria-label="Limpar filtros">
+          <svg viewBox="0 0 24 24" aria-hidden="true">
+            <path d="M6 6l12 12M18 6 6 18" fill="none" stroke="currentColor" stroke-linecap="round" stroke-width="1.9"></path>
+          </svg>
+          <span>Limpar</span>
+        </button>
+      </div>
+    </div>
+  `;
 }
 
 function renderPnrBarList(rows, options = {}) {
@@ -4315,90 +4570,6 @@ function renderPnrSkeleton(title = "Carregando", description = "Consultando dado
   `;
 }
 
-function renderPnrProcessingPanel({ hasFiles, totalRows, remotePending = false }) {
-  const meta = pnrRemoteState.cacheMeta || readPnrLightCache();
-  const lastProcessedAt = pnrRemoteState.lastProcessedAt || meta?.lastUpdatedAt || meta?.savedAt || "";
-  const hasData = hasPnrRemoteData() && Number(totalRows || 0) > 0;
-  const baseState = getModuleBaseState(DASHBOARD_MODULE_KEYS.desviosPnr);
-  if (!hasFiles) {
-    if (moduleIsConfirmedEmpty(DASHBOARD_MODULE_KEYS.desviosPnr)) {
-      return `
-        <article class="panel pnr-status-panel pnr-status-panel--empty">
-          <strong>Base de PNRs ainda não importada.</strong>
-          <span>Envie um arquivo XLSX ou CSV para alimentar este módulo.</span>
-        </article>
-      `;
-    }
-    if (baseState.status === MODULE_BASE_STATUS.error) {
-      return `
-        <article class="panel pnr-status-panel pnr-status-panel--error">
-          <strong>Não foi possível carregar a seção de PNRs.</strong>
-          <span>As demais áreas do painel continuam disponíveis. Verifique o console para detalhes técnicos.</span>
-          <button type="button" class="secondary-button" data-pnr-reprocess>Atualizar</button>
-        </article>
-      `;
-    }
-    return `
-      <article class="panel pnr-status-panel pnr-status-panel--processing dashboard-state-card dashboard-state-card--loading" aria-live="polite">
-        <div>
-          <strong>Carregando dados...</strong>
-          <span>Estamos validando a base persistida de PNRs.</span>
-        </div>
-        <div class="pnr-progress" aria-hidden="true"><span></span></div>
-      </article>
-    `;
-  }
-  if (pnrRemoteState.error) {
-    if (hasData) {
-      return `
-        <article class="panel pnr-status-panel pnr-status-panel--error">
-          <div>
-            <strong>Não foi possível atualizar os dados agora.</strong>
-            <span>Exibindo última versão carregada. As demais áreas do painel continuam disponíveis.</span>
-          </div>
-          <button type="button" class="secondary-button" data-pnr-reprocess>Atualizar</button>
-        </article>
-      `;
-    }
-    return `
-      <article class="panel pnr-status-panel pnr-status-panel--error">
-        <strong>Não foi possível carregar a seção de PNRs.</strong>
-        <span>As demais áreas do painel continuam disponíveis. Verifique o console para detalhes técnicos.</span>
-        <button type="button" class="secondary-button" data-pnr-reprocess>Atualizar</button>
-      </article>
-    `;
-  }
-  if (remotePending || pnrRemoteState.loadingSummary || pnrRemoteState.loadingCharts || pnrRemoteState.loadingTable) {
-    if (hasData) {
-      return renderDashboardUpdatingBadge(DASHBOARD_MODULE_KEYS.desviosPnr);
-    }
-    const countText = Number(totalRows || 0) > 0
-      ? `${integer.format(Math.min(Number(totalRows || 0), Number(state.pageSize || 15)))} de ${integer.format(Number(totalRows || 0))} registros analisados`
-      : "Consultando registros processados";
-    return `
-      <article class="panel pnr-status-panel pnr-status-panel--processing dashboard-state-card dashboard-state-card--loading" aria-live="polite">
-        <div>
-          <strong>Carregando dados...</strong>
-          <span>Estamos consultando a base do painel. ${escapeHtml(countText)}.</span>
-        </div>
-        <div class="pnr-progress" aria-hidden="true"><span></span></div>
-      </article>
-    `;
-  }
-  if (hasData) {
-    return `
-      <article class="panel pnr-status-panel pnr-status-panel--ready">
-        <div>
-          <strong>Dados carregados do Supabase</strong>
-          <span>${escapeHtml(lastProcessedAt ? `Última atualização: ${formatDateTime(lastProcessedAt)}` : "Atualizando dados processados pelo banco.")}</span>
-        </div>
-        <button type="button" class="secondary-button" data-pnr-reprocess>Atualizar</button>
-      </article>
-    `;
-  }
-  return "";
-}
-
 function renderPnrPage() {
   const hasRemoteFiles = getPnrRemoteFileIds().length > 0;
   const pnrBaseState = getModuleBaseState(DASHBOARD_MODULE_KEYS.desviosPnr);
@@ -4416,15 +4587,6 @@ function renderPnrPage() {
       });
       return `
         <section class="pnr-page">
-          <article class="panel deviation-management-panel pnr-hero-panel">
-            <div class="panel__header">
-              <div>
-                <h2>Gestão de Desvios · PNRs</h2>
-                <p>Análise de casos PNR separada das bases de Pré-Fatura e Gestão de Pacotes.</p>
-              </div>
-              <span class="panel__meta">Erro ao consultar base</span>
-            </div>
-          </article>
           ${renderDashboardErrorState(getDashboardStateConfig("supabase-error"))}
         </section>
       `;
@@ -4439,15 +4601,6 @@ function renderPnrPage() {
       });
       return `
         <section class="pnr-page">
-          <article class="panel deviation-management-panel pnr-hero-panel">
-            <div class="panel__header">
-              <div>
-                <h2>Gestão de Desvios · PNRs</h2>
-                <p>Análise de casos PNR separada das bases de Pré-Fatura e Gestão de Pacotes.</p>
-              </div>
-              <span class="panel__meta">Sem base importada</span>
-            </div>
-          </article>
           ${renderDashboardEmptyState(getModuleEmptyStateConfig(DASHBOARD_MODULE_KEYS.desviosPnr))}
         </section>
       `;
@@ -4470,15 +4623,6 @@ function renderPnrPage() {
     });
     return `
       <section class="pnr-page">
-        <article class="panel deviation-management-panel pnr-hero-panel">
-          <div class="panel__header">
-            <div>
-              <h2>Gestão de Desvios · PNRs</h2>
-              <p>Análise de casos PNR separada das bases de Pré-Fatura e Gestão de Pacotes.</p>
-            </div>
-            <span class="panel__meta">Consultando base</span>
-          </div>
-        </article>
         ${renderDashboardLoadingState({
           title: "Carregando dados da base...",
           description: "Consultando informações salvas no painel.",
@@ -4497,8 +4641,6 @@ function renderPnrPage() {
   }
   const localTableView = shouldUseRemote ? { filteredRows: [], sortedRows: [], pagedRows: [] } : getPnrTableViewModel();
   const { filteredRows, sortedRows, pagedRows } = localTableView;
-  const monthOptions = getPnrMonthOptions();
-  const filterOptions = getPnrFilterOptions();
   const analysis = shouldUseRemote && pnrRemoteState.summary
     ? {
       summary: pnrRemoteState.summary,
@@ -4518,22 +4660,13 @@ function renderPnrPage() {
     { label: "Enviados para faturamento", value: integer.format(summary.faturamento), tone: "kpi-card--volume", delta: `${formatPercent(summary.count ? (summary.faturamento / summary.count) * 100 : 0)} do recorte` },
     { label: "Status em aberto/análise", value: integer.format(summary.aberto), tone: "kpi-card--neutral", delta: "Status restantes no recorte" },
   ];
-  const monthSelectOptions = monthOptions.map((option) => ({ value: option.key, label: option.label }));
-  const totalLoadedRows = shouldUseRemote ? Number(pnrRemoteState.total || 0) : pnrRows.length;
-  const pnrLoadState = renderPnrProcessingPanel({ hasFiles: hasRemoteScope || Boolean(pnrRows.length), totalRows: totalLoadedRows, remotePending });
+  const pnrUpdatingBadge = (remotePending || pnrRemoteState.loadingSummary || pnrRemoteState.loadingCharts || pnrRemoteState.loadingTable) && summary.count
+    ? renderDashboardUpdatingBadge(DASHBOARD_MODULE_KEYS.desviosPnr)
+    : "";
   const noPnrBase = moduleIsConfirmedEmpty(DASHBOARD_MODULE_KEYS.desviosPnr) && !pnrRows.length && !hasPnrRemoteData() && !pnrRemoteState.loadingTable && !pnrRemoteState.loadingSummary && !pnrRemoteState.loadingCharts && !pnrRemoteState.error;
   if (noPnrBase) {
     return `
       <section class="pnr-page">
-        <article class="panel deviation-management-panel pnr-hero-panel">
-          <div class="panel__header">
-            <div>
-              <h2>Gestão de Desvios · PNRs</h2>
-              <p>Análise de casos PNR separada das bases de Pré-Fatura e Gestão de Pacotes.</p>
-            </div>
-            <span class="panel__meta">Sem base importada</span>
-          </div>
-        </article>
         ${renderDashboardEmptyState(getModuleEmptyStateConfig(DASHBOARD_MODULE_KEYS.desviosPnr))}
       </section>
     `;
@@ -4541,57 +4674,13 @@ function renderPnrPage() {
   if (pnrBaseState.status === MODULE_BASE_STATUS.error && !hasPnrRemoteData() && !pnrRows.length) {
     return `
       <section class="pnr-page">
-        <article class="panel deviation-management-panel pnr-hero-panel">
-          <div class="panel__header">
-            <div>
-              <h2>Gestão de Desvios · PNRs</h2>
-              <p>Análise de casos PNR separada das bases de Pré-Fatura e Gestão de Pacotes.</p>
-            </div>
-            <span class="panel__meta">Erro ao consultar base</span>
-          </div>
-        </article>
         ${renderDashboardErrorState(getDashboardStateConfig("supabase-error"))}
       </section>
     `;
   }
   return `
     <section class="pnr-page">
-      <article class="panel deviation-management-panel pnr-hero-panel">
-        <div class="panel__header">
-          <div>
-            <h2>Gestão de Desvios · PNRs</h2>
-            <p>Análise de casos PNR separada das bases de Pré-Fatura e Gestão de Pacotes.</p>
-          </div>
-          <span class="panel__meta">${integer.format(totalLoadedRows)} registros carregados</span>
-        </div>
-        <div class="pnr-filter-bar">
-          <div class="pnr-filter-row pnr-filter-row--primary">
-            <div class="pnr-search global-search-filter${state.pnrQuery ? " is-expanded" : ""}" data-pnr-search-control>
-              <button type="button" class="global-search-filter__button" data-pnr-search-toggle aria-label="Pesquisar PNRs">
-                <svg viewBox="0 0 24 24"><path d="m21 21-4.35-4.35M10.8 18a7.2 7.2 0 1 1 0-14.4 7.2 7.2 0 0 1 0 14.4Z" fill="none" stroke="currentColor" stroke-linecap="round" stroke-width="2"></path></svg>
-              </button>
-              <input type="search" data-pnr-query value="${escapeAttribute(state.pnrQuery || "")}" placeholder="Buscar" autocomplete="off">
-            </div>
-            ${renderPnrFilterSelect("month", "Mês", state.pnrMonths, monthSelectOptions)}
-            ${renderPnrFilterSelect("quinzena", "Quinzena", state.pnrQuinzena || "all", [
-              { value: "q1", label: "1ª quinzena" },
-              { value: "q2", label: "2ª quinzena" },
-            ])}
-            ${renderPnrFilterSelect("status", "Status", state.pnrStatus, filterOptions.statuses)}
-            ${renderPnrFilterSelect("tipo", "Tipo de base", state.pnrTipoOperacional, filterOptions.tipos)}
-          </div>
-          <div class="pnr-filter-row pnr-filter-row--secondary">
-            ${renderPnrFilterSelect("statusMotorista", "Status do motorista", state.pnrStatusMotorista, filterOptions.statusMotoristas)}
-            ${renderPnrFilterSelect("fonteCruzamento", "Fonte do cruzamento", state.pnrFonteCruzamento, filterOptions.fontesCruzamento)}
-            ${renderPnrFilterSelect("estacao", "Estação de origem", state.pnrEstacao, filterOptions.estacoes)}
-            ${renderPnrFilterSelect("motorista", "Motorista", state.pnrMotorista, filterOptions.motoristas)}
-            ${renderPnrFilterSelect("rota", "Rota", state.pnrRota, filterOptions.rotas)}
-            <button type="button" class="secondary-button" data-pnr-clear>Limpar</button>
-          </div>
-        </div>
-      </article>
-
-      ${pnrLoadState}
+      ${pnrUpdatingBadge}
 
       <section class="kpi-grid__group kpi-grid__group--main pnr-kpi-grid" aria-label="Cards principais de PNRs">
         ${(remotePending || pnrRemoteState.loadingSummary) && !summary.count ? Array.from({ length: 6 }).map((_, index) => renderDashboardSkeletonCard(index)).join("") : cards.map((card, index) => renderKpiCard(card, index)).join("")}
@@ -4631,7 +4720,7 @@ function hasLoadedDashboardData() {
 
 function getDashboardModuleKeyForSheet(sheet = state.sheet) {
   if (sheet === PACKAGE_MANAGEMENT_VIEW) return DASHBOARD_MODULE_KEYS.pacotes;
-  if (sheet === MONTHLY_BASE_VIEW) return DASHBOARD_MODULE_KEYS.evolucao;
+  if (sheet === MONTHLY_BASE_VIEW || (sheet === PRE_FATURA_VIEW && state.preFaturaView === PREFATURA_VIEW_EVOLUTION)) return DASHBOARD_MODULE_KEYS.evolucao;
   if (sheet === DEVIATION_MANAGEMENT_VIEW) return DASHBOARD_MODULE_KEYS.desviosPnr;
   return DASHBOARD_MODULE_KEYS.preFatura;
 }
@@ -5331,6 +5420,7 @@ function resetDashboardFilters() {
   Object.assign(state, {
     query: "",
     sheet: PRE_FATURA_VIEW,
+    preFaturaView: PREFATURA_VIEW_OVERVIEW,
     tipo: "Todos",
     prefaturaTipo: "Todos",
     packageTipo: "Todos",
@@ -9506,14 +9596,15 @@ function renderFilterSummary() {
     if (value && value !== "Todos") applied.push({ label, value });
   };
 
+  const isPreFaturaEvolution = state.sheet === PRE_FATURA_VIEW && state.preFaturaView === PREFATURA_VIEW_EVOLUTION;
   if (state.sheet !== PRE_FATURA_VIEW) push("Aba", getSheetDisplayLabel(state.sheet));
-  if (state.sheet !== MONTHLY_BASE_VIEW) push("Tipo", getActiveTypeFilter());
+  if (!isPreFaturaEvolution && state.sheet !== MONTHLY_BASE_VIEW) push("Tipo", getActiveTypeFilter());
   const monthOptions = getActiveMonthOptions();
   const monthSelection = getActiveMonthSelectionValues();
   if (monthOptions.length && monthSelection.length !== monthOptions.length) push("Mês", getMonthSelectionLabel(monthSelection, monthOptions));
   const activePeriod = getActivePeriodMode();
   if (activePeriod !== "month") push("Período", getPeriodModeLabel(activePeriod));
-  if (state.query && state.sheet !== MONTHLY_BASE_VIEW) applied.push({ label: "Busca", value: state.query });
+  if (state.query && !isPreFaturaEvolution && state.sheet !== MONTHLY_BASE_VIEW) applied.push({ label: "Busca", value: state.query });
 
   if (el.activeFiltersCount) {
     el.activeFiltersCount.textContent = `${applied.length} filtro${applied.length === 1 ? "" : "s"} ativo${applied.length === 1 ? "" : "s"}`;
@@ -13170,12 +13261,12 @@ function buildPnrRemotePayload(records = dashboardFileRecords) {
     p_month_keys: getPnrFilterSelectedValues(state.pnrMonths, pnrRemoteState.monthOptions.map((option) => option.key)),
     p_quinzenas: getPnrFilterSelectedValues(state.pnrQuinzena, ["q1", "q2"]),
     p_statuses: getPnrFilterSelectedValues(state.pnrStatus, filterOptions.statuses),
-    p_tipos: getPnrFilterSelectedValues(state.pnrTipoOperacional, filterOptions.tipos),
+    p_tipos: [],
     p_estacoes: getPnrFilterSelectedValues(state.pnrEstacao, filterOptions.estacoes),
-    p_status_motoristas: getPnrFilterSelectedValues(state.pnrStatusMotorista, filterOptions.statusMotoristas),
-    p_fontes: getPnrFilterSelectedValues(state.pnrFonteCruzamento, filterOptions.fontesCruzamento),
-    p_motoristas: getPnrFilterSelectedValues(state.pnrMotorista, filterOptions.motoristas),
-    p_rotas: getPnrFilterSelectedValues(state.pnrRota, filterOptions.rotas),
+    p_status_motoristas: [],
+    p_fontes: [],
+    p_motoristas: [],
+    p_rotas: [],
     p_search: String(state.pnrQuery || "").trim(),
   };
   return {
@@ -13411,12 +13502,7 @@ async function refreshPnrRemoteDashboard(options = {}) {
         months: state.pnrMonths,
         quinzena: state.pnrQuinzena,
         status: state.pnrStatus,
-        tipo: state.pnrTipoOperacional,
         estacao: state.pnrEstacao,
-        statusMotorista: state.pnrStatusMotorista,
-        fonteCruzamento: state.pnrFonteCruzamento,
-        motorista: state.pnrMotorista,
-        rota: state.pnrRota,
       },
       competencia: pnrRemoteState.monthOptions.map((option) => option.label).filter(Boolean).join(", "),
       summary: pnrRemoteState.summary,
@@ -15844,7 +15930,10 @@ function normalizeLoadedState(loadedState) {
   loadedState.accountPanelOpen = false;
   loadedState.fileName = "";
   loadedState.activeDatasetId = EMPTY_DATASET_ID;
-  if (loadedState.sheet === "Todos") {
+  if (loadedState.sheet === MONTHLY_BASE_VIEW) {
+    loadedState.sheet = PRE_FATURA_VIEW;
+    loadedState.preFaturaView = PREFATURA_VIEW_EVOLUTION;
+  } else if (loadedState.sheet === "Todos") {
     loadedState.sheet = PRE_FATURA_VIEW;
   } else if (SHEET_ORDER.includes(loadedState.sheet)) {
     loadedState.prefaturaTipo = getPrefaturaTypeForDivision(loadedState.sheet);
@@ -15852,6 +15941,7 @@ function normalizeLoadedState(loadedState) {
   } else if (!SHEET_TABS.includes(loadedState.sheet)) {
     loadedState.sheet = PRE_FATURA_VIEW;
   }
+  loadedState.preFaturaView = normalizePreFaturaView(loadedState.preFaturaView);
   loadedState.prefaturaTipo = normalizeTypeSelection(loadedState.prefaturaTipo);
   loadedState.packageTipo = normalizeTypeSelection(loadedState.packageTipo);
   loadedState.prefaturaMonths = Array.isArray(loadedState.prefaturaMonths) ? loadedState.prefaturaMonths : [];
@@ -15865,12 +15955,12 @@ function normalizeLoadedState(loadedState) {
     ? getPnrFilterSelectedValues(loadedState.pnrQuinzena, ["q1", "q2"])
     : ["all", "q1", "q2"].includes(loadedState.pnrQuinzena) ? loadedState.pnrQuinzena : "all";
   loadedState.pnrStatus = Array.isArray(loadedState.pnrStatus) ? loadedState.pnrStatus : normalizePnrSelectValue(loadedState.pnrStatus);
-  loadedState.pnrTipoOperacional = Array.isArray(loadedState.pnrTipoOperacional) ? loadedState.pnrTipoOperacional : normalizePnrSelectValue(loadedState.pnrTipoOperacional);
   loadedState.pnrEstacao = Array.isArray(loadedState.pnrEstacao) ? loadedState.pnrEstacao : normalizePnrSelectValue(loadedState.pnrEstacao);
-  loadedState.pnrStatusMotorista = Array.isArray(loadedState.pnrStatusMotorista) ? loadedState.pnrStatusMotorista : normalizePnrSelectValue(loadedState.pnrStatusMotorista);
-  loadedState.pnrFonteCruzamento = Array.isArray(loadedState.pnrFonteCruzamento) ? loadedState.pnrFonteCruzamento : normalizePnrSelectValue(loadedState.pnrFonteCruzamento);
-  loadedState.pnrMotorista = Array.isArray(loadedState.pnrMotorista) ? loadedState.pnrMotorista : normalizePnrSelectValue(loadedState.pnrMotorista);
-  loadedState.pnrRota = Array.isArray(loadedState.pnrRota) ? loadedState.pnrRota : normalizePnrSelectValue(loadedState.pnrRota);
+  loadedState.pnrTipoOperacional = "Todos";
+  loadedState.pnrStatusMotorista = "Todos";
+  loadedState.pnrFonteCruzamento = "Todos";
+  loadedState.pnrMotorista = "Todos";
+  loadedState.pnrRota = "Todos";
   loadedState.period = loadedState.prefaturaPeriod;
   loadedState.tipo = "Todos";
   return loadedState;

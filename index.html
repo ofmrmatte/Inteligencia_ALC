@@ -18,7 +18,7 @@
       href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&family=Space+Grotesk:wght@500;700&display=swap"
       rel="stylesheet"
     />
-    <link rel="stylesheet" href="./styles.css" />
+    <link rel="stylesheet" href="./styles.css?v=20260520-pnr-typography-v3" />
   </head>
   <body data-theme="dark">
     <div class="app-shell">
@@ -101,16 +101,16 @@
         <section class="content">
           <div class="view-toolbar">
             <nav class="sheet-tabs" id="sheet-tabs" aria-label="Selecionar aba de origem"></nav>
-            <div class="global-period-filters" aria-label="Filtros de período e tipo">
-              <div class="global-search-filter top-filter-control" id="top-search-filter">
+            <div class="global-period-filters dashboard-filter-bar" aria-label="Filtros de período e tipo">
+              <div class="global-search-filter top-filter-control dashboard-search-button dashboard-filter-xs" id="top-search-filter">
                 <button class="global-search-filter__button" id="search-toggle" type="button" aria-label="Pesquisar">
-                  <svg viewBox="0 0 24 24">
-                    <path d="M10.5 4a6.5 6.5 0 1 0 4.13 11.52L20 21l1-1-5.38-5.38A6.5 6.5 0 0 0 10.5 4Z" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8"></path>
+                  <svg viewBox="0 0 20 20">
+                    <path d="M8.8 4.2a4.6 4.6 0 1 0 0 9.2 4.6 4.6 0 0 0 0-9.2Zm3.35 7.95 3.65 3.65" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.55"></path>
                   </svg>
                 </button>
                 <input id="search-input" type="search" placeholder="Buscar" aria-label="Buscar registros" />
               </div>
-              <div class="global-period-filter global-period-filter--month top-filter-control custom-filter" id="month-filter">
+              <div class="global-period-filter global-period-filter--month top-filter-control custom-filter dashboard-filter-select dashboard-filter-sm" id="month-filter">
                 <span>Mês</span>
                 <button class="type-filter__button custom-filter__button" id="month-filter-toggle" type="button" aria-haspopup="true" aria-expanded="false">
                   <span id="month-filter-label">Todos</span>
@@ -118,9 +118,9 @@
                     <path d="m6 9 6 6 6-6" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2"></path>
                   </svg>
                 </button>
-                <div class="type-filter__menu custom-filter__menu" id="month-filter-menu" role="menu" hidden></div>
+                <div class="type-filter__menu custom-filter__menu dashboard-filter-dropdown" id="month-filter-menu" role="menu" hidden></div>
               </div>
-              <div class="global-period-filter top-filter-control custom-filter" id="period-filter">
+              <div class="global-period-filter top-filter-control custom-filter dashboard-filter-select dashboard-filter-md" id="period-filter">
                 <span>Período</span>
                 <button class="type-filter__button custom-filter__button" id="period-filter-toggle" type="button" aria-haspopup="true" aria-expanded="false">
                   <span id="period-filter-label">Mês completo</span>
@@ -128,9 +128,9 @@
                     <path d="m6 9 6 6 6-6" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2"></path>
                   </svg>
                 </button>
-                <div class="type-filter__menu custom-filter__menu" id="period-filter-menu" role="menu" hidden></div>
+                <div class="type-filter__menu custom-filter__menu dashboard-filter-dropdown" id="period-filter-menu" role="menu" hidden></div>
               </div>
-              <div class="global-period-filter global-period-filter--type type-filter top-filter-control" id="type-filter">
+              <div class="global-period-filter global-period-filter--type type-filter top-filter-control dashboard-filter-select dashboard-filter-md" id="type-filter">
                 <span>Tipo</span>
                 <button class="type-filter__button" id="type-filter-toggle" type="button" aria-haspopup="true" aria-expanded="false">
                   <span id="type-filter-label">Todos</span>
@@ -138,23 +138,23 @@
                     <path d="m6 9 6 6 6-6" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2"></path>
                   </svg>
                 </button>
-                <div class="type-filter__menu" id="type-filter-menu" role="menu" hidden>
-                  <label class="type-filter__option">
+                <div class="type-filter__menu dashboard-filter-dropdown" id="type-filter-menu" role="menu" hidden>
+                  <label class="type-filter__option dashboard-filter-option">
                     <input type="checkbox" value="Todos" data-type-option>
                     <span class="type-filter__check" aria-hidden="true"></span>
                     <span>Todos</span>
                   </label>
-                  <label class="type-filter__option">
+                  <label class="type-filter__option dashboard-filter-option">
                     <input type="checkbox" value="SVC" data-type-option>
                     <span class="type-filter__check" aria-hidden="true"></span>
                     <span>SVC</span>
                   </label>
-                  <label class="type-filter__option">
+                  <label class="type-filter__option dashboard-filter-option">
                     <input type="checkbox" value="XPT" data-type-option>
                     <span class="type-filter__check" aria-hidden="true"></span>
                     <span>XPT</span>
                   </label>
-                  <label class="type-filter__option">
+                  <label class="type-filter__option dashboard-filter-option">
                     <input type="checkbox" value="PNR" data-type-option>
                     <span class="type-filter__check" aria-hidden="true"></span>
                     <span>PNR</span>
@@ -166,7 +166,7 @@
           <div hidden>
             <span id="active-filters-count">0 filtros ativos</span>
             <div id="filter-summary"></div>
-            <button id="clear-filters" type="button">Limpar</button>
+            <button id="clear-filters" class="dashboard-clear-button dashboard-filter-action" type="button">Limpar</button>
           </div>
 
           <section class="monthly-base-view" id="monthly-base-view" hidden></section>
@@ -440,6 +440,6 @@
     <script src="./supabaseClient.js" defer></script>
     <script src="./authService.js" defer></script>
     <script src="./dashboardCacheService.js" defer></script>
-    <script src="./app.js" defer></script>
+    <script src="./app.js?v=20260520-filter-system-v2" defer></script>
   </body>
 </html>
