@@ -9200,6 +9200,34 @@ body:not([data-theme="light"]) .view-toolbar.is-pnr-view .pnr-toolbar-filters {
   --pnr-filter-action-color: #9aa8ba;
 }
 
+/* Gestão de Desvios / PNRs: color-only alignment with the shared toolbar tokens. */
+.view-toolbar .sheet-tab--deviation.dashboard-tab-button,
+.view-toolbar .sheet-tab--deviation.dashboard-tab-button .sheet-tab__label {
+  color: var(--dashboard-chrome-text) !important;
+}
+
+.view-toolbar .sheet-tab--deviation.dashboard-tab-button.is-active,
+.view-toolbar .sheet-tab--deviation.dashboard-tab-button.is-active .sheet-tab__label,
+.view-toolbar .sheet-tab--deviation .sheet-tab__badge {
+  color: var(--dashboard-chrome-text-active) !important;
+}
+
+.view-toolbar.is-pnr-view .pnr-toolbar-filters .dashboard-search-button,
+.view-toolbar.is-pnr-view .pnr-toolbar-filters .dashboard-clear-button,
+.view-toolbar.is-pnr-view .pnr-toolbar-filters .dashboard-clear-button span {
+  color: var(--dashboard-chrome-text) !important;
+}
+
+.view-toolbar.is-pnr-view .pnr-toolbar-filters .dashboard-filter-select > span {
+  color: color-mix(in srgb, var(--dashboard-chrome-text) 82%, transparent) !important;
+}
+
+.view-toolbar.is-pnr-view .pnr-toolbar-filters .pnr-filter-button,
+.view-toolbar.is-pnr-view .pnr-toolbar-filters .pnr-filter-button strong,
+.view-toolbar.is-pnr-view .pnr-toolbar-filters .dashboard-search-button input {
+  color: var(--dashboard-chrome-text-active) !important;
+}
+
 /* Gestão de Desvios / PNRs: final text-only normalization. */
 .view-toolbar .sheet-tab--deviation.dashboard-tab-button,
 .view-toolbar .sheet-tab--deviation.dashboard-tab-button .sheet-tab__label {
