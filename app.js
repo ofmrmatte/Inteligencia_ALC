@@ -8451,13 +8451,14 @@ function buildPnrReportAnalysis(rows) {
   const driverMap = new Map();
   const evolutionMap = new Map();
   const summary = createPnrSummary(safeRows.length);
+  const firstMeaningfulLabel = (...values) => values.find((value) => hasReportLabel(value)) || "";
 
   safeRows.forEach((row) => {
     const value = Number(row.valorCompraNumerico || 0);
     const status = row.statusNormalizado || "Indefinido";
     const statusType = getPnrStatusMetricType(status);
-    const origin = row.tipoBase || row.tipoOperacional || "Não identificada";
-    const station = row.estacaoOrigem || "Não identificada";
+    const origin = firstMeaningfulLabel(row.tipoBase, row.tipoOperacional, row.baseIdentificada) || "Não identificada";
+    const station = firstMeaningfulLabel(row.estacaoOrigem, row.nomeBaseOperacao) || "Não identificada";
     const driver = getPnrReportDriverLabel(row);
     const period = getPnrPeriodFromBillingPeriod(row.sourcePeriodo || row.periodoFaturamentoOriginal || row.periodoFaturamento) || getPnrPeriodFromDate(row.dataCaso || row.periodoFaturamento);
     const monthKey = row.monthKey || period.monthKey || "sem-periodo";
@@ -8516,7 +8517,11 @@ function buildPnrReportAnalysis(rows) {
   const stationRows = Array.from(stationMap.values())
     .map((item) => ({ ...item, share: (item.count / total) * 100 }))
     .sort((a, b) => b.count - a.count || b.totalValue - a.totalValue)
-    .slice(0, 10);
+    .slice(0, 10)
+    .map((item, index) => ({
+      ...item,
+      criticality: index < 5 || item.share >= 10 ? "Alto impacto" : item.share >= 4 ? "Médio impacto" : "Baixo impacto",
+    }));
   const driverRows = Array.from(driverMap.values())
     .map((item) => {
       const topStatuses = Array.from(item.statuses.entries())
@@ -8527,15 +8532,31 @@ function buildPnrReportAnalysis(rows) {
       return { ...item, topStatuses: topStatuses || "—", share: (item.count / total) * 100 };
     })
     .sort((a, b) => b.count - a.count || b.totalValue - a.totalValue)
-    .slice(0, 10);
+    .slice(0, 10)
+    .map((item, index) => ({
+      ...item,
+      criticality: index < 5 || item.share >= 8 ? "Acompanhamento prioritário" : "Monitorar recorrência",
+    }));
   const evolutionRows = Array.from(evolutionMap.values())
     .sort((a, b) => (a.year - b.year) || (a.month - b.month) || String(a.key).localeCompare(String(b.key), "pt-BR"));
   const saldo = Number(summary.valorAnulado || 0) - Number(summary.valorFaturado || 0);
   const maxAnulado = evolutionRows.reduce((best, item) => Number(item.valorAnulado || 0) > Number(best.valorAnulado || 0) ? item : best, evolutionRows[0] || { label: "—", valorAnulado: 0 });
   const maxFaturado = evolutionRows.reduce((best, item) => Number(item.valorFaturado || 0) > Number(best.valorFaturado || 0) ? item : best, evolutionRows[0] || { label: "—", valorFaturado: 0 });
   const fileName = getPnrReportFileName(filterState);
+  const missingOriginCount = safeRows.filter((row) => !firstMeaningfulLabel(row.tipoBase, row.tipoOperacional, row.baseIdentificada, row.estacaoOrigem)).length;
+  const missingStationCount = safeRows.filter((row) => !firstMeaningfulLabel(row.estacaoOrigem, row.nomeBaseOperacao)).length;
+  const missingDriverCount = safeRows.filter((row) => !hasReportLabel(row.idMotorista || row.nomeMotorista || row.motoristaDisplay)).length;
+  const missingStatusCount = safeRows.filter((row) => !hasReportLabel(row.statusNormalizado || row.statusOriginal)).length;
+  const missingDateCount = safeRows.filter((row) => ![row.dataEntrega, row.dataEncerramentoCaso, row.dataCaso].some((value) => hasReportLabel(value) && parseDateValue(value).ts !== null)).length;
+  const qualityRows = [
+    { label: "Sem origem/base identificada", count: missingOriginCount, risk: missingOriginCount ? "Reduz rastreabilidade operacional" : "Sem ocorrência relevante" },
+    { label: "Sem estação de origem", count: missingStationCount, risk: missingStationCount ? "Dificulta priorização por base" : "Sem ocorrência relevante" },
+    { label: "Sem motorista", count: missingDriverCount, risk: missingDriverCount ? "Dificulta ação individual" : "Sem ocorrência relevante" },
+    { label: "Sem data operacional", count: missingDateCount, risk: missingDateCount ? "Limita leitura temporal" : "Sem ocorrência relevante" },
+    { label: "Sem status", count: missingStatusCount, risk: missingStatusCount ? "Impede tratativa por etapa" : "Sem ocorrência relevante" },
+  ].map((item) => ({ ...item, share: (item.count / total) * 100 }));
 
-  return {
+  const analysis = {
     rows: safeRows,
     summary,
     filters,
@@ -8553,8 +8574,30 @@ function buildPnrReportAnalysis(rows) {
     periodLabel: filterState.selectedMonths.length ? filterState.selectedMonths.join(", ") : "Base completa",
     fileName,
     executiveSummary: "",
+    financialDiagnosis: "",
+    operationalDiagnosis: "",
     temporalAnalysis: "",
+    originAnalysis: "",
+    stationAnalysis: "",
+    driverAnalysis: "",
+    qualityAnalysis: "",
+    conclusion: "",
+    attentionPoints: [],
+    recommendations: [],
+    qualityRows,
   };
+  analysis.executiveSummary = buildPnrExecutiveSummaryText(analysis);
+  analysis.financialDiagnosis = buildPnrFinancialDiagnosisText(analysis);
+  analysis.operationalDiagnosis = buildPnrOperationalDiagnosisText(analysis);
+  analysis.temporalAnalysis = buildPnrTemporalAnalysisText(analysis);
+  analysis.originAnalysis = buildPnrOriginAnalysisText(analysis);
+  analysis.stationAnalysis = buildPnrStationAnalysisText(analysis);
+  analysis.driverAnalysis = buildPnrDriverAnalysisText(analysis);
+  analysis.qualityAnalysis = buildPnrQualityAnalysisText(analysis);
+  analysis.attentionPoints = buildPnrAttentionPoints(analysis);
+  analysis.recommendations = buildPnrRecommendations(analysis);
+  analysis.conclusion = buildPnrConclusionText(analysis);
+  return analysis;
 }
 
 function getPnrReportFileName(filterState = getPnrExportFilterState()) {
@@ -8570,7 +8613,28 @@ function buildPnrExecutiveSummaryText(analysis) {
   const saldoTone = analysis.saldo >= 0 ? "positivo" : "negativo";
   const topStation = analysis.stationRows[0]?.label || "sem concentração relevante";
   const topDriver = analysis.driverRows[0]?.label || "sem motorista identificado";
-  return `O recorte analisado contém ${integer.format(summary.count)} casos PNR, somando ${currency.format(summary.totalValue)} em valor bruto. Os valores anulados representam ${currency.format(summary.valorAnulado)} e são tratados como impacto positivo, enquanto os valores faturados representam -${currency.format(summary.valorFaturado)} e são tratados como impacto negativo. O saldo líquido do recorte é ${currency.format(analysis.saldo)}, com leitura ${saldoTone}. Permanecem ${integer.format(summary.aberto)} casos em aberto/análise, exigindo acompanhamento operacional. A maior concentração por estação está em ${topStation}, e o motorista com maior volume é ${topDriver}.`;
+  return [
+    `No ${analysis.scopeLabel.toLowerCase()}, a base PNR reúne ${integer.format(summary.count)} casos e ${currency.format(summary.totalValue)} em valor bruto analisado. A leitura financeira considera anulado como efeito positivo e faturado como efeito negativo, com saldo líquido ${saldoTone} de ${currency.format(analysis.saldo)}.`,
+    `O valor anulado soma ${currency.format(summary.valorAnulado)}, enquanto o valor faturado representa -${currency.format(summary.valorFaturado)}. Essa diferença indica ${analysis.saldo >= 0 ? "predominância de reversão positiva sobre o impacto faturado" : "predominância de impacto faturado sobre a reversão positiva"}, exigindo acompanhamento das origens e períodos que concentram maior risco.`,
+    `A concentração operacional aparece principalmente em ${topStation}, e o maior volume por motorista está em ${topDriver}. Permanecem ${integer.format(summary.aberto)} casos em aberto/análise, que ainda podem alterar o saldo final do recorte.`,
+  ].join("\n\n");
+}
+
+function buildPnrFinancialDiagnosisText(analysis) {
+  const summary = analysis.summary;
+  const valueTotal = Math.max(Number(summary.totalValue || 0), 1);
+  const faturadoShare = (Number(summary.valorFaturado || 0) / valueTotal) * 100;
+  const anuladoShare = (Number(summary.valorAnulado || 0) / valueTotal) * 100;
+  const saldoTone = analysis.saldo >= 0 ? "favorável" : "desfavorável";
+  return `O diagnóstico financeiro aponta ${currency.format(summary.totalValue)} em valor total envolvido nos PNRs. Desse montante, ${currency.format(summary.valorAnulado)} (${formatNumberPt(anuladoShare, 1)}%) foi anulado e tratado como impacto positivo, enquanto -${currency.format(summary.valorFaturado)} (${formatNumberPt(faturadoShare, 1)}%) foi faturado ou direcionado para faturamento como impacto negativo. O saldo líquido do recorte é ${currency.format(analysis.saldo)}, com leitura ${saldoTone}. O ticket médio geral é ${currency.format(summary.ticketMedioGeral)}, com ticket médio faturado de ${currency.format(summary.ticketMedioFaturado)} e ticket médio anulado de ${currency.format(summary.ticketMedioAnulado)}. A proporção entre faturado e anulado deve ser monitorada porque valores faturados representam desembolso ou cobrança efetiva, mesmo quando o saldo consolidado permanece positivo.`;
+}
+
+function buildPnrOperationalDiagnosisText(analysis) {
+  const summary = analysis.summary;
+  const total = Math.max(summary.count, 1);
+  const openShare = (Number(summary.aberto || 0) / total) * 100;
+  const statusLeader = analysis.statusRows[0] || { label: "sem status dominante", count: 0, share: 0 };
+  return `Operacionalmente, o recorte contém ${integer.format(summary.count)} casos PNR consolidados. O status com maior concentração é ${statusLeader.label}, com ${integer.format(statusLeader.count)} ocorrências (${formatNumberPt(statusLeader.share, 1)}%). Os casos em aberto/análise somam ${integer.format(summary.aberto)} registros (${formatNumberPt(openShare, 1)}%), indicando pendências que ainda podem migrar para anulado, faturado ou outro desfecho. Essa composição reforça a necessidade de rotina de acompanhamento dos status residuais e de priorização dos registros que ainda não têm decisão final.`;
 }
 
 function buildPnrTemporalAnalysisText(analysis) {
@@ -8580,12 +8644,81 @@ function buildPnrTemporalAnalysisText(analysis) {
       ? "tendência de aumento no volume financeiro ao longo do recorte"
       : "tendência de redução no volume financeiro ao longo do recorte"
     : "histórico curto para leitura de tendência";
-  return `O maior valor anulado ocorreu em ${analysis.maxAnulado?.label || "—"}, com ${currency.format(analysis.maxAnulado?.valorAnulado || 0)}. O maior impacto faturado ocorreu em ${analysis.maxFaturado?.label || "—"}, com -${currency.format(analysis.maxFaturado?.valorFaturado || 0)}. A evolução temporal indica ${trend}. O saldo líquido geral permanece ${saldoTone}, em ${currency.format(analysis.saldo)}, considerando anulado como positivo e faturado como negativo.`;
+  const last = analysis.evolutionRows[analysis.evolutionRows.length - 1] || null;
+  const previous = analysis.evolutionRows[analysis.evolutionRows.length - 2] || null;
+  const variation = last && previous ? Number(last.totalValue || 0) - Number(previous.totalValue || 0) : 0;
+  const variationText = last && previous ? ` A variação do último período contra o anterior foi de ${currency.format(Math.abs(variation))} ${variation >= 0 ? "para cima" : "para baixo"} no valor bruto.` : "";
+  return `A evolução temporal mostra ${trend}. O maior valor anulado ocorreu em ${analysis.maxAnulado?.label || "—"}, com ${currency.format(analysis.maxAnulado?.valorAnulado || 0)}, enquanto o maior impacto faturado ocorreu em ${analysis.maxFaturado?.label || "—"}, com -${currency.format(analysis.maxFaturado?.valorFaturado || 0)}. O saldo líquido geral permanece ${saldoTone}, em ${currency.format(analysis.saldo)}, considerando anulado como positivo e faturado como negativo.${variationText} A leitura temporal deve ser usada para identificar meses de pico, sazonalidade e períodos que exigem reforço de auditoria antes do fechamento.`;
+}
+
+function buildPnrOriginAnalysisText(analysis) {
+  const originLeader = analysis.originRows[0] || { label: "sem origem dominante", count: 0, share: 0, totalValue: 0 };
+  const unidentified = analysis.originRows.find((item) => !hasReportLabel(item.label));
+  const qualityNote = unidentified && unidentified.count
+    ? ` Há ${integer.format(unidentified.count)} registros com origem não identificada, o que reduz a rastreabilidade operacional e deve ser tratado como ponto de qualidade da base.`
+    : " A rastreabilidade por origem não apresenta concentração relevante de registros sem identificação.";
+  return `A análise por origem/base mostra maior participação de ${originLeader.label}, com ${integer.format(originLeader.count)} PNRs (${formatNumberPt(originLeader.share, 1)}%) e ${currency.format(originLeader.totalValue)} em valor associado. Bases com volume alto e valor alto devem ser priorizadas porque combinam recorrência operacional e impacto financeiro.${qualityNote}`;
+}
+
+function buildPnrStationAnalysisText(analysis) {
+  const top = analysis.stationRows[0] || { label: "sem estação dominante", count: 0, totalValue: 0, share: 0 };
+  return `As estações listadas concentram os maiores volumes do recorte. A principal concentração está em ${top.label}, com ${integer.format(top.count)} PNRs, ${currency.format(top.totalValue)} em valor e ${formatNumberPt(top.share, 1)}% de participação. A coluna de criticidade combina posição no ranking, quantidade e participação para indicar onde a gestão deve iniciar a tratativa operacional.`;
+}
+
+function buildPnrDriverAnalysisText(analysis) {
+  const top = analysis.driverRows[0] || { label: "sem motorista dominante", count: 0, totalValue: 0, topStatuses: "—" };
+  return `Os motoristas listados concentram maior recorrência de casos PNR e devem ser priorizados em ações de acompanhamento, orientação ou auditoria operacional. O maior volume está em ${top.label}, com ${integer.format(top.count)} PNRs e ${currency.format(top.totalValue)} em valor associado. O status predominante nesse grupo é ${top.topStatuses}, informação útil para separar reincidência operacional de pendências ainda em análise.`;
+}
+
+function buildPnrQualityAnalysisText(analysis) {
+  const totalIssues = analysis.qualityRows.reduce((acc, item) => acc + Number(item.count || 0), 0);
+  const worst = analysis.qualityRows.reduce((best, item) => Number(item.count || 0) > Number(best.count || 0) ? item : best, analysis.qualityRows[0] || { label: "Sem inconsistências", count: 0 });
+  if (!totalIssues) {
+    return "A base do recorte não apresenta ausência relevante nos campos críticos avaliados para origem, estação, motorista, datas e status. A rastreabilidade é suficiente para leitura executiva e acompanhamento operacional.";
+  }
+  return `A qualidade dos dados exige atenção em ${integer.format(totalIssues)} ocorrências de campos críticos ausentes ou não identificados. O principal ponto é ${worst.label}, com ${integer.format(worst.count)} registros. Essas lacunas afetam rastreabilidade, priorização por base e leitura temporal, principalmente quando a base PNR depende de cruzamento com Pré-Fatura e Gestão de Pacotes.`;
+}
+
+function buildPnrAttentionPoints(analysis) {
+  const summary = analysis.summary;
+  const points = [];
+  const topStation = analysis.stationRows[0];
+  const topDriver = analysis.driverRows[0];
+  const missingOrigin = analysis.qualityRows.find((item) => item.label === "Sem origem/base identificada");
+  const missingDriver = analysis.qualityRows.find((item) => item.label === "Sem motorista");
+  if (topStation) points.push(`${topStation.label} concentra ${integer.format(topStation.count)} PNRs e ${currency.format(topStation.totalValue)}, classificada como ${topStation.criticality.toLowerCase()}.`);
+  if (topDriver) points.push(`${topDriver.label} aparece como maior recorrência por motorista, com ${integer.format(topDriver.count)} casos e status predominante: ${topDriver.topStatuses}.`);
+  if (Number(summary.valorFaturado || 0) > 0) points.push(`O valor faturado soma -${currency.format(summary.valorFaturado)} e representa impacto financeiro negativo a acompanhar antes do fechamento.`);
+  if (Number(summary.aberto || 0) > 0) points.push(`${integer.format(summary.aberto)} casos ainda estão em aberto/análise e podem alterar o saldo final do recorte.`);
+  if (missingOrigin?.count) points.push(`${integer.format(missingOrigin.count)} registros sem origem/base reduzem rastreabilidade e dificultam priorização operacional.`);
+  if (missingDriver?.count) points.push(`${integer.format(missingDriver.count)} registros sem motorista limitam ações individuais de orientação ou auditoria.`);
+  points.push(`A diferença entre anulado e faturado gera saldo líquido de ${currency.format(analysis.saldo)}, que deve ser acompanhado junto da evolução temporal.`);
+  return points.slice(0, 7);
+}
+
+function buildPnrRecommendations(analysis) {
+  const topStation = analysis.stationRows[0]?.label || "as bases com maior volume";
+  const topDriver = analysis.driverRows[0]?.label || "os motoristas recorrentes";
+  const hasOpen = Number(analysis.summary.aberto || 0) > 0;
+  const hasQualityIssue = analysis.qualityRows.some((item) => Number(item.count || 0) > 0);
+  return [
+    `Priorizar a análise operacional de ${topStation} e das demais estações classificadas como alto impacto.`,
+    `Acompanhar ${topDriver} e os demais motoristas com maior recorrência para orientação, auditoria ou validação de processo.`,
+    hasOpen ? "Monitorar diariamente os casos em aberto/análise até a definição final, evitando alteração tardia do saldo financeiro." : "Manter rotina de monitoramento dos status para detectar novas pendências assim que surgirem.",
+    "Comparar mensalmente valores faturados e anulados para identificar picos, sazonalidade e mudança de tendência.",
+    hasQualityIssue ? "Corrigir registros sem origem, motorista ou data antes do fechamento para aumentar rastreabilidade e confiabilidade do relatório." : "Manter a validação de campos críticos antes do fechamento para preservar a qualidade atual da base.",
+    "Usar a base mestre como referência histórica e os arquivos quinzenais/mensais como atualização incremental consolidada.",
+  ];
+}
+
+function buildPnrConclusionText(analysis) {
+  const summary = analysis.summary;
+  const saldoTone = analysis.saldo >= 0 ? "positivo" : "negativo";
+  const topStation = analysis.stationRows[0]?.label || "sem base dominante";
+  return `O recorte analisado apresenta ${integer.format(summary.count)} PNRs e saldo líquido ${saldoTone} de ${currency.format(analysis.saldo)}, resultado da diferença entre ${currency.format(summary.valorAnulado)} anulados e -${currency.format(summary.valorFaturado)} faturados. A situação operacional exige foco nas concentrações por base, especialmente ${topStation}, e nos motoristas com maior recorrência. Os principais riscos estão nos valores faturados, nos casos ainda em aberto/análise e nas lacunas de rastreabilidade. O próximo passo recomendado é manter acompanhamento periódico de faturados x anulados, corrigir dados incompletos e priorizar as bases de alto impacto antes do fechamento operacional.`;
 }
 
 function buildPnrReportPdfBlob(analysis) {
-  analysis.executiveSummary = buildPnrExecutiveSummaryText(analysis);
-  analysis.temporalAnalysis = buildPnrTemporalAnalysisText(analysis);
   const pages = [];
   let commands = [];
   let y = 736;
@@ -8713,12 +8846,31 @@ function buildPnrReportPdfBlob(analysis) {
     });
     y -= height + 18;
   };
-  const drawParagraph = (title, text, accent = colors.teal) => {
-    ensure(116);
+  const drawParagraph = (title, text, accent = colors.teal, fill = colors.white) => {
+    const paragraphs = String(text || "").split(/\n+/).filter(Boolean);
+    const lineCount = paragraphs.reduce((acc, paragraph) => acc + wrapPdfText(paragraph, contentW - 32, 9, 7).length + 1, 0);
+    const h = Math.max(72, Math.min(172, 32 + lineCount * 11));
+    ensure(h + 46);
     sectionTitle(title, analysis.scopeLabel);
-    const h = 86;
-    card(page.margin, y, contentW, h, colors.white, accent);
-    addWrappedText(text, page.margin + 16, y - 18, contentW - 32, 9, colors.ink, 12, 6);
+    card(page.margin, y, contentW, h, fill, accent);
+    let textY = y - 18;
+    paragraphs.forEach((paragraph) => {
+      const used = addWrappedText(paragraph, page.margin + 16, textY, contentW - 32, 9, colors.ink, 12, 7);
+      textY -= used + 5;
+    });
+    y -= h + 24;
+  };
+  const drawBulletList = (title, items, accent = colors.orange, fill = colors.white) => {
+    const safeItems = Array.isArray(items) ? items.filter(Boolean) : [];
+    const h = Math.max(86, 30 + safeItems.length * 26);
+    ensure(h + 42);
+    sectionTitle(title, analysis.scopeLabel);
+    card(page.margin, y, contentW, h, fill, accent);
+    safeItems.forEach((item, index) => {
+      const rowY = y - 22 - index * 26;
+      addText(`${index + 1}.`, page.margin + 18, rowY, 8.6, accent, "left", "F2");
+      addWrappedText(item, page.margin + 46, rowY, contentW - 64, 8.4, colors.ink, 10.6, 2);
+    });
     y -= h + 24;
   };
   const drawFilters = () => {
@@ -8737,16 +8889,16 @@ function buildPnrReportPdfBlob(analysis) {
     y -= h + 20;
   };
   const drawTimelineChart = () => {
-    ensure(246);
+    ensure(218);
     sectionTitle("Evolução temporal de valores PNR", "anulado positivo x faturado negativo");
-    const h = 212;
+    const h = 184;
     card(page.margin, y, contentW, h, colors.white, colors.teal);
     addText("Anulado", page.margin + 18, y - 18, 8, colors.green, "left", "F2");
     addText("Faturado", page.margin + 80, y - 18, 8, colors.red, "left", "F2");
     const chartX = page.margin + 48;
     const chartY = y - h + 34;
     const chartW = contentW - 78;
-    const chartH = h - 70;
+    const chartH = h - 66;
     const values = analysis.evolutionRows.length ? analysis.evolutionRows : [{ label: "Sem período", valorAnulado: 0, valorFaturado: 0 }];
     const plotted = values.map((item) => ({ ...item, faturadoPlot: -Number(item.valorFaturado || 0), anuladoPlot: Number(item.valorAnulado || 0) }));
     const maxValue = Math.max(1, ...plotted.map((item) => item.anuladoPlot));
@@ -8784,56 +8936,63 @@ function buildPnrReportPdfBlob(analysis) {
   };
 
   addPage();
-  drawKpis();
   drawFilters();
-  drawParagraph("Resumo executivo", analysis.executiveSummary);
-  drawTimelineChart();
-  drawParagraph("Análise da evolução temporal", analysis.temporalAnalysis, colors.blue);
+  drawParagraph("Sumário executivo", analysis.executiveSummary, colors.navy, "0.98 0.995 1");
+  drawParagraph("Diagnóstico financeiro", analysis.financialDiagnosis, colors.orange, colors.warm);
+  drawKpis();
+  drawParagraph("Diagnóstico operacional", analysis.operationalDiagnosis, colors.teal);
   drawTable(
-    "Distribuição por status",
+    "Distribuição por status — leitura operacional",
     ["Status", "Qtd.", "%", "Valor"],
     analysis.statusRows.slice(0, 10).map((item) => [item.label, integer.format(item.count), `${formatNumberPt(item.share, 1)}%`, formatCurrencyShort(item.totalValue)]),
     [254, 70, 70, 110],
     colors.blue,
   );
+  drawTimelineChart();
+  drawParagraph("Análise temporal dos valores", analysis.temporalAnalysis, colors.blue);
+  drawParagraph("Análise por origem e base operacional", analysis.originAnalysis, colors.teal);
   drawTable(
-    "Análise por origem",
+    "Participação por origem/base",
     ["Origem", "Qtd.", "%", "Valor"],
     analysis.originRows.slice(0, 8).map((item) => [item.label, integer.format(item.count), `${formatNumberPt(item.share, 1)}%`, formatCurrencyShort(item.totalValue)]),
     [254, 70, 70, 110],
     colors.teal,
   );
+  drawParagraph("Ranking analítico de estações", analysis.stationAnalysis, colors.orange);
   drawTable(
     "Estações com maior volume de PNR",
-    ["Estação", "Origem", "PNRs", "Valor", "%"],
-    analysis.stationRows.map((item) => [item.label, item.origin, integer.format(item.count), formatCurrencyShort(item.totalValue), `${formatNumberPt(item.share, 1)}%`]),
-    [150, 92, 68, 118, 76],
+    ["Estação", "Origem", "PNRs", "Valor", "Criticidade"],
+    analysis.stationRows.map((item) => [item.label, item.origin, integer.format(item.count), formatCurrencyShort(item.totalValue), item.criticality]),
+    [136, 76, 58, 104, 130],
     colors.orange,
-    ["left", "left", "right", "right", "right"],
+    ["left", "left", "right", "right", "left"],
   );
+  drawParagraph("Motoristas com maior concentração de PNR", analysis.driverAnalysis, colors.green);
   drawTable(
     "Motoristas com maior volume de PNR",
-    ["Motorista", "PNRs", "Valor", "Status", "%"],
-    analysis.driverRows.map((item) => [item.label, integer.format(item.count), formatCurrencyShort(item.totalValue), item.topStatuses, `${formatNumberPt(item.share, 1)}%`]),
-    [174, 58, 104, 120, 48],
+    ["Motorista", "PNRs", "Valor", "Status frequente", "Ação"],
+    analysis.driverRows.map((item) => [item.label, integer.format(item.count), formatCurrencyShort(item.totalValue), item.topStatuses, item.criticality]),
+    [136, 48, 90, 132, 98],
     colors.green,
-    ["left", "right", "right", "left", "right"],
+    ["left", "right", "right", "left", "left"],
   );
+  drawParagraph("Qualidade e rastreabilidade dos dados", analysis.qualityAnalysis, colors.red, colors.dangerSoft);
   drawTable(
-    "Detalhamento dos registros",
-    ["Competência", "Status", "Envio", "Valor", "Origem", "Motorista"],
-    analysis.rows.slice(0, 18).map((row) => [row.competencia || "—", row.statusNormalizado || "—", row.idEnvio || "—", currency.format(row.valorCompraNumerico || 0), row.estacaoOrigem || "—", getPnrReportDriverLabel(row)]),
-    [76, 108, 88, 80, 78, 74],
-    colors.navy,
-    ["left", "left", "left", "right", "left", "left"],
+    "Indicadores de qualidade da base",
+    ["Critério", "Registros", "%", "Impacto"],
+    analysis.qualityRows.map((item) => [item.label, integer.format(item.count), `${formatNumberPt(item.share, 1)}%`, item.risk]),
+    [186, 70, 56, 192],
+    colors.red,
+    ["left", "right", "right", "left"],
   );
-  const hiddenRows = Math.max(0, analysis.rows.length - 18);
-  if (hiddenRows) {
-    ensure(44);
-    card(page.margin, y, contentW, 36, colors.blueSoft, colors.blue);
-    addText(`Detalhamento completo disponível no download Excel. O PDF exibe uma amostra de 18 registros de ${integer.format(analysis.rows.length)} no recorte.`, page.margin + 14, y - 21, 8.3, colors.ink);
-    y -= 52;
-  }
+  drawBulletList("Pontos de atenção", analysis.attentionPoints, colors.orange, colors.warm);
+  drawBulletList("Recomendações", analysis.recommendations, colors.green, colors.greenSoft);
+  drawParagraph("Conclusão executiva", analysis.conclusion, colors.navy, "0.98 0.995 1");
+  ensure(48);
+  card(page.margin, y, contentW, 38, colors.blueSoft, colors.blue);
+  addText("Detalhamento completo dos registros", page.margin + 14, y - 17, 9.4, colors.ink, "left", "F2");
+  addText("A base completa do recorte permanece disponível no download Excel; este PDF prioriza análise executiva, riscos e recomendações.", page.margin + 14, y - 30, 7.9, colors.muted);
+  y -= 54;
 
   pages.push(commands.join("\n"));
   const totalPages = pages.length;
