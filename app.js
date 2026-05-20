@@ -54,13 +54,7 @@ const DASHBOARD_EMPTY_STATE_COPY = {
   },
 };
 const DEVIATION_CATEGORIES = [
-  { key: "SAFETY_OCORRENCIAS", label: "Safety - Ocorrências", enabled: false },
-  { key: "SAFETY_MULTAS", label: "Safety - Multas", enabled: false },
-  { key: "SAFETY_TELEMETRIA_MM", label: "Safety - Telemetria MM", enabled: false },
-  { key: "SAFETY_BRIEFING", label: "Safety - Briefing", enabled: false },
-  { key: "SAFETY_RELATOS", label: "Safety - Relatos", enabled: false },
   { key: DEVIATION_CATEGORY_PNRS, label: "PNRs", enabled: true },
-  { key: "JURIDICO", label: "Jurídico", enabled: false },
 ];
 const PREFATURA_CATEGORIES = [
   { key: PREFATURA_VIEW_OVERVIEW, label: "Visão geral", enabled: true },
