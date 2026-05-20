@@ -8768,7 +8768,7 @@ function buildPnrReportPdfBlob(analysis) {
     addStrokeRect(infoX, 773, infoW, 52, "0.16 0.42 0.55");
     if (PDF_LOGO_IMAGE.base64) addPdfImage(PDF_LOGO_IMAGE.name, page.margin, 768, 60, 60);
     addText("Painel de Inteligência", page.margin + 74, 815, 8.2, "0.77 0.88 0.96", "left", "F2");
-    addText("Relatório Executivo de Performance Operacional", page.margin + 74, 798, 12.6, colors.white, "left", "F2");
+    addText("Relatório Executivo", page.margin + 74, 798, 14.1, colors.white, "left", "F2");
     addText("Gestão de Desvios / PNRs", page.margin + 74, 784, 10.5, "0.86 0.95 1", "left");
     addText("Setor: Loss", infoX + 14, 810, 8.4, colors.white, "left", "F2");
     addText(`Período: ${analysis.periodLabel}`, infoX + 14, 796, 7.8, "0.82 0.92 0.98", "left");
