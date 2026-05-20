@@ -8303,6 +8303,10 @@ async function downloadMonthlyReport() {
   if (!ensureReportPermission()) {
     return;
   }
+  if (state.sheet === DEVIATION_MANAGEMENT_VIEW && state.activeDesvioCategory === DEVIATION_CATEGORY_PNRS) {
+    await downloadPnrReport();
+    return;
+  }
   if (state.sheet === PACKAGE_MANAGEMENT_VIEW) {
     await downloadPackageManagementReport();
     return;
@@ -8359,6 +8363,45 @@ async function downloadPackageManagementReport() {
   showToast("Relatório de Gestão de Pacotes baixado.", "good", 4200);
 }
 
+async function downloadPnrReport() {
+  if (!ensureReportPermission()) return;
+  const button = el.reportButton;
+  const previousText = button?.textContent || "Relatório";
+  if (button) {
+    button.disabled = true;
+    button.textContent = "Gerando relatório...";
+    button.setAttribute("aria-busy", "true");
+  }
+  try {
+    showToast("Gerando relatório de PNRs...", "info", 3200);
+    const rows = await fetchPnrExportRowsFromSupabase();
+    if (!rows.length) {
+      showToast("Não há dados disponíveis para gerar o relatório deste recorte.", "warn", 5200);
+      return;
+    }
+    await ensurePdfLogoImage();
+    const analysis = buildPnrReportAnalysis(rows);
+    const pdf = buildPnrReportPdfBlob(analysis);
+    downloadBlob(pdf, analysis.fileName);
+    await logAudit("generate_report", "report", null, {
+      report_tab: DEVIATION_MANAGEMENT_VIEW,
+      report_category: DEVIATION_CATEGORY_PNRS,
+      records_count: rows.length,
+      filters: getPnrExportFilterLabelList(),
+    });
+    showToast("Relatório de Gestão de Desvios / PNRs baixado.", "good", 4200);
+  } catch (error) {
+    console.error("[PNR Report] Falha ao gerar relatório:", error);
+    showToast("Não foi possível gerar o relatório agora. Tente novamente.", "error", 6200);
+  } finally {
+    if (button) {
+      button.disabled = false;
+      button.textContent = previousText;
+      button.setAttribute("aria-busy", "false");
+    }
+  }
+}
+
 async function ensurePdfLogoImage() {
   if (PDF_LOGO_IMAGE.base64 || !PDF_LOGO_IMAGE.src) return;
   if (!pdfLogoLoadPromise) {
@@ -8389,6 +8432,416 @@ async function ensurePackageManagementRowsForReport() {
   );
   await loadPackageManagementRowsForCards(files, cachedDatasets);
   return packageManagementRows;
+}
+
+function getPnrReportDriverLabel(row) {
+  const id = formatPnrId(row?.idMotorista || "");
+  const candidateName = getPnrDriverNameFromSourceRow({ motorista: row?.nomeMotorista || row?.motoristaDisplay || "" });
+  const name = candidateName && normalizePnrLookupId(candidateName) !== normalizePnrLookupId(id) ? candidateName : "";
+  return name || (id ? `Motorista ${id}` : "Não identificado");
+}
+
+function buildPnrReportAnalysis(rows) {
+  const safeRows = Array.isArray(rows) ? rows : [];
+  const filters = getPnrExportFilterLabelList();
+  const filterState = getPnrExportFilterState();
+  const statusMap = new Map();
+  const originMap = new Map();
+  const stationMap = new Map();
+  const driverMap = new Map();
+  const evolutionMap = new Map();
+  const summary = createPnrSummary(safeRows.length);
+
+  safeRows.forEach((row) => {
+    const value = Number(row.valorCompraNumerico || 0);
+    const status = row.statusNormalizado || "Indefinido";
+    const statusType = getPnrStatusMetricType(status);
+    const origin = row.tipoBase || row.tipoOperacional || "Não identificada";
+    const station = row.estacaoOrigem || "Não identificada";
+    const driver = getPnrReportDriverLabel(row);
+    const period = getPnrPeriodFromBillingPeriod(row.sourcePeriodo || row.periodoFaturamentoOriginal || row.periodoFaturamento) || getPnrPeriodFromDate(row.dataCaso || row.periodoFaturamento);
+    const monthKey = row.monthKey || period.monthKey || "sem-periodo";
+    const monthLabel = row.competencia || getPnrMonthFullLabel(period) || "Sem período";
+
+    summary.totalValue += value;
+    addPnrSummaryStatus(summary, status, value, 1);
+
+    const statusEntry = statusMap.get(status) || { label: status, count: 0, totalValue: 0 };
+    statusEntry.count += 1;
+    statusEntry.totalValue += value;
+    statusMap.set(status, statusEntry);
+
+    const originEntry = originMap.get(origin) || { label: origin, count: 0, totalValue: 0 };
+    originEntry.count += 1;
+    originEntry.totalValue += value;
+    originMap.set(origin, originEntry);
+
+    const stationKey = `${station}|${origin}`;
+    const stationEntry = stationMap.get(stationKey) || { label: station, origin, count: 0, totalValue: 0 };
+    stationEntry.count += 1;
+    stationEntry.totalValue += value;
+    stationMap.set(stationKey, stationEntry);
+
+    const driverEntry = driverMap.get(driver) || { label: driver, statuses: new Map(), count: 0, totalValue: 0 };
+    driverEntry.count += 1;
+    driverEntry.totalValue += value;
+    driverEntry.statuses.set(status, (driverEntry.statuses.get(status) || 0) + 1);
+    driverMap.set(driver, driverEntry);
+
+    const evolutionEntry = evolutionMap.get(monthKey) || {
+      key: monthKey,
+      label: monthLabel,
+      year: Number(row.ano || period.ano || String(monthKey).slice(0, 4) || 0),
+      month: Number(row.mesNumero || period.mes || String(monthKey).slice(5, 7) || 0),
+      count: 0,
+      totalValue: 0,
+      valorAnulado: 0,
+      valorFaturado: 0,
+    };
+    evolutionEntry.count += 1;
+    evolutionEntry.totalValue += value;
+    if (statusType === "anulado") evolutionEntry.valorAnulado += value;
+    if (statusType === "faturado") evolutionEntry.valorFaturado += value;
+    evolutionMap.set(monthKey, evolutionEntry);
+  });
+
+  completePnrSummary(summary);
+  const total = Math.max(summary.count, 1);
+  const statusRows = Array.from(statusMap.values())
+    .map((item) => ({ ...item, share: (item.count / total) * 100 }))
+    .sort((a, b) => b.count - a.count || b.totalValue - a.totalValue);
+  const originRows = Array.from(originMap.values())
+    .map((item) => ({ ...item, share: (item.count / total) * 100 }))
+    .sort((a, b) => b.count - a.count || b.totalValue - a.totalValue);
+  const stationRows = Array.from(stationMap.values())
+    .map((item) => ({ ...item, share: (item.count / total) * 100 }))
+    .sort((a, b) => b.count - a.count || b.totalValue - a.totalValue)
+    .slice(0, 10);
+  const driverRows = Array.from(driverMap.values())
+    .map((item) => {
+      const topStatuses = Array.from(item.statuses.entries())
+        .sort((a, b) => b[1] - a[1])
+        .slice(0, 2)
+        .map(([label]) => label)
+        .join(", ");
+      return { ...item, topStatuses: topStatuses || "—", share: (item.count / total) * 100 };
+    })
+    .sort((a, b) => b.count - a.count || b.totalValue - a.totalValue)
+    .slice(0, 10);
+  const evolutionRows = Array.from(evolutionMap.values())
+    .sort((a, b) => (a.year - b.year) || (a.month - b.month) || String(a.key).localeCompare(String(b.key), "pt-BR"));
+  const saldo = Number(summary.valorAnulado || 0) - Number(summary.valorFaturado || 0);
+  const maxAnulado = evolutionRows.reduce((best, item) => Number(item.valorAnulado || 0) > Number(best.valorAnulado || 0) ? item : best, evolutionRows[0] || { label: "—", valorAnulado: 0 });
+  const maxFaturado = evolutionRows.reduce((best, item) => Number(item.valorFaturado || 0) > Number(best.valorFaturado || 0) ? item : best, evolutionRows[0] || { label: "—", valorFaturado: 0 });
+  const fileName = getPnrReportFileName(filterState);
+
+  return {
+    rows: safeRows,
+    summary,
+    filters,
+    filterState,
+    statusRows,
+    originRows,
+    stationRows,
+    driverRows,
+    evolutionRows,
+    saldo,
+    maxAnulado,
+    maxFaturado,
+    generatedAt: `Gerado em: ${formatCurrentDateTime()}`,
+    scopeLabel: filterState.hasFilters ? "Recorte filtrado" : "Base completa",
+    periodLabel: filterState.selectedMonths.length ? filterState.selectedMonths.join(", ") : "Base completa",
+    fileName,
+    executiveSummary: "",
+    temporalAnalysis: "",
+  };
+}
+
+function getPnrReportFileName(filterState = getPnrExportFilterState()) {
+  const dateLabel = formatPnrExportDateForFile();
+  if (filterState.selectedMonths?.length === 1) {
+    return `Relatorio_Executivo_Gestao_Desvios_PNRs_${normalizePnrExportFilePart(filterState.selectedMonths[0])}_${dateLabel}.pdf`;
+  }
+  return `Relatorio_Executivo_Gestao_Desvios_PNRs_${dateLabel}.pdf`;
+}
+
+function buildPnrExecutiveSummaryText(analysis) {
+  const summary = analysis.summary;
+  const saldoTone = analysis.saldo >= 0 ? "positivo" : "negativo";
+  const topStation = analysis.stationRows[0]?.label || "sem concentração relevante";
+  const topDriver = analysis.driverRows[0]?.label || "sem motorista identificado";
+  return `O recorte analisado contém ${integer.format(summary.count)} casos PNR, somando ${currency.format(summary.totalValue)} em valor bruto. Os valores anulados representam ${currency.format(summary.valorAnulado)} e são tratados como impacto positivo, enquanto os valores faturados representam -${currency.format(summary.valorFaturado)} e são tratados como impacto negativo. O saldo líquido do recorte é ${currency.format(analysis.saldo)}, com leitura ${saldoTone}. Permanecem ${integer.format(summary.aberto)} casos em aberto/análise, exigindo acompanhamento operacional. A maior concentração por estação está em ${topStation}, e o motorista com maior volume é ${topDriver}.`;
+}
+
+function buildPnrTemporalAnalysisText(analysis) {
+  const saldoTone = analysis.saldo >= 0 ? "positivo" : "negativo";
+  const trend = analysis.evolutionRows.length > 1
+    ? Number(analysis.evolutionRows[analysis.evolutionRows.length - 1].totalValue || 0) >= Number(analysis.evolutionRows[0].totalValue || 0)
+      ? "tendência de aumento no volume financeiro ao longo do recorte"
+      : "tendência de redução no volume financeiro ao longo do recorte"
+    : "histórico curto para leitura de tendência";
+  return `O maior valor anulado ocorreu em ${analysis.maxAnulado?.label || "—"}, com ${currency.format(analysis.maxAnulado?.valorAnulado || 0)}. O maior impacto faturado ocorreu em ${analysis.maxFaturado?.label || "—"}, com -${currency.format(analysis.maxFaturado?.valorFaturado || 0)}. A evolução temporal indica ${trend}. O saldo líquido geral permanece ${saldoTone}, em ${currency.format(analysis.saldo)}, considerando anulado como positivo e faturado como negativo.`;
+}
+
+function buildPnrReportPdfBlob(analysis) {
+  analysis.executiveSummary = buildPnrExecutiveSummaryText(analysis);
+  analysis.temporalAnalysis = buildPnrTemporalAnalysisText(analysis);
+  const pages = [];
+  let commands = [];
+  let y = 736;
+  const page = { width: 595, height: 842, margin: 34, bottom: 42 };
+  const contentW = page.width - page.margin * 2;
+  const colors = {
+    ink: "0.06 0.13 0.22",
+    muted: "0.36 0.44 0.55",
+    soft: "0.95 0.98 1",
+    line: "0.82 0.87 0.93",
+    tableHead: "0.90 0.94 0.98",
+    navy: "0.04 0.18 0.31",
+    teal: "0.05 0.55 0.48",
+    blue: "0.08 0.47 0.78",
+    green: "0.08 0.52 0.28",
+    orange: "0.74 0.35 0",
+    red: "0.76 0.16 0.18",
+    white: "1 1 1",
+    warm: "1 0.95 0.88",
+    dangerSoft: "1 0.92 0.93",
+    blueSoft: "0.91 0.96 1",
+    greenSoft: "0.91 0.98 0.94",
+  };
+  const addText = (text, x, yy, size = 10, color = colors.ink, align = "left", font = "F1") => {
+    const value = String(text ?? "");
+    const offset = align === "right" ? estimatePdfTextWidth(value, size) : align === "center" ? estimatePdfTextWidth(value, size) / 2 : 0;
+    commands.push(`${color} rg BT /${font} ${size} Tf ${Math.max(0, x - offset).toFixed(1)} ${yy.toFixed(1)} Td <${pdfTextHex(value)}> Tj ET`);
+  };
+  const addRect = (x, yy, w, h, color) => commands.push(`${color} rg ${x.toFixed(1)} ${yy.toFixed(1)} ${w.toFixed(1)} ${h.toFixed(1)} re f`);
+  const addStrokeRect = (x, yy, w, h, color = colors.line) => commands.push(`${color} RG ${x.toFixed(1)} ${yy.toFixed(1)} ${w.toFixed(1)} ${h.toFixed(1)} re S`);
+  const addLine = (x1, y1, x2, y2, color = colors.line, width = 0.7) => commands.push(`${color} RG ${width} w ${x1.toFixed(1)} ${y1.toFixed(1)} m ${x2.toFixed(1)} ${y2.toFixed(1)} l S`);
+  const addPdfImage = (name, x, yy, w, h) => commands.push(`q ${w.toFixed(1)} 0 0 ${h.toFixed(1)} ${x.toFixed(1)} ${yy.toFixed(1)} cm /${name} Do Q`);
+  const addWrappedText = (text, x, top, width, size = 9, color = colors.ink, lineHeight = 11.5, maxLines = 5) => {
+    const lines = wrapPdfText(text, width, size, maxLines);
+    lines.forEach((line, index) => addText(line, x, top - index * lineHeight, size, color));
+    return lines.length * lineHeight;
+  };
+  const addPage = () => {
+    if (commands.length) pages.push(commands.join("\n"));
+    commands = [];
+    const infoW = 174;
+    const infoX = page.width - page.margin - infoW;
+    commands.push(`${colors.soft} rg 0 0 ${page.width} ${page.height} re f`);
+    addRect(0, 754, page.width, 88, colors.navy);
+    addRect(0, 754, page.width, 5, colors.teal);
+    addRect(infoX, 773, infoW, 52, "0.06 0.24 0.36");
+    addStrokeRect(infoX, 773, infoW, 52, "0.16 0.42 0.55");
+    if (PDF_LOGO_IMAGE.base64) addPdfImage(PDF_LOGO_IMAGE.name, page.margin, 768, 60, 60);
+    addText("Painel de Inteligência", page.margin + 74, 815, 8.2, "0.77 0.88 0.96", "left", "F2");
+    addText("Relatório Executivo de Performance Operacional", page.margin + 74, 798, 12.6, colors.white, "left", "F2");
+    addText("Gestão de Desvios / PNRs", page.margin + 74, 784, 10.5, "0.86 0.95 1", "left");
+    addText("Setor: Loss", infoX + 14, 810, 8.4, colors.white, "left", "F2");
+    addText(`Período: ${analysis.periodLabel}`, infoX + 14, 796, 7.8, "0.82 0.92 0.98", "left");
+    addText(analysis.generatedAt, infoX + 14, 783, 7.8, "0.82 0.92 0.98", "left");
+    y = 734;
+  };
+  const ensure = (height) => {
+    if (y - height < page.bottom) addPage();
+  };
+  const card = (x, top, w, h, fill = colors.white, accent = "") => {
+    addRect(x, top - h, w, h, fill);
+    addStrokeRect(x, top - h, w, h);
+    if (accent) addRect(x, top - h, 4, h, accent);
+  };
+  const sectionTitle = (title, meta = "") => {
+    ensure(36);
+    addText(meta ? `${title} — ${meta}` : title, page.margin, y, 12.5, colors.ink, "left", "F2");
+    y -= 10;
+    addLine(page.margin, y, page.width - page.margin, y, colors.line, 0.6);
+    y -= 16;
+  };
+  const metricCard = (x, top, w, h, label, value, note, accent, fill = colors.white) => {
+    card(x, top, w, h, fill, accent);
+    addText(label, x + 12, top - 17, 7.5, colors.muted);
+    addWrappedText(value, x + 12, top - 36, w - 24, value.length > 18 ? 11 : 14, accent, 12, 2);
+    if (note) addWrappedText(note, x + 12, top - 55, w - 24, 7.1, colors.muted, 8.5, 2);
+  };
+  const drawKpis = () => {
+    const gap = 10;
+    const cols = 3;
+    const w = (contentW - gap * (cols - 1)) / cols;
+    const h = 64;
+    const total = Math.max(analysis.summary.count, 1);
+    const valueTotal = Math.max(Number(analysis.summary.totalValue || 0), 1);
+    const metrics = [
+      ["Total de PNRs", integer.format(analysis.summary.count), "100% do recorte", colors.blue, colors.blueSoft],
+      ["Valor total", currency.format(analysis.summary.totalValue), "Soma geral dos valores PNR", colors.orange, colors.warm],
+      ["Valor faturado", `-${currency.format(analysis.summary.valorFaturado)}`, `${formatNumberPt((analysis.summary.valorFaturado / valueTotal) * 100, 1)}% do valor`, colors.red, colors.dangerSoft],
+      ["Ticket médio", currency.format(analysis.summary.ticketMedioGeral), `Fat.: ${currency.format(analysis.summary.ticketMedioFaturado)} · Anul.: ${currency.format(analysis.summary.ticketMedioAnulado)}`, colors.green, colors.greenSoft],
+      ["Valor anulado", currency.format(analysis.summary.valorAnulado), `${formatNumberPt((analysis.summary.valorAnulado / valueTotal) * 100, 1)}% do valor`, colors.green, colors.greenSoft],
+      ["Em aberto/análise", integer.format(analysis.summary.aberto), `${formatNumberPt((analysis.summary.aberto / total) * 100, 1)}% dos PNRs`, colors.teal, colors.white],
+    ];
+    ensure(154);
+    metrics.forEach((metric, index) => {
+      const row = Math.floor(index / cols);
+      const col = index % cols;
+      metricCard(page.margin + col * (w + gap), y - row * (h + 10), w, h, ...metric);
+    });
+    y -= h * 2 + 32;
+  };
+  const drawTable = (title, headers, rows, widths, accent = colors.blue, aligns = []) => {
+    const rowHeight = 18;
+    const height = 48 + rows.length * rowHeight;
+    ensure(height + 18);
+    card(page.margin, y, contentW, height, colors.white, accent);
+    addText(title, page.margin + 12, y - 18, 10.3, colors.ink, "left", "F2");
+    const tableTop = y - 32;
+    addRect(page.margin + 10, tableTop - 14, contentW - 20, 18, colors.tableHead);
+    let cursor = page.margin + 14;
+    headers.forEach((header, index) => {
+      const align = aligns[index] || (index >= 2 ? "right" : "left");
+      addText(clipPdfText(header, widths[index] - 8, 7.2), align === "right" ? cursor + widths[index] - 4 : cursor, tableTop - 8, 7.2, colors.muted, align);
+      cursor += widths[index];
+    });
+    rows.forEach((row, rowIndex) => {
+      const rowY = tableTop - 29 - rowIndex * rowHeight;
+      if (rowIndex % 2 === 1) addRect(page.margin + 10, rowY - 7, contentW - 20, 16, "0.97 0.985 1");
+      cursor = page.margin + 14;
+      row.forEach((cell, index) => {
+        const align = aligns[index] || (index >= 2 ? "right" : "left");
+        const text = clipPdfText(cell, widths[index] - 8, 7.5);
+        addText(text, align === "right" ? cursor + widths[index] - 4 : cursor, rowY, 7.5, colors.ink, align);
+        cursor += widths[index];
+      });
+    });
+    y -= height + 18;
+  };
+  const drawParagraph = (title, text, accent = colors.teal) => {
+    ensure(116);
+    sectionTitle(title, analysis.scopeLabel);
+    const h = 86;
+    card(page.margin, y, contentW, h, colors.white, accent);
+    addWrappedText(text, page.margin + 16, y - 18, contentW - 32, 9, colors.ink, 12, 6);
+    y -= h + 24;
+  };
+  const drawFilters = () => {
+    ensure(82);
+    const h = 58;
+    card(page.margin, y, contentW, h, colors.white, colors.blue);
+    addText("Filtros aplicados", page.margin + 14, y - 18, 9.6, colors.ink, "left", "F2");
+    const filterText = [
+      `Mês: ${analysis.filters.month}`,
+      `Quinzena: ${analysis.filters.quinzena}`,
+      `Status: ${analysis.filters.status}`,
+      `Origem: ${analysis.filters.origem}`,
+      `Busca: ${analysis.filters.busca}`,
+    ].join(" · ");
+    addWrappedText(filterText, page.margin + 14, y - 36, contentW - 28, 8, colors.muted, 10, 2);
+    y -= h + 20;
+  };
+  const drawTimelineChart = () => {
+    ensure(246);
+    sectionTitle("Evolução temporal de valores PNR", "anulado positivo x faturado negativo");
+    const h = 212;
+    card(page.margin, y, contentW, h, colors.white, colors.teal);
+    addText("Anulado", page.margin + 18, y - 18, 8, colors.green, "left", "F2");
+    addText("Faturado", page.margin + 80, y - 18, 8, colors.red, "left", "F2");
+    const chartX = page.margin + 48;
+    const chartY = y - h + 34;
+    const chartW = contentW - 78;
+    const chartH = h - 70;
+    const values = analysis.evolutionRows.length ? analysis.evolutionRows : [{ label: "Sem período", valorAnulado: 0, valorFaturado: 0 }];
+    const plotted = values.map((item) => ({ ...item, faturadoPlot: -Number(item.valorFaturado || 0), anuladoPlot: Number(item.valorAnulado || 0) }));
+    const maxValue = Math.max(1, ...plotted.map((item) => item.anuladoPlot));
+    const minValue = Math.min(-1, ...plotted.map((item) => item.faturadoPlot));
+    const range = Math.max(1, maxValue - minValue);
+    const pointX = (index) => chartX + (plotted.length <= 1 ? chartW / 2 : (index / (plotted.length - 1)) * chartW);
+    const pointY = (value) => chartY + ((value - minValue) / range) * chartH;
+    const zeroY = pointY(0);
+    addLine(chartX, chartY, chartX + chartW, chartY, colors.line, 0.4);
+    addLine(chartX, chartY + chartH, chartX + chartW, chartY + chartH, colors.line, 0.4);
+    addLine(chartX, zeroY, chartX + chartW, zeroY, "0.55 0.62 0.70", 0.8);
+    addText(currency.format(maxValue), chartX - 8, chartY + chartH - 2, 6.7, colors.muted, "right");
+    addText("R$ 0", chartX - 8, zeroY - 2, 6.7, colors.muted, "right");
+    addText(`-${currency.format(Math.abs(minValue))}`, chartX - 8, chartY - 2, 6.7, colors.muted, "right");
+    const drawSeries = (key, color) => {
+      if (plotted.length === 1) {
+        const x = pointX(0);
+        const py = pointY(plotted[0][key]);
+        addRect(x - 2, py - 2, 4, 4, color);
+        return;
+      }
+      for (let index = 0; index < plotted.length - 1; index += 1) {
+        addLine(pointX(index), pointY(plotted[index][key]), pointX(index + 1), pointY(plotted[index + 1][key]), color, 1.5);
+      }
+      plotted.forEach((item, index) => addRect(pointX(index) - 1.8, pointY(item[key]) - 1.8, 3.6, 3.6, color));
+    };
+    drawSeries("anuladoPlot", colors.green);
+    drawSeries("faturadoPlot", colors.red);
+    plotted.forEach((item, index) => {
+      if (index % Math.max(1, Math.ceil(plotted.length / 6)) === 0 || index === plotted.length - 1) {
+        addText(clipPdfText(shortMonthYear(item.label), 54, 6.7), pointX(index), chartY - 14, 6.7, colors.muted, "center");
+      }
+    });
+    y -= h + 22;
+  };
+
+  addPage();
+  drawKpis();
+  drawFilters();
+  drawParagraph("Resumo executivo", analysis.executiveSummary);
+  drawTimelineChart();
+  drawParagraph("Análise da evolução temporal", analysis.temporalAnalysis, colors.blue);
+  drawTable(
+    "Distribuição por status",
+    ["Status", "Qtd.", "%", "Valor"],
+    analysis.statusRows.slice(0, 10).map((item) => [item.label, integer.format(item.count), `${formatNumberPt(item.share, 1)}%`, formatCurrencyShort(item.totalValue)]),
+    [254, 70, 70, 110],
+    colors.blue,
+  );
+  drawTable(
+    "Análise por origem",
+    ["Origem", "Qtd.", "%", "Valor"],
+    analysis.originRows.slice(0, 8).map((item) => [item.label, integer.format(item.count), `${formatNumberPt(item.share, 1)}%`, formatCurrencyShort(item.totalValue)]),
+    [254, 70, 70, 110],
+    colors.teal,
+  );
+  drawTable(
+    "Estações com maior volume de PNR",
+    ["Estação", "Origem", "PNRs", "Valor", "%"],
+    analysis.stationRows.map((item) => [item.label, item.origin, integer.format(item.count), formatCurrencyShort(item.totalValue), `${formatNumberPt(item.share, 1)}%`]),
+    [150, 92, 68, 118, 76],
+    colors.orange,
+    ["left", "left", "right", "right", "right"],
+  );
+  drawTable(
+    "Motoristas com maior volume de PNR",
+    ["Motorista", "PNRs", "Valor", "Status", "%"],
+    analysis.driverRows.map((item) => [item.label, integer.format(item.count), formatCurrencyShort(item.totalValue), item.topStatuses, `${formatNumberPt(item.share, 1)}%`]),
+    [174, 58, 104, 120, 48],
+    colors.green,
+    ["left", "right", "right", "left", "right"],
+  );
+  drawTable(
+    "Detalhamento dos registros",
+    ["Competência", "Status", "Envio", "Valor", "Origem", "Motorista"],
+    analysis.rows.slice(0, 18).map((row) => [row.competencia || "—", row.statusNormalizado || "—", row.idEnvio || "—", currency.format(row.valorCompraNumerico || 0), row.estacaoOrigem || "—", getPnrReportDriverLabel(row)]),
+    [76, 108, 88, 80, 78, 74],
+    colors.navy,
+    ["left", "left", "left", "right", "left", "left"],
+  );
+  const hiddenRows = Math.max(0, analysis.rows.length - 18);
+  if (hiddenRows) {
+    ensure(44);
+    card(page.margin, y, contentW, 36, colors.blueSoft, colors.blue);
+    addText(`Detalhamento completo disponível no download Excel. O PDF exibe uma amostra de 18 registros de ${integer.format(analysis.rows.length)} no recorte.`, page.margin + 14, y - 21, 8.3, colors.ink);
+    y -= 52;
+  }
+
+  pages.push(commands.join("\n"));
+  const totalPages = pages.length;
+  const pagesWithFooter = pages.map((content, index) => {
+    const pageLabel = `Página ${index + 1} de ${totalPages}`;
+    return `${content}\n${colors.line} RG 0.5 w ${page.margin.toFixed(1)} 28.0 m ${(page.width - page.margin).toFixed(1)} 28.0 l S\n${colors.muted} rg BT /F1 7.3 Tf ${page.margin.toFixed(1)} 16.0 Td <${pdfTextHex("ALC Pereira & Filho Transportes · Painel de Inteligência Operacional · Relatório gerado automaticamente")}> Tj ET\n${colors.muted} rg BT /F1 7.3 Tf ${(page.width - page.margin - estimatePdfTextWidth(pageLabel, 7.3)).toFixed(1)} 16.0 Td <${pdfTextHex(pageLabel)}> Tj ET`;
+  });
+  return createPdfBlob(pagesWithFooter);
 }
 
 function arrayBufferToBase64(buffer) {
