@@ -8756,6 +8756,33 @@ function buildPnrReportPdfBlob(analysis) {
     lines.forEach((line, index) => addText(line, x, top - index * lineHeight, size, color));
     return lines.length * lineHeight;
   };
+  const addJustifiedWrappedText = (text, x, top, width, size = 9, color = colors.ink, lineHeight = 11.5, maxLines = 5) => {
+    const lines = wrapPdfText(text, width, size, maxLines);
+    const drawJustifiedLine = (line, yy, shouldJustify) => {
+      const words = String(line || "").split(/\s+/).filter(Boolean);
+      if (!shouldJustify || words.length < 2) {
+        addText(line, x, yy, size, color);
+        return;
+      }
+      const wordsWidth = words.reduce((acc, word) => acc + estimatePdfTextWidth(word, size), 0);
+      const extraGap = (width - wordsWidth) / Math.max(words.length - 1, 1);
+      if (!Number.isFinite(extraGap) || extraGap <= 1 || extraGap > size * 1.8) {
+        addText(line, x, yy, size, color);
+        return;
+      }
+      let cursor = x;
+      words.forEach((word, index) => {
+        addText(word, cursor, yy, size, color);
+        cursor += estimatePdfTextWidth(word, size) + (index < words.length - 1 ? extraGap : 0);
+      });
+    };
+    lines.forEach((line, index) => {
+      const isLastLine = index === lines.length - 1;
+      const shouldJustify = !isLastLine && estimatePdfTextWidth(line, size) > width * 0.58;
+      drawJustifiedLine(line, top - index * lineHeight, shouldJustify);
+    });
+    return lines.length * lineHeight;
+  };
   const addPage = () => {
     if (commands.length) pages.push(commands.join("\n"));
     commands = [];
@@ -8855,7 +8882,7 @@ function buildPnrReportPdfBlob(analysis) {
     card(page.margin, y, contentW, h, fill, accent);
     let textY = y - 18;
     paragraphs.forEach((paragraph) => {
-      const used = addWrappedText(paragraph, page.margin + 16, textY, contentW - 32, 9, colors.ink, 12, 7);
+      const used = addJustifiedWrappedText(paragraph, page.margin + 16, textY, contentW - 32, 9, colors.ink, 12, 7);
       textY -= used + 5;
     });
     y -= h + 24;
@@ -8869,7 +8896,7 @@ function buildPnrReportPdfBlob(analysis) {
     safeItems.forEach((item, index) => {
       const rowY = y - 22 - index * 26;
       addText(`${index + 1}.`, page.margin + 18, rowY, 8.6, accent, "left", "F2");
-      addWrappedText(item, page.margin + 46, rowY, contentW - 64, 8.4, colors.ink, 10.6, 2);
+      addJustifiedWrappedText(item, page.margin + 46, rowY, contentW - 64, 8.4, colors.ink, 10.6, 2);
     });
     y -= h + 24;
   };
@@ -8948,7 +8975,6 @@ function buildPnrReportPdfBlob(analysis) {
     [254, 70, 70, 110],
     colors.blue,
   );
-  drawTimelineChart();
   drawParagraph("Análise temporal dos valores", analysis.temporalAnalysis, colors.blue);
   drawParagraph("Análise por origem e base operacional", analysis.originAnalysis, colors.teal);
   drawTable(
