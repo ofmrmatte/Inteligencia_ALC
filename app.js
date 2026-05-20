@@ -4709,23 +4709,17 @@ function addPnrExportTable(worksheet, exportRows) {
   worksheet.views = [{ state: "frozen", ySplit: headerRowNumber, topLeftCell: "A9", zoomScale: 85, zoomScaleNormal: 85, activeCell: "A9" }];
 }
 
-async function protectPnrExportHeader(worksheet, exportRows) {
-  const lastDataRow = 8 + Math.max(0, exportRows.length);
-  for (let rowNumber = 9; rowNumber <= lastDataRow; rowNumber += 1) {
-    worksheet.getRow(rowNumber).eachCell((cell) => {
-      cell.protection = { locked: false };
-    });
-  }
-  styleExcelRange(worksheet, "A1:J8", {
-    protection: { locked: true },
-  });
-  await worksheet.protect("alc-dashboard", {
-    selectLockedCells: true,
-    selectUnlockedCells: true,
-    sort: true,
-    autoFilter: true,
-    objects: false,
-    scenarios: false,
+function autoFitPnrExportColumns(worksheet, exportRows) {
+  const headers = ["Competência", "Quinzena", "Status", "ID de Envio", "ID da Reclamação", "Valor da Compra", "Estação de Origem", "Motorista", "Data da Entrega", "Data de Encerramento"];
+  const minWidths = [16, 17, 18, 16, 19, 16, 20, 20, 16, 20];
+  const maxWidths = [24, 28, 34, 22, 24, 18, 34, 38, 18, 22];
+  headers.forEach((header, index) => {
+    const contentWidth = Math.max(
+      header.length,
+      ...(Array.isArray(exportRows) ? exportRows : []).map((row) => String(row?.[header] ?? "").length),
+    );
+    const paddedWidth = Math.ceil(contentWidth * 1.12) + 2;
+    worksheet.getColumn(index + 1).width = Math.min(maxWidths[index], Math.max(minWidths[index], paddedWidth));
   });
 }
 
@@ -4755,7 +4749,7 @@ async function buildStyledPnrWorkbook(rows, exportRows) {
   configurePnrExportHeader(worksheet, rows, exportRows);
   await addPackageExportLogo(worksheet, workbook);
   addPnrExportTable(worksheet, exportRows);
-  await protectPnrExportHeader(worksheet, exportRows);
+  autoFitPnrExportColumns(worksheet, exportRows);
   const buffer = await workbook.xlsx.writeBuffer();
   return new Blob([buffer], { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" });
 }
