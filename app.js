@@ -4242,7 +4242,7 @@ function renderPnrTable(rows, allRows, options = {}) {
               <tr>
                 ${PNR_TABLE_COLUMNS.map((column) => `<td class="${column.format === "currency" || column.format === "currencyText" ? "is-right" : ""}">${formatPnrTableCell(row, column)}</td>`).join("")}
               </tr>
-            `).join("") : `<tr><td colspan="${PNR_TABLE_COLUMNS.length}">${emptyState("Sem registros", "Ajuste os filtros ou carregue uma planilha de PNR.")}</td></tr>`}
+            `).join("") : `<tr><td colspan="${PNR_TABLE_COLUMNS.length}">${emptyState("Nenhum resultado encontrado", "Nenhum resultado encontrado para os filtros atuais.")}</td></tr>`}
           </tbody>
         </table>
       </div>
@@ -4401,8 +4401,71 @@ function renderPnrProcessingPanel({ hasFiles, totalRows, remotePending = false }
 
 function renderPnrPage() {
   const hasRemoteFiles = getPnrRemoteFileIds().length > 0;
+  const pnrBaseState = getModuleBaseState(DASHBOARD_MODULE_KEYS.desviosPnr);
   const hasPersistedPnrBase = moduleHasConfirmedBase(DASHBOARD_MODULE_KEYS.desviosPnr);
   const hasRemoteScope = hasRemoteFiles || hasPersistedPnrBase;
+  const hasAnyPnrData = hasPnrRemoteData() || pnrRows.length > 0;
+  if (!hasRemoteScope && !hasAnyPnrData) {
+    if (pnrBaseState.status === MODULE_BASE_STATUS.error) {
+      return `
+        <section class="pnr-page">
+          <article class="panel deviation-management-panel pnr-hero-panel">
+            <div class="panel__header">
+              <div>
+                <h2>Gestão de Desvios · PNRs</h2>
+                <p>Análise de casos PNR separada das bases de Pré-Fatura e Gestão de Pacotes.</p>
+              </div>
+              <span class="panel__meta">Erro ao consultar base</span>
+            </div>
+          </article>
+          ${renderDashboardErrorState(getDashboardStateConfig("supabase-error"))}
+        </section>
+      `;
+    }
+    if (moduleIsConfirmedEmpty(DASHBOARD_MODULE_KEYS.desviosPnr)) {
+      return `
+        <section class="pnr-page">
+          <article class="panel deviation-management-panel pnr-hero-panel">
+            <div class="panel__header">
+              <div>
+                <h2>Gestão de Desvios · PNRs</h2>
+                <p>Análise de casos PNR separada das bases de Pré-Fatura e Gestão de Pacotes.</p>
+              </div>
+              <span class="panel__meta">Sem base importada</span>
+            </div>
+          </article>
+          ${renderDashboardEmptyState(getModuleEmptyStateConfig(DASHBOARD_MODULE_KEYS.desviosPnr))}
+        </section>
+      `;
+    }
+    if (pnrBaseState.hasCheckedPersistedData !== true && !pnrBaseState.checkStartedAt) {
+      void checkModulePersistedBase(DASHBOARD_MODULE_KEYS.desviosPnr, { reason: "pnr-enter-tab" }).then((baseState) => {
+        if (baseState.status === MODULE_BASE_STATUS.loaded) {
+          schedulePnrRemoteRefresh({ immediate: true, force: true, reason: "pnr-enter-tab" });
+        } else {
+          renderAll();
+        }
+      });
+    }
+    return `
+      <section class="pnr-page">
+        <article class="panel deviation-management-panel pnr-hero-panel">
+          <div class="panel__header">
+            <div>
+              <h2>Gestão de Desvios · PNRs</h2>
+              <p>Análise de casos PNR separada das bases de Pré-Fatura e Gestão de Pacotes.</p>
+            </div>
+            <span class="panel__meta">Consultando base</span>
+          </div>
+        </article>
+        ${renderDashboardLoadingState({
+          title: "Carregando dados da base...",
+          description: "Consultando informações salvas no painel.",
+          loading: true,
+        })}
+      </section>
+    `;
+  }
   if (hasRemoteScope && !hasPnrRemoteData() && !pnrRemoteState.loadingTable && !pnrRemoteState.error) {
     applyPnrLightCacheIfAvailable(buildPnrCacheSignature());
   }
@@ -4437,7 +4500,6 @@ function renderPnrPage() {
   const monthSelectOptions = monthOptions.map((option) => ({ value: option.key, label: option.label }));
   const totalLoadedRows = shouldUseRemote ? Number(pnrRemoteState.total || 0) : pnrRows.length;
   const pnrLoadState = renderPnrProcessingPanel({ hasFiles: hasRemoteScope || Boolean(pnrRows.length), totalRows: totalLoadedRows, remotePending });
-  const pnrBaseState = getModuleBaseState(DASHBOARD_MODULE_KEYS.desviosPnr);
   const noPnrBase = moduleIsConfirmedEmpty(DASHBOARD_MODULE_KEYS.desviosPnr) && !pnrRows.length && !hasPnrRemoteData() && !pnrRemoteState.loadingTable && !pnrRemoteState.loadingSummary && !pnrRemoteState.loadingCharts && !pnrRemoteState.error;
   if (noPnrBase) {
     return `
@@ -4555,9 +4617,13 @@ function getDashboardModuleKeyForSheet(sheet = state.sheet) {
 
 function createModuleBaseState(patch = {}) {
   return {
-    status: MODULE_BASE_STATUS.idle,
+    status: MODULE_BASE_STATUS.loading,
+    hasCheckedPersistedData: false,
+    hasPersistedData: null,
     total: null,
+    filteredTotal: null,
     error: null,
+    checkStartedAt: "",
     lastCheckedAt: "",
     source: "",
     reason: "",
@@ -4586,34 +4652,77 @@ function getModuleBaseState(moduleKey = getDashboardModuleKeyForSheet()) {
 function setModuleBaseState(moduleKey, patch = {}) {
   if (!moduleBaseState[moduleKey]) moduleBaseState[moduleKey] = createModuleBaseState();
   const previous = { ...moduleBaseState[moduleKey] };
+  const nextPatch = { ...patch };
+  if (nextPatch.hasCheckedPersistedData === undefined) {
+    nextPatch.hasCheckedPersistedData = Boolean(
+      nextPatch.status === MODULE_BASE_STATUS.loaded ||
+      nextPatch.status === MODULE_BASE_STATUS.empty ||
+      nextPatch.status === MODULE_BASE_STATUS.error ||
+      moduleBaseState[moduleKey].hasCheckedPersistedData,
+    );
+  }
+  if (nextPatch.hasPersistedData === undefined) {
+    if (nextPatch.status === MODULE_BASE_STATUS.loaded) nextPatch.hasPersistedData = true;
+    else if (nextPatch.status === MODULE_BASE_STATUS.empty) nextPatch.hasPersistedData = false;
+    else nextPatch.hasPersistedData = moduleBaseState[moduleKey].hasPersistedData;
+  }
+  if (nextPatch.filteredTotal === undefined && nextPatch.total !== undefined) {
+    nextPatch.filteredTotal = nextPatch.total;
+  }
+  if (
+    nextPatch.checkStartedAt === undefined &&
+    (nextPatch.status === MODULE_BASE_STATUS.loading || nextPatch.status === MODULE_BASE_STATUS.refreshing)
+  ) {
+    nextPatch.checkStartedAt = moduleBaseState[moduleKey].checkStartedAt || new Date().toISOString();
+  }
   moduleBaseState[moduleKey] = createModuleBaseState({
     ...moduleBaseState[moduleKey],
-    ...patch,
-    lastCheckedAt: patch.lastCheckedAt || new Date().toISOString(),
+    ...nextPatch,
+    lastCheckedAt: nextPatch.lastCheckedAt || new Date().toISOString(),
   });
-  console.info(getModuleBaseLogPrefix(moduleKey), {
+  console.info("[Module State]", {
     module: moduleKey,
     previousState: previous.status,
     nextState: moduleBaseState[moduleKey].status,
+    hasCheckedPersistedData: moduleBaseState[moduleKey].hasCheckedPersistedData,
+    hasPersistedData: moduleBaseState[moduleKey].hasPersistedData,
     totalPersisted: moduleBaseState[moduleKey].total,
+    filteredTotal: moduleBaseState[moduleKey].filteredTotal,
+    checkStartedAt: moduleBaseState[moduleKey].checkStartedAt,
     source: moduleBaseState[moduleKey].source,
     reason: moduleBaseState[moduleKey].reason,
     error: moduleBaseState[moduleKey].error,
+  });
+  console.info(getModuleBaseLogPrefix(moduleKey), {
+    module: moduleKey,
+    state: moduleBaseState[moduleKey].status,
+    totalPersisted: moduleBaseState[moduleKey].total,
+    hasCheckedPersistedData: moduleBaseState[moduleKey].hasCheckedPersistedData,
+    moduleHasData: moduleBaseState[moduleKey].hasPersistedData,
+    reason: moduleBaseState[moduleKey].reason,
   });
   return moduleBaseState[moduleKey];
 }
 
 function moduleHasConfirmedBase(moduleKey = getDashboardModuleKeyForSheet()) {
   const baseState = getModuleBaseState(moduleKey);
-  return baseState.status === MODULE_BASE_STATUS.loaded && Number(baseState.total || 0) > 0;
+  return baseState.hasPersistedData === true &&
+    baseState.status !== MODULE_BASE_STATUS.empty &&
+    baseState.status !== MODULE_BASE_STATUS.error &&
+    Number(baseState.total || 0) > 0;
 }
 
 function moduleIsConfirmedEmpty(moduleKey = getDashboardModuleKeyForSheet()) {
   const baseState = getModuleBaseState(moduleKey);
-  return baseState.status === MODULE_BASE_STATUS.empty && Number(baseState.total || 0) === 0;
+  return baseState.hasCheckedPersistedData === true &&
+    baseState.status === MODULE_BASE_STATUS.empty &&
+    baseState.hasPersistedData === false &&
+    Number(baseState.total || 0) === 0;
 }
 
 function moduleBaseCheckPending(moduleKey = getDashboardModuleKeyForSheet()) {
+  const baseState = getModuleBaseState(moduleKey);
+  if (baseState.hasCheckedPersistedData !== true) return true;
   const status = getModuleBaseState(moduleKey).status;
   return status === MODULE_BASE_STATUS.idle || status === MODULE_BASE_STATUS.loading || status === MODULE_BASE_STATUS.refreshing;
 }
@@ -4644,16 +4753,25 @@ async function countEvolutionPersistedRows() {
 async function checkModulePersistedBase(moduleKey = getDashboardModuleKeyForSheet(), options = {}) {
   if (!currentUser || !window.supabaseClient) {
     return setModuleBaseState(moduleKey, {
-      status: MODULE_BASE_STATUS.idle,
+      status: MODULE_BASE_STATUS.loading,
+      hasCheckedPersistedData: false,
+      hasPersistedData: null,
       total: null,
+      filteredTotal: null,
       error: null,
       source: "session",
       reason: options.reason || "not-ready",
     });
   }
   const previous = getModuleBaseState(moduleKey);
+  console.info("[Base Check]", moduleKey, "checking persisted data", {
+    previousState: previous.status,
+    hasCheckedPersistedData: previous.hasCheckedPersistedData,
+    reason: options.reason || "base-check",
+  });
   setModuleBaseState(moduleKey, {
     status: previous.status === MODULE_BASE_STATUS.loaded ? MODULE_BASE_STATUS.refreshing : MODULE_BASE_STATUS.loading,
+    hasCheckedPersistedData: false,
     error: null,
     source: "Supabase",
     reason: options.reason || "base-check",
@@ -4665,7 +4783,10 @@ async function checkModulePersistedBase(moduleKey = getDashboardModuleKeyForShee
       : await countRowsInPersistedTable(tableName);
     return setModuleBaseState(moduleKey, {
       status: total > 0 ? MODULE_BASE_STATUS.loaded : MODULE_BASE_STATUS.empty,
+      hasCheckedPersistedData: true,
+      hasPersistedData: total > 0,
       total,
+      filteredTotal: total,
       error: null,
       source: tableName || "persisted-aggregates",
       reason: options.reason || "base-check",
@@ -4675,7 +4796,10 @@ async function checkModulePersistedBase(moduleKey = getDashboardModuleKeyForShee
     dashboardLastError = error;
     return setModuleBaseState(moduleKey, {
       status: MODULE_BASE_STATUS.error,
+      hasCheckedPersistedData: true,
+      hasPersistedData: previous.hasPersistedData === true ? true : null,
       total: previous.total,
+      filteredTotal: previous.filteredTotal,
       error: error?.message || String(error),
       source: "Supabase",
       reason: options.reason || "base-check",
@@ -4690,6 +4814,8 @@ async function checkAllModulePersistedBases(options = {}) {
     DASHBOARD_MODULE_KEYS.desviosPnr,
     DASHBOARD_MODULE_KEYS.evolucao,
   ];
+  const loadPrefix = options.reason === "initial-load" ? "[Initial Load]" : "[Reload Load]";
+  console.info(loadPrefix, "início da validação de bases persistidas", { reason: options.reason || "reload" });
   console.info("[Dashboard Reload State] início da validação de bases persistidas", { reason: options.reason || "reload" });
   const results = await Promise.allSettled(keys.map((key) => checkModulePersistedBase(key, { reason: options.reason || "reload" })));
   results.forEach((result, index) => {
@@ -4826,7 +4952,7 @@ function resetDashboardImportState() {
 }
 
 function renderDashboardUpdatingBadge(moduleKey = getDashboardModuleKeyForSheet(), text = "Atualizando dados em segundo plano...") {
-  if (!moduleLoadingState[moduleKey]) return "";
+  if (!moduleLoadingState[moduleKey] && getModuleBaseState(moduleKey).status !== MODULE_BASE_STATUS.refreshing) return "";
   return `
     <div class="dashboard-updating-badge" role="status" aria-live="polite">
       <span class="dashboard-updating-badge__dot" aria-hidden="true"></span>
@@ -12508,7 +12634,7 @@ async function loadDashboardFilesFromSupabase(options = {}) {
     if (validateStorage && dashboardFileRecords.length) {
       dashboardFileRecords = await validateDashboardFileRecords(dashboardFileRecords);
     }
-    await checkAllModulePersistedBases({ reason: "reload" });
+    await checkAllModulePersistedBases({ reason: hasInitialLoadCompleted ? "reload" : "initial-load" });
     if (!dashboardFileRecords.length) {
       const activeModuleKey = getDashboardModuleKeyForSheet();
       clearDashboardData({ render: false, preserveRecords: moduleHasConfirmedBase(activeModuleKey) || moduleBaseCheckPending(activeModuleKey) });
