@@ -1,7 +1,7 @@
 (function initDashboardCacheService() {
   const STORAGE_KEY = "alc-dashboard-module-cache-v1";
-  const CACHE_VERSION = "dashboard-cache-v1";
-  const RESET_VERSION = "dashboard-reset-2026-05-19-v1";
+  const CACHE_VERSION = "dashboard-cache-v2";
+  const RESET_VERSION = "dashboard-reset-2026-05-20-v2";
   const RESET_MARKER_KEY = "alc-dashboard-reset-version";
   const DEFAULT_TIMEOUT_MS = 30000;
 
@@ -26,6 +26,13 @@
         /dashboard[_-]?cache/i,
         /processed[_-]?files/i,
         /uploaded[_-]?files/i,
+        /no[_-]?files/i,
+        /has[_-]?files/i,
+        /empty[_-]?state/i,
+        /no[_-]?base/i,
+        /base[_-]?missing/i,
+        /files[_-]?empty/i,
+        /module[_-]?empty/i,
       ];
       const removeFromStorage = (storage) => {
         explicitKeys.forEach((key) => storage.removeItem(key));
