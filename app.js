@@ -121,6 +121,10 @@ const PNR_TABLE_RPC = "desvios_pnr_table";
 const PNR_METRICS_REFRESH_RPC = "refresh_desvios_pnr_metrics_summary";
 const PNR_LIGHT_CACHE_VERSION = "pnr-dashboard-light-cache-v3";
 const PNR_LIGHT_CACHE_KEY = "alc-pnr-dashboard-light-cache-v1";
+const FILE_DELETE_MODES = {
+  listOnly: "list-only",
+  withData: "with-data",
+};
 let processedRecordsUnavailable = false;
 let isExportingPackageExcel = false;
 const SHEET_ORDER = ["SVC PERDIDOS", "XPT PERDIDOS", "PNR"];
@@ -2568,7 +2572,8 @@ function isDashboardFileActive(file) {
   if (!file) return false;
   const status = normalizeText(file.status || file.metadata?.status || "");
   if (file.deleted_at || file.deletedAt) return false;
-  if (["DELETED", "REMOVIDO", "EMPTY OR PARSE ERROR", "EMPTY_OR_PARSE_ERROR", "SUPERSEDED", "SUBSTITUIDO", "SUBSTITUÍDO"].includes(status)) return false;
+  if (file.metadata?.hidden_from_history === true || file.metadata?.removed_from_history === true) return false;
+  if (["DELETED", "REMOVIDO", "REMOVED FROM HISTORY", "REMOVED_FROM_HISTORY", "EMPTY OR PARSE ERROR", "EMPTY_OR_PARSE_ERROR", "SUPERSEDED", "SUBSTITUIDO", "SUBSTITUÍDO"].includes(status)) return false;
   if (["MISSING STORAGE", "MISSING_STORAGE"].includes(status)) return hasPersistedRowsMetadata(file);
   return Boolean(file.id && (file.storage_path || hasPersistedRowsMetadata(file)));
 }
@@ -12044,6 +12049,7 @@ async function loadProcessedDashboardFileRecords(moduleKey) {
     );
     if (error) throw error;
     return (Array.isArray(data) ? data : [])
+      .filter((record) => record?.metadata?.hidden_from_history !== true && record?.metadata?.removed_from_history !== true)
       .map((record) => mapProcessedDashboardFileToDashboardRecord(record, moduleKey))
       .filter(Boolean);
   } catch (error) {
@@ -15150,7 +15156,275 @@ async function setActiveDashboardFile(fileId) {
   showToast("Arquivo ativo atualizado.", "good", 4200);
 }
 
-async function deleteDashboardFiles(fileRecords = []) {
+function getDashboardFileModuleKey(record = {}) {
+  return getDashboardModuleKeyForFileCategory(getFileRecordCategory(record));
+}
+
+function getDashboardFileHash(record = {}) {
+  return record?.metadata?.file_hash || record?.file_hash || "";
+}
+
+function getProcessedDashboardFileId(record = {}) {
+  return record?.metadata?.processed_dashboard_file_id || record?.processed_dashboard_file_id || "";
+}
+
+function getDashboardFileIdsForRecord(record = {}) {
+  return [...new Set([
+    record?.id,
+    record?.metadata?.dashboard_file_id,
+    record?.metadata?.file_id,
+  ].filter((id) => id && !String(id).startsWith("processed:")))];
+}
+
+function isSyntheticOrDeletedRawFile(record = {}) {
+  const storagePath = String(record.storage_path || record.metadata?.storage_path || "");
+  return record.metadata?.raw_file_deleted === true ||
+    record.raw_file_deleted === true ||
+    storagePath.startsWith(`${PROCESSED_ONLY_STORAGE_PREFIX}/`) ||
+    !storagePath;
+}
+
+async function getProcessedDashboardFileMatches(record = {}) {
+  if (!window.supabaseClient) return [];
+  const moduleKey = getDashboardFileModuleKey(record);
+  const aliases = getProcessedDashboardModuleKeyAliases(moduleKey);
+  const fileHash = getDashboardFileHash(record);
+  const processedId = getProcessedDashboardFileId(record);
+  const dashboardIds = getDashboardFileIdsForRecord(record);
+  const matches = new Map();
+  const addRows = (rows) => {
+    (Array.isArray(rows) ? rows : []).forEach((row) => {
+      if (row?.id) matches.set(row.id, row);
+    });
+  };
+
+  const run = async (query, label) => {
+    const { data, error } = await query;
+    if (error) {
+      console.warn("[File Delete] Falha ao consultar processed_dashboard_files.", { label, error });
+      return;
+    }
+    addRows(data);
+  };
+
+  if (processedId) {
+    await run(
+      window.supabaseClient
+        .from("processed_dashboard_files")
+        .select("*")
+        .eq("id", processedId),
+      "processed-id",
+    );
+  }
+  if (fileHash) {
+    await run(
+      window.supabaseClient
+        .from("processed_dashboard_files")
+        .select("*")
+        .in("module_key", aliases)
+        .eq("file_hash", fileHash),
+      "file-hash",
+    );
+  }
+  for (const id of dashboardIds) {
+    await run(
+      window.supabaseClient
+        .from("processed_dashboard_files")
+        .select("*")
+        .in("module_key", aliases)
+        .contains("metadata", { dashboard_file_id: id }),
+      "dashboard-file-id",
+    );
+    await run(
+      window.supabaseClient
+        .from("processed_dashboard_files")
+        .select("*")
+        .in("module_key", aliases)
+        .contains("metadata", { file_id: id }),
+      "file-id",
+    );
+  }
+  return Array.from(matches.values());
+}
+
+async function updateProcessedDashboardFilesForListRemoval(records = []) {
+  for (const record of records) {
+    const matches = await getProcessedDashboardFileMatches(record);
+    for (const match of matches) {
+      const { error } = await window.supabaseClient
+        .from("processed_dashboard_files")
+        .update({
+          metadata: {
+            ...(match.metadata || {}),
+            hidden_from_history: true,
+            removed_from_history: true,
+            removed_from_history_at: new Date().toISOString(),
+            removal_mode: FILE_DELETE_MODES.listOnly,
+          },
+        })
+        .eq("id", match.id);
+      if (error) throw error;
+    }
+  }
+}
+
+async function deleteProcessedDashboardFileMetadata(records = []) {
+  const ids = new Set();
+  for (const record of records) {
+    const matches = await getProcessedDashboardFileMatches(record);
+    matches.forEach((match) => {
+      if (match?.id) ids.add(match.id);
+    });
+  }
+  if (!ids.size) return 0;
+  const { error } = await window.supabaseClient
+    .from("processed_dashboard_files")
+    .delete()
+    .in("id", Array.from(ids));
+  if (error) throw error;
+  return ids.size;
+}
+
+async function updateDashboardFilesForListRemoval(records = []) {
+  const ids = records.flatMap(getDashboardFileIdsForRecord);
+  if (!ids.length) return 0;
+  const { data: existing, error: selectError } = await window.supabaseClient
+    .from("dashboard_files")
+    .select("id,metadata")
+    .in("id", ids);
+  if (selectError) throw selectError;
+  for (const row of Array.isArray(existing) ? existing : []) {
+    const { error } = await window.supabaseClient
+      .from("dashboard_files")
+      .update({
+        is_active: false,
+        status: "removed_from_history",
+        metadata: {
+          ...(row.metadata || {}),
+          hidden_from_history: true,
+          removed_from_history: true,
+          removed_from_history_at: new Date().toISOString(),
+          removal_mode: FILE_DELETE_MODES.listOnly,
+        },
+        updated_at: new Date().toISOString(),
+      })
+      .eq("id", row.id);
+    if (error) throw error;
+  }
+  return Array.isArray(existing) ? existing.length : 0;
+}
+
+async function deleteDashboardFileMetadata(records = []) {
+  const ids = records.flatMap(getDashboardFileIdsForRecord);
+  if (!ids.length) return 0;
+  const { error } = await window.supabaseClient
+    .from("dashboard_files")
+    .delete()
+    .in("id", ids);
+  if (error) throw error;
+  return ids.length;
+}
+
+async function tryDeleteRowsByColumn(tableName, column, values = []) {
+  const uniqueValues = [...new Set((Array.isArray(values) ? values : []).filter(Boolean))];
+  if (!uniqueValues.length) return 0;
+  const { count, error } = await window.supabaseClient
+    .from(tableName)
+    .delete({ count: "exact" })
+    .in(column, uniqueValues);
+  if (error) {
+    const text = `${error.code || ""} ${error.message || ""} ${error.details || ""}`;
+    if (/PGRST204|schema cache|Could not find|column/i.test(text)) {
+      console.warn("[Delete Imported Data] Coluna indisponível durante exclusão.", { tableName, column, error });
+      return 0;
+    }
+    throw error;
+  }
+  return Number(count || 0);
+}
+
+async function deleteImportedRowsForRecord(record = {}) {
+  const category = getFileRecordCategory(record);
+  const tableName = getProcessedRecordsTable(category);
+  if (!tableName) return 0;
+  const ids = getDashboardFileIdsForRecord(record);
+  const fileName = record.file_name || record.metadata?.original_name || "";
+  const before = await countRowsInPersistedTable(tableName).catch(() => null);
+  let removed = 0;
+  removed += await tryDeleteRowsByColumn(tableName, "file_id", ids);
+  if (category === DEVIATION_PNR_FILE_CATEGORY) {
+    removed += await tryDeleteRowsByColumn(tableName, "upload_batch_id", ids);
+    if (!ids.length && fileName) removed += await tryDeleteRowsByColumn(tableName, "source_file_name", [fileName]);
+    await refreshPnrMetricsSummaryForFiles(ids).catch((error) => {
+      console.warn("[Delete Imported Data] Não foi possível recalcular agregados PNR após exclusão.", error);
+    });
+  }
+  const after = await countRowsInPersistedTable(tableName).catch(() => null);
+  console.info("[Delete Imported Data]", {
+    module_key: getDashboardFileModuleKey(record),
+    file_name: fileName,
+    tableName,
+    ids,
+    before,
+    removed,
+    after,
+  });
+  return removed;
+}
+
+async function deleteProcessedRowsForDashboardFiles(records = []) {
+  if (!window.supabaseClient) return 0;
+  let removed = 0;
+  for (const record of Array.isArray(records) ? records : []) {
+    removed += await deleteImportedRowsForRecord(record);
+  }
+  return removed;
+}
+
+async function refreshAfterFileDeletion(records = [], mode = FILE_DELETE_MODES.withData) {
+  const affectedModules = new Set((Array.isArray(records) ? records : []).map(getDashboardFileModuleKey).filter(Boolean));
+  selectedSettingsFileIds.clear();
+  const deletedIds = new Set(records.flatMap(getDashboardFileIdsForRecord));
+  dashboardFileRecords = dashboardFileRecords.filter((record) => !deletedIds.has(record.id));
+  library.datasets = (Array.isArray(library.datasets) ? library.datasets : []).filter((dataset) => !deletedIds.has(dataset.id));
+  packageManagementRowsLoadedKey = "";
+  pnrRowsLoadedKey = "";
+  pnrRows = [];
+  resetDerivedDataCache();
+
+  if (affectedModules.has(DASHBOARD_MODULE_KEYS.desviosPnr)) {
+    clearPnrPostImportLocalState();
+    resetPnrRemoteState();
+  }
+
+  const files = await loadDashboardFilesFromSupabase({ loadActive: true, render: false, validateStorage: false, showLoading: false });
+  await Promise.allSettled([...affectedModules].map((moduleKey) => checkModulePersistedData(moduleKey, { reason: `file-delete-${mode}` })));
+
+  if (affectedModules.has(DASHBOARD_MODULE_KEYS.desviosPnr) && state.appView === "dashboard" && state.sheet === DEVIATION_MANAGEMENT_VIEW) {
+    await refreshPnrRemoteDashboard({ force: true, reason: "file-delete" });
+  } else {
+    hydrateControls();
+    renderAll();
+  }
+  renderSettingsFileManagement();
+  return files;
+}
+
+async function removeStorageFilesIfPresent(records = []) {
+  const storagePaths = records
+    .filter((record) => !isSyntheticOrDeletedRawFile(record))
+    .map((record) => record.storage_path)
+    .filter(Boolean);
+  if (!storagePaths.length) return 0;
+  const { error } = await window.supabaseClient.storage.from("dashboard-files").remove(storagePaths);
+  if (error) {
+    console.warn("[File Delete] Arquivo bruto não encontrado no Storage; seguindo com metadados/dados.", { storagePaths, error });
+    return 0;
+  }
+  return storagePaths.length;
+}
+
+async function deleteDashboardFiles(fileRecords = [], options = {}) {
   const permissions = getActionPermissions();
   if (!permissions.canDeleteFile) {
     showToast(permissions.isLoggedIn ? "Apenas administradores podem realizar esta ação." : "Faça login para acessar esta função.", "warn", 5200);
@@ -15175,79 +15449,66 @@ async function deleteDashboardFiles(fileRecords = []) {
     return;
   }
 
-  const storagePaths = records.map((record) => record.storage_path).filter(Boolean);
-  if (storagePaths.length) {
-    const { error: storageError } = await window.supabaseClient.storage.from("dashboard-files").remove(storagePaths);
-
-    if (storageError) {
-      console.error("Erro ao remover do storage:", storageError);
-      showToast("Um ou mais arquivos não foram encontrados no Storage. Removendo registros do painel.", "warn", 5200);
-    }
-  }
-
-  await deleteProcessedRowsForDashboardFiles(records);
-
-  const { error: dbError } = await window.supabaseClient
-    .from("dashboard_files")
-    .delete()
-    .in("id", records.map((record) => record.id));
-
-  if (dbError) {
-    console.error("Erro ao remover registros:", dbError);
-    showToast("Erro ao remover registros dos arquivos.", "error", 5200);
-    return;
-  }
-
-  await Promise.all(
-    records.map((record) =>
-      logAudit("delete_file", "dashboard_file", record.id, {
-        file_name: record.file_name,
-        storage_path: record.storage_path,
-      }),
-    ),
-  );
-
-  selectedSettingsFileIds.clear();
-  const deletedIds = new Set(records.map((record) => record.id));
-  dashboardFileRecords = dashboardFileRecords.filter((record) => !deletedIds.has(record.id));
-  library.datasets = (Array.isArray(library.datasets) ? library.datasets : []).filter((dataset) => !deletedIds.has(dataset.id));
-  packageManagementRowsLoadedKey = "";
-  pnrRowsLoadedKey = "";
-  pnrRows = [];
-  resetDerivedDataCache();
-
-  const files = await loadDashboardFilesFromSupabase({ loadActive: true, render: true, validateStorage: true, showLoading: false });
-  if (!files.length) {
-    clearDashboardData({ render: true, preserveRecords: false });
-  }
-  renderSettingsFileManagement();
-  showToast(records.length === 1 ? "Arquivo excluído com sucesso." : "Arquivos excluídos com sucesso.", "good", 4200);
-}
-
-async function deleteProcessedRowsForDashboardFiles(records = []) {
-  if (!window.supabaseClient) return;
-  const grouped = new Map();
-  (Array.isArray(records) ? records : []).forEach((record) => {
-    const category = getFileRecordCategory(record);
-    const tableName = getProcessedRecordsTable(category);
-    if (!record?.id || !tableName) return;
-    if (!grouped.has(tableName)) grouped.set(tableName, []);
-    grouped.get(tableName).push(record.id);
+  const mode = options.mode === FILE_DELETE_MODES.listOnly ? FILE_DELETE_MODES.listOnly : FILE_DELETE_MODES.withData;
+  const moduleKeys = [...new Set(records.map(getDashboardFileModuleKey))];
+  console.info("[File Delete]", {
+    action: mode,
+    files: records.map((record) => ({
+      module_key: getDashboardFileModuleKey(record),
+      file_name: record.file_name,
+      file_hash: getDashboardFileHash(record),
+      processed_file_id: getProcessedDashboardFileId(record),
+      raw_file_deleted: isSyntheticOrDeletedRawFile(record),
+      storage_path: record.storage_path,
+    })),
   });
 
-  for (const [tableName, ids] of grouped.entries()) {
-    const { error } = await window.supabaseClient
-      .from(tableName)
-      .delete()
-      .in("file_id", ids);
-    if (error) {
-      if (isMissingProcessedRecordsTableError(error)) {
-        console.warn(`[FILES] Tabela processada ${tableName} indisponível durante exclusão.`, error);
-        continue;
-      }
-      console.error(`[FILES] Erro ao remover registros processados de ${tableName}:`, error);
-      throw error;
+  try {
+    const removedStorageFiles = await removeStorageFilesIfPresent(records);
+    let removedRows = 0;
+    let removedProcessedMetadata = 0;
+    let changedDashboardMetadata = 0;
+    if (mode === FILE_DELETE_MODES.withData) {
+      removedRows = await deleteProcessedRowsForDashboardFiles(records);
+      removedProcessedMetadata = await deleteProcessedDashboardFileMetadata(records);
+      changedDashboardMetadata = await deleteDashboardFileMetadata(records);
+    } else {
+      await updateProcessedDashboardFilesForListRemoval(records);
+      changedDashboardMetadata = await updateDashboardFilesForListRemoval(records);
     }
+
+    await Promise.all(
+      records.map((record) =>
+        logAudit("delete_file", "dashboard_file", record.id, {
+          file_name: record.file_name,
+          storage_path: record.storage_path,
+          mode,
+          module_key: getDashboardFileModuleKey(record),
+        }),
+      ),
+    );
+
+    console.info("[Module File Delete]", {
+      action: mode,
+      moduleKeys,
+      removedStorageFiles,
+      removedRows,
+      removedProcessedMetadata,
+      changedDashboardMetadata,
+      status: "ok",
+    });
+
+    await refreshAfterFileDeletion(records, mode);
+    showToast(
+      mode === FILE_DELETE_MODES.listOnly
+        ? (records.length === 1 ? "Arquivo removido da lista. Os dados importados foram mantidos." : "Arquivos removidos da lista. Os dados importados foram mantidos.")
+        : (records.length === 1 ? "Arquivo e dados importados excluídos com sucesso." : "Arquivos e dados importados excluídos com sucesso."),
+      "good",
+      5200,
+    );
+  } catch (error) {
+    console.error("[File Delete] Falha ao excluir arquivo/metadados.", error);
+    showToast("Não foi possível concluir a exclusão. Verifique o console para detalhes técnicos.", "error", 7200);
   }
 }
 
@@ -15931,14 +16192,56 @@ async function deleteSelectedSettingsFiles() {
     showToast("Selecione um arquivo antes de excluir.", "warn", 5000);
     return;
   }
-  const isDeviationDeletion = settingsFilesTab === DEVIATION_PNR_FILE_CATEGORY;
-  const title = files.length === 1 ? "Excluir arquivo selecionado?" : `Excluir ${files.length} arquivos selecionados?`;
-  const message = isDeviationDeletion
-    ? "Esta ação removerá os arquivos da Gestão de Desvios e atualizará os indicadores da aba PNRs."
-    : "Esta ação removerá os arquivos do painel e atualizará os indicadores. Essa ação não pode ser desfeita.";
-  const confirmed = window.confirm(`${title}\n\n${message}${isDeviationDeletion ? "\n\nEssa ação não pode ser desfeita." : ""}`);
-  if (!confirmed) return;
-  await deleteDashboardFiles(files);
+  const mode = await showFileDeleteChoiceDialog(files);
+  if (!mode) return;
+  await deleteDashboardFiles(files, { mode });
+}
+
+function showFileDeleteChoiceDialog(files = []) {
+  const count = Array.isArray(files) ? files.length : 0;
+  const moduleLabel = getSettingsFileTabLabel(settingsFilesTab);
+  return new Promise((resolve) => {
+    const overlay = document.createElement("div");
+    overlay.className = "file-delete-dialog-backdrop";
+    overlay.setAttribute("role", "presentation");
+    overlay.innerHTML = `
+      <section class="file-delete-dialog" role="dialog" aria-modal="true" aria-labelledby="file-delete-dialog-title">
+        <div class="file-delete-dialog__header">
+          <strong id="file-delete-dialog-title">${escapeHtml(count === 1 ? "Excluir arquivo importado?" : `Excluir ${count} arquivos importados?`)}</strong>
+          <p>Você deseja remover apenas o arquivo da lista ou excluir também os dados importados por ele?</p>
+        </div>
+        <div class="file-delete-dialog__body">
+          <span><strong>Módulo</strong>${escapeHtml(moduleLabel)}</span>
+          <span><strong>Selecionados</strong>${integer.format(count)}</span>
+          <p>Excluir os dados removerá os registros importados por este arquivo da base do painel. As demais abas não serão afetadas.</p>
+        </div>
+        <div class="file-delete-dialog__actions">
+          <button class="secondary-button" type="button" data-file-delete-choice="${FILE_DELETE_MODES.listOnly}">Remover da lista</button>
+          <button class="danger-button" type="button" data-file-delete-choice="${FILE_DELETE_MODES.withData}">Excluir arquivo e dados</button>
+          <button class="ghost-button" type="button" data-file-delete-cancel>Cancelar</button>
+        </div>
+      </section>
+    `;
+    const close = (value) => {
+      document.removeEventListener("keydown", onKeydown);
+      overlay.remove();
+      resolve(value);
+    };
+    const onKeydown = (event) => {
+      if (event.key === "Escape") close("");
+    };
+    overlay.addEventListener("click", (event) => {
+      if (event.target === overlay || event.target.closest("[data-file-delete-cancel]")) {
+        close("");
+        return;
+      }
+      const button = event.target.closest("[data-file-delete-choice]");
+      if (button) close(button.dataset.fileDeleteChoice);
+    });
+    document.addEventListener("keydown", onKeydown);
+    document.body.appendChild(overlay);
+    overlay.querySelector("[data-file-delete-choice]")?.focus();
+  });
 }
 
 function parseDateValue(value) {

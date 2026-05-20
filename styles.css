@@ -5095,6 +5095,73 @@ body:not([data-theme="light"]) .toast {
   text-align: center;
 }
 
+.file-delete-dialog-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 9000;
+  display: grid;
+  place-items: center;
+  padding: 1.2rem;
+  background: rgba(4, 10, 18, 0.62);
+  backdrop-filter: blur(10px);
+}
+
+.file-delete-dialog {
+  display: grid;
+  gap: 1rem;
+  width: min(34rem, 100%);
+  padding: 1.15rem;
+  border: 1px solid var(--line);
+  border-radius: 1rem;
+  background: var(--surface-strong);
+  box-shadow: 0 24px 70px rgba(0, 0, 0, 0.34);
+}
+
+.file-delete-dialog__header,
+.file-delete-dialog__body {
+  display: grid;
+  gap: 0.45rem;
+}
+
+.file-delete-dialog__header strong {
+  font-size: 1rem;
+}
+
+.file-delete-dialog__header p,
+.file-delete-dialog__body p {
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.9rem;
+  line-height: 1.45;
+}
+
+.file-delete-dialog__body span {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 0.58rem 0.7rem;
+  border: 1px solid var(--line);
+  border-radius: 0.72rem;
+  color: var(--text);
+  background: color-mix(in srgb, var(--surface) 78%, transparent);
+  font-size: 0.84rem;
+}
+
+.file-delete-dialog__body span strong {
+  color: var(--muted);
+  font-size: 0.72rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.file-delete-dialog__actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 0.55rem;
+}
+
 .settings-user {
   display: grid;
   grid-template-columns: minmax(13rem, 1fr) minmax(8rem, 0.8fr) minmax(9rem, 0.75fr) auto auto;
