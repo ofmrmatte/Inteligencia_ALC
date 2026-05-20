@@ -113,7 +113,7 @@ const PNR_REMOTE_RPC = "desvios_pnr_dashboard";
 const PNR_SUMMARY_RPC = "desvios_pnr_summary";
 const PNR_TABLE_RPC = "desvios_pnr_table";
 const PNR_METRICS_REFRESH_RPC = "refresh_desvios_pnr_metrics_summary";
-const PNR_LIGHT_CACHE_VERSION = "pnr-dashboard-light-cache-v3";
+const PNR_LIGHT_CACHE_VERSION = "pnr-dashboard-light-cache-v4";
 const PNR_LIGHT_CACHE_KEY = "alc-pnr-dashboard-light-cache-v1";
 const FILE_DELETE_MODES = {
   listOnly: "list-only",
@@ -121,6 +121,7 @@ const FILE_DELETE_MODES = {
 };
 let processedRecordsUnavailable = false;
 let isExportingPackageExcel = false;
+let isExportingPnrExcel = false;
 const SHEET_ORDER = ["SVC PERDIDOS", "XPT PERDIDOS", "PNR"];
 const SHEET_TABS = [PRE_FATURA_VIEW, PACKAGE_MANAGEMENT_VIEW, DEVIATION_MANAGEMENT_VIEW];
 const SHEET_DISPLAY_LABELS = {
@@ -998,6 +999,12 @@ function bindEvents() {
     if (!button) return;
     event.preventDefault();
     await exportPackageManagementExcel(button);
+  });
+  document.addEventListener("click", async (event) => {
+    const button = event.target.closest("[data-pnr-export-excel]");
+    if (!button) return;
+    event.preventDefault();
+    await exportPnrTableExcel(button);
   });
   document.addEventListener("input", (event) => {
     const input = event.target.closest("[data-pnr-query]");
@@ -4085,12 +4092,24 @@ function getFilteredPnrRows() {
   ensurePnrDriverEnrichment();
   const cacheKey = getPnrRowsCacheKey();
   if (derivedDataCache.pnrKey === cacheKey) return derivedDataCache.pnrRows;
-  const selectedMonths = new Set(getPnrSelectedMonthKeys());
+  const rows = filterPnrRowsForCurrentState(pnrRows);
+  derivedDataCache.pnrKey = cacheKey;
+  derivedDataCache.pnrRows = rows;
+  return rows;
+}
+
+function filterPnrRowsForCurrentState(rows, options = {}) {
+  const safeRows = Array.isArray(rows) ? rows : [];
+  const monthOptions = getPnrMonthOptions();
+  const selectedMonthValues = options.explicitMonthFilterOnly
+    ? getPnrFilterSelectedValues(state.pnrMonths, monthOptions.map((option) => option.key))
+    : getPnrSelectedMonthKeys();
+  const selectedMonths = new Set(selectedMonthValues);
   const selectedQuinzenas = new Set(getPnrFilterSelectedValues(state.pnrQuinzena, ["q1", "q2"]));
   const selectedStatuses = new Set(getPnrFilterSelectedValues(state.pnrStatus));
   const selectedEstacoes = new Set(getPnrFilterSelectedValues(state.pnrEstacao));
   const query = normalize(state.pnrQuery);
-  const rows = pnrRows.filter((row) => {
+  return safeRows.filter((row) => {
     const monthKey = row.monthKey || getPnrPeriodFromBillingPeriod(row.sourcePeriodo || row.periodoFaturamentoOriginal || row.periodoFaturamento)?.monthKey || getPnrPeriodFromDate(row.dataCaso || row.periodoFaturamento).monthKey;
     if (selectedMonths.size && !selectedMonths.has(monthKey)) return false;
     if (selectedQuinzenas.size && !selectedQuinzenas.has(getPeriodModeFromLabel(row.quinzena))) return false;
@@ -4099,9 +4118,6 @@ function getFilteredPnrRows() {
     if (query && !String(row._search || "").includes(query)) return false;
     return true;
   });
-  derivedDataCache.pnrKey = cacheKey;
-  derivedDataCache.pnrRows = rows;
-  return rows;
 }
 
 function getPnrChronologicalSortParts(row) {
@@ -4175,13 +4191,72 @@ function getPaginatedPnrRows(sortedRows) {
   return pagedRows;
 }
 
+function getPnrStatusMetricType(status) {
+  const normalized = normalizeText(status);
+  if (!normalized) return "aberto";
+  if (normalized.includes("FATUR") || normalized.includes("COBR")) return "faturado";
+  if (normalized.includes("ANULAD") || normalized.includes("CANCEL")) return "anulado";
+  return "aberto";
+}
+
+function createPnrSummary(total = 0) {
+  return {
+    count: Number(total || 0),
+    totalValue: 0,
+    avgValue: 0,
+    anulado: 0,
+    faturamento: 0,
+    aberto: 0,
+    valorFaturado: 0,
+    valorAnulado: 0,
+    valorAberto: 0,
+    ticketMedioGeral: 0,
+    ticketMedioFaturado: 0,
+    ticketMedioAnulado: 0,
+  };
+}
+
+function addPnrSummaryStatus(summary, status, value = 0, count = 1) {
+  const safeCount = Number(count || 0);
+  const safeValue = Number(value || 0);
+  const metricType = getPnrStatusMetricType(status);
+  if (metricType === "faturado") {
+    summary.faturamento += safeCount;
+    summary.valorFaturado += safeValue;
+    return;
+  }
+  if (metricType === "anulado") {
+    summary.anulado += safeCount;
+    summary.valorAnulado += safeValue;
+    return;
+  }
+  summary.aberto += safeCount;
+  summary.valorAberto += safeValue;
+}
+
+function completePnrSummary(summary) {
+  const totalCount = Number(summary.count || 0);
+  summary.totalValue = Number(summary.totalValue || 0);
+  summary.faturamento = Number(summary.faturamento || 0);
+  summary.anulado = Number(summary.anulado || 0);
+  summary.aberto = Number(summary.aberto || Math.max(0, totalCount - summary.faturamento - summary.anulado));
+  summary.valorFaturado = Number(summary.valorFaturado || 0);
+  summary.valorAnulado = Number(summary.valorAnulado || 0);
+  summary.valorAberto = Number(summary.valorAberto || Math.max(0, summary.totalValue - summary.valorFaturado - summary.valorAnulado));
+  summary.avgValue = totalCount ? summary.totalValue / totalCount : 0;
+  summary.ticketMedioGeral = summary.avgValue;
+  summary.ticketMedioFaturado = summary.faturamento ? summary.valorFaturado / summary.faturamento : 0;
+  summary.ticketMedioAnulado = summary.anulado ? summary.valorAnulado / summary.anulado : 0;
+  return summary;
+}
+
 function getPnrAnalysisData(rows) {
   const safeRows = Array.isArray(rows) ? rows : [];
   const cacheKey = `${derivedDataCache.pnrKey || getPnrRowsCacheKey()}::analysis:${safeRows.length}`;
   if (derivedDataCache.pnrAggregatesKey === cacheKey && derivedDataCache.pnrAggregates) return derivedDataCache.pnrAggregates;
 
   const total = safeRows.length;
-  const summary = { count: total, totalValue: 0, avgValue: 0, anulado: 0, faturamento: 0, aberto: 0 };
+  const summary = createPnrSummary(total);
   const statusMap = new Map();
   const operationOrder = ["SVC", "XPT", "Não identificada"];
   const operationMap = new Map(operationOrder.map((label) => [label, 0]));
@@ -4192,11 +4267,14 @@ function getPnrAnalysisData(rows) {
   safeRows.forEach((row) => {
     const value = Number(row.valorCompraNumerico || 0);
     summary.totalValue += value;
-    if (row.statusNormalizado === "Anulado") summary.anulado += 1;
-    if (row.statusNormalizado === "Enviado para faturamento") summary.faturamento += 1;
 
     const status = row.statusNormalizado || "Indefinido";
-    statusMap.set(status, (statusMap.get(status) || 0) + 1);
+    const statusMetricType = getPnrStatusMetricType(status);
+    addPnrSummaryStatus(summary, status, value, 1);
+    const statusEntry = statusMap.get(status) || { label: status, count: 0, totalValue: 0 };
+    statusEntry.count += 1;
+    statusEntry.totalValue += value;
+    statusMap.set(status, statusEntry);
 
     const operationValue = row.tipoBase || row.tipoOperacional;
     const operation = operationOrder.includes(operationValue) ? operationValue : "Não identificada";
@@ -4228,19 +4306,22 @@ function getPnrAnalysisData(rows) {
       month: Number(row.mesNumero || period.mes || String(key).slice(5, 7) || 0),
       count: 0,
       totalValue: 0,
+      valorAnulado: 0,
+      valorFaturado: 0,
     };
     evolutionEntry.count += 1;
     evolutionEntry.totalValue += value;
+    if (statusMetricType === "anulado") evolutionEntry.valorAnulado += value;
+    if (statusMetricType === "faturado") evolutionEntry.valorFaturado += value;
     evolutionMap.set(key, evolutionEntry);
   });
 
-  summary.avgValue = total ? summary.totalValue / total : 0;
-  summary.aberto = Math.max(0, total - summary.anulado - summary.faturamento);
+  completePnrSummary(summary);
 
   const aggregates = {
     summary,
-    statusRows: Array.from(statusMap.entries())
-      .map(([label, count]) => ({ label, count, share: total ? (count / total) * 100 : 0 }))
+    statusRows: Array.from(statusMap.values())
+      .map((item) => ({ ...item, share: total ? (item.count / total) * 100 : 0 }))
       .sort((a, b) => b.count - a.count),
     operationRows: Array.from(operationMap.entries())
       .map(([label, count]) => ({ label, count, share: total ? (count / total) * 100 : 0 }))
@@ -4269,19 +4350,59 @@ function getPnrTableViewModel() {
 }
 
 const PNR_TABLE_COLUMNS = [
-  { key: "competencia", label: "Competência", width: 130, format: "text" },
-  { key: "quinzena", label: "Quinzena", width: 130, format: "text" },
-  { key: "statusNormalizado", label: "Status", width: 170, format: "status" },
-  { key: "idCaso", label: "ID do Caso", width: 130, format: "text" },
-  { key: "idEnvio", label: "ID de Envio", width: 140, format: "text" },
-  { key: "idReclamacao", label: "ID da Reclamação", width: 165, format: "text" },
+  { key: "competencia", label: "Competência", width: 118, format: "text" },
+  { key: "quinzena", label: "Quinzena", width: 118, format: "text" },
+  { key: "statusNormalizado", label: "Status", width: 172, format: "status" },
+  { key: "idEnvio", label: "ID de Envio", width: 135, format: "text" },
+  { key: "idReclamacao", label: "ID da Reclamação", width: 155, format: "text" },
   { key: "valorCompraNumerico", label: "Valor da Compra", width: 145, format: "currency" },
-  { key: "estacaoOrigem", label: "Estação de Origem", width: 250, format: "station" },
-  { key: "dataEntrega", label: "Data da Entrega", width: 150, format: "date" },
-  { key: "dataReclamacao", label: "Data da Reclamação", width: 170, format: "date" },
-  { key: "dataEncerramentoCaso", label: "Data de Encerramento", width: 185, format: "date" },
-  { key: "comentarioEncerramento", label: "Comentário de Encerramento", width: 280, format: "long" },
+  { key: "estacaoOrigem", label: "Estação de Origem", width: 230, format: "station" },
+  { key: "motoristaDisplay", label: "Motorista", width: 190, format: "driver" },
+  { key: "dataEntrega", label: "Data da Entrega", width: 145, format: "date" },
+  { key: "dataEncerramentoCaso", label: "Data de Encerramento", width: 178, format: "date" },
 ];
+
+const PNR_EXPORT_SELECT_COLUMNS = [
+  "id",
+  "file_id",
+  "dedupe_key",
+  "competencia",
+  "quinzena",
+  "tipo",
+  "status_original",
+  "status_normalizado",
+  "periodo_faturamento",
+  "periodo_faturamento_original",
+  "mes",
+  "ano",
+  "quinzena_ref",
+  "periodo_label",
+  "source_file_name",
+  "source_periodo",
+  "data_encerramento_caso",
+  "id_envio",
+  "produtos",
+  "valor_compra",
+  "estacao_origem",
+  "tipo_ocorrencia",
+  "tipo_base",
+  "tipo_operacional",
+  "base_identificada",
+  "nome_base_operacao",
+  "id_rota",
+  "id_motorista",
+  "nome_motorista",
+  "motorista_display",
+  "status_motorista",
+  "fonte_cruzamento",
+  "observacao_cruzamento",
+  "motorista_match_source",
+  "data_caso",
+  "data_entrega",
+  "id_reclamacao",
+  "data_reclamacao",
+  "created_at",
+].join(",");
 
 function formatPnrTableCell(row, column) {
   const value = row?.[column.key];
@@ -4293,7 +4414,6 @@ function formatPnrTableCell(row, column) {
     const details = [
       row?.tipoBase || row?.tipoOperacional || "",
       row?.idRota ? `Rota ${row.idRota}` : "",
-      row?.idMotorista ? `Motorista ${row.idMotorista}` : "",
     ].filter(Boolean);
     return `
       <div class="pnr-station-cell">
@@ -4302,7 +4422,393 @@ function formatPnrTableCell(row, column) {
       </div>
     `;
   }
+  if (column.format === "driver") {
+    const id = formatPnrId(row?.idMotorista || "");
+    const candidateName = getPnrDriverNameFromSourceRow({ motorista: row?.nomeMotorista || row?.motoristaDisplay || "" });
+    const name = candidateName && normalizePnrLookupId(candidateName) !== normalizePnrLookupId(id) ? candidateName : "";
+    const primary = name || (id ? `Motorista ${id}` : String(value || "").trim());
+    const detail = name && id ? `ID ${id}` : "";
+    return `
+      <div class="pnr-driver-cell">
+        <strong>${escapeHtml(primary || "—")}</strong>
+        ${detail ? `<span>${escapeHtml(detail)}</span>` : ""}
+      </div>
+    `;
+  }
   return escapeHtml(value || "—");
+}
+
+function getPnrExportRows() {
+  const localRows = getPnrTableViewModel().sortedRows;
+  if (localRows.length) return localRows;
+  if (hasPnrRemoteData()) return Array.isArray(pnrRemoteState.rows) ? pnrRemoteState.rows : [];
+  return [];
+}
+
+function getPnrExportFilterState() {
+  const monthOptions = getPnrMonthOptions();
+  const selectedMonthKeys = getPnrFilterSelectedValues(state.pnrMonths, monthOptions.map((option) => option.key));
+  const selectedMonths = selectedMonthKeys.map((key) => monthOptions.find((option) => option.key === key)?.label || key);
+  const selectedQuinzenas = getPnrFilterSelectedValues(state.pnrQuinzena, ["q1", "q2"]);
+  const filterOptions = pnrRemoteState.filterOptions || getPnrFilterOptions();
+  const selectedStatuses = getPnrFilterSelectedValues(state.pnrStatus, filterOptions.statuses);
+  const selectedEstacoes = getPnrFilterSelectedValues(state.pnrEstacao, filterOptions.estacoes);
+  const search = String(state.pnrQuery || "").trim();
+  return {
+    selectedMonthKeys,
+    selectedMonths,
+    selectedQuinzenas,
+    selectedStatuses,
+    selectedEstacoes,
+    search,
+    hasFilters: Boolean(selectedMonthKeys.length || selectedQuinzenas.length || selectedStatuses.length || selectedEstacoes.length || search),
+  };
+}
+
+function getPnrExportFilterLabelList() {
+  const filters = getPnrExportFilterState();
+  const quinzenaLabels = filters.selectedQuinzenas.map((value) => value === "q1" ? "1ª quinzena" : value === "q2" ? "2ª quinzena" : value);
+  return {
+    month: filters.selectedMonths.length ? filters.selectedMonths.join(", ") : "Todos",
+    quinzena: quinzenaLabels.length ? quinzenaLabels.join(", ") : "Todas",
+    status: filters.selectedStatuses.length ? filters.selectedStatuses.join(", ") : "Todos",
+    origem: filters.selectedEstacoes.length ? filters.selectedEstacoes.join(", ") : "Todas",
+    busca: filters.search || "Sem busca",
+  };
+}
+
+function formatPnrExportDateForFile(date = new Date()) {
+  return date.toLocaleDateString("pt-BR").replace(/\//g, "-");
+}
+
+function normalizePnrExportFilePart(value) {
+  return String(value || "")
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/[^A-Za-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .trim();
+}
+
+async function fetchPnrExportRowsFromSupabase() {
+  if (!window.supabaseClient) {
+    const fallbackRows = getPnrExportRows();
+    if (hasPnrRemoteData() && Number(pnrRemoteState.total || 0) > fallbackRows.length) {
+      throw new Error("Cliente Supabase indisponível para exportar o recorte completo de PNRs.");
+    }
+    return fallbackRows;
+  }
+  const rows = [];
+  const filters = getPnrExportFilterState();
+  for (let from = 0; ; from += PROCESSED_RECORDS_PAGE_SIZE) {
+    const to = from + PROCESSED_RECORDS_PAGE_SIZE - 1;
+    let query = window.supabaseClient
+      .from("desvios_pnr_records")
+      .select(PNR_EXPORT_SELECT_COLUMNS)
+      .order("ano", { ascending: true, nullsFirst: false })
+      .order("mes", { ascending: true, nullsFirst: false })
+      .order("quinzena_ref", { ascending: true, nullsFirst: false })
+      .order("data_encerramento_caso", { ascending: true, nullsFirst: false })
+      .range(from, to);
+
+    if (filters.selectedStatuses.length) query = query.in("status_normalizado", filters.selectedStatuses);
+    if (filters.selectedEstacoes.length) query = query.in("estacao_origem", filters.selectedEstacoes);
+
+    const { data, error } = await withTimeout(
+      query,
+      SUPABASE_QUERY_TIMEOUT_MS,
+      "Tempo limite excedido ao buscar PNRs para exportação.",
+    );
+    if (error) throw error;
+    const page = Array.isArray(data) ? data : [];
+    rows.push(...page.map((record) => mapProcessedPnrRecord(record, { file_name: record?.source_file_name || "" })).filter(Boolean));
+    if (page.length < PROCESSED_RECORDS_PAGE_SIZE) break;
+  }
+  return sortPnrRows(filterPnrRowsForCurrentState(rows, { explicitMonthFilterOnly: true }));
+}
+
+function buildPnrExportSheetRows(rows) {
+  return (Array.isArray(rows) ? rows : []).map((row) => {
+    const driverId = formatPnrId(row?.idMotorista || "");
+    const candidateName = getPnrDriverNameFromSourceRow({ motorista: row?.nomeMotorista || row?.motoristaDisplay || "" });
+    const driverName = candidateName && normalizePnrLookupId(candidateName) !== normalizePnrLookupId(driverId) ? candidateName : "";
+    return {
+      "Competência": row.competencia || "",
+      "Quinzena": row.quinzena || "",
+      "Status": row.statusNormalizado || "",
+      "ID de Envio": String(row.idEnvio || ""),
+      "ID da Reclamação": String(row.idReclamacao || ""),
+      "Valor da Compra": Number(row.valorCompraNumerico || 0),
+      "Estação de Origem": row.estacaoOrigem || "",
+      "Motorista": driverName || (driverId ? `Motorista ${driverId}` : row.motoristaDisplay || ""),
+      "Data da Entrega": formatPackageExportDate(row.dataEntrega) || "",
+      "Data de Encerramento": formatPackageExportDate(row.dataEncerramentoCaso) || "",
+    };
+  });
+}
+
+function buildPnrExcelFileName(rows) {
+  const filters = getPnrExportFilterState();
+  const dateLabel = formatPnrExportDateForFile();
+  if (filters.selectedMonths.length === 1) {
+    return `Relatorio_PNRs_Gestao_Desvios_${normalizePnrExportFilePart(filters.selectedMonths[0])}_${dateLabel}.xlsx`;
+  }
+  const scope = filters.hasFilters ? "Filtrado" : "Completo";
+  return `Relatorio_PNRs_Gestao_Desvios_${scope}_${dateLabel}.xlsx`;
+}
+
+function getPnrExportSummary(rows, exportRows) {
+  const filters = getPnrExportFilterLabelList();
+  return {
+    totalRows: exportRows.length,
+    monthLabel: filters.month,
+    quinzenaLabel: filters.quinzena,
+    statusLabel: filters.status,
+    origemLabel: filters.origem,
+    searchLabel: filters.busca,
+    valueTotal: (Array.isArray(rows) ? rows : []).reduce((sum, row) => sum + Number(row.valorCompraNumerico || 0), 0),
+  };
+}
+
+function configurePnrExportHeader(worksheet, rows, exportRows) {
+  const darkBlue = "0B1F33";
+  const aqua = "19D3C5";
+  const white = "FFFFFF";
+  const mutedBlue = "E8F1F8";
+  const textDark = "1F2A37";
+  const borderColor = "D8E3ED";
+  const summary = getPnrExportSummary(rows, exportRows);
+
+  styleExcelRange(worksheet, "A1:J5", {
+    fill: { type: "pattern", pattern: "solid", fgColor: { argb: darkBlue } },
+    font: { name: "Arial", color: { argb: white } },
+    alignment: { vertical: "middle" },
+  });
+  worksheet.getRow(1).height = 21;
+  worksheet.getRow(2).height = 21;
+  worksheet.getRow(3).height = 15.6;
+  worksheet.getRow(4).height = 14.4;
+  worksheet.getRow(5).height = 14.4;
+
+  worksheet.mergeCells("A1:A5");
+  worksheet.mergeCells("B2:D2");
+  worksheet.mergeCells("B3:D3");
+  worksheet.getCell("A1").alignment = { horizontal: "center", vertical: "middle" };
+
+  worksheet.getCell("B2").value = "Painel de Inteligência Operacional";
+  worksheet.getCell("B2").font = { name: "Arial", size: 16, bold: true, color: { argb: white } };
+  worksheet.getCell("B2").alignment = { horizontal: "left", vertical: "middle" };
+  worksheet.getCell("B3").value = "Gestão de Desvios — PNRs";
+  worksheet.getCell("B3").font = { name: "Arial", size: 12, bold: true, color: { argb: white } };
+  worksheet.getCell("B3").alignment = { horizontal: "left", vertical: "middle" };
+
+  worksheet.getCell("J1").value = "Setor: LOSS";
+  worksheet.getCell("J2").value = `Mês: ${summary.monthLabel}`;
+  worksheet.getCell("J3").value = `Status: ${summary.statusLabel}`;
+  worksheet.getCell("J4").value = `Gerado em: ${formatCurrentDateTime()}`;
+  ["J1", "J2", "J3", "J4"].forEach((address) => {
+    worksheet.getCell(address).font = { name: "Arial", size: 10, bold: address === "J1", color: { argb: white } };
+    worksheet.getCell(address).alignment = { horizontal: "left", vertical: "middle" };
+  });
+
+  const summaryHeaders = ["Resumo do recorte", "Registros exportados", "Valor total", "Mês", "Quinzena", "Status", "Origem", "Busca", "", ""];
+  const summaryValues = ["", summary.totalRows, summary.valueTotal, summary.monthLabel, summary.quinzenaLabel, summary.statusLabel, summary.origemLabel, summary.searchLabel, "", ""];
+  worksheet.getRow(6).values = summaryHeaders;
+  worksheet.getRow(7).values = summaryValues;
+  worksheet.getRow(6).height = 15.6;
+  worksheet.getRow(7).height = 14.4;
+  styleExcelRange(worksheet, "A6:J6", {
+    fill: { type: "pattern", pattern: "solid", fgColor: { argb: aqua } },
+    font: { name: "Arial", size: 12, italic: true, color: { argb: white } },
+    alignment: { horizontal: "center", vertical: "middle" },
+    border: {
+      top: { style: "thin", color: { argb: borderColor } },
+      left: { style: "thin", color: { argb: borderColor } },
+      bottom: { style: "thin", color: { argb: borderColor } },
+      right: { style: "thin", color: { argb: borderColor } },
+    },
+  });
+  styleExcelRange(worksheet, "A7:J7", {
+    fill: { type: "pattern", pattern: "solid", fgColor: { argb: mutedBlue } },
+    font: { name: "Arial", size: 11, bold: true, color: { argb: textDark } },
+    alignment: { vertical: "middle" },
+    border: {
+      top: { style: "thin", color: { argb: borderColor } },
+      left: { style: "thin", color: { argb: borderColor } },
+      bottom: { style: "thin", color: { argb: borderColor } },
+      right: { style: "thin", color: { argb: borderColor } },
+    },
+  });
+  worksheet.getCell("C7").numFmt = '_-"R$" * #,##0.00_-;-"R$" * #,##0.00_-;_-"R$" * "-"??_-;_-@_-';
+}
+
+function addPnrExportTable(worksheet, exportRows) {
+  const headerRowNumber = 8;
+  const headers = ["Competência", "Quinzena", "Status", "ID de Envio", "ID da Reclamação", "Valor da Compra", "Estação de Origem", "Motorista", "Data da Entrega", "Data de Encerramento"];
+  worksheet.addTable({
+    name: "TabelaPNRs",
+    displayName: "TabelaPNRs",
+    ref: `A${headerRowNumber}`,
+    headerRow: true,
+    totalsRow: false,
+    style: {
+      theme: "TableStyleMedium2",
+      showFirstColumn: true,
+      showLastColumn: true,
+      showRowStripes: false,
+      showColumnStripes: false,
+    },
+    columns: headers.map((name) => ({ name, filterButton: true })),
+    rows: exportRows.map((item) => headers.map((header) => item[header])),
+  });
+
+  worksheet.getRow(headerRowNumber).height = 14.4;
+  worksheet.getRow(headerRowNumber).eachCell((cell) => {
+    cell.font = { name: "Arial", size: 10, bold: true, italic: true, color: { argb: "102A43" } };
+    cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "DCEAF5" } };
+    cell.alignment = { vertical: "middle", horizontal: "left" };
+    cell.border = {
+      top: { style: "thin", color: { argb: "B9CAD8" } },
+      left: { style: "thin", color: { argb: "B9CAD8" } },
+      bottom: { style: "thin", color: { argb: "B9CAD8" } },
+      right: { style: "thin", color: { argb: "B9CAD8" } },
+    };
+  });
+
+  exportRows.forEach((item, index) => {
+    const rowNumber = headerRowNumber + 1 + index;
+    const row = worksheet.getRow(rowNumber);
+    row.values = headers.map((header) => item[header]);
+    row.height = 22.05;
+    row.eachCell((cell, colNumber) => {
+      cell.font = {
+        name: "Arial",
+        size: 10,
+        bold: colNumber === 3 || colNumber === 6,
+        color: { argb: colNumber === 6 ? "1F2A37" : "1F2A37" },
+      };
+      cell.alignment = { vertical: "middle", horizontal: colNumber === 6 ? "right" : "left", wrapText: colNumber === 7 || colNumber === 8 };
+      cell.fill = {
+        type: "pattern",
+        pattern: "solid",
+        fgColor: { argb: index % 2 === 0 ? "FFFFFF" : "F7FAFC" },
+      };
+      cell.border = {
+        top: { style: "thin", color: { argb: "E0E7EF" } },
+        left: { style: "thin", color: { argb: "E0E7EF" } },
+        bottom: { style: "thin", color: { argb: "E0E7EF" } },
+        right: { style: "thin", color: { argb: "E0E7EF" } },
+      };
+      if (colNumber === 4 || colNumber === 5) cell.numFmt = "@";
+      if (colNumber === 6) cell.numFmt = '_-"R$" * #,##0.00_-;-"R$" * #,##0.00_-;_-"R$" * "-"??_-;_-@_-';
+    });
+    row.getCell(4).value = String(item["ID de Envio"] || "");
+    row.getCell(5).value = String(item["ID da Reclamação"] || "");
+  });
+
+  worksheet.views = [{ state: "frozen", ySplit: headerRowNumber, topLeftCell: "A9", zoomScale: 85, zoomScaleNormal: 85, activeCell: "A9" }];
+}
+
+async function protectPnrExportHeader(worksheet, exportRows) {
+  const lastDataRow = 8 + Math.max(0, exportRows.length);
+  for (let rowNumber = 9; rowNumber <= lastDataRow; rowNumber += 1) {
+    worksheet.getRow(rowNumber).eachCell((cell) => {
+      cell.protection = { locked: false };
+    });
+  }
+  styleExcelRange(worksheet, "A1:J8", {
+    protection: { locked: true },
+  });
+  await worksheet.protect("alc-dashboard", {
+    selectLockedCells: true,
+    selectUnlockedCells: true,
+    sort: true,
+    autoFilter: true,
+    objects: false,
+    scenarios: false,
+  });
+}
+
+async function buildStyledPnrWorkbook(rows, exportRows) {
+  const ExcelJS = await loadExcelExportEngine();
+  const workbook = new ExcelJS.Workbook();
+  workbook.creator = "Painel de Inteligência";
+  workbook.created = new Date();
+  workbook.modified = new Date();
+  const worksheet = workbook.addWorksheet("PNRs", {
+    properties: { defaultRowHeight: 20 },
+    pageSetup: { orientation: "landscape", fitToPage: true, fitToWidth: 1, fitToHeight: 0 },
+  });
+  worksheet.columns = [
+    { key: "competencia", width: 18 },
+    { key: "quinzena", width: 20 },
+    { key: "status", width: 26 },
+    { key: "idEnvio", width: 18 },
+    { key: "idReclamacao", width: 20 },
+    { key: "valorCompra", width: 18 },
+    { key: "estacaoOrigem", width: 26 },
+    { key: "motorista", width: 28 },
+    { key: "dataEntrega", width: 17 },
+    { key: "dataEncerramento", width: 20 },
+  ];
+
+  configurePnrExportHeader(worksheet, rows, exportRows);
+  await addPackageExportLogo(worksheet, workbook);
+  addPnrExportTable(worksheet, exportRows);
+  await protectPnrExportHeader(worksheet, exportRows);
+  const buffer = await workbook.xlsx.writeBuffer();
+  return new Blob([buffer], { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" });
+}
+
+function renderPnrTableActions(totalRows, isInitialLoading) {
+  return `
+    <div class="pnr-table-actions">
+      ${renderPnrPageSizeControl()}
+      <button class="secondary-button secondary-button--icon table-export-button pnr-table-export-button" type="button" data-pnr-export-excel title="${isExportingPnrExcel ? "Gerando planilha..." : "Baixar Excel"}" aria-label="${isExportingPnrExcel ? "Gerando planilha" : "Baixar Excel"}" ${isInitialLoading || !totalRows || isExportingPnrExcel ? "disabled" : ""}>
+        <svg viewBox="0 0 24 24" aria-hidden="true">
+          <path d="M12 3v11" fill="none" stroke="currentColor" stroke-linecap="round" stroke-width="2"></path>
+          <path d="m7 10 5 5 5-5" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2"></path>
+          <path d="M5 19h14" fill="none" stroke="currentColor" stroke-linecap="round" stroke-width="2"></path>
+        </svg>
+      </button>
+    </div>
+  `;
+}
+
+async function exportPnrTableExcel(button) {
+  if (isExportingPnrExcel) return;
+  isExportingPnrExcel = true;
+  if (button) {
+    button.classList.add("is-loading");
+    button.disabled = true;
+    button.setAttribute("aria-busy", "true");
+    button.setAttribute("title", "Gerando planilha...");
+    button.setAttribute("aria-label", "Gerando planilha");
+  }
+  try {
+    showToast("Gerando planilha de PNRs...", "info", 3200);
+    const rows = await fetchPnrExportRowsFromSupabase();
+    if (!rows.length) {
+      showToast("Nenhum PNR para exportar.", "warn", 4200);
+      return;
+    }
+    const exportRows = buildPnrExportSheetRows(rows);
+    const blob = await buildStyledPnrWorkbook(rows, exportRows);
+    downloadBlob(blob, buildPnrExcelFileName(rows));
+    showToast(`Excel de PNRs baixado com ${integer.format(exportRows.length)} registros.`, "good", 4200);
+  } catch (error) {
+    console.error("[PNR Export] Falha ao exportar tabela detalhada:", error);
+    showToast("Não foi possível exportar a tabela de PNRs.", "error", 5200);
+  } finally {
+    isExportingPnrExcel = false;
+    if (button) {
+      button.classList.remove("is-loading");
+      button.disabled = false;
+      button.setAttribute("aria-busy", "false");
+      button.setAttribute("title", "Baixar Excel");
+      button.setAttribute("aria-label", "Baixar Excel");
+    }
+  }
 }
 
 function getDashboardFilterSizeClass(name) {
@@ -4478,6 +4984,353 @@ function renderPnrEvolution(rows) {
   `;
 }
 
+function formatPnrAxisCurrency(value) {
+  const abs = Math.abs(Number(value || 0));
+  const sign = Number(value || 0) < 0 ? "-" : "";
+  if (abs >= 1000000) return `${sign}R$ ${formatNumberPt(abs / 1000000, abs >= 10000000 ? 0 : 1)} mi`;
+  if (abs >= 1000) return `${sign}R$ ${formatNumberPt(abs / 1000, 0)} mil`;
+  return `${sign}${currency.format(abs)}`;
+}
+
+function formatPnrCompactCurrency(value) {
+  const abs = Math.abs(Number(value || 0));
+  const sign = Number(value || 0) < 0 ? "-" : "";
+  if (abs >= 1000000) return `${sign}R$ ${formatNumberPt(abs / 1000000, 2)} mi`;
+  if (abs >= 1000) return `${sign}R$ ${formatNumberPt(abs / 1000, 0)} mil`;
+  return `${sign}${currency.format(abs)}`;
+}
+
+function formatPnrSignedCurrency(value) {
+  const numeric = Number(value || 0);
+  return `${numeric < 0 ? "-" : ""}${currency.format(Math.abs(numeric))}`;
+}
+
+function getPnrTimelineAxisLabel(row) {
+  const rawLabel = String(row?.label || row?.key || "").trim();
+  const monthNames = {
+    janeiro: "Jan",
+    fevereiro: "Fev",
+    marco: "Mar",
+    março: "Mar",
+    abril: "Abr",
+    maio: "Mai",
+    junho: "Jun",
+    julho: "Jul",
+    agosto: "Ago",
+    setembro: "Set",
+    outubro: "Out",
+    novembro: "Nov",
+    dezembro: "Dez",
+  };
+  const normalized = rawLabel.toLowerCase();
+  const monthKey = Object.keys(monthNames).find((name) => normalized.includes(name));
+  const yearMatch = rawLabel.match(/20(\d{2})/);
+  const quinzenalMatch = rawLabel.match(/\b([12]Q)\b/i);
+  if (monthKey && yearMatch) {
+    return `${monthNames[monthKey]}/${yearMatch[1]}${quinzenalMatch ? ` ${quinzenalMatch[1].toUpperCase()}` : ""}`;
+  }
+  const keyMatch = String(row?.key || "").match(/^(\d{4})-(\d{2})(?:\|(q[12]))?/i);
+  if (keyMatch) {
+    const monthIndex = Math.max(0, Math.min(11, Number(keyMatch[2]) - 1));
+    const shortMonths = ["Jan", "Fev", "Mar", "Abr", "Mai", "Jun", "Jul", "Ago", "Set", "Out", "Nov", "Dez"];
+    return `${shortMonths[monthIndex]}/${keyMatch[1].slice(2)}${keyMatch[3] ? ` ${keyMatch[3].toUpperCase().replace("Q", "Q")}` : ""}`;
+  }
+  return rawLabel;
+}
+
+function getPnrTimelineValue(row, keys) {
+  for (const key of keys) {
+    if (row?.[key] != null && row[key] !== "") return Number(row[key] || 0);
+  }
+  return 0;
+}
+
+function buildSvgLinePath(points) {
+  const safePoints = (Array.isArray(points) ? points : []).filter((point) => Number.isFinite(point.x) && Number.isFinite(point.y));
+  if (!safePoints.length) return "";
+  if (safePoints.length === 1) {
+    const point = safePoints[0];
+    return `M ${point.x.toFixed(2)} ${point.y.toFixed(2)} L ${(point.x + 0.01).toFixed(2)} ${point.y.toFixed(2)}`;
+  }
+  return safePoints.map((point, index) => `${index ? "L" : "M"} ${point.x.toFixed(2)} ${point.y.toFixed(2)}`).join(" ");
+}
+
+function buildSvgAreaPath(points, zeroY) {
+  const safePoints = (Array.isArray(points) ? points : []).filter((point) => Number.isFinite(point.x) && Number.isFinite(point.y));
+  if (!safePoints.length) return "";
+  const first = safePoints[0];
+  const last = safePoints[safePoints.length - 1];
+  return [
+    `M ${first.x.toFixed(2)} ${zeroY.toFixed(2)}`,
+    buildSvgLinePath(safePoints).replace(/^M\s*/, "L "),
+    `L ${last.x.toFixed(2)} ${zeroY.toFixed(2)}`,
+    "Z",
+  ].join(" ");
+}
+
+function getPnrValueTimelineRows(rows) {
+  return (Array.isArray(rows) ? rows : [])
+    .map((row) => {
+      const valorAnulado = getPnrTimelineValue(row, ["valorAnulado", "valor_anulado", "anuladoValue", "anulado_value"]);
+      const valorFaturado = getPnrTimelineValue(row, ["valorFaturado", "valor_faturado", "faturadoValue", "faturado_value"]);
+      return {
+        ...row,
+        valorAnulado,
+        valorFaturado,
+        saldoValue: valorAnulado - valorFaturado,
+      };
+    })
+    .filter((row) => row.valorAnulado || row.valorFaturado);
+}
+
+function getPnrValueTimelineTotals(rows) {
+  const safeRows = getPnrValueTimelineRows(rows);
+  const totalAnulado = safeRows.reduce((sum, row) => sum + Number(row.valorAnulado || 0), 0);
+  const totalFaturado = safeRows.reduce((sum, row) => sum + Number(row.valorFaturado || 0), 0);
+  return {
+    totalAnulado,
+    totalFaturado,
+    saldoTotal: totalAnulado - totalFaturado,
+    hasRows: safeRows.length > 0,
+  };
+}
+
+function renderPnrValueTimelineHeaderMeta(rows) {
+  const totals = getPnrValueTimelineTotals(rows);
+  if (!totals.hasRows) return "";
+  return `
+    <div class="pnr-value-header-meta">
+      <div class="pnr-value-timeline__summary" aria-label="Resumo financeiro do gráfico">
+        <span><small>Anulado</small><strong>${formatPnrCompactCurrency(totals.totalAnulado)}</strong><em>positivo</em></span>
+        <span><small>Faturado</small><strong>${formatPnrSignedCurrency(-totals.totalFaturado)}</strong><em>negativo</em></span>
+        <span><small>Saldo</small><strong>${formatPnrSignedCurrency(totals.saldoTotal)}</strong><em>resultado líquido</em></span>
+      </div>
+      <div class="pnr-value-timeline__legend" aria-label="Legenda do gráfico">
+        <span><i class="is-anulado"></i>Anulado positivo</span>
+        <span><i class="is-faturado"></i>Faturado negativo</span>
+      </div>
+    </div>
+  `;
+}
+
+function renderPnrValueTimelineChart(rows) {
+  const safeRows = getPnrValueTimelineRows(rows);
+
+  if (!safeRows.length) {
+    return emptyState(
+      "Sem dados suficientes para exibir a evolução temporal.",
+      "Ajuste os filtros ou importe uma base com histórico compatível."
+    );
+  }
+
+  const width = 1180;
+  const height = 430;
+  const padding = { top: 14, right: 22, bottom: 42, left: 44 };
+  const innerWidth = width - padding.left - padding.right;
+  const innerHeight = height - padding.top - padding.bottom;
+  const maxAnulado = Math.max(...safeRows.map((row) => row.valorAnulado), 0);
+  const maxFaturado = Math.max(...safeRows.map((row) => row.valorFaturado), 0);
+  const yMax = Math.max(maxAnulado, 1);
+  const yMin = -Math.max(maxFaturado, 1);
+  const ySpan = yMax - yMin || 1;
+  const getX = (index) => padding.left + (safeRows.length === 1 ? innerWidth / 2 : (index / (safeRows.length - 1)) * innerWidth);
+  const getY = (value) => padding.top + ((yMax - value) / ySpan) * innerHeight;
+  const anuladoPoints = safeRows.map((row, index) => ({ x: getX(index), y: getY(row.valorAnulado), row }));
+  const faturadoPoints = safeRows.map((row, index) => ({ x: getX(index), y: getY(-row.valorFaturado), row }));
+  const zeroY = getY(0);
+  const yTicks = [
+    { value: yMax, label: formatPnrAxisCurrency(yMax) },
+    { value: yMax / 2, label: formatPnrAxisCurrency(yMax / 2) },
+    { value: 0, label: currency.format(0) },
+    { value: yMin / 2, label: formatPnrAxisCurrency(yMin / 2) },
+    { value: yMin, label: formatPnrAxisCurrency(yMin) },
+  ];
+  const labelEvery = safeRows.length > 8 ? Math.ceil(safeRows.length / 6) : 1;
+  const anuladoPath = buildSvgLinePath(anuladoPoints);
+  const faturadoPath = buildSvgLinePath(faturadoPoints);
+  const anuladoAreaPath = buildSvgAreaPath(anuladoPoints, zeroY);
+  const faturadoAreaPath = buildSvgAreaPath(faturadoPoints, zeroY);
+
+  const renderPoint = (point, kind) => {
+    const row = point.row;
+    const currentIndex = safeRows.indexOf(row);
+    const previousRow = currentIndex > 0 ? safeRows[currentIndex - 1] : null;
+    const title = row.label || row.periodo || row.key || "Período";
+    const saldo = row.saldoValue || 0;
+    const totalPeriodo = row.valorAnulado + row.valorFaturado;
+    const previousSaldo = previousRow ? Number(previousRow.saldoValue || 0) : null;
+    const variation = previousSaldo == null ? null : saldo - previousSaldo;
+    const lines = [
+      `Período: ${title}`,
+      `Anulado: ${currency.format(row.valorAnulado)}`,
+      `Faturado: -${currency.format(row.valorFaturado)}`,
+      `Saldo: ${formatPnrSignedCurrency(saldo)}`,
+      variation == null ? "" : `Variação vs. anterior: ${formatPnrSignedCurrency(variation)}`,
+      `Total do período: ${currency.format(totalPeriodo)}`,
+    ].filter(Boolean).join("|");
+    return `
+      <circle
+        class="pnr-value-point pnr-value-point--${kind} pnr-tooltip-target"
+        cx="${point.x.toFixed(2)}"
+        cy="${point.y.toFixed(2)}"
+        r="4"
+        data-tooltip-title="${escapeAttribute(title)}"
+        data-tooltip-lines="${escapeAttribute(lines)}"
+      ></circle>
+    `;
+  };
+
+  return `
+    <div class="pnr-value-timeline">
+      <svg class="pnr-value-timeline__svg" viewBox="0 0 ${width} ${height}" role="img" aria-label="Evolução temporal de valores PNR">
+        <defs>
+          <filter id="pnr-line-glow" x="-20%" y="-20%" width="140%" height="140%">
+            <feGaussianBlur stdDeviation="1.55" result="blur"></feGaussianBlur>
+            <feMerge>
+              <feMergeNode in="blur"></feMergeNode>
+              <feMergeNode in="SourceGraphic"></feMergeNode>
+            </feMerge>
+          </filter>
+          <linearGradient id="pnr-anulado-area" x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0%" stop-color="#2fc47c" stop-opacity="0.18"></stop>
+            <stop offset="100%" stop-color="#2fc47c" stop-opacity="0"></stop>
+          </linearGradient>
+          <linearGradient id="pnr-faturado-area" x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0%" stop-color="#ef5b64" stop-opacity="0"></stop>
+            <stop offset="100%" stop-color="#ef5b64" stop-opacity="0.16"></stop>
+          </linearGradient>
+        </defs>
+        <g class="pnr-value-grid">
+          ${yTicks.map((tick) => {
+            const y = getY(tick.value);
+            return `
+              <line x1="${padding.left + 6}" y1="${y.toFixed(2)}" x2="${width - padding.right}" y2="${y.toFixed(2)}"></line>
+              <text x="${padding.left - 6}" y="${(y + 4).toFixed(2)}">${escapeHtml(tick.label)}</text>
+            `;
+          }).join("")}
+          <line class="pnr-value-zero-line" x1="${padding.left + 6}" y1="${zeroY.toFixed(2)}" x2="${width - padding.right}" y2="${zeroY.toFixed(2)}"></line>
+        </g>
+        <g class="pnr-value-areas">
+          <path class="pnr-value-area pnr-value-area--anulado" d="${anuladoAreaPath}"></path>
+          <path class="pnr-value-area pnr-value-area--faturado" d="${faturadoAreaPath}"></path>
+        </g>
+        <g class="pnr-value-lines">
+          <path class="pnr-value-line pnr-value-line--anulado" d="${anuladoPath}"></path>
+          <path class="pnr-value-line pnr-value-line--faturado" d="${faturadoPath}"></path>
+          <path class="pnr-value-line-glow pnr-value-line-glow--anulado" d="${anuladoPath}"></path>
+          <path class="pnr-value-line-glow pnr-value-line-glow--faturado" d="${faturadoPath}"></path>
+        </g>
+        <g class="pnr-value-points">
+          ${anuladoPoints.map((point) => renderPoint(point, "anulado")).join("")}
+          ${faturadoPoints.map((point) => renderPoint(point, "faturado")).join("")}
+        </g>
+        <g class="pnr-value-axis-labels">
+          ${safeRows.map((row, index) => {
+            if (index % labelEvery !== 0 && index !== safeRows.length - 1) return "";
+            const x = getX(index);
+            return `<text x="${x.toFixed(2)}" y="${height - 13}" text-anchor="middle">${escapeHtml(getPnrTimelineAxisLabel(row))}</text>`;
+          }).join("")}
+        </g>
+      </svg>
+    </div>
+  `;
+}
+
+function getNumberFromObject(source, keys, fallback = 0) {
+  if (!source || typeof source !== "object") return fallback;
+  for (const key of keys) {
+    if (source[key] != null && source[key] !== "") return Number(source[key] || 0);
+  }
+  return fallback;
+}
+
+function buildPnrCardSummary(summary = {}, statusRows = []) {
+  const cardSummary = createPnrSummary(Number(summary.count || 0));
+  cardSummary.totalValue = Number(summary.totalValue ?? summary.total_value ?? 0);
+  cardSummary.avgValue = Number(summary.avgValue ?? summary.avg_value ?? 0);
+  cardSummary.faturamento = getNumberFromObject(summary, ["quantidadeFaturados", "quantidade_faturados", "faturadoCount", "faturado_count", "faturamento"], 0);
+  cardSummary.valorFaturado = getNumberFromObject(summary, ["valorFaturado", "valor_faturado", "faturadoValue", "faturado_value"], 0);
+  cardSummary.anulado = getNumberFromObject(summary, ["quantidadeAnulados", "quantidade_anulados", "anuladoCount", "anulado_count", "anulado"], 0);
+  cardSummary.valorAnulado = getNumberFromObject(summary, ["valorAnulado", "valor_anulado", "anuladoValue", "anulado_value"], 0);
+  cardSummary.aberto = getNumberFromObject(summary, ["quantidadeEmAbertoAnalise", "quantidade_em_aberto_analise", "abertoAnaliseCount", "aberto_analise_count", "aberto"], 0);
+  cardSummary.valorAberto = getNumberFromObject(summary, ["valorEmAbertoAnalise", "valor_em_aberto_analise", "abertoAnaliseValue", "aberto_analise_value"], 0);
+
+  const hasStatusValues = Array.isArray(statusRows) && statusRows.some((row) => row && (row.totalValue != null || row.total_value != null));
+  if (hasStatusValues && (!cardSummary.valorFaturado || !cardSummary.valorAnulado || !cardSummary.valorAberto)) {
+    cardSummary.faturamento = 0;
+    cardSummary.valorFaturado = 0;
+    cardSummary.anulado = 0;
+    cardSummary.valorAnulado = 0;
+    cardSummary.aberto = 0;
+    cardSummary.valorAberto = 0;
+    statusRows.forEach((row) => {
+      addPnrSummaryStatus(
+        cardSummary,
+        row?.label,
+        Number(row?.totalValue ?? row?.total_value ?? 0),
+        Number(row?.count || 0)
+      );
+    });
+  }
+
+  return completePnrSummary(cardSummary);
+}
+
+function buildPnrKpiCards(summary = {}, statusRows = []) {
+  const metrics = buildPnrCardSummary(summary, statusRows);
+  const count = Number(metrics.count || 0);
+  const totalValue = Number(metrics.totalValue || 0);
+  const percentOfCount = (value) => formatPercent(count ? (Number(value || 0) / count) * 100 : 0);
+  const percentOfValue = (value) => formatPercent(totalValue ? (Number(value || 0) / totalValue) * 100 : 0);
+  return [
+    {
+      label: "Total de PNRs",
+      value: integer.format(count),
+      tone: "kpi-card--volume",
+      delta: `${formatPercent(count ? 100 : 0)} do recorte`,
+      description: "Casos PNR no recorte",
+    },
+    {
+      label: "Valor total",
+      value: currency.format(totalValue),
+      tone: "kpi-card--finance",
+      delta: `${formatPercent(totalValue ? 100 : 0)} do valor no recorte`,
+      description: "Soma geral dos valores PNR",
+    },
+    {
+      label: "Valor faturado",
+      value: currency.format(metrics.valorFaturado),
+      tone: "kpi-card--problem",
+      delta: `${percentOfValue(metrics.valorFaturado)} do valor total`,
+      description: "Impacto negativo direcionado para cobrança",
+    },
+    {
+      label: "Ticket médio",
+      value: currency.format(metrics.ticketMedioGeral),
+      tone: "kpi-card--neutral",
+      delta: "Média por registro",
+      details: [
+        { label: "Faturado", value: currency.format(metrics.ticketMedioFaturado) },
+        { label: "Anulado", value: currency.format(metrics.ticketMedioAnulado) },
+      ],
+    },
+    {
+      label: "Valor anulado",
+      value: currency.format(metrics.valorAnulado),
+      tone: "kpi-card--neutral",
+      delta: `${percentOfValue(metrics.valorAnulado)} do valor total`,
+      description: "Valor positivo sem cobrança no recorte",
+    },
+    {
+      label: "Em aberto/análise",
+      value: integer.format(metrics.aberto),
+      tone: "kpi-card--neutral",
+      delta: `${percentOfCount(metrics.aberto)} dos PNRs`,
+      description: "Casos ainda pendentes de definição",
+    },
+  ];
+}
+
 function renderPnrTable(rows, allRows, options = {}) {
   const totalRows = Array.isArray(allRows) ? allRows.length : Number(allRows || 0);
   const totalPages = Math.max(1, Math.ceil(totalRows / state.pageSize));
@@ -4491,7 +5344,7 @@ function renderPnrTable(rows, allRows, options = {}) {
           <h3>Tabela detalhada de PNRs</h3>
           <p>${isInitialLoading ? "Carregando página atual..." : `${integer.format(totalRows)} registros no recorte`}</p>
         </div>
-        ${renderPnrPageSizeControl()}
+        ${renderPnrTableActions(totalRows, isInitialLoading)}
       </div>
       ${isInitialLoading ? renderDashboardSkeletonTable(6, 7) : `
       <div class="table-wrap pnr-table-wrap">
@@ -4516,11 +5369,11 @@ function renderPnrTable(rows, allRows, options = {}) {
       <div class="table-footer">
         <div>${totalRows ? `${integer.format((state.page - 1) * state.pageSize + 1)}-${integer.format(Math.min(state.page * state.pageSize, totalRows))}` : "0-0"} de ${integer.format(totalRows)}</div>
         <div class="pagination">
-          <button type="button" class="secondary-button secondary-button--icon" data-pnr-page="prev"${state.page <= 1 ? " disabled" : ""} aria-label="Página anterior" title="Página anterior">
+          <button type="button" class="secondary-button secondary-button--icon pnr-pagination-button" data-pnr-page="prev"${state.page <= 1 ? " disabled" : ""} aria-label="Página anterior" title="Página anterior">
             <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m15 6-6 6 6 6" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2"></path></svg>
           </button>
-          <span>Página ${integer.format(state.page)} de ${integer.format(totalPages)}</span>
-          <button type="button" class="secondary-button secondary-button--icon" data-pnr-page="next"${state.page >= totalPages ? " disabled" : ""} aria-label="Próxima página" title="Próxima página">
+          <span id="pnr-page-indicator">Página ${integer.format(state.page)} de ${integer.format(totalPages)}</span>
+          <button type="button" class="secondary-button secondary-button--icon pnr-pagination-button" data-pnr-page="next"${state.page >= totalPages ? " disabled" : ""} aria-label="Próxima página" title="Próxima página">
             <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m9 6 6 6-6 6" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2"></path></svg>
           </button>
         </div>
@@ -4664,14 +5517,7 @@ function renderPnrPage() {
     }
     : getPnrAnalysisData(filteredRows);
   const { summary, statusRows, operationRows, stationRows, driverRows, evolutionRows } = analysis;
-  const cards = [
-    { label: "Total de PNRs", value: integer.format(summary.count), tone: "kpi-card--volume", delta: "Registros no recorte" },
-    { label: "Valor total dos produtos", value: currency.format(summary.totalValue), tone: "kpi-card--finance", delta: "Soma de valor da compra" },
-    { label: "Valor médio dos produtos", value: currency.format(summary.avgValue), tone: "kpi-card--neutral", delta: "Média por registro" },
-    { label: "Anulados", value: integer.format(summary.anulado), tone: "kpi-card--problem", delta: `${formatPercent(summary.count ? (summary.anulado / summary.count) * 100 : 0)} do recorte` },
-    { label: "Enviados para faturamento", value: integer.format(summary.faturamento), tone: "kpi-card--volume", delta: `${formatPercent(summary.count ? (summary.faturamento / summary.count) * 100 : 0)} do recorte` },
-    { label: "Status em aberto/análise", value: integer.format(summary.aberto), tone: "kpi-card--neutral", delta: "Status restantes no recorte" },
-  ];
+  const cards = buildPnrKpiCards(summary, statusRows);
   const pnrUpdatingBadge = (remotePending || pnrRemoteState.loadingSummary || pnrRemoteState.loadingCharts || pnrRemoteState.loadingTable) && summary.count
     ? renderDashboardUpdatingBadge(DASHBOARD_MODULE_KEYS.desviosPnr)
     : "";
@@ -4699,13 +5545,12 @@ function renderPnrPage() {
       </section>
 
       <section class="pnr-analysis-grid">
-        <article class="panel pnr-chart-panel">
-          <div class="panel__header"><div><h3>Distribuição por status</h3><p>Quantidade e percentual no recorte</p></div></div>
-          ${(remotePending || pnrRemoteState.loadingCharts) && !statusRows.length ? renderPnrSkeleton("Carregando gráfico", "Buscando agregados por status.") : renderPnrBarList(statusRows)}
-        </article>
-        <article class="panel pnr-chart-panel">
-          <div class="panel__header"><div><h3>PNRs por tipo de base</h3><p>SVC, XPT e bases não identificadas pela origem</p></div></div>
-          ${(remotePending || pnrRemoteState.loadingCharts) && !operationRows.length ? renderPnrSkeleton("Carregando gráfico", "Buscando agregados por tipo de base.") : renderPnrBarList(operationRows)}
+        <article class="panel pnr-chart-panel pnr-chart-panel--value-timeline">
+          <div class="panel__header">
+            <div class="pnr-value-header-copy"><h3>Evolução temporal de valores PNR</h3><p>Comparativo entre valores anulados (positivo) e faturados (negativo) no período</p></div>
+            ${renderPnrValueTimelineHeaderMeta((remotePending || pnrRemoteState.loadingCharts) && !evolutionRows.length ? [] : evolutionRows)}
+          </div>
+          ${(remotePending || pnrRemoteState.loadingCharts) && !evolutionRows.length ? renderPnrSkeleton("Carregando evolução", "Buscando valores anulados e faturados.") : renderPnrValueTimelineChart(evolutionRows)}
         </article>
         <article class="panel pnr-chart-panel">
           <div class="panel__header"><div><h3>Estações com maior volume</h3><p>Ranking por estação de origem</p></div></div>
@@ -4714,10 +5559,6 @@ function renderPnrPage() {
         <article class="panel pnr-chart-panel">
           <div class="panel__header"><div><h3>Motoristas com maior volume de PNR</h3><p>Nome localizado por cruzamento ou ID do motorista</p></div></div>
           ${(remotePending || pnrRemoteState.loadingCharts) && !driverRows.length ? renderPnrSkeleton("Carregando ranking", "Buscando top 10 motoristas.") : renderPnrRankingList(driverRows, "Sem motoristas")}
-        </article>
-        <article class="panel pnr-chart-panel pnr-chart-panel--wide">
-          <div class="panel__header"><div><h3>Evolução temporal</h3><p>Quantidade e valor total por mês</p></div></div>
-          ${(remotePending || pnrRemoteState.loadingCharts) && !evolutionRows.length ? renderPnrSkeleton("Carregando evolução", "Buscando meses agregados.") : renderPnrEvolution(evolutionRows)}
         </article>
       </section>
 
@@ -6088,6 +6929,11 @@ function renderKpis(summary) {
 }
 
 function renderKpiCard(card, index) {
+  const details = Array.isArray(card.details) && card.details.length
+    ? `<div class="kpi-card__details">${card.details.map((item) => `
+        <span><small>${escapeHtml(item.label)}</small><strong>${escapeHtml(item.value)}</strong></span>
+      `).join("")}</div>`
+    : "";
   return `
     <article class="kpi-card ${card.tone}"${card.key ? ` data-kpi="${escapeAttribute(card.key)}"` : ""} style="--reveal-index:${index}">
       <div class="kpi-card__label">
@@ -6096,6 +6942,8 @@ function renderKpiCard(card, index) {
       </div>
       <div class="kpi-card__value metric-card-value">${card.value}</div>
       <div class="kpi-card__delta"${card.key === "total-discounts" ? " data-total-discounts-delta" : ""}>${card.delta}</div>
+      ${details}
+      ${card.description ? `<div class="kpi-card__description">${escapeHtml(card.description)}</div>` : ""}
     </article>
   `;
 }
@@ -13614,6 +14462,12 @@ function applyPnrRemoteSummary(payload) {
     anulado: Number(summary.anulado || 0),
     faturamento: Number(summary.faturamento || 0),
     aberto: Number(summary.aberto || 0),
+    valorFaturado: Number(summary.valorFaturado ?? summary.valor_faturado ?? summary.faturadoValue ?? summary.faturado_value ?? 0),
+    valorAnulado: Number(summary.valorAnulado ?? summary.valor_anulado ?? summary.anuladoValue ?? summary.anulado_value ?? 0),
+    valorAberto: Number(summary.valorAberto ?? summary.valor_aberto ?? summary.valorEmAbertoAnalise ?? summary.valor_em_aberto_analise ?? 0),
+    ticketMedioGeral: Number(summary.ticketMedioGeral ?? summary.ticket_medio_geral ?? summary.avgValue ?? summary.avg_value ?? 0),
+    ticketMedioFaturado: Number(summary.ticketMedioFaturado ?? summary.ticket_medio_faturado ?? 0),
+    ticketMedioAnulado: Number(summary.ticketMedioAnulado ?? summary.ticket_medio_anulado ?? 0),
   };
   pnrRemoteState.statusRows = Array.isArray(payload?.statusRows || payload?.status_rows) ? (payload.statusRows || payload.status_rows) : [];
   pnrRemoteState.operationRows = Array.isArray(payload?.operationRows || payload?.operation_rows) ? (payload.operationRows || payload.operation_rows) : [];

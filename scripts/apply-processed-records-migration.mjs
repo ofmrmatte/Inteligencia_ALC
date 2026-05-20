@@ -27,6 +27,7 @@ try {
         if (file.includes("create_processed_dashboard_files")) return 25;
         if (file.includes("optimize_pnr_dashboard_queries")) return 30;
         if (file.includes("update_pnr_dashboard_rpc_filters")) return 40;
+        if (file.includes("update_pnr_summary_card_metrics")) return 45;
         if (file.includes("compact_pnr_persisted_records")) return 50;
         if (file.includes("processed_files_storage_flags")) return 60;
         return 0;
