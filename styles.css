@@ -357,6 +357,11 @@
   background: color-mix(in srgb, var(--surface) 92%, transparent);
 }
 
+.pnr-status-edit.is-pending {
+  border-color: color-mix(in srgb, var(--accent) 58%, var(--line));
+  background: color-mix(in srgb, var(--accent-soft) 52%, var(--surface));
+}
+
 .pnr-status-edit select {
   min-width: 0;
   max-width: 132px;
@@ -389,6 +394,11 @@
 .pnr-status-edit.is-saving {
   opacity: 0.72;
   pointer-events: none;
+}
+
+.pnr-status-edit.is-pending svg {
+  opacity: 0.92;
+  color: var(--accent);
 }
 
 .pnr-status-panel {
@@ -9581,6 +9591,11 @@ body:not([data-theme="light"]) .view-toolbar.is-pnr-view .pnr-toolbar-filters {
     linear-gradient(180deg, color-mix(in srgb, var(--surface) 96%, transparent), color-mix(in srgb, var(--surface-soft) 92%, transparent)),
     var(--surface) !important;
   color: var(--text) !important;
+}
+
+.pnr-table-save-button.has-pending:not(:disabled) {
+  border-color: color-mix(in srgb, var(--accent) 54%, var(--line)) !important;
+  color: var(--accent) !important;
 }
 
 .pnr-table-export-button:disabled,

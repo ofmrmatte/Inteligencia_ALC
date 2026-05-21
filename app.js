@@ -1014,6 +1014,12 @@ function bindEvents() {
     event.preventDefault();
     await exportPnrTableExcel(button);
   });
+  document.addEventListener("click", async (event) => {
+    const button = event.target.closest("[data-pnr-save-status]");
+    if (!button) return;
+    event.preventDefault();
+    await savePendingPnrStatusEdits(button);
+  });
   document.addEventListener("input", (event) => {
     const input = event.target.closest("[data-pnr-query]");
     if (!input) return;
@@ -4388,6 +4394,8 @@ const PNR_MANUAL_STATUS_OPTIONS = [
 
 const pnrStatusUpdateState = {
   savingIds: new Set(),
+  pending: new Map(),
+  isSaving: false,
 };
 
 const PNR_EXPORT_SELECT_COLUMNS = [
@@ -4487,19 +4495,24 @@ function canEditPnrStatus() {
   return Boolean(currentUser);
 }
 
+function getPendingPnrStatusEdit(recordId) {
+  return pnrStatusUpdateState.pending.get(String(recordId || ""));
+}
+
 function renderPnrStatusCell(row = {}) {
   const recordId = row.pnrRecordId || row.recordId || row.id || "";
   const currentStatus = row.statusNormalizado || "";
   const canUpdate = canEditPnrStatus() && recordId;
   if (!canUpdate) return `<span class="badge">${escapeHtml(currentStatus || "—")}</span>`;
+  const pendingEdit = getPendingPnrStatusEdit(recordId);
   const isSaving = pnrStatusUpdateState.savingIds.has(String(recordId));
-  const editableCurrentStatus = getPnrEditableStatusValue(currentStatus) || currentStatus;
+  const editableCurrentStatus = getPnrEditableStatusValue(pendingEdit?.nextStatus || currentStatus) || pendingEdit?.nextStatus || currentStatus;
   const options = PNR_MANUAL_STATUS_OPTIONS.map((status) => `<option value="${escapeAttribute(status)}"${status === editableCurrentStatus ? " selected" : ""}>${escapeHtml(status)}</option>`).join("");
   const extraOption = currentStatus && !PNR_MANUAL_STATUS_OPTIONS.includes(editableCurrentStatus)
     ? `<option value="${escapeAttribute(currentStatus)}" selected disabled>${escapeHtml(currentStatus)}</option>`
     : "";
   return `
-    <label class="pnr-status-edit${isSaving ? " is-saving" : ""}" title="Editar status">
+    <label class="pnr-status-edit${isSaving ? " is-saving" : ""}${pendingEdit ? " is-pending" : ""}" title="${pendingEdit ? "Alteração pendente. Clique em salvar." : "Editar status"}">
       <select data-pnr-status-edit data-record-id="${escapeAttribute(recordId)}" data-file-id="${escapeAttribute(row.fileId || "")}" data-current-status="${escapeAttribute(row.statusNormalizado || "")}" ${isSaving ? "disabled" : ""}>
         ${extraOption}${options}
       </select>
@@ -4615,22 +4628,58 @@ async function handlePnrStatusEditChange(select) {
   const nextStatus = select?.value || "";
   const fileId = select?.dataset?.fileId || "";
   if (!recordId || !nextStatus || previousStatus === nextStatus) return;
-  pnrStatusUpdateState.savingIds.add(String(recordId));
-  select.disabled = true;
-  select.closest(".pnr-status-edit")?.classList.add("is-saving");
+  pnrStatusUpdateState.pending.set(String(recordId), {
+    recordId,
+    previousStatus,
+    nextStatus,
+    fileId,
+  });
+  renderPnrTableOnly();
+}
+
+async function savePendingPnrStatusEdits(button) {
+  if (pnrStatusUpdateState.isSaving) return;
+  const pendingEdits = Array.from(pnrStatusUpdateState.pending.values());
+  if (!pendingEdits.length) {
+    showToast("Nenhuma alteração de status pendente.", "info", 3200);
+    return;
+  }
+  pnrStatusUpdateState.isSaving = true;
+  pendingEdits.forEach((edit) => pnrStatusUpdateState.savingIds.add(String(edit.recordId)));
+  if (button) {
+    button.classList.add("is-loading");
+    button.disabled = true;
+    button.setAttribute("aria-busy", "true");
+    button.setAttribute("title", "Salvando alterações...");
+    button.setAttribute("aria-label", "Salvando alterações de status");
+  }
+  renderPnrTableOnly();
+  let savedCount = 0;
   try {
-    await updatePnrRecordStatus(recordId, nextStatus, { currentStatus: previousStatus, fileId });
-    showToast("Status do PNR atualizado.", "good", 3200);
-    pnrStatusUpdateState.savingIds.delete(String(recordId));
+    for (const edit of pendingEdits) {
+      await updatePnrRecordStatus(edit.recordId, edit.nextStatus, { currentStatus: edit.previousStatus, fileId: edit.fileId });
+      pnrStatusUpdateState.pending.delete(String(edit.recordId));
+      pnrStatusUpdateState.savingIds.delete(String(edit.recordId));
+      savedCount += 1;
+    }
+    showToast(savedCount === 1 ? "Status do PNR salvo." : `${integer.format(savedCount)} status de PNR salvos.`, "good", 3600);
     state.page = Math.max(1, state.page);
     persistState();
     renderPnrTableOnly();
     await refreshPnrRemoteDashboard({ force: true, reason: "status-edit" });
   } catch (error) {
-    console.error("[PNR Status Edit] Não foi possível atualizar status.", error);
-    select.value = getPnrEditableStatusValue(previousStatus) || previousStatus;
-    showToast("Não foi possível atualizar o status. Tente novamente.", "error", 5200);
-    pnrStatusUpdateState.savingIds.delete(String(recordId));
+    console.error("[PNR Status Edit] Não foi possível salvar status.", error);
+    showToast("Não foi possível salvar o status. Tente novamente.", "error", 5200);
+  } finally {
+    pnrStatusUpdateState.isSaving = false;
+    pendingEdits.forEach((edit) => pnrStatusUpdateState.savingIds.delete(String(edit.recordId)));
+    if (button) {
+      button.classList.remove("is-loading");
+      button.disabled = false;
+      button.removeAttribute("aria-busy");
+      button.setAttribute("title", "Salvar alterações de status");
+      button.setAttribute("aria-label", "Salvar alterações de status");
+    }
     renderPnrTableOnly();
   }
 }
@@ -4952,9 +5001,18 @@ async function buildStyledPnrWorkbook(rows, exportRows) {
 }
 
 function renderPnrTableActions(totalRows, isInitialLoading) {
+  const pendingCount = pnrStatusUpdateState.pending.size;
+  const isSavingStatus = pnrStatusUpdateState.isSaving;
   return `
     <div class="pnr-table-actions">
       ${renderPnrPageSizeControl()}
+      <button class="secondary-button secondary-button--icon table-export-button pnr-table-export-button pnr-table-save-button${pendingCount ? " has-pending" : ""}" type="button" data-pnr-save-status title="${isSavingStatus ? "Salvando alterações..." : pendingCount ? `Salvar ${integer.format(pendingCount)} alteração${pendingCount === 1 ? "" : "es"} de status` : "Salvar alterações de status"}" aria-label="${isSavingStatus ? "Salvando alterações de status" : "Salvar alterações de status"}" ${isInitialLoading || !pendingCount || isSavingStatus ? "disabled" : ""}>
+        <svg viewBox="0 0 24 24" aria-hidden="true">
+          <path d="M5 4h11l3 3v13H5z" fill="none" stroke="currentColor" stroke-linejoin="round" stroke-width="2"></path>
+          <path d="M8 4v6h8V4" fill="none" stroke="currentColor" stroke-linejoin="round" stroke-width="2"></path>
+          <path d="M8 17h8" fill="none" stroke="currentColor" stroke-linecap="round" stroke-width="2"></path>
+        </svg>
+      </button>
       <button class="secondary-button secondary-button--icon table-export-button pnr-table-export-button" type="button" data-pnr-export-excel title="${isExportingPnrExcel ? "Gerando planilha..." : "Baixar Excel"}" aria-label="${isExportingPnrExcel ? "Gerando planilha" : "Baixar Excel"}" ${isInitialLoading || !totalRows || isExportingPnrExcel ? "disabled" : ""}>
         <svg viewBox="0 0 24 24" aria-hidden="true">
           <path d="M12 3v11" fill="none" stroke="currentColor" stroke-linecap="round" stroke-width="2"></path>
