@@ -354,6 +354,9 @@ let missingPackagesRows = [];
 let isLoadingMissingPackages = false;
 let isImportingMissingPackages = false;
 let isExportingMissingPackagesExcel = false;
+let isDeletingMissingPackages = false;
+let isMissingPackagesSelectionMode = false;
+const selectedMissingPackageIds = new Set();
 let pendingAvatarFile = null;
 let pendingAvatarPreviewUrl = "";
 let pendingAvatarSourceUrl = "";
@@ -1081,6 +1084,36 @@ function bindEvents() {
     if (exportButton) {
       event.preventDefault();
       await exportMissingPackagesExcel(exportButton);
+      return;
+    }
+    const selectionToggle = event.target.closest("[data-missing-packages-selection-toggle]");
+    if (selectionToggle) {
+      event.preventDefault();
+      isMissingPackagesSelectionMode = !isMissingPackagesSelectionMode;
+      if (!isMissingPackagesSelectionMode) selectedMissingPackageIds.clear();
+      renderAll();
+      return;
+    }
+    const deleteSelected = event.target.closest("[data-missing-packages-delete-selected]");
+    if (deleteSelected) {
+      event.preventDefault();
+      await deleteSelectedMissingPackages();
+      return;
+    }
+    const selectAll = event.target.closest("[data-missing-packages-select-all]");
+    if (selectAll) {
+      const visibleIds = getVisibleMissingPackagePageRows().map((row) => String(row.id)).filter(Boolean);
+      if (selectAll.checked) visibleIds.forEach((id) => selectedMissingPackageIds.add(id));
+      else visibleIds.forEach((id) => selectedMissingPackageIds.delete(id));
+      renderAll();
+      return;
+    }
+    const rowSelect = event.target.closest("[data-missing-packages-row-select]");
+    if (rowSelect) {
+      const id = String(rowSelect.value || "");
+      if (rowSelect.checked) selectedMissingPackageIds.add(id);
+      else selectedMissingPackageIds.delete(id);
+      renderAll();
       return;
     }
     const statusToggle = event.target.closest("[data-missing-status-toggle]");
@@ -2651,6 +2684,21 @@ function getAvailableMonthOptions(fileCategory = getCurrentFileCategory()) {
         months.set(period.key, { key: period.key, label: period.monthLabel, sort: period.sort });
       }
     });
+  if (fileCategory === PRE_FATURA_FILE_CATEGORY) {
+    const sourceRows = [
+      ...(Array.isArray(allRows) ? allRows : []),
+      ...(Array.isArray(library?.datasets) ? library.datasets : [])
+        .filter((dataset) => dataset && dataset.id !== EMPTY_DATASET_ID && (dataset.fileCategory || inferRowsFileCategory(dataset.rows)) === PRE_FATURA_FILE_CATEGORY)
+        .flatMap((dataset) => Array.isArray(dataset.rows) ? dataset.rows : []),
+    ];
+    sourceRows
+      .filter((row) => (row?.file_category || PRE_FATURA_FILE_CATEGORY) !== PACKAGE_MANAGEMENT_FILE_CATEGORY)
+      .forEach((row) => {
+        const key = getRowMonthKey(row);
+        if (!key || months.has(key)) return;
+        months.set(key, { key, label: getMonthLabelFromKey(key), sort: Number(key.replace("-", "")) || 0 });
+      });
+  }
   return Array.from(months.values()).sort((a, b) => a.sort - b.sort);
 }
 
@@ -3843,7 +3891,7 @@ function normalizeMissingPackageRow(record = {}) {
     dataFechamento: record.data_fechamento || record.dataFechamento || "",
     base: record.base || "",
     tipoBase: record.tipo_base || record.tipoBase || "XPT",
-    driverNome: record.driver_nome || record.driverNome || "",
+    driverNome: formatDriverName(record.driver_nome || record.driverNome || "", ""),
     idEnvio: record.id_envio || record.idEnvio || "",
     caso: record.caso || "Pacote faltante",
     motivoOriginal: record.motivo_original || record.motivoOriginal || "Faltante",
@@ -3920,7 +3968,7 @@ function parseMissingPackagesText(text = "") {
     }
     const driverMatch = line.match(/^Driver\s*:\s*(.+)$/i);
     if (driverMatch) {
-      currentDriver = driverMatch[1].trim();
+      currentDriver = formatDriverName(driverMatch[1], "");
       if (currentDriver) drivers.add(currentDriver);
       return;
     }
@@ -4095,6 +4143,30 @@ function getFilteredMissingPackagesRows() {
   });
 }
 
+function getVisibleMissingPackagePageRows(rows = getFilteredMissingPackagesRows()) {
+  const totalPages = Math.max(1, Math.ceil(rows.length / state.pageSize));
+  const page = Math.min(Math.max(1, state.page), totalPages);
+  return rows.slice((page - 1) * state.pageSize, page * state.pageSize);
+}
+
+function syncSelectedMissingPackagesWithRows(rows = missingPackagesRows) {
+  const availableIds = new Set((Array.isArray(rows) ? rows : []).map((row) => String(row.id)).filter(Boolean));
+  Array.from(selectedMissingPackageIds).forEach((id) => {
+    if (!availableIds.has(id)) selectedMissingPackageIds.delete(id);
+  });
+}
+
+function getMissingPackageTableColumns() {
+  if (!isMissingPackagesSelectionMode && !selectedMissingPackageIds.size) return MISSING_PACKAGE_TABLE_COLUMNS;
+  return [{ key: "__select", label: "", width: 52, format: "selection" }, ...MISSING_PACKAGE_TABLE_COLUMNS];
+}
+
+function hydrateMissingPackageTableSelection() {
+  document.querySelectorAll("[data-missing-packages-select-all][data-indeterminate=\"true\"]").forEach((input) => {
+    input.indeterminate = true;
+  });
+}
+
 function getMissingPackagesMetrics(rows = getFilteredMissingPackagesRows()) {
   const total = rows.length;
   const count = (predicate) => rows.filter(predicate).length;
@@ -4184,6 +4256,14 @@ async function applyMissingPackageStatusOption(button) {
   const currentRow = missingPackagesRows.find((row) => row.id === recordId) || {};
   const nextRow = type === "meli" ? { ...currentRow, statusContatoMeli: value } : { ...currentRow, statusCaso: value };
   const situacaoPrazo = getMissingPackageDeadlineStatus(nextRow);
+  missingPackagesRows = missingPackagesRows.map((row) => row.id === recordId ? normalizeMissingPackageRow({
+    ...row,
+    statusCaso: nextRow.statusCaso,
+    statusContatoMeli: nextRow.statusContatoMeli,
+    situacaoPrazo,
+    updatedAt: new Date().toISOString(),
+  }) : row);
+  renderAll();
   const payload = type === "meli"
     ? { status_contato_meli: value, situacao_prazo: situacaoPrazo, contato_updated_at: new Date().toISOString(), updated_at: new Date().toISOString() }
     : { status_caso: value, situacao_prazo: situacaoPrazo, status_updated_at: new Date().toISOString(), updated_at: new Date().toISOString() };
@@ -4193,19 +4273,63 @@ async function applyMissingPackageStatusOption(button) {
       .update(payload)
       .eq("id", recordId)
       .select("*")
-      .single();
+      .maybeSingle();
     if (error) throw error;
+    if (!data) throw new Error("Nenhum registro foi atualizado. Verifique a permissão de edição no Supabase.");
     missingPackagesRows = missingPackagesRows.map((row) => row.id === recordId ? normalizeMissingPackageRow(data) : row);
     showToast("Status de Pacote Faltante salvo.", "good", 3200);
     renderAll();
   } catch (error) {
     console.error("[Pacotes Faltantes] Falha ao salvar status.", error);
+    missingPackagesRows = missingPackagesRows.map((row) => row.id === recordId ? currentRow : row);
+    renderAll();
     showToast("Não foi possível salvar o status.", "error", 5200);
+  }
+}
+
+async function deleteSelectedMissingPackages() {
+  const ids = Array.from(selectedMissingPackageIds).filter(Boolean);
+  if (!ids.length || isDeletingMissingPackages) return;
+  if (!window.supabaseClient || !currentUser) {
+    showToast("Faça login para excluir casos de Pacotes Faltantes.", "warn", 4200);
+    return;
+  }
+  const confirmed = window.confirm(`Excluir ${integer.format(ids.length)} caso${ids.length === 1 ? "" : "s"} de Pacotes Faltantes? Esta ação remove os registros da base desta categoria.`);
+  if (!confirmed) return;
+  isDeletingMissingPackages = true;
+  renderAll();
+  try {
+    const { error } = await window.supabaseClient
+      .from("gestao_desvios_pacotes_faltantes")
+      .delete()
+      .in("id", ids);
+    if (error) throw error;
+    const deleted = new Set(ids);
+    missingPackagesRows = missingPackagesRows.filter((row) => !deleted.has(String(row.id)));
+    selectedMissingPackageIds.clear();
+    isMissingPackagesSelectionMode = false;
+    state.page = 1;
+    persistState();
+    showToast(`${integer.format(ids.length)} caso${ids.length === 1 ? "" : "s"} excluído${ids.length === 1 ? "" : "s"}.`, "good", 4200);
+  } catch (error) {
+    console.error("[Pacotes Faltantes] Falha ao excluir casos.", error);
+    showToast("Não foi possível excluir os casos selecionados.", "error", 5600);
+  } finally {
+    isDeletingMissingPackages = false;
+    renderAll();
   }
 }
 
 function formatMissingPackageCell(row, column) {
   const value = row[column.key];
+  if (column.format === "selection") {
+    return `
+      <label class="table-row-selector" title="Selecionar caso">
+        <input type="checkbox" value="${escapeAttribute(row.id)}" data-missing-packages-row-select ${selectedMissingPackageIds.has(String(row.id)) ? "checked" : ""} aria-label="Selecionar caso ${escapeAttribute(row.idEnvio || row.id)}">
+        <span class="type-filter__check" aria-hidden="true"></span>
+      </label>
+    `;
+  }
   if (column.format === "date") return escapeHtml(formatDate(value));
   if (column.format === "datetime") return escapeHtml(formatDateTime(value));
   if (column.format === "missingStatus") return renderMissingStatusCell(row, column.statusType);
@@ -4215,11 +4339,17 @@ function formatMissingPackageCell(row, column) {
 }
 
 function renderMissingPackagesTable(rows) {
+  syncSelectedMissingPackagesWithRows(rows);
   const totalRows = rows.length;
   const totalPages = Math.max(1, Math.ceil(totalRows / state.pageSize));
   state.page = Math.min(Math.max(1, state.page), totalPages);
-  const pagedRows = rows.slice((state.page - 1) * state.pageSize, state.page * state.pageSize);
-  const tableMinWidth = MISSING_PACKAGE_TABLE_COLUMNS.reduce((sum, column) => sum + column.width, 0);
+  const pagedRows = getVisibleMissingPackagePageRows(rows);
+  const pageIds = pagedRows.map((row) => String(row.id)).filter(Boolean);
+  const selectedCount = selectedMissingPackageIds.size;
+  const allPageSelected = Boolean(pageIds.length) && pageIds.every((id) => selectedMissingPackageIds.has(id));
+  const somePageSelected = pageIds.some((id) => selectedMissingPackageIds.has(id));
+  const tableColumns = getMissingPackageTableColumns();
+  const tableMinWidth = tableColumns.reduce((sum, column) => sum + column.width, 0);
   return `
     <article class="panel pnr-table-panel missing-packages-table-panel">
       <div class="panel__header">
@@ -4229,6 +4359,19 @@ function renderMissingPackagesTable(rows) {
         </div>
         <div class="pnr-table-actions">
           ${renderPnrPageSizeControl()}
+          <button class="secondary-button secondary-button--icon table-export-button pnr-table-export-button${isMissingPackagesSelectionMode ? " is-active" : ""}" type="button" data-missing-packages-selection-toggle title="${isMissingPackagesSelectionMode ? "Cancelar seleção" : "Selecionar casos"}" aria-label="${isMissingPackagesSelectionMode ? "Cancelar seleção de casos" : "Selecionar casos"}">
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M9 11.5 11 13.5 15.5 9" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2"></path>
+              <rect x="4" y="5" width="16" height="14" rx="3" fill="none" stroke="currentColor" stroke-width="1.8"></rect>
+            </svg>
+          </button>
+          <button class="secondary-button secondary-button--icon table-export-button pnr-table-export-button missing-packages-delete-button${selectedCount ? " has-pending" : ""}" type="button" data-missing-packages-delete-selected title="${selectedCount ? `Excluir ${integer.format(selectedCount)} caso${selectedCount === 1 ? "" : "s"} selecionado${selectedCount === 1 ? "" : "s"}` : "Excluir casos selecionados"}" aria-label="Excluir casos selecionados" ${!selectedCount || isDeletingMissingPackages ? "disabled" : ""}>
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M4 7h16" fill="none" stroke="currentColor" stroke-linecap="round" stroke-width="2"></path>
+              <path d="M10 11v6M14 11v6" fill="none" stroke="currentColor" stroke-linecap="round" stroke-width="1.8"></path>
+              <path d="M6 7l1 14h10l1-14M9 7V4h6v3" fill="none" stroke="currentColor" stroke-linejoin="round" stroke-width="1.8"></path>
+            </svg>
+          </button>
           <button class="secondary-button secondary-button--icon table-export-button pnr-table-export-button" type="button" data-missing-packages-export title="Baixar Excel" aria-label="Baixar Excel" ${!totalRows || isExportingMissingPackagesExcel ? "disabled" : ""}>
             <svg viewBox="0 0 24 24" aria-hidden="true">
               <path d="M12 3v11" fill="none" stroke="currentColor" stroke-linecap="round" stroke-width="2"></path>
@@ -4240,10 +4383,15 @@ function renderMissingPackagesTable(rows) {
       </div>
       <div class="table-wrap pnr-table-wrap">
         <table style="min-width:${tableMinWidth}px">
-          <colgroup>${MISSING_PACKAGE_TABLE_COLUMNS.map((column) => `<col style="width:${column.width}px; min-width:${column.width}px">`).join("")}</colgroup>
-          <thead><tr>${MISSING_PACKAGE_TABLE_COLUMNS.map((column) => `<th>${escapeHtml(column.label)}</th>`).join("")}</tr></thead>
+          <colgroup>${tableColumns.map((column) => `<col style="width:${column.width}px; min-width:${column.width}px">`).join("")}</colgroup>
+          <thead><tr>${tableColumns.map((column) => column.format === "selection" ? `<th>
+            <label class="table-row-selector" title="Selecionar casos desta página">
+              <input type="checkbox" data-missing-packages-select-all ${allPageSelected ? "checked" : ""} ${somePageSelected && !allPageSelected ? "data-indeterminate=\"true\"" : ""} aria-label="Selecionar casos desta página">
+              <span class="type-filter__check" aria-hidden="true"></span>
+            </label>
+          </th>` : `<th>${escapeHtml(column.label)}</th>`).join("")}</tr></thead>
           <tbody>
-            ${pagedRows.length ? pagedRows.map((row) => `<tr>${MISSING_PACKAGE_TABLE_COLUMNS.map((column) => `<td>${formatMissingPackageCell(row, column)}</td>`).join("")}</tr>`).join("") : `<tr><td colspan="${MISSING_PACKAGE_TABLE_COLUMNS.length}">${emptyState("Nenhum pacote faltante encontrado", "Cole um fechamento do dispatcher ou ajuste os filtros.")}</td></tr>`}
+            ${pagedRows.length ? pagedRows.map((row) => `<tr>${tableColumns.map((column) => `<td>${formatMissingPackageCell(row, column)}</td>`).join("")}</tr>`).join("") : `<tr><td colspan="${tableColumns.length}">${emptyState("Nenhum pacote faltante encontrado", "Cole um fechamento do dispatcher ou ajuste os filtros.")}</td></tr>`}
           </tbody>
         </table>
       </div>
@@ -4294,53 +4442,218 @@ function renderMissingPackagesPage() {
   return `
     <section class="pnr-page missing-packages-page">
       ${critical ? `<div class="missing-packages-alert">Há ${integer.format(critical)} pacote(s) faltante(s) com prazo vencido ou próximo do vencimento.</div>` : ""}
-      ${renderMissingPackagesCards(rows)}
-      ${renderMissingPackagesImportPanel()}
+      <section class="missing-packages-workspace" aria-label="Importação e resumo de Pacotes Faltantes">
+        <div class="missing-packages-workspace__import">
+          ${renderMissingPackagesImportPanel()}
+        </div>
+        <div class="missing-packages-workspace__summary">
+          ${renderMissingPackagesCards(rows)}
+        </div>
+      </section>
       ${renderMissingPackagesTable(rows)}
     </section>
   `;
 }
 
+function buildMissingPackagesExportRows(rows = []) {
+  return (Array.isArray(rows) ? rows : []).map((row) => ({
+    "Data do Caso": formatDate(row.dataFechamento),
+    "Data de importação": formatDateTime(row.importedAt),
+    Base: row.base || "",
+    Driver: formatDriverName(row.driverNome, ""),
+    "ID do Pacote/Envio": String(row.idEnvio || ""),
+    "Status do Caso": row.statusCaso || "",
+    "Contato Méli": row.statusContatoMeli || "",
+    "Prazo da tratativa": formatDateTime(row.prazoTratativa),
+  }));
+}
+
+function getMissingPackagesExportScope() {
+  return {
+    data: state.missingPackagesDate === "Todos" ? "Todas" : formatDate(state.missingPackagesDate),
+    base: state.missingPackagesBase === "Todos" ? "Todas" : state.missingPackagesBase,
+    driver: state.missingPackagesDriver === "Todos" ? "Todos" : formatDriverName(state.missingPackagesDriver, ""),
+    status: state.missingPackagesCaseStatus === "Todos" ? "Todos" : normalizeMissingPackageCaseStatus(state.missingPackagesCaseStatus),
+    contato: state.missingPackagesMeliStatus === "Todos" ? "Todos" : normalizeMissingPackageMeliStatus(state.missingPackagesMeliStatus),
+    prazo: state.missingPackagesDeadline === "Todos" ? "Todos" : state.missingPackagesDeadline,
+  };
+}
+
+function configureMissingPackagesExportHeader(worksheet, exportRows) {
+  const darkBlue = "0B1F33";
+  const aqua = "19D3C5";
+  const white = "FFFFFF";
+  const mutedBlue = "E8F1F8";
+  const textDark = "1F2A37";
+  const borderColor = "D8E3ED";
+  const scope = getMissingPackagesExportScope();
+
+  styleExcelRange(worksheet, "A1:H5", {
+    fill: { type: "pattern", pattern: "solid", fgColor: { argb: darkBlue } },
+    font: { name: "Arial", color: { argb: white } },
+    alignment: { vertical: "middle" },
+  });
+  [1, 2].forEach((row) => { worksheet.getRow(row).height = 21; });
+  [3, 4, 5].forEach((row) => { worksheet.getRow(row).height = row === 3 ? 15.6 : 14.4; });
+  worksheet.mergeCells("A1:A5");
+  worksheet.mergeCells("B2:D2");
+  worksheet.mergeCells("B3:D3");
+  worksheet.getCell("A1").alignment = { horizontal: "center", vertical: "middle" };
+  worksheet.getCell("B2").value = "Painel de Inteligência";
+  worksheet.getCell("B2").font = { name: "Arial", size: 16, bold: true, color: { argb: white } };
+  worksheet.getCell("B3").value = "Gestão de Desvios — Pacotes Faltantes";
+  worksheet.getCell("B3").font = { name: "Arial", size: 12, bold: true, color: { argb: white } };
+  worksheet.getCell("H1").value = "Setor: LOSS";
+  worksheet.getCell("H2").value = `Data: ${scope.data}`;
+  worksheet.getCell("H3").value = `Status: ${scope.status}`;
+  worksheet.getCell("H4").value = `Gerado em: ${formatCurrentDateTime()}`;
+  ["H1", "H2", "H3", "H4"].forEach((address) => {
+    worksheet.getCell(address).font = { name: "Arial", size: 10, bold: address === "H1", color: { argb: white } };
+    worksheet.getCell(address).alignment = { horizontal: "left", vertical: "middle" };
+  });
+
+  worksheet.getRow(6).values = ["Resumo do recorte", "Registros exportados", "Base", "Driver", "Contato Méli", "Prazo", "", ""];
+  worksheet.getRow(7).values = ["", exportRows.length, scope.base, scope.driver, scope.contato, scope.prazo, "", ""];
+  worksheet.getRow(6).height = 15.6;
+  worksheet.getRow(7).height = 14.4;
+  styleExcelRange(worksheet, "A6:H6", {
+    fill: { type: "pattern", pattern: "solid", fgColor: { argb: aqua } },
+    font: { name: "Arial", size: 12, italic: true, color: { argb: white } },
+    alignment: { horizontal: "center", vertical: "middle" },
+    border: {
+      top: { style: "thin", color: { argb: borderColor } },
+      left: { style: "thin", color: { argb: borderColor } },
+      bottom: { style: "thin", color: { argb: borderColor } },
+      right: { style: "thin", color: { argb: borderColor } },
+    },
+  });
+  styleExcelRange(worksheet, "A7:H7", {
+    fill: { type: "pattern", pattern: "solid", fgColor: { argb: mutedBlue } },
+    font: { name: "Arial", size: 11, bold: true, color: { argb: textDark } },
+    alignment: { vertical: "middle" },
+    border: {
+      top: { style: "thin", color: { argb: borderColor } },
+      left: { style: "thin", color: { argb: borderColor } },
+      bottom: { style: "thin", color: { argb: borderColor } },
+      right: { style: "thin", color: { argb: borderColor } },
+    },
+  });
+}
+
+function addMissingPackagesExportTable(worksheet, exportRows) {
+  const headers = MISSING_PACKAGE_TABLE_COLUMNS.map((column) => column.label);
+  const headerRowNumber = 8;
+  worksheet.addTable({
+    name: "Tabela_Pacotes_Faltantes",
+    displayName: "Tabela_Pacotes_Faltantes",
+    ref: `A${headerRowNumber}`,
+    headerRow: true,
+    totalsRow: false,
+    style: { theme: "TableStyleMedium2", showFirstColumn: true, showLastColumn: true, showRowStripes: false, showColumnStripes: false },
+    columns: headers.map((name) => ({ name, filterButton: true })),
+    rows: exportRows.map((item) => headers.map((header) => item[header])),
+  });
+  worksheet.getRow(headerRowNumber).height = 14.4;
+  worksheet.getRow(headerRowNumber).eachCell((cell) => {
+    cell.font = { name: "Arial", size: 10, bold: true, italic: true, color: { argb: "102A43" } };
+    cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "DCEAF5" } };
+    cell.alignment = { vertical: "middle", horizontal: "left" };
+    cell.border = {
+      top: { style: "thin", color: { argb: "B9CAD8" } },
+      left: { style: "thin", color: { argb: "B9CAD8" } },
+      bottom: { style: "thin", color: { argb: "B9CAD8" } },
+      right: { style: "thin", color: { argb: "B9CAD8" } },
+    };
+  });
+  exportRows.forEach((item, index) => {
+    const row = worksheet.getRow(headerRowNumber + 1 + index);
+    row.values = headers.map((header) => item[header]);
+    row.height = 22.05;
+    row.eachCell((cell, colNumber) => {
+      cell.font = { name: "Arial", size: 10, bold: colNumber === 6 || colNumber === 7, color: { argb: "1F2A37" } };
+      cell.alignment = { vertical: "middle", horizontal: "left", wrapText: colNumber === 4 };
+      cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: index % 2 === 0 ? "FFFFFF" : "F7FAFC" } };
+      cell.border = {
+        top: { style: "thin", color: { argb: "E0E7EF" } },
+        left: { style: "thin", color: { argb: "E0E7EF" } },
+        bottom: { style: "thin", color: { argb: "E0E7EF" } },
+        right: { style: "thin", color: { argb: "E0E7EF" } },
+      };
+      if (colNumber === 5) cell.numFmt = "@";
+    });
+    row.getCell(5).value = String(item["ID do Pacote/Envio"] || "");
+  });
+  worksheet.views = [{ state: "frozen", ySplit: headerRowNumber, topLeftCell: "A9", zoomScale: 85, zoomScaleNormal: 85, activeCell: "A9" }];
+}
+
+function autoFitMissingPackagesExportColumns(worksheet, exportRows) {
+  const headers = MISSING_PACKAGE_TABLE_COLUMNS.map((column) => column.label);
+  const minWidths = [14, 19, 10, 22, 18, 16, 18, 19];
+  const maxWidths = [18, 24, 16, 40, 24, 22, 24, 24];
+  headers.forEach((header, index) => {
+    const maxContent = Math.max(header.length, ...exportRows.map((row) => String(row[header] || "").length));
+    worksheet.getColumn(index + 1).width = Math.min(maxWidths[index], Math.max(minWidths[index], Math.ceil(maxContent * 1.08) + 2));
+  });
+}
+
+async function buildStyledMissingPackagesWorkbook(rows) {
+  const ExcelJS = await loadExcelExportEngine();
+  const exportRows = buildMissingPackagesExportRows(rows);
+  const workbook = new ExcelJS.Workbook();
+  workbook.creator = "Painel de Inteligência";
+  workbook.created = new Date();
+  workbook.modified = new Date();
+  const worksheet = workbook.addWorksheet("Pacotes Faltantes", {
+    properties: { defaultRowHeight: 20 },
+    pageSetup: { orientation: "landscape", fitToPage: true, fitToWidth: 1, fitToHeight: 0 },
+  });
+  worksheet.columns = [
+    { key: "dataCaso", width: 16 },
+    { key: "importado", width: 20 },
+    { key: "base", width: 12 },
+    { key: "driver", width: 30 },
+    { key: "idEnvio", width: 20 },
+    { key: "status", width: 18 },
+    { key: "contato", width: 20 },
+    { key: "prazo", width: 20 },
+  ];
+  configureMissingPackagesExportHeader(worksheet, exportRows);
+  await addPackageExportLogo(worksheet, workbook);
+  addMissingPackagesExportTable(worksheet, exportRows);
+  autoFitMissingPackagesExportColumns(worksheet, exportRows);
+  const buffer = await workbook.xlsx.writeBuffer();
+  return { blob: new Blob([buffer], { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" }), count: exportRows.length };
+}
+
 async function exportMissingPackagesExcel(button) {
   if (isExportingMissingPackagesExcel) return;
   isExportingMissingPackagesExcel = true;
-  if (button) button.disabled = true;
+  if (button) {
+    button.classList.add("is-loading");
+    button.disabled = true;
+    button.setAttribute("title", "Gerando planilha...");
+    button.setAttribute("aria-label", "Gerando planilha");
+  }
   try {
     const rows = getFilteredMissingPackagesRows();
     if (!rows.length) {
       showToast("Nenhum Pacote Faltante para exportar.", "warn", 4200);
       return;
     }
-    const workbook = new ExcelJS.Workbook();
-    workbook.creator = "Painel de Inteligência";
-    workbook.created = new Date();
-    const worksheet = workbook.addWorksheet("Pacotes Faltantes");
-    worksheet.addRow(["Painel de Inteligência", "Gestão de Desvios - Pacotes Faltantes"]);
-    worksheet.addRow(["Gerado em", formatDateTime(new Date())]);
-    worksheet.addRow([]);
-    worksheet.addRow(MISSING_PACKAGE_TABLE_COLUMNS.map((column) => column.label));
-    rows.forEach((row) => worksheet.addRow(MISSING_PACKAGE_TABLE_COLUMNS.map((column) => {
-      if (column.format === "date") return formatDate(row[column.key]);
-      if (column.format === "datetime") return formatDateTime(row[column.key]);
-      if (column.format === "deadline") return getMissingPackageDeadlineStatus(row);
-      return row[column.key] || "";
-    })));
-    worksheet.columns.forEach((column) => {
-      let max = 12;
-      column.eachCell({ includeEmpty: true }, (cell) => {
-        max = Math.max(max, String(cell.value || "").length + 2);
-      });
-      column.width = Math.min(max, 38);
-    });
-    const buffer = await workbook.xlsx.writeBuffer();
-    downloadBlob(new Blob([buffer], { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" }), `Pacotes_Faltantes_${new Date().toISOString().slice(0, 10)}.xlsx`);
-    showToast(`Excel de Pacotes Faltantes baixado com ${integer.format(rows.length)} registros.`, "good", 4200);
+    const { blob, count } = await buildStyledMissingPackagesWorkbook(rows);
+    downloadBlob(blob, `Relatorio_Pacotes_Faltantes_${new Date().toLocaleDateString("pt-BR").replace(/\//g, "-")}.xlsx`);
+    showToast(`Excel de Pacotes Faltantes baixado com ${integer.format(count)} registros.`, "good", 4200);
   } catch (error) {
     console.error("[Pacotes Faltantes] Falha ao exportar.", error);
     showToast("Não foi possível exportar Pacotes Faltantes.", "error", 5200);
   } finally {
     isExportingMissingPackagesExcel = false;
-    if (button) button.disabled = false;
+    if (button) {
+      button.classList.remove("is-loading");
+      button.disabled = false;
+      button.setAttribute("title", "Baixar Excel");
+      button.setAttribute("aria-label", "Baixar Excel");
+    }
   }
 }
 
@@ -4367,6 +4680,7 @@ function renderDeviationManagementView() {
     try {
       removeDetachedPnrFilterMenus();
       el.deviationManagementView.innerHTML = renderMissingPackagesPage();
+      hydrateMissingPackageTableSelection();
     } catch (error) {
       console.error("Erro ao renderizar Gestão de Desvios / Pacotes Faltantes:", error);
       console.error("Stack:", error?.stack);
@@ -11356,7 +11670,8 @@ async function hydrateTotalDiscountComparison(summary) {
   }
 
   try {
-    const rows = await buildReportHistoricalComparisonRows(scope);
+    let rows = buildMonthlyComparison();
+    if (!rows.length) rows = await buildReportHistoricalComparisonRows(scope);
     if (requestId !== totalDiscountComparisonRequest) return;
     const activeMonth = rows.find((row) => row.key === scope.key) || null;
     const activeIndex = activeMonth ? rows.findIndex((row) => row.key === activeMonth.key) : -1;
@@ -11558,6 +11873,89 @@ function filterPreFaturaRowsForExport(rows) {
     .filter((row) => allMonthsSelected || selectedMonths.includes(getRowMonthKey(row)))
     .filter((row) => normalizedPeriod === "month" || getPreFaturaRowPeriodType(row) === normalizedPeriod)
     .filter((row) => !query || String(row._search || "").includes(query));
+}
+
+function getPreFaturaMonthOptionsFromRows(rows) {
+  const months = new Map();
+  (Array.isArray(rows) ? rows : [])
+    .filter((row) => (row?.file_category || PRE_FATURA_FILE_CATEGORY) !== PACKAGE_MANAGEMENT_FILE_CATEGORY)
+    .forEach((row) => {
+      const key = getRowMonthKey(row);
+      if (!key || months.has(key)) return;
+      months.set(key, { key, label: getMonthLabelFromKey(key), sort: Number(key.replace("-", "")) || 0 });
+    });
+  return Array.from(months.values()).sort((a, b) => a.sort - b.sort);
+}
+
+function filterPreFaturaRowsForActiveState(rows, monthOptions = getAvailableMonthOptions(PRE_FATURA_FILE_CATEGORY)) {
+  const safeRows = Array.isArray(rows) ? rows : [];
+  const selectedMonths = normalizeMonthSelection(
+    Array.isArray(state.prefaturaMonths) && state.prefaturaMonths.length ? state.prefaturaMonths : state.monthFilter || "all",
+    monthOptions,
+  );
+  const allMonthsSelected = !monthOptions.length || selectedMonths.length === monthOptions.length;
+  const selectedDivisions = getPrefaturaDivisionsForTypes();
+  const normalizedPeriod = normalizePeriodMode(state.prefaturaPeriod || state.period || "month");
+  const query = normalize(state.query);
+  return safeRows
+    .filter((row) => (row?.file_category || PRE_FATURA_FILE_CATEGORY) !== PACKAGE_MANAGEMENT_FILE_CATEGORY)
+    .filter((row) => selectedDivisions.length >= MAIN_TYPE_OPTIONS.length || selectedDivisions.includes(getRowDivision(row)))
+    .filter((row) => allMonthsSelected || selectedMonths.includes(getRowMonthKey(row)))
+    .filter((row) => normalizedPeriod === "month" || getPreFaturaRowPeriodType(row) === normalizedPeriod)
+    .filter((row) => !query || String(row._search || "").includes(query));
+}
+
+function buildPreFaturaHistoricalDatasetsFromRows(rows) {
+  const groups = new Map();
+  (Array.isArray(rows) ? rows : [])
+    .filter((row) => (row?.file_category || PRE_FATURA_FILE_CATEGORY) !== PACKAGE_MANAGEMENT_FILE_CATEGORY)
+    .forEach((row) => {
+      const key = getRowMonthKey(row);
+      if (!key) return;
+      const periodType = getPreFaturaRowPeriodType(row);
+      const groupKey = `${key}:${periodType}`;
+      if (!groups.has(groupKey)) {
+        const [year, month] = key.split("-");
+        groups.set(groupKey, {
+          id: `persisted-pre-fatura-${key}-${periodType}`,
+          fileName: `Pré-Fatura ${getMonthLabelFromKey(key)} ${getPeriodModeLabel(periodType)}`,
+          label: `${getMonthLabelFromKey(key)} · ${getPeriodModeLabel(periodType)}`,
+          source: "supabase",
+          importedAt: new Date().toISOString(),
+          storagePath: "",
+          fileCategory: PRE_FATURA_FILE_CATEGORY,
+          remoteRecord: {
+            id: `persisted-pre-fatura-${key}-${periodType}`,
+            file_name: `Pré-Fatura ${getMonthLabelFromKey(key)} ${getPeriodModeLabel(periodType)}`,
+            file_type: PRE_FATURA_FILE_CATEGORY,
+            module_key: DASHBOARD_MODULE_KEYS.preFatura,
+            period_type: periodType,
+            reference_month: month,
+            reference_year: year,
+            metadata: {
+              file_category: PRE_FATURA_FILE_CATEGORY,
+              semantic_file_type: PRE_FATURA_FILE_CATEGORY,
+              raw_file_deleted: true,
+              mes: month,
+              ano: year,
+              reference_month: month,
+              reference_year: year,
+              period_type: periodType,
+            },
+          },
+          rows: [],
+        });
+      }
+      groups.get(groupKey).rows.push(row);
+    });
+  return Array.from(groups.values())
+    .map(normalizeDatasetRecord)
+    .filter(Boolean)
+    .sort((a, b) => {
+      const pa = getDatasetPeriod(a);
+      const pb = getDatasetPeriod(b);
+      return pa.sort - pb.sort || getDatasetQuarterOrder(a) - getDatasetQuarterOrder(b);
+    });
 }
 
 async function fetchPreFaturaExportRows() {
@@ -12936,6 +13334,10 @@ function countScopedGoalMonths(rows) {
 }
 
 function getRowMonthKey(row) {
+  const month = getMonthNumberFromAny(row?.reference_month || row?.mes || row?.competencia || row?.arquivo_origem);
+  const year = normalizeReferenceYear(row?.reference_year || row?.ano || row?.competencia || row?.arquivo_origem);
+  if (month && year) return `${year}-${month}`;
+
   const rawDate = row?.data_normalizada || row?.data_sort || row?.data || "";
   if (!rawDate) return "";
   const parsed = row?.data_normalizada ? new Date(`${rawDate}T00:00:00Z`) : new Date(rawDate);
@@ -17167,20 +17569,41 @@ async function ensurePnrRowsLoaded(records = dashboardFileRecords) {
 }
 
 function applyDashboardScopeFromLoadedDatasets() {
-  if (!dashboardFileRecords.length || !Array.isArray(library.datasets) || !library.datasets.length) return false;
+  if (!Array.isArray(library.datasets) || !library.datasets.length) return false;
+  const preFaturaHistoricalDatasets = library.datasets
+    .filter((dataset) => dataset?.source !== "filtered" && (dataset.fileCategory || inferRowsFileCategory(dataset.rows)) === PRE_FATURA_FILE_CATEGORY && Array.isArray(dataset.rows) && dataset.rows.length);
+  const applyPersistedScopeFallback = () => {
+    const allPreFaturaRows = preFaturaHistoricalDatasets.flatMap((dataset) => dataset.rows);
+    if (!allPreFaturaRows.length) return false;
+    const monthOptions = getPreFaturaMonthOptionsFromRows(allPreFaturaRows);
+    const rows = filterPreFaturaRowsForActiveState(allPreFaturaRows, monthOptions);
+    if (!rows.length) return false;
+    const packageDatasets = library.datasets.filter((dataset) => dataset?.source !== "filtered" && dataset?.fileCategory === PACKAGE_MANAGEMENT_FILE_CATEGORY);
+    const pnrDatasets = library.datasets.filter((dataset) => dataset?.source !== "filtered" && dataset?.fileCategory === DEVIATION_PNR_FILE_CATEGORY);
+    replaceDashboardData(rows, {
+      selectedFiles: [],
+      selectedDatasets: preFaturaHistoricalDatasets,
+      allHistoricalDatasets: [...preFaturaHistoricalDatasets, ...packageDatasets, ...pnrDatasets],
+      selectedMonth: state.prefaturaMonths.length === 1 ? state.prefaturaMonths[0] : "all",
+      selectedPeriod: state.prefaturaPeriod || state.period,
+      fileCategory: PRE_FATURA_FILE_CATEGORY,
+    });
+    setDashboardVisualState("", { render: false });
+    return true;
+  };
   const categoryFiles = dashboardFileRecords
     .filter(isUsableDashboardFileRecord)
     .filter((record) => getFileRecordCategory(record) === PRE_FATURA_FILE_CATEGORY);
-  if (!categoryFiles.length) return false;
+  if (!categoryFiles.length) return applyPersistedScopeFallback();
   const selectedFiles = getFilesByMonthsAndPeriod(categoryFiles, getPrefaturaMonthSelectionValues(), state.prefaturaPeriod || state.period, PRE_FATURA_FILE_CATEGORY);
-  if (!selectedFiles.length) return false;
+  if (!selectedFiles.length) return applyPersistedScopeFallback();
   const datasetById = new Map(
     library.datasets
       .filter((dataset) => dataset?.source !== "filtered" && Array.isArray(dataset.rows) && dataset.rows.length)
       .map((dataset) => [dataset.id, dataset]),
   );
   const selectedDatasets = selectedFiles.map((file) => datasetById.get(file.id)).filter(Boolean);
-  if (selectedDatasets.length !== selectedFiles.length) return false;
+  if (selectedDatasets.length !== selectedFiles.length) return applyPersistedScopeFallback();
   const allHistoricalDatasets = categoryFiles.map((file) => datasetById.get(file.id)).filter(Boolean);
   const packageDatasets = library.datasets.filter((dataset) => dataset?.source !== "filtered" && dataset?.fileCategory === PACKAGE_MANAGEMENT_FILE_CATEGORY);
   const pnrDatasets = library.datasets.filter((dataset) => dataset?.source !== "filtered" && dataset?.fileCategory === DEVIATION_PNR_FILE_CATEGORY);
@@ -17258,11 +17681,19 @@ async function loadDashboardDataByFilters(options = {}) {
       if (persistedDataset?.rows?.length) {
         const packageDatasets = library.datasets.filter((dataset) => dataset?.source !== "filtered" && dataset?.fileCategory === PACKAGE_MANAGEMENT_FILE_CATEGORY);
         const pnrDatasets = library.datasets.filter((dataset) => dataset?.source !== "filtered" && dataset?.fileCategory === DEVIATION_PNR_FILE_CATEGORY);
-        replaceDashboardData(persistedDataset.rows, {
+        const historicalDatasets = buildPreFaturaHistoricalDatasetsFromRows(persistedDataset.rows);
+        const monthOptions = getPreFaturaMonthOptionsFromRows(persistedDataset.rows);
+        state.prefaturaMonths = normalizeMonthSelection(
+          Array.isArray(state.prefaturaMonths) && state.prefaturaMonths.length ? state.prefaturaMonths : state.monthFilter || "all",
+          monthOptions,
+        );
+        state.monthFilter = state.prefaturaMonths.length === monthOptions.length ? "all" : state.prefaturaMonths[0] || "all";
+        const scopedRows = filterPreFaturaRowsForActiveState(persistedDataset.rows, monthOptions);
+        replaceDashboardData(scopedRows, {
           selectedFiles: dashboardFileRecords.filter((record) => getFileRecordCategory(record) === PRE_FATURA_FILE_CATEGORY),
-          selectedDatasets: [persistedDataset],
-          allHistoricalDatasets: [persistedDataset, ...packageDatasets, ...pnrDatasets],
-          selectedMonth: "all",
+          selectedDatasets: historicalDatasets.length ? historicalDatasets : [persistedDataset],
+          allHistoricalDatasets: [...(historicalDatasets.length ? historicalDatasets : [persistedDataset]), ...packageDatasets, ...pnrDatasets],
+          selectedMonth: state.prefaturaMonths.length === 1 ? state.prefaturaMonths[0] : "all",
           selectedPeriod: state.prefaturaPeriod || state.period,
           fileCategory: PRE_FATURA_FILE_CATEGORY,
         });
@@ -17277,6 +17708,8 @@ async function loadDashboardDataByFilters(options = {}) {
         console.info("[PreFatura Load]", "fim via tabela persistida", {
           requestId,
           rows: persistedDataset.rows.length,
+          scopedRows: scopedRows.length,
+          historicalDatasets: historicalDatasets.length,
           ms: Math.round(performance.now() - startedAt),
         });
         return;
@@ -18323,6 +18756,11 @@ function replaceDashboardData(rows, context = {}) {
       rows: [],
     });
   }).filter(Boolean);
+  const fileDatasetIds = new Set(fileDatasets.map((dataset) => dataset.id));
+  const extraHistoricalDatasets = allHistoricalDatasets
+    .filter((dataset) => dataset && dataset.id && dataset.id !== scopeDataset.id && !fileDatasetIds.has(dataset.id))
+    .map(normalizeDatasetRecord)
+    .filter(Boolean);
 
   currentActiveFile = {
     id: scopeDataset.id,
@@ -18334,7 +18772,7 @@ function replaceDashboardData(rows, context = {}) {
   };
   library = {
     activeDatasetId: scopeDataset.id,
-    datasets: [scopeDataset, ...fileDatasets],
+    datasets: [scopeDataset, ...extraHistoricalDatasets, ...fileDatasets],
   };
   state.activeDatasetId = scopeDataset.id;
   state.fileName = label;
