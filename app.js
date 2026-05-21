@@ -4903,10 +4903,6 @@ function addPnrSummaryStatus(summary, status, value = 0, count = 1) {
     summary.valorFaturado += safeValue;
     return;
   }
-  if (state.activeDesvioCategory === DEVIATION_CATEGORY_MISSING_PACKAGES) {
-    el.deviationManagementView.innerHTML = renderMissingPackagesPage();
-    return;
-  }
   if (metricType === "anulado") {
     summary.anulado += safeCount;
     summary.valorAnulado += safeValue;
@@ -5314,16 +5310,24 @@ async function updatePnrRecordStatus(recordId, nextStatus, options = {}) {
     .eq("id", recordId)
     .select(getPnrStatusUpdateSelectColumns(true))
     .single());
-    if (error && /manual_status_override|status_updated_by|status_previous|status_current|status_updated_at|updated_at|PGRST204|schema cache|Could not find/i.test(`${error.code || ""} ${error.message || ""} ${error.details || ""}`)) {
+    if (error && /manual_status_override|status_updated_by|PGRST204|schema cache|Could not find/i.test(`${error.code || ""} ${error.message || ""} ${error.details || ""}`)) {
       const fallbackPayload = { ...payload };
       delete fallbackPayload.manual_status_override;
       delete fallbackPayload.status_updated_by;
-      delete fallbackPayload.status_previous;
-      delete fallbackPayload.status_current;
-      delete fallbackPayload.status_updated_at;
       ({ data, error } = await window.supabaseClient
         .from("desvios_pnr_records")
         .update(fallbackPayload)
+        .eq("id", recordId)
+        .select("id,file_id,status_normalizado,status_previous,status_current,status_updated_at")
+        .single());
+    }
+    if (error && /status_previous|status_current|status_updated_at|updated_at|PGRST204|schema cache|Could not find/i.test(`${error.code || ""} ${error.message || ""} ${error.details || ""}`)) {
+      const legacyPayload = {
+        status_normalizado: normalizedStatus,
+      };
+      ({ data, error } = await window.supabaseClient
+        .from("desvios_pnr_records")
+        .update(legacyPayload)
         .eq("id", recordId)
         .select(getPnrStatusUpdateSelectColumns(false))
         .single());
@@ -16180,9 +16184,15 @@ async function loadDashboardFilesFromSupabase(options = {}) {
     const mergeResults = await Promise.allSettled(
       mergeModules.map((moduleKey) => mergeProcessedDashboardFileRecords(dashboardFileRecords, moduleKey)),
     );
+    const mergedRecordsById = new Map(
+      dashboardFileRecords.map((record) => [record.id || `${getDashboardRecordModuleKey(record)}:${record.file_name}`, record]),
+    );
     mergeResults.forEach((result, index) => {
       if (result.status === "fulfilled") {
-        dashboardFileRecords = result.value;
+        (Array.isArray(result.value) ? result.value : []).forEach((record) => {
+          const key = record.id || `${getDashboardRecordModuleKey(record)}:${record.file_name}`;
+          if (key) mergedRecordsById.set(key, record);
+        });
       } else {
         console.warn("[Module Files] Falha ao mesclar metadados processados", {
           moduleKey: mergeModules[index],
@@ -16190,6 +16200,7 @@ async function loadDashboardFilesFromSupabase(options = {}) {
         });
       }
     });
+    dashboardFileRecords = Array.from(mergedRecordsById.values());
     if (requestId !== dashboardFilesLoadRequestId) {
       console.info("[Module Files]", "resposta antiga de arquivos ignorada", { requestId, latest: dashboardFilesLoadRequestId });
       return dashboardFileRecords;
@@ -19394,21 +19405,28 @@ async function applyAuthenticatedUser(user, options = {}) {
   debugAuth("[PROFILE] Perfil carregado:", currentProfile);
   debugAuth("[PROFILE] is_admin:", currentProfile?.is_admin);
 
-  await loadGlobalGoalSettings();
-
-  if (canEdit()) {
-    await loadUsers();
-    await loadAuditLogs();
-  } else {
-    knownUsers = [];
-    auditLogs = [];
-  }
+  const settingsPromise = loadGlobalGoalSettings().catch((settingsError) => {
+    console.error("[SETTINGS] Erro ao carregar metas globais:", settingsError);
+    globalGoalSettings = getDefaultGoalSettings();
+  });
 
   await loadDashboardFilesFromSupabase({
     loadActive: true,
     render: false,
     showLoading: options.showLoading === true || (!hasInitialLoadCompleted && !hasLoadedDashboardData()),
   });
+
+  await settingsPromise;
+  if (canEdit()) {
+    Promise.allSettled([loadUsers(), loadAuditLogs()]).then((results) => {
+      const failed = results.find((result) => result.status === "rejected");
+      if (failed) console.warn("[AUTH] Dados administrativos não bloquearam o painel.", failed.reason);
+      renderAccountPage();
+    });
+  } else {
+    knownUsers = [];
+    auditLogs = [];
+  }
   hasInitialLoadCompleted = true;
   updateAccessControls();
   updateDatasetMeta();
