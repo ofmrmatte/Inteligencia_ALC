@@ -5,6 +5,7 @@
   "description": "Painel de Inteligência Operacional.",
   "scripts": {
     "db:migrate:processed-records": "node scripts/apply-processed-records-migration.mjs",
+    "db:migrate:missing-packages": "node scripts/apply-missing-packages-migration.mjs",
     "fix:stuck-pnr-processing": "node scripts/fix-stuck-processing-files.mjs"
   },
   "dependencies": {
