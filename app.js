@@ -16388,6 +16388,10 @@ function mapProcessedPnrRecord(record, fileRecord) {
   const raw = record.raw_data || {};
   return normalizePnrStoredRow({
     ...raw,
+    id: record.id || raw.id,
+    recordId: record.id || raw.recordId || raw.record_id,
+    pnrRecordId: record.id || raw.pnrRecordId || raw.record_id,
+    fileId: record.file_id || raw.fileId || raw.file_id,
     file_category: DEVIATION_PNR_FILE_CATEGORY,
     arquivo_origem: raw.arquivo_origem || fileRecord.file_name,
     competencia: record.competencia || raw.competencia || fileRecord.metadata?.competencia || "",
@@ -16402,7 +16406,11 @@ function mapProcessedPnrRecord(record, fileRecord) {
     sourceFileName: record.source_file_name || raw.sourceFileName || raw.source_file_name || fileRecord.file_name,
     tipo: record.tipo || raw.tipo,
     statusOriginal: record.status_original || raw.statusOriginal,
-    statusNormalizado: record.status_normalizado || raw.statusNormalizado,
+    statusNormalizado: record.status_current || record.status_normalizado || raw.statusNormalizado,
+    statusPrevious: record.status_previous || raw.statusPrevious || raw.status_previous,
+    statusUpdatedAt: record.status_updated_at || raw.statusUpdatedAt || raw.status_updated_at,
+    statusUpdatedBy: record.status_updated_by || raw.statusUpdatedBy || raw.status_updated_by,
+    manualStatusOverride: record.manual_status_override === true || raw.manualStatusOverride === true || raw.manual_status_override === true,
     periodoFaturamento: record.periodo_faturamento || raw.periodoFaturamento,
     dataPedidoRevisao: record.data_pedido_revisao || raw.dataPedidoRevisao,
     pedidoRevisao: record.pedido_revisao || raw.pedidoRevisao,
