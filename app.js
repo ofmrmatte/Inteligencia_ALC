@@ -15975,9 +15975,33 @@ async function loadDashboardDataByFilters(options = {}) {
     const files = Array.isArray(options.files) ? options.files : await loadDashboardFilesFromSupabase({ loadActive: false, render: false, validateStorage: false, showLoading: false });
     await hydrateDashboardFileMetadata(files);
     dashboardFileRecords = files.filter(isUsableDashboardFileRecord).filter(isDashboardFileActive);
+    const persistedPreFaturaState = await checkModulePersistedData(DASHBOARD_MODULE_KEYS.preFatura, { reason: "prefatura-load" });
+    if (Number(persistedPreFaturaState.total || 0) > 0) {
+      const persistedDataset = await loadPersistedDatasetForModule(DASHBOARD_MODULE_KEYS.preFatura, PRE_FATURA_FILE_CATEGORY);
+      if (persistedDataset?.rows?.length) {
+        const packageDatasets = library.datasets.filter((dataset) => dataset?.source !== "filtered" && dataset?.fileCategory === PACKAGE_MANAGEMENT_FILE_CATEGORY);
+        const pnrDatasets = library.datasets.filter((dataset) => dataset?.source !== "filtered" && dataset?.fileCategory === DEVIATION_PNR_FILE_CATEGORY);
+        replaceDashboardData(persistedDataset.rows, {
+          selectedFiles: dashboardFileRecords.filter((record) => getFileRecordCategory(record) === PRE_FATURA_FILE_CATEGORY),
+          selectedDatasets: [persistedDataset],
+          allHistoricalDatasets: [persistedDataset, ...packageDatasets, ...pnrDatasets],
+          selectedMonth: "all",
+          selectedPeriod: state.prefaturaPeriod || state.period,
+          fileCategory: PRE_FATURA_FILE_CATEGORY,
+        });
+        setDashboardVisualState("", { render: false });
+        if (shouldRender) {
+          hydrateControls();
+          renderAll();
+        } else {
+          syncActiveDataset();
+          updateDatasetMeta();
+        }
+        return;
+      }
+    }
     if (!dashboardFileRecords.length) {
-      const baseState = await checkModulePersistedData(DASHBOARD_MODULE_KEYS.preFatura, { reason: "prefatura-load" });
-      const fallbackDataset = Number(baseState.total || 0) > 0
+      const fallbackDataset = Number(persistedPreFaturaState.total || 0) > 0
         ? await loadPersistedDatasetForModule(DASHBOARD_MODULE_KEYS.preFatura, PRE_FATURA_FILE_CATEGORY)
         : null;
       if (fallbackDataset?.rows?.length) {
@@ -15993,7 +16017,7 @@ async function loadDashboardDataByFilters(options = {}) {
         return;
       }
       dashboardFilesLoading = false;
-      setDashboardVisualState(baseState.status === MODULE_BASE_STATUS.error ? "supabase-error" : "", { render: false, error: baseState.error ? new Error(baseState.error) : undefined });
+      setDashboardVisualState(persistedPreFaturaState.status === MODULE_BASE_STATUS.error ? "supabase-error" : "", { render: false, error: persistedPreFaturaState.error ? new Error(persistedPreFaturaState.error) : undefined });
       clearDashboardData({ render: shouldRender, preserveRecords: !moduleIsConfirmedEmpty(DASHBOARD_MODULE_KEYS.preFatura) });
       return;
     }
