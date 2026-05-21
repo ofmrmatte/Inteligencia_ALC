@@ -376,6 +376,37 @@
   cursor: pointer;
 }
 
+.pnr-status-pill {
+  align-items: center;
+  background: transparent;
+  border: 0;
+  color: inherit;
+  cursor: pointer;
+  display: inline-flex;
+  font: inherit;
+  font-size: 0.78rem;
+  font-weight: 750;
+  gap: 0.32rem;
+  line-height: 1;
+  min-width: 0;
+  padding: 0;
+}
+
+.pnr-status-pill span {
+  display: block;
+  max-width: 132px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.pnr-status-pill svg {
+  flex: 0 0 auto;
+  height: 0.78rem;
+  opacity: 0.74;
+  width: 0.78rem;
+}
+
 .pnr-status-edit svg {
   flex: 0 0 auto;
   width: 0.82rem;
@@ -399,6 +430,49 @@
 .pnr-status-edit.is-pending svg {
   opacity: 0.92;
   color: var(--accent);
+}
+
+.pnr-status-dropdown {
+  background: color-mix(in srgb, var(--surface) 98%, transparent);
+  border: 1px solid color-mix(in srgb, var(--line) 82%, transparent);
+  border-radius: 14px;
+  box-shadow: 0 18px 48px rgba(15, 23, 42, 0.18);
+  color: var(--text);
+  display: grid;
+  gap: 0.16rem;
+  max-width: min(320px, calc(100vw - 24px));
+  padding: 0.35rem;
+}
+
+.pnr-status-dropdown__item {
+  align-items: center;
+  background: transparent;
+  border: 0;
+  border-radius: 10px;
+  color: var(--text);
+  cursor: pointer;
+  display: flex;
+  font-size: 0.82rem;
+  font-weight: 700;
+  gap: 0.65rem;
+  justify-content: space-between;
+  min-height: 2.25rem;
+  padding: 0.52rem 0.68rem;
+  text-align: left;
+  width: 100%;
+}
+
+.pnr-status-dropdown__item:hover,
+.pnr-status-dropdown__item.is-selected {
+  background: color-mix(in srgb, var(--accent-soft) 62%, transparent);
+  color: var(--text);
+}
+
+.pnr-status-dropdown__item svg {
+  color: var(--accent);
+  flex: 0 0 auto;
+  height: 0.9rem;
+  width: 0.9rem;
 }
 
 .pnr-status-panel {
@@ -9534,10 +9608,8 @@ body:not([data-theme="light"]) .view-toolbar.is-pnr-view .pnr-toolbar-filters {
   min-height: var(--dashboard-filter-height) !important;
   border: var(--dashboard-filter-border) !important;
   border-radius: var(--dashboard-filter-radius) !important;
-  background:
-    linear-gradient(180deg, color-mix(in srgb, var(--surface) 90%, transparent), color-mix(in srgb, var(--surface-soft) 86%, transparent)),
-    var(--surface) !important;
-  box-shadow: var(--dashboard-filter-shadow) !important;
+  background: color-mix(in srgb, var(--surface) 92%, transparent) !important;
+  box-shadow: none !important;
   color: var(--text) !important;
   padding: 0 var(--dashboard-filter-padding-x) !important;
 }
@@ -9568,10 +9640,8 @@ body:not([data-theme="light"]) .view-toolbar.is-pnr-view .pnr-toolbar-filters {
   padding: 0 !important;
   border: var(--dashboard-filter-border) !important;
   border-radius: 999px !important;
-  background:
-    linear-gradient(180deg, color-mix(in srgb, var(--surface) 90%, transparent), color-mix(in srgb, var(--surface-soft) 86%, transparent)),
-    var(--surface) !important;
-  box-shadow: var(--dashboard-filter-shadow) !important;
+  background: color-mix(in srgb, var(--surface) 92%, transparent) !important;
+  box-shadow: none !important;
   color: var(--muted) !important;
 }
 
@@ -9587,9 +9657,7 @@ body:not([data-theme="light"]) .view-toolbar.is-pnr-view .pnr-toolbar-filters {
 .pnr-table-actions .dashboard-filter-select:hover,
 .pnr-table-actions .dashboard-filter-select:focus-within {
   border-color: color-mix(in srgb, var(--accent) 36%, var(--line)) !important;
-  background:
-    linear-gradient(180deg, color-mix(in srgb, var(--surface) 96%, transparent), color-mix(in srgb, var(--surface-soft) 92%, transparent)),
-    var(--surface) !important;
+  background: color-mix(in srgb, var(--surface) 96%, transparent) !important;
   color: var(--text) !important;
 }
 
@@ -9622,17 +9690,17 @@ body:not([data-theme="light"]) .view-toolbar.is-pnr-view .pnr-toolbar-filters {
 
 .pnr-table-panel .pagination {
   align-items: center;
-  border: 1px solid var(--line);
+  border: 0;
   border-radius: 999px;
   display: inline-flex;
   gap: 0.45rem;
-  padding: 0.25rem;
-  background: color-mix(in srgb, var(--surface-soft) 76%, transparent);
+  padding: 0;
+  background: transparent;
 }
 
 .pnr-table-panel .pagination #pnr-page-indicator {
   align-items: center;
-  background: color-mix(in srgb, var(--surface) 82%, transparent);
+  background: transparent;
   border-radius: 999px;
   color: var(--text);
   display: inline-flex;

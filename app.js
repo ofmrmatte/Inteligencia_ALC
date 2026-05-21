@@ -304,6 +304,7 @@ let donutTooltipHideTimer = null;
 let isPreFaturaCategoryMenuOpen = false;
 let isDeviationCategoryMenuOpen = false;
 let activePnrFilterMenu = "";
+let activePnrStatusDropdownRecordId = "";
 let isPnrSearchExpanded = false;
 let activeDropdownPortalKind = "";
 let chartViewportObserver = null;
@@ -1020,6 +1021,21 @@ function bindEvents() {
     event.preventDefault();
     await savePendingPnrStatusEdits(button);
   });
+  document.addEventListener("click", (event) => {
+    const toggle = event.target.closest("[data-pnr-status-toggle]");
+    if (toggle) {
+      event.preventDefault();
+      openPnrStatusDropdown(toggle);
+      return;
+    }
+    const option = event.target.closest("[data-pnr-status-option]");
+    if (option) {
+      event.preventDefault();
+      applyPnrStatusOption(option);
+      return;
+    }
+    if (!event.target.closest("[data-pnr-status-dropdown]")) closePnrStatusDropdown();
+  });
   document.addEventListener("input", (event) => {
     const input = event.target.closest("[data-pnr-query]");
     if (!input) return;
@@ -1061,7 +1077,7 @@ function bindEvents() {
   document.addEventListener("change", (event) => {
     const statusEdit = event.target.closest("[data-pnr-status-edit]");
     if (statusEdit) {
-      void handlePnrStatusEditChange(statusEdit);
+      handlePnrStatusEditChange(statusEdit);
       return;
     }
     const pnrOption = event.target.closest("[data-pnr-filter-option]");
@@ -1237,6 +1253,11 @@ function bindEvents() {
 
   document.addEventListener("keydown", (event) => {
     if (event.key !== "Escape") return;
+    if (activePnrStatusDropdownRecordId) {
+      closePnrStatusDropdown();
+      event.preventDefault();
+      return;
+    }
     if (activeDropdownPortalKind) {
       const closingKind = activeDropdownPortalKind;
       if (closingKind === "prefatura") closePreFaturaCategoryMenu({ render: true });
@@ -1458,6 +1479,14 @@ function closePnrFilterMenus() {
     button.setAttribute("aria-expanded", "false");
   });
   if (String(activeDropdownPortalKind || "").startsWith("pnr:")) activeDropdownPortalKind = "";
+}
+
+function closePnrStatusDropdown() {
+  activePnrStatusDropdownRecordId = "";
+  document.querySelectorAll("[data-pnr-status-dropdown]").forEach((menu) => menu.remove());
+  document.querySelectorAll("[data-pnr-status-toggle]").forEach((button) => {
+    button.setAttribute("aria-expanded", "false");
+  });
 }
 
 function togglePnrFilterMenu(name) {
@@ -4507,21 +4536,72 @@ function renderPnrStatusCell(row = {}) {
   const pendingEdit = getPendingPnrStatusEdit(recordId);
   const isSaving = pnrStatusUpdateState.savingIds.has(String(recordId));
   const editableCurrentStatus = getPnrEditableStatusValue(pendingEdit?.nextStatus || currentStatus) || pendingEdit?.nextStatus || currentStatus;
-  const options = PNR_MANUAL_STATUS_OPTIONS.map((status) => `<option value="${escapeAttribute(status)}"${status === editableCurrentStatus ? " selected" : ""}>${escapeHtml(status)}</option>`).join("");
-  const extraOption = currentStatus && !PNR_MANUAL_STATUS_OPTIONS.includes(editableCurrentStatus)
-    ? `<option value="${escapeAttribute(currentStatus)}" selected disabled>${escapeHtml(currentStatus)}</option>`
-    : "";
   return `
-    <label class="pnr-status-edit${isSaving ? " is-saving" : ""}${pendingEdit ? " is-pending" : ""}" title="${pendingEdit ? "Alteração pendente. Clique em salvar." : "Editar status"}">
-      <select data-pnr-status-edit data-record-id="${escapeAttribute(recordId)}" data-file-id="${escapeAttribute(row.fileId || "")}" data-current-status="${escapeAttribute(row.statusNormalizado || "")}" ${isSaving ? "disabled" : ""}>
-        ${extraOption}${options}
-      </select>
+    <span class="pnr-status-edit${isSaving ? " is-saving" : ""}${pendingEdit ? " is-pending" : ""}" title="${pendingEdit ? "Alteração pendente. Clique em salvar." : "Editar status"}">
+      <button type="button" class="pnr-status-pill" data-pnr-status-toggle data-record-id="${escapeAttribute(recordId)}" data-file-id="${escapeAttribute(row.fileId || "")}" data-current-status="${escapeAttribute(row.statusNormalizado || "")}" data-value="${escapeAttribute(editableCurrentStatus)}" aria-haspopup="menu" aria-expanded="${activePnrStatusDropdownRecordId === String(recordId) ? "true" : "false"}" ${isSaving ? "disabled" : ""}>
+        <span>${escapeHtml(editableCurrentStatus || "—")}</span>
+        <svg viewBox="0 0 20 20" aria-hidden="true"><path d="m5 7 5 5 5-5" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8"></path></svg>
+      </button>
       <svg viewBox="0 0 24 24" aria-hidden="true">
         <path d="M12 20h9" fill="none" stroke="currentColor" stroke-linecap="round" stroke-width="2"></path>
         <path d="m16.5 3.5 4 4L8 20H4v-4L16.5 3.5Z" fill="none" stroke="currentColor" stroke-linejoin="round" stroke-width="2"></path>
       </svg>
-    </label>
+    </span>
   `;
+}
+
+function openPnrStatusDropdown(button) {
+  if (!button) return;
+  const recordId = button.dataset.recordId || "";
+  if (!recordId) return;
+  if (activePnrStatusDropdownRecordId === String(recordId) && document.querySelector("[data-pnr-status-dropdown]")) {
+    closePnrStatusDropdown();
+    return;
+  }
+  closePnrStatusDropdown();
+  activePnrStatusDropdownRecordId = String(recordId);
+  button.setAttribute("aria-expanded", "true");
+  const currentValue = button.dataset.value || button.dataset.currentStatus || "";
+  const rect = button.getBoundingClientRect();
+  const menu = document.createElement("div");
+  menu.className = "pnr-status-dropdown";
+  menu.dataset.pnrStatusDropdown = recordId;
+  menu.dataset.dropdownPortalMenu = "true";
+  menu.setAttribute("role", "menu");
+  const menuWidth = Math.max(220, rect.width);
+  const left = Math.min(Math.max(12, rect.left), window.innerWidth - menuWidth - 12);
+  menu.style.position = "fixed";
+  menu.style.minWidth = `${menuWidth}px`;
+  menu.style.left = `${left}px`;
+  menu.style.top = `${rect.bottom + 8}px`;
+  menu.style.zIndex = "9999";
+  menu.innerHTML = PNR_MANUAL_STATUS_OPTIONS.map((status) => `
+    <button type="button" class="pnr-status-dropdown__item${status === currentValue ? " is-selected" : ""}" data-pnr-status-option data-record-id="${escapeAttribute(recordId)}" data-file-id="${escapeAttribute(button.dataset.fileId || "")}" data-current-status="${escapeAttribute(button.dataset.currentStatus || "")}" data-value="${escapeAttribute(status)}" role="menuitem">
+      <span>${escapeHtml(status)}</span>
+      ${status === currentValue ? '<svg viewBox="0 0 20 20" aria-hidden="true"><path d="m4.5 10 3.5 3.5 7.5-8" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2"></path></svg>' : ""}
+    </button>
+  `).join("");
+  document.body.appendChild(menu);
+}
+
+function applyPnrStatusOption(button) {
+  const recordId = button?.dataset?.recordId || "";
+  const previousStatus = button?.dataset?.currentStatus || "";
+  const nextStatus = button?.dataset?.value || "";
+  const fileId = button?.dataset?.fileId || "";
+  if (!recordId || !nextStatus) return;
+  if (previousStatus === nextStatus) pnrStatusUpdateState.pending.delete(String(recordId));
+  else {
+    pnrStatusUpdateState.pending.set(String(recordId), {
+      recordId,
+      previousStatus,
+      nextStatus,
+      fileId,
+    });
+  }
+  closePnrStatusDropdown();
+  console.info("[PNR Status Update]", { action: "pending", recordId, previousStatus, nextStatus });
+  renderPnrTableOnly();
 }
 
 function updatePnrRowsStatusLocally(recordId, nextStatus, payload = {}) {
@@ -15739,12 +15819,69 @@ function normalizePnrRemoteOptionList(values) {
     .filter(Boolean);
 }
 
+function getPnrRowUniqueKey(row = {}) {
+  return String(
+    row.pnrRecordId ||
+    row.recordId ||
+    row.id ||
+    row.dedupeKey ||
+    row.dedupe_key ||
+    [row.idEnvio || row.id_envio, row.idReclamacao || row.id_reclamacao, row.produtos, row.competencia, row.quinzena, row.estacaoOrigem || row.estacao_origem].filter(Boolean).join("|"),
+  );
+}
+
+function dedupePnrRowsForRender(rows = [], context = "table") {
+  const seen = new Set();
+  const duplicateKeys = [];
+  const deduped = [];
+  (Array.isArray(rows) ? rows : []).forEach((row) => {
+    const key = getPnrRowUniqueKey(row);
+    if (!key) {
+      deduped.push(row);
+      return;
+    }
+    if (seen.has(key)) {
+      duplicateKeys.push(key);
+      return;
+    }
+    seen.add(key);
+    deduped.push(row);
+  });
+  if (duplicateKeys.length) {
+    console.warn("[PNR Table Dedup]", {
+      context,
+      received: Array.isArray(rows) ? rows.length : 0,
+      deduped: deduped.length,
+      duplicateCount: duplicateKeys.length,
+      duplicateKeys: duplicateKeys.slice(0, 20),
+    });
+  } else {
+    console.info("[PNR Table Dedup]", {
+      context,
+      received: Array.isArray(rows) ? rows.length : 0,
+      deduped: deduped.length,
+      duplicateCount: 0,
+    });
+  }
+  return deduped;
+}
+
 function applyPnrRemoteTable(payload) {
   pnrRemoteState.source = "remote";
-  pnrRemoteState.rows = (Array.isArray(payload?.rows) ? payload.rows : [])
+  const receivedRows = (Array.isArray(payload?.rows) ? payload.rows : [])
     .map((record) => mapProcessedPnrRecord(record, { file_name: record?.source_file_name || "" }))
     .filter(Boolean);
+  pnrRemoteState.rows = dedupePnrRowsForRender(receivedRows, "remote-table");
   pnrRemoteState.total = Number(payload?.total || pnrRemoteState.summary?.count || 0);
+  if (receivedRows.length !== pnrRemoteState.rows.length && pnrRemoteState.total <= receivedRows.length) {
+    pnrRemoteState.total = pnrRemoteState.rows.length;
+  }
+  console.info("[PNR Table Render]", {
+    received: receivedRows.length,
+    rendered: pnrRemoteState.rows.length,
+    total: pnrRemoteState.total,
+    mode: "replace",
+  });
   pnrRemoteState.lastProcessedAt = payload?.cachedAt || payload?.processedAt || pnrRemoteState.lastProcessedAt || new Date().toISOString();
 }
 
@@ -15844,6 +15981,11 @@ async function refreshPnrRemoteDashboard(options = {}) {
   renderPnrRemoteLoadingOnly();
   try {
     if (shouldLoadSummary) {
+      try {
+        await refreshPnrMetricsSummaryForFiles([]);
+      } catch (refreshError) {
+        console.warn("[PNR Table Dedup] Não foi possível reconstruir agregados antes do resumo.", refreshError);
+      }
       const summaryPayload = buildPnrSummaryPayload();
       window.dashboardCacheService?.log?.(moduleKey, "origem dos dados: Supabase RPC resumo", { rpc: PNR_SUMMARY_RPC, payload: summaryPayload });
       const start = performance.now();
