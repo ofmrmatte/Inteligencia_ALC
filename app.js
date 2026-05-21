@@ -29,12 +29,14 @@ const DASHBOARD_MODULE_KEYS = {
   evolucao: "evolucao-mensal",
   pacotes: "gestao-pacotes",
   desviosPnr: "gestao-desvios-pnr",
+  pacotesFaltantes: "pacotes-faltantes",
 };
 const DASHBOARD_MODULE_LABELS = {
   [DASHBOARD_MODULE_KEYS.preFatura]: "Pré-Fatura",
   [DASHBOARD_MODULE_KEYS.evolucao]: "Evolução Mensal",
   [DASHBOARD_MODULE_KEYS.pacotes]: "Gestão de Pacotes",
   [DASHBOARD_MODULE_KEYS.desviosPnr]: "Gestão de Desvios / PNRs",
+  [DASHBOARD_MODULE_KEYS.pacotesFaltantes]: "Pacotes Faltantes",
 };
 const DASHBOARD_EMPTY_STATE_COPY = {
   [DASHBOARD_MODULE_KEYS.preFatura]: {
@@ -52,6 +54,10 @@ const DASHBOARD_EMPTY_STATE_COPY = {
   [DASHBOARD_MODULE_KEYS.evolucao]: {
     title: "Sem dados disponíveis para evolução.",
     description: "Importe as bases necessárias para gerar os indicadores.",
+  },
+  [DASHBOARD_MODULE_KEYS.pacotesFaltantes]: {
+    title: "Pacotes Faltantes ainda não importados.",
+    description: "Cole o fechamento do dispatcher para alimentar esta categoria.",
   },
 };
 const DEVIATION_CATEGORIES = [
@@ -263,11 +269,14 @@ let dashboardFilesLoading = false;
 let dashboardVisualState = "loading-session";
 let hasInitialLoadCompleted = false;
 let isLoadingDashboardData = false;
+let preFaturaLoadRequestId = 0;
+let dashboardFilesLoadRequestId = 0;
 const moduleLoadingState = {
   [DASHBOARD_MODULE_KEYS.preFatura]: false,
   [DASHBOARD_MODULE_KEYS.evolucao]: false,
   [DASHBOARD_MODULE_KEYS.pacotes]: false,
   [DASHBOARD_MODULE_KEYS.desviosPnr]: false,
+  [DASHBOARD_MODULE_KEYS.pacotesFaltantes]: false,
 };
 const MODULE_BASE_STATUS = {
   idle: "idle",
@@ -282,6 +291,7 @@ const moduleBaseState = {
   [DASHBOARD_MODULE_KEYS.evolucao]: createModuleBaseState(),
   [DASHBOARD_MODULE_KEYS.pacotes]: createModuleBaseState(),
   [DASHBOARD_MODULE_KEYS.desviosPnr]: createModuleBaseState(),
+  [DASHBOARD_MODULE_KEYS.pacotesFaltantes]: createModuleBaseState(),
 };
 let dashboardLastError = null;
 const dashboardImportState = {
@@ -1340,6 +1350,11 @@ function bindEvents() {
       if (applyDashboardScopeFromLoadedDatasets()) {
         hydrateControls();
         renderAll();
+      } else if (getCurrentFileCategory() === PRE_FATURA_FILE_CATEGORY) {
+        void loadDashboardDataByFilters({ force: true, silent: true, showLoading: true }).finally(() => {
+          hydrateControls();
+          renderAll();
+        });
       }
       return;
     }
@@ -6529,7 +6544,11 @@ function hasLoadedDashboardData() {
 function getDashboardModuleKeyForSheet(sheet = state.sheet) {
   if (sheet === PACKAGE_MANAGEMENT_VIEW) return DASHBOARD_MODULE_KEYS.pacotes;
   if (sheet === MONTHLY_BASE_VIEW || (sheet === PRE_FATURA_VIEW && state.preFaturaView === PREFATURA_VIEW_EVOLUTION)) return DASHBOARD_MODULE_KEYS.evolucao;
-  if (sheet === DEVIATION_MANAGEMENT_VIEW) return DASHBOARD_MODULE_KEYS.desviosPnr;
+  if (sheet === DEVIATION_MANAGEMENT_VIEW) {
+    return state.activeDesvioCategory === DEVIATION_CATEGORY_MISSING_PACKAGES
+      ? DASHBOARD_MODULE_KEYS.pacotesFaltantes
+      : DASHBOARD_MODULE_KEYS.desviosPnr;
+  }
   return DASHBOARD_MODULE_KEYS.preFatura;
 }
 
@@ -6554,6 +6573,7 @@ function createModuleBaseState(patch = {}) {
 
 function getModulePersistedTableName(moduleKey) {
   if (moduleKey === DASHBOARD_MODULE_KEYS.desviosPnr) return "desvios_pnr_records";
+  if (moduleKey === DASHBOARD_MODULE_KEYS.pacotesFaltantes) return "gestao_desvios_pacotes_faltantes";
   if (moduleKey === DASHBOARD_MODULE_KEYS.pacotes) return "gestao_pacotes_records";
   if (moduleKey === DASHBOARD_MODULE_KEYS.preFatura) return "pre_fatura_records";
   return "";
@@ -6561,6 +6581,7 @@ function getModulePersistedTableName(moduleKey) {
 
 function getModuleBaseLogPrefix(moduleKey) {
   if (moduleKey === DASHBOARD_MODULE_KEYS.desviosPnr) return "[PNR Base Check]";
+  if (moduleKey === DASHBOARD_MODULE_KEYS.pacotesFaltantes) return "[Pacotes Faltantes Base Check]";
   if (moduleKey === DASHBOARD_MODULE_KEYS.preFatura) return "[PreFatura Base Check]";
   if (moduleKey === DASHBOARD_MODULE_KEYS.pacotes) return "[GestaoPacotes Base Check]";
   return "[Module Base Check]";
@@ -6700,6 +6721,16 @@ async function countEvolutionPersistedRows() {
   throw rejected[0]?.reason || new Error("Não foi possível validar dados persistidos da evolução mensal.");
 }
 
+function getAllPersistedModuleKeys() {
+  return [
+    DASHBOARD_MODULE_KEYS.preFatura,
+    DASHBOARD_MODULE_KEYS.pacotes,
+    DASHBOARD_MODULE_KEYS.desviosPnr,
+    DASHBOARD_MODULE_KEYS.evolucao,
+    DASHBOARD_MODULE_KEYS.pacotesFaltantes,
+  ];
+}
+
 async function checkModulePersistedData(moduleKey = getDashboardModuleKeyForSheet(), options = {}) {
   if (!currentUser || !window.supabaseClient) {
     return setModuleBaseState(moduleKey, {
@@ -6769,12 +6800,7 @@ async function checkModulePersistedData(moduleKey = getDashboardModuleKeyForShee
 }
 
 async function checkAllModulePersistedBases(options = {}) {
-  const keys = [
-    DASHBOARD_MODULE_KEYS.preFatura,
-    DASHBOARD_MODULE_KEYS.pacotes,
-    DASHBOARD_MODULE_KEYS.desviosPnr,
-    DASHBOARD_MODULE_KEYS.evolucao,
-  ];
+  const keys = getAllPersistedModuleKeys();
   const loadPrefix = options.reason === "initial-load" ? "[Initial Load]" : "[Reload Load]";
   console.info(loadPrefix, "início da validação de bases persistidas", { reason: options.reason || "reload" });
   console.info("[Dashboard Reload State] início da validação de bases persistidas", { reason: options.reason || "reload" });
@@ -6785,6 +6811,29 @@ async function checkAllModulePersistedBases(options = {}) {
     }
   });
   return moduleBaseState;
+}
+
+async function checkActiveModulePersistedBase(options = {}) {
+  const activeModuleKey = options.moduleKey || getDashboardModuleKeyForSheet();
+  const reason = options.reason || "active-module-load";
+  console.info("[Module Isolation]", "validação independente da base ativa", {
+    activeModuleKey,
+    reason,
+  });
+  const activeResult = await checkModulePersistedData(activeModuleKey, { reason });
+  const remainingKeys = getAllPersistedModuleKeys().filter((key) => key !== activeModuleKey);
+  void Promise.allSettled(remainingKeys.map((key) => checkModulePersistedData(key, { reason: `${reason}:background` })))
+    .then((results) => {
+      results.forEach((result, index) => {
+        if (result.status === "rejected") {
+          console.error("[Module Isolation] Falha na validação em segundo plano", {
+            module: remainingKeys[index],
+            error: result.reason,
+          });
+        }
+      });
+    });
+  return activeResult;
 }
 
 
@@ -14774,6 +14823,49 @@ function getDashboardModuleKeyForFileCategory(fileCategory) {
   return DASHBOARD_MODULE_KEYS.preFatura;
 }
 
+function normalizeDashboardModuleKey(value = "") {
+  const key = String(value || "").trim();
+  if (!key) return "";
+  if ([DASHBOARD_MODULE_KEYS.desviosPnr, "desvios_pnr"].includes(key)) return DASHBOARD_MODULE_KEYS.desviosPnr;
+  if ([DASHBOARD_MODULE_KEYS.pacotes, "gestao_pacotes"].includes(key)) return DASHBOARD_MODULE_KEYS.pacotes;
+  if ([DASHBOARD_MODULE_KEYS.preFatura, "pre_fatura"].includes(key)) return DASHBOARD_MODULE_KEYS.preFatura;
+  if ([DASHBOARD_MODULE_KEYS.evolucao, "evolucao_mensal"].includes(key)) return DASHBOARD_MODULE_KEYS.evolucao;
+  if ([DASHBOARD_MODULE_KEYS.pacotesFaltantes, "pacotes_faltantes", "gestao_desvios_pacotes_faltantes"].includes(key)) return DASHBOARD_MODULE_KEYS.pacotesFaltantes;
+  return key;
+}
+
+function getDashboardRecordModuleKey(record = {}) {
+  const metadata = record.metadata || {};
+  const explicitModuleKey = normalizeDashboardModuleKey(record.module_key || metadata.module_key || metadata.dashboard_module_key || "");
+  if (explicitModuleKey) return explicitModuleKey;
+  return getDashboardModuleKeyForFileCategory(getFileRecordCategory(record));
+}
+
+function filterDashboardRecordsByModule(records = [], moduleKey = "") {
+  const normalizedModuleKey = normalizeDashboardModuleKey(moduleKey);
+  if (!normalizedModuleKey) return Array.isArray(records) ? records : [];
+  const filtered = (Array.isArray(records) ? records : []).filter((record) => getDashboardRecordModuleKey(record) === normalizedModuleKey);
+  const removed = (Array.isArray(records) ? records.length : 0) - filtered.length;
+  console.info("[Module Files]", {
+    moduleKey: normalizedModuleKey,
+    received: Array.isArray(records) ? records.length : 0,
+    returned: filtered.length,
+    removedByIsolation: removed,
+    moduleKeys: filtered.map((record) => getDashboardRecordModuleKey(record)).slice(0, 20),
+  });
+  return filtered;
+}
+
+function getActiveDashboardModuleKeysForFileLoad(options = {}) {
+  if (Array.isArray(options.moduleKeys) && options.moduleKeys.length) {
+    return [...new Set(options.moduleKeys.map(normalizeDashboardModuleKey).filter(Boolean))];
+  }
+  const activeModuleKey = normalizeDashboardModuleKey(options.moduleKey || getDashboardModuleKeyForSheet());
+  if (activeModuleKey === DASHBOARD_MODULE_KEYS.evolucao) return [DASHBOARD_MODULE_KEYS.preFatura, DASHBOARD_MODULE_KEYS.pacotes, DASHBOARD_MODULE_KEYS.desviosPnr];
+  if (activeModuleKey === DASHBOARD_MODULE_KEYS.pacotesFaltantes) return [DASHBOARD_MODULE_KEYS.pacotesFaltantes];
+  return [activeModuleKey].filter(Boolean);
+}
+
 async function findProcessedDashboardFile(moduleKey, fileHash) {
   if (!window.supabaseClient || !moduleKey || !fileHash) return null;
   const requestedRole = moduleKey === DASHBOARD_MODULE_KEYS.desviosPnr ? getPnrFileRole(dashboardImportState.fileName || "") : "";
@@ -15088,14 +15180,20 @@ async function refreshPnrDashboardAfterImport(fileRecord, metadata = {}) {
     if (totalPersisted <= 0) {
       throw new Error("A importação informou sucesso, mas desvios_pnr_records continua sem registros.");
     }
-    const files = await loadDashboardFilesFromSupabase({ loadActive: false, render: false, validateStorage: false, showLoading: false });
+    const files = await loadDashboardFilesFromSupabase({
+      loadActive: false,
+      render: false,
+      validateStorage: false,
+      showLoading: false,
+      moduleKey,
+    });
     const pnrFiles = getPnrFilesForView(files.length ? files : dashboardFileRecords);
     console.info("[PNR Files Refresh]", {
       files: pnrFiles.length,
       fileNames: pnrFiles.slice(0, 8).map((record) => record.file_name),
       rawFileDeleted: pnrFiles.filter((record) => record.metadata?.raw_file_deleted === true).length,
     });
-    await loadPnrRowsForView(files.length ? files : dashboardFileRecords, new Map());
+    await loadPnrRowsForView(pnrFiles, new Map());
     window.clearTimeout(pnrRemoteDebounceTimer);
     await refreshPnrRemoteDashboard({ force: true, reason: "upload" });
     const rpcTotal = Number(pnrRemoteState.total || 0);
@@ -15196,13 +15294,19 @@ async function refreshDashboardModuleAfterImport(fileRecord, metadata = {}) {
     if (totalPersisted <= 0) {
       throw new Error(`A importação informou sucesso, mas a tabela persistida do módulo ${moduleKey} continua sem registros.`);
     }
-    const files = await loadDashboardFilesFromSupabase({ loadActive: false, render: false, validateStorage: false, showLoading: false });
-    const activeRecords = files.length ? files : dashboardFileRecords;
+    const files = await loadDashboardFilesFromSupabase({
+      loadActive: false,
+      render: false,
+      validateStorage: false,
+      showLoading: false,
+      moduleKey,
+    });
+    const activeRecords = filterDashboardRecordsByModule(files.length ? files : dashboardFileRecords, moduleKey);
     if (moduleKey === DASHBOARD_MODULE_KEYS.preFatura) {
       const dataset = await loadPersistedDatasetForModule(DASHBOARD_MODULE_KEYS.preFatura, PRE_FATURA_FILE_CATEGORY);
       if (!dataset?.rows?.length) throw new Error("A base Pré-Fatura tem registros persistidos, mas não retornou linhas para renderização.");
       replaceDashboardData(dataset.rows, {
-        selectedFiles: activeRecords.filter((record) => getFileRecordCategory(record) === PRE_FATURA_FILE_CATEGORY),
+        selectedFiles: activeRecords,
         selectedDatasets: [dataset],
         allHistoricalDatasets: [dataset],
         selectedMonth: "all",
@@ -16027,6 +16131,9 @@ function rebuildPnrRowsFromLibrary() {
 
 async function loadDashboardFilesFromSupabase(options = {}) {
   const { loadActive = true, render = true, validateStorage = false, showLoading = null } = options;
+  const requestId = ++dashboardFilesLoadRequestId;
+  const activeModuleKey = normalizeDashboardModuleKey(options.moduleKey || getDashboardModuleKeyForSheet());
+  const modulesToMerge = getActiveDashboardModuleKeysForFileLoad(options);
   if (!window.supabaseClient || !currentUser) {
     dashboardFileRecords = [];
     clearDashboardData({ render: false, preserveRecords: false });
@@ -16039,6 +16146,13 @@ async function loadDashboardFilesFromSupabase(options = {}) {
   if (didSetLoadingState) setDashboardVisualState("loading-files");
   updateDatasetMeta();
   try {
+    console.info("[Module Files]", "início da carga de arquivos", {
+      requestId,
+      activeModuleKey,
+      modulesToMerge,
+      loadActive,
+      validateStorage,
+    });
     const { data, error } = await withTimeout(
       window.supabaseClient
         .from("dashboard_files")
@@ -16061,16 +16175,34 @@ async function loadDashboardFilesFromSupabase(options = {}) {
     dashboardFileRecords = (Array.isArray(data) ? data : [])
       .filter(isUsableDashboardFileRecord)
       .filter(isDashboardFileActive);
-    dashboardFileRecords = await mergeProcessedDashboardFileRecords(dashboardFileRecords, DASHBOARD_MODULE_KEYS.preFatura);
-    dashboardFileRecords = await mergeProcessedDashboardFileRecords(dashboardFileRecords, DASHBOARD_MODULE_KEYS.pacotes);
-    dashboardFileRecords = await mergeProcessedDashboardFileRecords(dashboardFileRecords, DASHBOARD_MODULE_KEYS.desviosPnr);
+    const mergeModules = modulesToMerge
+      .filter((moduleKey) => moduleKey !== DASHBOARD_MODULE_KEYS.evolucao && moduleKey !== DASHBOARD_MODULE_KEYS.pacotesFaltantes);
+    const mergeResults = await Promise.allSettled(
+      mergeModules.map((moduleKey) => mergeProcessedDashboardFileRecords(dashboardFileRecords, moduleKey)),
+    );
+    mergeResults.forEach((result, index) => {
+      if (result.status === "fulfilled") {
+        dashboardFileRecords = result.value;
+      } else {
+        console.warn("[Module Files] Falha ao mesclar metadados processados", {
+          moduleKey: mergeModules[index],
+          error: result.reason,
+        });
+      }
+    });
+    if (requestId !== dashboardFilesLoadRequestId) {
+      console.info("[Module Files]", "resposta antiga de arquivos ignorada", { requestId, latest: dashboardFilesLoadRequestId });
+      return dashboardFileRecords;
+    }
     await hydrateDashboardFileMetadata(dashboardFileRecords, { inferFromFile: options.inferMissingMetadataFromFile === true });
     if (validateStorage && dashboardFileRecords.length) {
       dashboardFileRecords = await validateDashboardFileRecords(dashboardFileRecords);
     }
-    await checkAllModulePersistedBases({ reason: hasInitialLoadCompleted ? "reload" : "initial-load" });
+    await checkActiveModulePersistedBase({
+      moduleKey: activeModuleKey,
+      reason: hasInitialLoadCompleted ? "reload" : "initial-load",
+    });
     if (!dashboardFileRecords.length) {
-      const activeModuleKey = getDashboardModuleKeyForSheet();
       clearDashboardData({ render: false, preserveRecords: moduleHasConfirmedBase(activeModuleKey) || moduleBaseCheckPending(activeModuleKey) });
       if (loadActive && moduleHasConfirmedBase(activeModuleKey)) {
         if (activeModuleKey === DASHBOARD_MODULE_KEYS.preFatura || activeModuleKey === DASHBOARD_MODULE_KEYS.evolucao) {
@@ -16097,7 +16229,7 @@ async function loadDashboardFilesFromSupabase(options = {}) {
       return [];
     }
 
-    const preFaturaRecords = dashboardFileRecords.filter((record) => getFileRecordCategory(record) === PRE_FATURA_FILE_CATEGORY);
+    const preFaturaRecords = filterDashboardRecordsByModule(dashboardFileRecords, DASHBOARD_MODULE_KEYS.preFatura);
     const activeFile = preFaturaRecords.find((record) => record.is_active) || preFaturaRecords[0] || null;
     currentActiveFile = activeFile;
 
@@ -16127,24 +16259,27 @@ async function loadDashboardFilesFromSupabase(options = {}) {
       window.dashboardCacheService?.log?.(DASHBOARD_MODULE_KEYS.desviosPnr, "carga inicial independente da aba PNR");
       activeDataset = buildEmptyDataset();
       allRows = [];
-      if (shouldLoadPnrRowsForCurrentView(dashboardFileRecords)) {
-        void loadPnrRowsForView(dashboardFileRecords, new Map()).catch((error) => {
+      const pnrRecords = filterDashboardRecordsByModule(dashboardFileRecords, DASHBOARD_MODULE_KEYS.desviosPnr);
+      if (shouldLoadPnrRowsForCurrentView(pnrRecords)) {
+        void loadPnrRowsForView(pnrRecords, new Map()).catch((error) => {
           console.error("[Gestão Desvios PNR] Falha ao iniciar carga independente:", error);
         });
       }
     } else if (loadActive && state.sheet === DEVIATION_MANAGEMENT_VIEW && state.activeDesvioCategory === DEVIATION_CATEGORY_MISSING_PACKAGES) {
       void loadMissingPackagesFromSupabase({ render: false });
     } else if (loadActive && activeFile) {
-      await loadDashboardDataByFilters({ files: dashboardFileRecords, render: false, silent: true, showLoading: shouldShowLoading });
+      await loadDashboardDataByFilters({ files: filterDashboardRecordsByModule(dashboardFileRecords, DASHBOARD_MODULE_KEYS.preFatura), render: false, silent: true, showLoading: shouldShowLoading, force: true });
     } else if (loadActive) {
       const cachedDatasets = new Map(
         (Array.isArray(library.datasets) ? library.datasets : [])
           .filter((dataset) => dataset?.source !== "filtered" && Array.isArray(dataset.rows) && dataset.rows.length)
           .map((dataset) => [dataset.id, dataset]),
       );
-      await loadPackageManagementRowsForCards(dashboardFileRecords, cachedDatasets);
-      if (shouldLoadPnrRowsForCurrentView(dashboardFileRecords)) {
-        await loadPnrRowsForView(dashboardFileRecords, cachedDatasets);
+      if (activeModuleKey === DASHBOARD_MODULE_KEYS.pacotes) {
+        await loadPackageManagementRowsForCards(filterDashboardRecordsByModule(dashboardFileRecords, DASHBOARD_MODULE_KEYS.pacotes), cachedDatasets);
+      }
+      if (activeModuleKey === DASHBOARD_MODULE_KEYS.desviosPnr && shouldLoadPnrRowsForCurrentView(dashboardFileRecords)) {
+        await loadPnrRowsForView(filterDashboardRecordsByModule(dashboardFileRecords, DASHBOARD_MODULE_KEYS.desviosPnr), cachedDatasets);
       }
       activeDataset = buildEmptyDataset();
       allRows = [];
@@ -16360,6 +16495,12 @@ async function markDashboardFileMissing(fileRecord, error) {
 }
 
 async function loadPackageManagementRowsForCards(records, cachedDatasets = new Map()) {
+  const scopedRecords = filterDashboardRecordsByModule(records, DASHBOARD_MODULE_KEYS.pacotes);
+  console.info("[GestaoPacotes Files]", {
+    received: Array.isArray(records) ? records.length : 0,
+    scoped: scopedRecords.length,
+    pnrFilesRemoved: (Array.isArray(records) ? records : []).filter((record) => getDashboardRecordModuleKey(record) === DASHBOARD_MODULE_KEYS.desviosPnr).length,
+  });
   const baseState = await checkModulePersistedData(DASHBOARD_MODULE_KEYS.pacotes, { reason: "package-load" });
   if (Number(baseState.total || 0) > 0) {
     const dataset = await loadPersistedDatasetForModule(DASHBOARD_MODULE_KEYS.pacotes, PACKAGE_MANAGEMENT_FILE_CATEGORY);
@@ -16368,7 +16509,7 @@ async function loadPackageManagementRowsForCards(records, cachedDatasets = new M
     resetDerivedDataCache();
     return dataset ? [dataset] : [];
   }
-  const packageFiles = (Array.isArray(records) ? records : [])
+  const packageFiles = scopedRecords
     .filter(isUsableDashboardFileRecord)
     .filter((record) => getFileRecordCategory(record) === PACKAGE_MANAGEMENT_FILE_CATEGORY);
   if (!packageFiles.length) {
@@ -16703,10 +16844,27 @@ function applyPnrRemoteTable(payload) {
 function applyPnrRemoteSummary(payload) {
   const summary = payload?.summary || {};
   const options = payload?.filterOptions || payload?.filter_options || {};
+  const persistedTotal = Number(getModuleBaseState(DASHBOARD_MODULE_KEYS.desviosPnr).totalPersisted || 0);
+  const receivedTotal = Number(payload?.total || summary.count || 0);
+  const shouldClampUnfilteredTotal = persistedTotal > 0 &&
+    !state.pnrQuery &&
+    !getPnrFilterSelectedValues(state.pnrMonths, pnrRemoteState.monthOptions.map((option) => option.key)).length &&
+    !getPnrFilterSelectedValues(state.pnrQuinzena, ["q1", "q2"]).length &&
+    !getPnrFilterSelectedValues(state.pnrStatus, pnrRemoteState.filterOptions.statuses || []).length &&
+    !getPnrFilterSelectedValues(state.pnrEstacao, pnrRemoteState.filterOptions.estacoes || []).length &&
+    receivedTotal > persistedTotal;
+  const displayTotal = shouldClampUnfilteredTotal ? persistedTotal : receivedTotal;
+  if (shouldClampUnfilteredTotal) {
+    console.warn("[PNR Dedup]", "resumo remoto maior que total persistido; total visual limitado ao banco", {
+      receivedTotal,
+      persistedTotal,
+      reason: "possible-duplicated-metrics-summary",
+    });
+  }
   pnrRemoteState.source = "remote";
-  pnrRemoteState.total = Number(payload?.total || summary.count || 0);
+  pnrRemoteState.total = displayTotal;
   pnrRemoteState.summary = {
-    count: Number(summary.count || 0),
+    count: displayTotal,
     totalValue: Number(summary.totalValue ?? summary.total_value ?? 0),
     avgValue: Number(summary.avgValue ?? summary.avg_value ?? 0),
     anulado: Number(summary.anulado || 0),
@@ -16779,6 +16937,7 @@ async function refreshPnrRemoteDashboard(options = {}) {
   const shouldLoadTable = options.force === true || pnrRemoteState.tableKey !== tableKey || !pnrRemoteState.rows.length;
   if (!shouldLoadSummary && !shouldLoadTable && pnrRemoteState.source === "remote") return;
   const requestId = ++pnrRemoteRequestId;
+  const startedAt = performance.now();
   pnrRemoteState.key = tableKey;
   pnrRemoteState.cacheSignature = summaryKey;
   pnrRemoteState.error = "";
@@ -16796,12 +16955,14 @@ async function refreshPnrRemoteDashboard(options = {}) {
   renderPnrRemoteLoadingOnly();
   try {
     if (shouldLoadSummary) {
-      try {
-        await refreshPnrMetricsSummaryForFiles([]);
-      } catch (refreshError) {
-        console.warn("[PNR Table Dedup] Não foi possível reconstruir agregados antes do resumo.", refreshError);
-      }
       const summaryPayload = buildPnrSummaryPayload();
+      console.info("[PNR Load]", "resumo iniciado", {
+        requestId,
+        reason: options.reason || "",
+        tableOnly,
+        mode: "replace",
+        payload: summaryPayload,
+      });
       window.dashboardCacheService?.log?.(moduleKey, "origem dos dados: Supabase RPC resumo", { rpc: PNR_SUMMARY_RPC, payload: summaryPayload });
       const start = performance.now();
       const { data, error } = await withTimeout(
@@ -16816,6 +16977,14 @@ async function refreshPnrRemoteDashboard(options = {}) {
         total: data?.total || 0,
       });
       applyPnrRemoteSummary(data || {});
+      console.info("[PNR Load]", "resumo aplicado", {
+        requestId,
+        receivedTotal: data?.total || data?.summary?.count || 0,
+        displayedTotal: pnrRemoteState.total,
+        persistedTotal: getModuleBaseState(moduleKey).totalPersisted,
+        mode: "replace",
+        ms: Math.round(performance.now() - start),
+      });
       pnrRemoteState.summaryKey = summaryKey;
       pnrRemoteState.loadingSummary = false;
       pnrRemoteState.loadingCharts = false;
@@ -16824,6 +16993,12 @@ async function refreshPnrRemoteDashboard(options = {}) {
     }
     if (shouldLoadTable) {
       const tablePayload = buildPnrTablePayload();
+      console.info("[PNR Load]", "tabela iniciada", {
+        requestId,
+        reason: options.reason || "",
+        mode: "replace",
+        payload: tablePayload,
+      });
       window.dashboardCacheService?.log?.(moduleKey, "origem dos dados: Supabase RPC tabela", { rpc: PNR_TABLE_RPC, payload: tablePayload });
       const start = performance.now();
       const { data, error } = await withTimeout(
@@ -16839,6 +17014,14 @@ async function refreshPnrRemoteDashboard(options = {}) {
         total: data?.total || 0,
       });
       applyPnrRemoteTable(data || {});
+      console.info("[PNR Load]", "tabela aplicada", {
+        requestId,
+        receivedRows: Array.isArray(data?.rows) ? data.rows.length : 0,
+        displayedRows: pnrRemoteState.rows.length,
+        total: pnrRemoteState.total,
+        mode: "replace",
+        ms: Math.round(performance.now() - start),
+      });
       pnrRemoteState.tableKey = tableKey;
     }
     pnrRemoteState.source = "remote";
@@ -16879,6 +17062,12 @@ async function refreshPnrRemoteDashboard(options = {}) {
       setPnrRemoteLoading(false);
       hydrateControls();
       renderAll();
+      console.info("[PNR Load]", "fim", {
+        requestId,
+        total: pnrRemoteState.total,
+        rows: pnrRemoteState.rows.length,
+        ms: Math.round(performance.now() - startedAt),
+      });
     }
   }
 }
@@ -16975,6 +17164,8 @@ async function loadDashboardDataByFilters(options = {}) {
     return;
   }
   if (isLoadingDashboardData && options.force !== true) return;
+  const requestId = ++preFaturaLoadRequestId;
+  const startedAt = performance.now();
   const shouldRender = options.render !== false;
   const shouldShowLoading = options.showLoading ?? (!hasInitialLoadCompleted || !hasLoadedDashboardData());
   isLoadingDashboardData = true;
@@ -16982,17 +17173,48 @@ async function loadDashboardDataByFilters(options = {}) {
   dashboardFilesLoading = shouldShowLoading;
   if (shouldShowLoading && !hasLoadedDashboardData()) setDashboardVisualState("loading-files", { render: shouldRender });
   window.dashboardCacheService?.log?.(DASHBOARD_MODULE_KEYS.preFatura, "início da carga", {
+    requestId,
     showLoading: shouldShowLoading,
     hasData: hasLoadedDashboardData(),
   });
+  console.info("[PreFatura Load]", "início", {
+    requestId,
+    showLoading: shouldShowLoading,
+    hasData: hasLoadedDashboardData(),
+    source: Array.isArray(options.files) ? "provided-files" : "load-files",
+  });
   updateDatasetMeta();
   try {
-    const files = Array.isArray(options.files) ? options.files : await loadDashboardFilesFromSupabase({ loadActive: false, render: false, validateStorage: false, showLoading: false });
+    const files = Array.isArray(options.files)
+      ? filterDashboardRecordsByModule(options.files, DASHBOARD_MODULE_KEYS.preFatura)
+      : filterDashboardRecordsByModule(await loadDashboardFilesFromSupabase({
+        loadActive: false,
+        render: false,
+        validateStorage: false,
+        showLoading: false,
+        moduleKey: DASHBOARD_MODULE_KEYS.preFatura,
+      }), DASHBOARD_MODULE_KEYS.preFatura);
+    if (requestId !== preFaturaLoadRequestId) {
+      console.info("[PreFatura Load]", "resposta antiga ignorada após arquivos", { requestId, latest: preFaturaLoadRequestId });
+      return;
+    }
     await hydrateDashboardFileMetadata(files);
-    dashboardFileRecords = files.filter(isUsableDashboardFileRecord).filter(isDashboardFileActive);
+    dashboardFileRecords = Array.from(new Map([
+      ...filterDashboardRecordsByModule(dashboardFileRecords, DASHBOARD_MODULE_KEYS.pacotes),
+      ...filterDashboardRecordsByModule(dashboardFileRecords, DASHBOARD_MODULE_KEYS.desviosPnr),
+      ...files.filter(isUsableDashboardFileRecord).filter(isDashboardFileActive),
+    ].map((record) => [record.id || `${getDashboardRecordModuleKey(record)}:${record.file_name}`, record])).values());
     const persistedPreFaturaState = await checkModulePersistedData(DASHBOARD_MODULE_KEYS.preFatura, { reason: "prefatura-load" });
+    if (requestId !== preFaturaLoadRequestId) {
+      console.info("[PreFatura Load]", "resposta antiga ignorada após base-check", { requestId, latest: preFaturaLoadRequestId });
+      return;
+    }
     if (Number(persistedPreFaturaState.total || 0) > 0) {
       const persistedDataset = await loadPersistedDatasetForModule(DASHBOARD_MODULE_KEYS.preFatura, PRE_FATURA_FILE_CATEGORY);
+      if (requestId !== preFaturaLoadRequestId) {
+        console.info("[PreFatura Load]", "resposta antiga ignorada após tabela persistida", { requestId, latest: preFaturaLoadRequestId });
+        return;
+      }
       if (persistedDataset?.rows?.length) {
         const packageDatasets = library.datasets.filter((dataset) => dataset?.source !== "filtered" && dataset?.fileCategory === PACKAGE_MANAGEMENT_FILE_CATEGORY);
         const pnrDatasets = library.datasets.filter((dataset) => dataset?.source !== "filtered" && dataset?.fileCategory === DEVIATION_PNR_FILE_CATEGORY);
@@ -17012,6 +17234,11 @@ async function loadDashboardDataByFilters(options = {}) {
           syncActiveDataset();
           updateDatasetMeta();
         }
+        console.info("[PreFatura Load]", "fim via tabela persistida", {
+          requestId,
+          rows: persistedDataset.rows.length,
+          ms: Math.round(performance.now() - startedAt),
+        });
         return;
       }
     }
@@ -17056,17 +17283,10 @@ async function loadDashboardDataByFilters(options = {}) {
     );
     const packageDatasets = library.datasets.filter((dataset) => dataset?.source !== "filtered" && dataset?.fileCategory === PACKAGE_MANAGEMENT_FILE_CATEGORY);
     const pnrDatasets = library.datasets.filter((dataset) => dataset?.source !== "filtered" && dataset?.fileCategory === DEVIATION_PNR_FILE_CATEGORY);
-    void Promise.allSettled([
-      loadPackageManagementRowsForCards(dashboardFileRecords, cachedDatasets),
-      shouldLoadPnrRowsForCurrentView(dashboardFileRecords)
-        ? loadPnrRowsForView(dashboardFileRecords, cachedDatasets)
-        : Promise.resolve(pnrDatasets),
-    ]).then((results) => {
-      results.forEach((result, index) => {
-        if (result.status === "rejected") {
-          console.error(index === 0 ? "[Gestão de Pacotes] Falha na carga em segundo plano:" : "[Gestão Desvios PNR] Falha na carga em segundo plano:", result.reason);
-        }
-      });
+    console.info("[PreFatura Load]", "carga isolada: Pacotes e PNR não serão acionados por esta aba", {
+      requestId,
+      packageDatasets: packageDatasets.length,
+      pnrDatasets: pnrDatasets.length,
     });
     const currentFileCategory = PRE_FATURA_FILE_CATEGORY;
     const categoryFiles = dashboardFileRecords.filter((record) => getFileRecordCategory(record) === currentFileCategory);
@@ -17168,16 +17388,24 @@ async function loadDashboardDataByFilters(options = {}) {
       updateDatasetMeta();
     }
     if (!options.silent) showToast("Dados do período carregados.", "good", 3200);
+    console.info("[PreFatura Load]", "fim", {
+      requestId,
+      rows: rows.length,
+      selectedFiles: selectedFiles.length,
+      ms: Math.round(performance.now() - startedAt),
+    });
   } catch (error) {
     console.error("[DASHBOARD] Falha ao carregar dados processados:", error);
     showToast(error.message || "Não foi possível carregar os dados. Tente atualizar novamente.", "error", 6200);
     if (!hasLoadedDashboardData()) setDashboardVisualState("supabase-error", { render: false, error });
   } finally {
-    moduleLoadingState[DASHBOARD_MODULE_KEYS.preFatura] = false;
-    dashboardFilesLoading = false;
-    isLoadingDashboardData = false;
-    if (shouldShowLoading && dashboardVisualState === "loading-files") setDashboardVisualState("", { render: false });
-    updateDatasetMeta();
+    if (requestId === preFaturaLoadRequestId) {
+      moduleLoadingState[DASHBOARD_MODULE_KEYS.preFatura] = false;
+      dashboardFilesLoading = false;
+      isLoadingDashboardData = false;
+      if (shouldShowLoading && dashboardVisualState === "loading-files") setDashboardVisualState("", { render: false });
+      updateDatasetMeta();
+    }
   }
 }
 
@@ -18510,7 +18738,7 @@ async function setActiveDashboardFile(fileId) {
 }
 
 function getDashboardFileModuleKey(record = {}) {
-  return getDashboardModuleKeyForFileCategory(getFileRecordCategory(record));
+  return getDashboardRecordModuleKey(record);
 }
 
 function getDashboardFileHash(record = {}) {
