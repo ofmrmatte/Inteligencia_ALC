@@ -15407,18 +15407,18 @@ async function markDashboardFileMissing(fileRecord, error) {
 }
 
 async function loadPackageManagementRowsForCards(records, cachedDatasets = new Map()) {
+  const baseState = await checkModulePersistedData(DASHBOARD_MODULE_KEYS.pacotes, { reason: "package-load" });
+  if (Number(baseState.total || 0) > 0) {
+    const dataset = await loadPersistedDatasetForModule(DASHBOARD_MODULE_KEYS.pacotes, PACKAGE_MANAGEMENT_FILE_CATEGORY);
+    packageManagementRows = dataset?.rows?.map(normalizePackageManagementStoredRow).filter(Boolean) || [];
+    packageManagementRowsLoadedKey = `persisted:${baseState.total}:${baseState.lastCheckedAt || ""}`;
+    resetDerivedDataCache();
+    return dataset ? [dataset] : [];
+  }
   const packageFiles = (Array.isArray(records) ? records : [])
     .filter(isUsableDashboardFileRecord)
     .filter((record) => getFileRecordCategory(record) === PACKAGE_MANAGEMENT_FILE_CATEGORY);
   if (!packageFiles.length) {
-    const baseState = await checkModulePersistedData(DASHBOARD_MODULE_KEYS.pacotes, { reason: "package-load" });
-    if (Number(baseState.total || 0) > 0) {
-      const dataset = await loadPersistedDatasetForModule(DASHBOARD_MODULE_KEYS.pacotes, PACKAGE_MANAGEMENT_FILE_CATEGORY);
-      packageManagementRows = dataset?.rows?.map(normalizePackageManagementStoredRow).filter(Boolean) || [];
-      packageManagementRowsLoadedKey = `persisted:${baseState.total}:${baseState.lastCheckedAt || ""}`;
-      resetDerivedDataCache();
-      return dataset ? [dataset] : [];
-    }
     packageManagementRows = [];
     packageManagementRowsLoadedKey = "__empty";
     resetDerivedDataCache();
