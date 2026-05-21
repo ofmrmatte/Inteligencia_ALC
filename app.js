@@ -113,6 +113,7 @@ const PNR_REMOTE_RPC = "desvios_pnr_dashboard";
 const PNR_SUMMARY_RPC = "desvios_pnr_summary";
 const PNR_TABLE_RPC = "desvios_pnr_table";
 const PNR_METRICS_REFRESH_RPC = "refresh_desvios_pnr_metrics_summary";
+const PNR_STATUS_UPDATE_RPC = "update_desvios_pnr_status";
 const PNR_LIGHT_CACHE_VERSION = "pnr-dashboard-light-cache-v4";
 const PNR_LIGHT_CACHE_KEY = "alc-pnr-dashboard-light-cache-v1";
 const FILE_DELETE_MODES = {
@@ -4482,10 +4483,14 @@ function getPnrStatusUpdateSelectColumns(includeAuditColumns = true) {
     : "id,file_id,status_normalizado";
 }
 
+function canEditPnrStatus() {
+  return Boolean(currentUser);
+}
+
 function renderPnrStatusCell(row = {}) {
   const recordId = row.pnrRecordId || row.recordId || row.id || "";
   const currentStatus = row.statusNormalizado || "";
-  const canUpdate = canEdit() && recordId;
+  const canUpdate = canEditPnrStatus() && recordId;
   if (!canUpdate) return `<span class="badge">${escapeHtml(currentStatus || "—")}</span>`;
   const isSaving = pnrStatusUpdateState.savingIds.has(String(recordId));
   const editableCurrentStatus = getPnrEditableStatusValue(currentStatus) || currentStatus;
@@ -4529,46 +4534,70 @@ function updatePnrRowsStatusLocally(recordId, nextStatus, payload = {}) {
 async function updatePnrRecordStatus(recordId, nextStatus, options = {}) {
   const normalizedStatus = getPnrEditableStatusValue(nextStatus);
   if (!recordId || !normalizedStatus) throw new Error("Status inválido para atualização.");
-  if (!window.supabaseClient || !currentUser || !canEdit()) throw new Error("Usuário sem permissão para editar status.");
+  if (!window.supabaseClient || !currentUser || !canEditPnrStatus()) throw new Error("Usuário sem permissão para editar status.");
   const currentStatus = options.currentStatus || "";
   if (currentStatus === normalizedStatus) return null;
   const timestamp = new Date().toISOString();
   const updatedBy = currentUser.email || currentUser.id || "";
-  const payload = {
-    status_normalizado: normalizedStatus,
-    status_current: normalizedStatus,
-    status_previous: currentStatus,
-    status_updated_at: timestamp,
-    manual_status_override: true,
-    status_updated_by: updatedBy,
-  };
-  let { data, error } = await window.supabaseClient
+  let data = null;
+  let rpcError = null;
+  try {
+    const result = await window.supabaseClient.rpc(PNR_STATUS_UPDATE_RPC, {
+      p_record_id: recordId,
+      p_status: normalizedStatus,
+    });
+    if (result.error) rpcError = result.error;
+    else data = result.data;
+  } catch (error) {
+    rpcError = error;
+  }
+  const rpcErrorText = `${rpcError?.code || ""} ${rpcError?.message || ""} ${rpcError?.details || ""}`;
+  if (rpcError && !/update_desvios_pnr_status|PGRST202|function|schema cache|Could not find/i.test(rpcErrorText)) {
+    throw rpcError;
+  }
+  if (!data) {
+    const payload = {
+      status_normalizado: normalizedStatus,
+      status_current: normalizedStatus,
+      status_previous: currentStatus,
+      status_updated_at: timestamp,
+      manual_status_override: true,
+      status_updated_by: updatedBy,
+    };
+    let error = null;
+    ({ data, error } = await window.supabaseClient
     .from("desvios_pnr_records")
     .update(payload)
     .eq("id", recordId)
     .select(getPnrStatusUpdateSelectColumns(true))
-    .single();
-  if (error && /manual_status_override|status_updated_by|status_previous|status_current|status_updated_at|updated_at|PGRST204|schema cache|Could not find/i.test(`${error.code || ""} ${error.message || ""} ${error.details || ""}`)) {
-    const fallbackPayload = { ...payload };
-    delete fallbackPayload.manual_status_override;
-    delete fallbackPayload.status_updated_by;
-    delete fallbackPayload.status_previous;
-    delete fallbackPayload.status_current;
-    delete fallbackPayload.status_updated_at;
-    ({ data, error } = await window.supabaseClient
-      .from("desvios_pnr_records")
-      .update(fallbackPayload)
-      .eq("id", recordId)
-      .select(getPnrStatusUpdateSelectColumns(false))
-      .single());
+    .single());
+    if (error && /manual_status_override|status_updated_by|status_previous|status_current|status_updated_at|updated_at|PGRST204|schema cache|Could not find/i.test(`${error.code || ""} ${error.message || ""} ${error.details || ""}`)) {
+      const fallbackPayload = { ...payload };
+      delete fallbackPayload.manual_status_override;
+      delete fallbackPayload.status_updated_by;
+      delete fallbackPayload.status_previous;
+      delete fallbackPayload.status_current;
+      delete fallbackPayload.status_updated_at;
+      ({ data, error } = await window.supabaseClient
+        .from("desvios_pnr_records")
+        .update(fallbackPayload)
+        .eq("id", recordId)
+        .select(getPnrStatusUpdateSelectColumns(false))
+        .single());
+    }
+    if (error) throw error;
+    const fallbackFileId = data?.file_id || options.fileId || "";
+    try {
+      await refreshPnrMetricsSummaryForFiles(fallbackFileId ? [fallbackFileId] : []);
+    } catch (refreshError) {
+      console.warn("[PNR Status Edit] Status salvo, mas não foi possível recalcular agregados imediatamente.", refreshError);
+    }
   }
-  if (error) throw error;
   const fileId = data?.file_id || options.fileId || "";
-  await refreshPnrMetricsSummaryForFiles(fileId ? [fileId] : []);
   updatePnrRowsStatusLocally(recordId, normalizedStatus, {
-    status_previous: currentStatus,
-    status_updated_at: timestamp,
-    status_updated_by: updatedBy,
+    status_previous: data?.status_previous || currentStatus,
+    status_updated_at: data?.status_updated_at || timestamp,
+    status_updated_by: data?.status_updated_by || updatedBy,
   });
   console.info("[PNR Status Edit]", {
     recordId,
