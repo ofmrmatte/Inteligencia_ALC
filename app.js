@@ -64,6 +64,18 @@ const DEVIATION_CATEGORIES = [
   { key: DEVIATION_CATEGORY_PNRS, label: "PNRs", enabled: true },
   { key: DEVIATION_CATEGORY_MISSING_PACKAGES, label: "Pacotes Faltantes", enabled: true },
 ];
+const MISSING_PACKAGE_CASE_STATUS_OPTIONS = ["Pendente", "Concluído", "Em rota"];
+const MISSING_PACKAGE_MELI_STATUS_OPTIONS = ["E-mail Enviado", "Aguardando MELI", "Concluído"];
+const MISSING_PACKAGE_TABLE_COLUMNS = [
+  { key: "dataFechamento", label: "Data do Caso", width: 130, format: "date" },
+  { key: "importedAt", label: "Data de importação", width: 170, format: "datetime" },
+  { key: "base", label: "Base", width: 95, format: "text" },
+  { key: "driverNome", label: "Driver", width: 260, format: "textStrong" },
+  { key: "idEnvio", label: "ID do Pacote/Envio", width: 175, format: "text" },
+  { key: "statusCaso", label: "Status do Caso", width: 165, format: "missingStatus", statusType: "case" },
+  { key: "statusContatoMeli", label: "Contato Méli", width: 180, format: "missingStatus", statusType: "meli" },
+  { key: "prazoTratativa", label: "Prazo da tratativa", width: 170, format: "datetime" },
+];
 const PREFATURA_CATEGORIES = [
   { key: PREFATURA_VIEW_OVERVIEW, label: "Visão geral", enabled: true },
   { key: PREFATURA_VIEW_EVOLUTION, label: "Evolução mensal", enabled: true },
@@ -2939,18 +2951,17 @@ function categoryAwareFullMonthLabel(file, period = getFileRecordPeriod(file)) {
 }
 
 function renderDeviationSettingsCategories(filesCount = 0) {
-  const rowsLabel = filesCount ? `${integer.format(filesCount)} arquivo${filesCount === 1 ? "" : "s"}` : "Sem arquivos";
+  const pnrRowsLabel = filesCount ? `${integer.format(filesCount)} arquivo${filesCount === 1 ? "" : "s"}` : "Sem arquivos";
   return `
     <div class="settings-deviation-categories" aria-label="Categorias da Gestão de Desvios">
-      ${DEVIATION_CATEGORIES.map((category) => {
-        const enabled = category.enabled === true;
-        return `
-          <span class="settings-deviation-category ${enabled ? "is-enabled is-active" : "is-disabled"}">
-            <span>${escapeHtml(category.label)}</span>
-            <small>${enabled ? rowsLabel : "Em desenvolvimento"}</small>
-          </span>
-        `;
-      }).join("")}
+      <span class="settings-deviation-category is-enabled is-active">
+        <span>PNRs</span>
+        <small>${escapeHtml(pnrRowsLabel)}</small>
+      </span>
+      <span class="settings-deviation-category is-disabled" title="Pacotes Faltantes não possui arquivos importados. A entrada é feita por texto colado na própria aba.">
+        <span>Pacotes Faltantes</span>
+        <small>Não usa arquivos</small>
+      </span>
     </div>
   `;
 }
@@ -3810,9 +3821,23 @@ function renderDeviationCategoryMenu() {
   `;
 }
 
+function normalizeMissingPackageCaseStatus(value = "") {
+  const normalized = normalizeText(value);
+  if (normalized === "concluido" || normalized === "resolvido" || normalized === "cancelado") return "Concluído";
+  if (normalized === "em rota") return "Em rota";
+  return "Pendente";
+}
+
+function normalizeMissingPackageMeliStatus(value = "") {
+  const normalized = normalizeText(value);
+  if (normalized === "concluido") return "Concluído";
+  if (normalized.includes("aguardando")) return "Aguardando MELI";
+  return "E-mail Enviado";
+}
+
 function normalizeMissingPackageRow(record = {}) {
-  const statusCaso = record.status_caso || record.statusCaso || "Pendente";
-  const statusContatoMeli = record.status_contato_meli || record.statusContatoMeli || "Em tratativa";
+  const statusCaso = normalizeMissingPackageCaseStatus(record.status_caso || record.statusCaso || "Pendente");
+  const statusContatoMeli = normalizeMissingPackageMeliStatus(record.status_contato_meli || record.statusContatoMeli || "E-mail Enviado");
   const row = {
     id: record.id || "",
     dataFechamento: record.data_fechamento || record.dataFechamento || "",
@@ -3937,7 +3962,7 @@ function buildMissingPackageDedupeKey(record = {}) {
 }
 
 function getMissingPackageDeadlineStatus(row = {}) {
-  if (row.statusCaso === "Resolvido" || row.statusCaso === "Cancelado" || row.statusContatoMeli === "Concluído") return "Concluído";
+  if (row.statusCaso === "Concluído" || row.statusContatoMeli === "Concluído") return "Concluído";
   const deadline = row.prazoTratativa ? new Date(row.prazoTratativa) : null;
   if (!deadline || Number.isNaN(deadline.getTime())) return "Dentro do prazo";
   const remainingMs = deadline.getTime() - Date.now();
@@ -4026,7 +4051,7 @@ async function processMissingPackagesText() {
       caso: "Pacote faltante",
       motivo_original: record.motivoOriginal || "Faltante",
       status_caso: "Pendente",
-      status_contato_meli: "Em tratativa",
+      status_contato_meli: "E-mail Enviado",
       prazo_tratativa: prazo,
       situacao_prazo: "Dentro do prazo",
       imported_at: now.toISOString(),
@@ -4057,13 +4082,15 @@ async function processMissingPackagesText() {
 }
 
 function getFilteredMissingPackagesRows() {
+  const selectedCaseStatus = state.missingPackagesCaseStatus === "Todos" ? "Todos" : normalizeMissingPackageCaseStatus(state.missingPackagesCaseStatus);
+  const selectedMeliStatus = state.missingPackagesMeliStatus === "Todos" ? "Todos" : normalizeMissingPackageMeliStatus(state.missingPackagesMeliStatus);
   return (Array.isArray(missingPackagesRows) ? missingPackagesRows : []).filter((row) => {
     const prazo = getMissingPackageDeadlineStatus(row);
     return (state.missingPackagesDate === "Todos" || row.dataFechamento === state.missingPackagesDate) &&
       (state.missingPackagesBase === "Todos" || row.base === state.missingPackagesBase) &&
       (state.missingPackagesDriver === "Todos" || row.driverNome === state.missingPackagesDriver) &&
-      (state.missingPackagesCaseStatus === "Todos" || row.statusCaso === state.missingPackagesCaseStatus) &&
-      (state.missingPackagesMeliStatus === "Todos" || row.statusContatoMeli === state.missingPackagesMeliStatus) &&
+      (selectedCaseStatus === "Todos" || row.statusCaso === selectedCaseStatus) &&
+      (selectedMeliStatus === "Todos" || row.statusContatoMeli === selectedMeliStatus) &&
       (state.missingPackagesDeadline === "Todos" || prazo === state.missingPackagesDeadline);
   });
 }
@@ -4075,9 +4102,9 @@ function getMissingPackagesMetrics(rows = getFilteredMissingPackagesRows()) {
     total,
     pendentes: count((row) => row.statusCaso === "Pendente"),
     emRota: count((row) => row.statusCaso === "Em rota"),
-    emTratativa: count((row) => row.statusContatoMeli === "Em tratativa"),
-    aguardandoMeli: count((row) => row.statusContatoMeli === "Aguardando Méli"),
-    concluidos: count((row) => row.statusContatoMeli === "Concluído" || row.statusCaso === "Resolvido"),
+    emailEnviado: count((row) => row.statusContatoMeli === "E-mail Enviado"),
+    aguardandoMeli: count((row) => row.statusContatoMeli === "Aguardando MELI"),
+    concluidos: count((row) => row.statusContatoMeli === "Concluído" || row.statusCaso === "Concluído"),
     prazoCritico: count((row) => ["Vencido", "Próximo do vencimento"].includes(getMissingPackageDeadlineStatus(row))),
   };
 }
@@ -4086,21 +4113,14 @@ function renderMissingPackagesCards(rows) {
   const metrics = getMissingPackagesMetrics(rows);
   const pct = (value) => metrics.total ? `${formatNumberPt((value / metrics.total) * 100, 1)}% do recorte` : "0% do recorte";
   const cards = [
-    ["Total de faltantes", metrics.total, "kpi-card--volume", "Casos extraídos como Faltante"],
-    ["Pendentes", metrics.pendentes, "kpi-card--neutral", "Status do caso pendente"],
-    ["Em rota", metrics.emRota, "kpi-card--neutral", "Casos em rota"],
-    ["Em tratativa Méli", metrics.emTratativa, "kpi-card--finance", "Contato em tratativa"],
-    ["Aguardando Méli", metrics.aguardandoMeli, "kpi-card--neutral", "Aguardando retorno Méli"],
-    ["Prazo crítico", metrics.prazoCritico, "kpi-card--problem", "Vencidos ou próximos"],
+    { label: "Total de faltantes", value: integer.format(metrics.total), tone: "kpi-card--volume", delta: pct(metrics.total), description: "Casos extraídos como Faltante" },
+    { label: "Pendentes", value: integer.format(metrics.pendentes), tone: "kpi-card--neutral", delta: pct(metrics.pendentes), description: "Status do caso pendente" },
+    { label: "Concluídos", value: integer.format(metrics.concluidos), tone: "kpi-card--neutral", delta: pct(metrics.concluidos), description: "Casos encerrados" },
+    { label: "Em rota", value: integer.format(metrics.emRota), tone: "kpi-card--neutral", delta: pct(metrics.emRota), description: "Casos em rota" },
+    { label: "Aguardando MELI", value: integer.format(metrics.aguardandoMeli), tone: "kpi-card--finance", delta: pct(metrics.aguardandoMeli), description: "Contato aguardando retorno" },
+    { label: "Prazo crítico", value: integer.format(metrics.prazoCritico), tone: "kpi-card--problem", delta: pct(metrics.prazoCritico), description: "Vencidos ou próximos" },
   ];
-  return `<section class="pnr-kpi-grid missing-packages-kpi-grid">${cards.map(([label, value, tone, description]) => `
-    <article class="kpi-card ${tone}">
-      <div class="kpi-card__label"><span>${escapeHtml(label)}</span></div>
-      <div class="kpi-card__value">${integer.format(value)}</div>
-      <div class="kpi-card__delta">${pct(value)}</div>
-      <p class="kpi-card__description">${escapeHtml(description)}</p>
-    </article>
-  `).join("")}</section>`;
+  return `<section class="kpi-grid__group kpi-grid__group--main pnr-kpi-grid missing-packages-kpi-grid" aria-label="Cards de Pacotes Faltantes">${cards.map((card, index) => renderKpiCard(card, index)).join("")}</section>`;
 }
 
 function renderMissingStatusCell(row = {}, type = "case") {
@@ -4248,10 +4268,18 @@ function renderMissingPackagesImportPanel() {
           <p>Cole aqui o texto enviado pelo dispatcher. O sistema irá extrair somente os pacotes marcados como Faltante.</p>
         </div>
       </div>
-      <textarea class="missing-packages-textarea" data-missing-packages-text placeholder="Cole o fechamento aqui...">${escapeHtml(state.missingPackagesText || "")}</textarea>
+      <div class="missing-packages-text-shell">
+        <textarea class="missing-packages-textarea" data-missing-packages-text placeholder="Cole o fechamento aqui...">${escapeHtml(state.missingPackagesText || "")}</textarea>
+      </div>
       <div class="missing-packages-import-actions">
-        <button type="button" class="primary-button" data-missing-packages-process ${isImportingMissingPackages ? "disabled" : ""}>${isImportingMissingPackages ? "Processando..." : "Processar texto"}</button>
-        <button type="button" class="secondary-button" data-missing-packages-clear-text>Limpar texto</button>
+        <button type="button" class="secondary-button missing-packages-action missing-packages-action--primary" data-missing-packages-process ${isImportingMissingPackages ? "disabled" : ""}>
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m5 12 4 4L19 6" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2"></path></svg>
+          <span>${isImportingMissingPackages ? "Processando..." : "Processar texto"}</span>
+        </button>
+        <button type="button" class="secondary-button missing-packages-action" data-missing-packages-clear-text>
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6 6 18" fill="none" stroke="currentColor" stroke-linecap="round" stroke-width="1.9"></path></svg>
+          <span>Limpar texto</span>
+        </button>
       </div>
     </article>
   `;
@@ -4266,8 +4294,8 @@ function renderMissingPackagesPage() {
   return `
     <section class="pnr-page missing-packages-page">
       ${critical ? `<div class="missing-packages-alert">Há ${integer.format(critical)} pacote(s) faltante(s) com prazo vencido ou próximo do vencimento.</div>` : ""}
-      ${renderMissingPackagesImportPanel()}
       ${renderMissingPackagesCards(rows)}
+      ${renderMissingPackagesImportPanel()}
       ${renderMissingPackagesTable(rows)}
     </section>
   `;
@@ -4329,6 +4357,21 @@ function renderDeviationManagementView() {
       console.error("Stack:", error?.stack);
       el.deviationManagementView.innerHTML = `
         <section class="pnr-page">
+          ${renderDashboardErrorState(getDashboardStateConfig("supabase-error"))}
+        </section>
+      `;
+    }
+    return;
+  }
+  if (state.activeDesvioCategory === DEVIATION_CATEGORY_MISSING_PACKAGES) {
+    try {
+      removeDetachedPnrFilterMenus();
+      el.deviationManagementView.innerHTML = renderMissingPackagesPage();
+    } catch (error) {
+      console.error("Erro ao renderizar Gestão de Desvios / Pacotes Faltantes:", error);
+      console.error("Stack:", error?.stack);
+      el.deviationManagementView.innerHTML = `
+        <section class="pnr-page missing-packages-page">
           ${renderDashboardErrorState(getDashboardStateConfig("supabase-error"))}
         </section>
       `;
@@ -5049,22 +5092,6 @@ const PNR_MANUAL_STATUS_OPTIONS = [
   "Em Revisão",
   "Sin Comprovante Carregado",
   "Em aberto/análise",
-];
-
-const MISSING_PACKAGE_CASE_STATUS_OPTIONS = ["Pendente", "Em rota", "Não localizado", "Resolvido", "Cancelado"];
-const MISSING_PACKAGE_MELI_STATUS_OPTIONS = ["Em tratativa", "Aguardando Méli", "Concluído"];
-const MISSING_PACKAGE_TABLE_COLUMNS = [
-  { key: "dataFechamento", label: "Data", width: 112, format: "date" },
-  { key: "base", label: "Base", width: 95, format: "text" },
-  { key: "tipoBase", label: "Tipo de base", width: 110, format: "text" },
-  { key: "driverNome", label: "Driver", width: 230, format: "textStrong" },
-  { key: "idEnvio", label: "ID do pacote/envio", width: 165, format: "text" },
-  { key: "caso", label: "Caso", width: 155, format: "text" },
-  { key: "statusCaso", label: "Status do caso", width: 165, format: "missingStatus", statusType: "case" },
-  { key: "statusContatoMeli", label: "Status contato Méli", width: 175, format: "missingStatus", statusType: "meli" },
-  { key: "prazoTratativa", label: "Prazo de tratativa", width: 160, format: "datetime" },
-  { key: "situacaoPrazo", label: "Situação do prazo", width: 155, format: "deadline" },
-  { key: "importedAt", label: "Importado em", width: 155, format: "datetime" },
 ];
 
 const pnrStatusUpdateState = {
@@ -5946,14 +5973,16 @@ function getMissingPackagesFilterOptions() {
 
 function renderMissingPackagesFilterControls() {
   const options = getMissingPackagesFilterOptions();
+  const caseStatusValue = state.missingPackagesCaseStatus === "Todos" ? "Todos" : normalizeMissingPackageCaseStatus(state.missingPackagesCaseStatus);
+  const meliStatusValue = state.missingPackagesMeliStatus === "Todos" ? "Todos" : normalizeMissingPackageMeliStatus(state.missingPackagesMeliStatus);
   return `
     <div class="pnr-filter-bar missing-packages-filter-bar">
       <div class="pnr-filter-row dashboard-filter-bar">
         ${renderMissingPackagesFilterSelect("data", "Data", state.missingPackagesDate, options.datas)}
         ${renderMissingPackagesFilterSelect("base", "Base", state.missingPackagesBase, options.bases)}
         ${renderMissingPackagesFilterSelect("driver", "Driver", state.missingPackagesDriver, options.drivers)}
-        ${renderMissingPackagesFilterSelect("statusCaso", "Status", state.missingPackagesCaseStatus, options.statusCaso)}
-        ${renderMissingPackagesFilterSelect("statusMeli", "Contato Méli", state.missingPackagesMeliStatus, options.statusMeli)}
+        ${renderMissingPackagesFilterSelect("statusCaso", "Status", caseStatusValue, options.statusCaso)}
+        ${renderMissingPackagesFilterSelect("statusMeli", "Contato Méli", meliStatusValue, options.statusMeli)}
         ${renderMissingPackagesFilterSelect("prazo", "Prazo", state.missingPackagesDeadline, options.prazos)}
         <button type="button" class="secondary-button dashboard-clear-button dashboard-filter-action" data-missing-packages-clear aria-label="Limpar filtros">
           <svg viewBox="0 0 24 24" aria-hidden="true">
@@ -16277,7 +16306,7 @@ async function loadDashboardFilesFromSupabase(options = {}) {
         });
       }
     } else if (loadActive && state.sheet === DEVIATION_MANAGEMENT_VIEW && state.activeDesvioCategory === DEVIATION_CATEGORY_MISSING_PACKAGES) {
-      void loadMissingPackagesFromSupabase({ render: false });
+      await loadMissingPackagesFromSupabase({ render: false });
     } else if (loadActive && activeFile) {
       await loadDashboardDataByFilters({ files: filterDashboardRecordsByModule(dashboardFileRecords, DASHBOARD_MODULE_KEYS.preFatura), render: false, silent: true, showLoading: shouldShowLoading, force: true });
     } else if (loadActive) {
