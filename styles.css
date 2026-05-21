@@ -337,6 +337,60 @@
   font-weight: 700;
 }
 
+.pnr-status-edit {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  max-width: 100%;
+  min-height: 2rem;
+  padding: 0.14rem 0.34rem 0.14rem 0.62rem;
+  border: 1px solid color-mix(in srgb, var(--line) 76%, transparent);
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--surface-soft) 74%, transparent);
+  color: var(--text);
+  transition: border-color 160ms ease, background 160ms ease, color 160ms ease;
+}
+
+.pnr-status-edit:hover,
+.pnr-status-edit:focus-within {
+  border-color: color-mix(in srgb, var(--accent) 34%, var(--line));
+  background: color-mix(in srgb, var(--surface) 92%, transparent);
+}
+
+.pnr-status-edit select {
+  min-width: 0;
+  max-width: 132px;
+  border: 0;
+  outline: 0;
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  font-size: 0.78rem;
+  font-weight: 750;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.pnr-status-edit svg {
+  flex: 0 0 auto;
+  width: 0.82rem;
+  height: 0.82rem;
+  color: var(--muted);
+  opacity: 0;
+  transition: opacity 160ms ease;
+}
+
+.pnr-status-edit:hover svg,
+.pnr-status-edit:focus-within svg,
+.pnr-status-edit.is-saving svg {
+  opacity: 0.78;
+}
+
+.pnr-status-edit.is-saving {
+  opacity: 0.72;
+  pointer-events: none;
+}
+
 .pnr-status-panel {
   display: flex;
   align-items: center;

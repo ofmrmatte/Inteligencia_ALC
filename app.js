@@ -1052,6 +1052,11 @@ function bindEvents() {
     if (!event.target.closest("[data-pnr-filter-control]") && !isDropdownPortalTarget(event.target)) closePnrFilterMenus();
   });
   document.addEventListener("change", (event) => {
+    const statusEdit = event.target.closest("[data-pnr-status-edit]");
+    if (statusEdit) {
+      void handlePnrStatusEditChange(statusEdit);
+      return;
+    }
     const pnrOption = event.target.closest("[data-pnr-filter-option]");
     if (pnrOption) {
       applyPnrFilterOptionChange(pnrOption);
@@ -4369,6 +4374,21 @@ const PNR_TABLE_COLUMNS = [
   { key: "dataEncerramentoCaso", label: "Data de Encerramento", width: 178, format: "date" },
 ];
 
+const PNR_MANUAL_STATUS_OPTIONS = [
+  "Anulado",
+  "Enviado para faturamento",
+  "Aguardando Comprovante",
+  "Com Penalidade",
+  "Comprovante Carregado",
+  "Em Revisão",
+  "Sin Comprovante Carregado",
+  "Em aberto/análise",
+];
+
+const pnrStatusUpdateState = {
+  savingIds: new Set(),
+};
+
 const PNR_EXPORT_SELECT_COLUMNS = [
   "id",
   "file_id",
@@ -4378,6 +4398,11 @@ const PNR_EXPORT_SELECT_COLUMNS = [
   "tipo",
   "status_original",
   "status_normalizado",
+  "status_previous",
+  "status_current",
+  "status_updated_at",
+  "status_updated_by",
+  "manual_status_override",
   "periodo_faturamento",
   "periodo_faturamento_original",
   "mes",
@@ -4416,7 +4441,7 @@ function formatPnrTableCell(row, column) {
   if (column.format === "date") return escapeHtml(formatDate(value));
   if (column.format === "currency") return escapeHtml(currency.format(Number(value || 0)));
   if (column.format === "currencyText") return escapeHtml(String(value || row?.valorCompraFormatado || currency.format(Number(row?.valorCompraNumerico || 0))));
-  if (column.format === "status") return `<span class="badge">${escapeHtml(value || "—")}</span>`;
+  if (column.format === "status") return renderPnrStatusCell(row);
   if (column.format === "station") {
     const details = [
       row?.tipoBase || row?.tipoOperacional || "",
@@ -4443,6 +4468,142 @@ function formatPnrTableCell(row, column) {
     `;
   }
   return escapeHtml(value || "—");
+}
+
+function getPnrEditableStatusValue(status) {
+  const normalized = normalizePnrStatus(status);
+  if (normalized === "Faturado") return "Enviado para faturamento";
+  return PNR_MANUAL_STATUS_OPTIONS.includes(normalized) ? normalized : "";
+}
+
+function getPnrStatusUpdateSelectColumns(includeAuditColumns = true) {
+  return includeAuditColumns
+    ? "id,file_id,status_normalizado,status_previous,status_current,status_updated_at,status_updated_by,manual_status_override"
+    : "id,file_id,status_normalizado";
+}
+
+function renderPnrStatusCell(row = {}) {
+  const recordId = row.pnrRecordId || row.recordId || row.id || "";
+  const currentStatus = row.statusNormalizado || "";
+  const canUpdate = canEdit() && recordId;
+  if (!canUpdate) return `<span class="badge">${escapeHtml(currentStatus || "—")}</span>`;
+  const isSaving = pnrStatusUpdateState.savingIds.has(String(recordId));
+  const editableCurrentStatus = getPnrEditableStatusValue(currentStatus) || currentStatus;
+  const options = PNR_MANUAL_STATUS_OPTIONS.map((status) => `<option value="${escapeAttribute(status)}"${status === editableCurrentStatus ? " selected" : ""}>${escapeHtml(status)}</option>`).join("");
+  const extraOption = currentStatus && !PNR_MANUAL_STATUS_OPTIONS.includes(editableCurrentStatus)
+    ? `<option value="${escapeAttribute(currentStatus)}" selected disabled>${escapeHtml(currentStatus)}</option>`
+    : "";
+  return `
+    <label class="pnr-status-edit${isSaving ? " is-saving" : ""}" title="Editar status">
+      <select data-pnr-status-edit data-record-id="${escapeAttribute(recordId)}" data-file-id="${escapeAttribute(row.fileId || "")}" data-current-status="${escapeAttribute(row.statusNormalizado || "")}" ${isSaving ? "disabled" : ""}>
+        ${extraOption}${options}
+      </select>
+      <svg viewBox="0 0 24 24" aria-hidden="true">
+        <path d="M12 20h9" fill="none" stroke="currentColor" stroke-linecap="round" stroke-width="2"></path>
+        <path d="m16.5 3.5 4 4L8 20H4v-4L16.5 3.5Z" fill="none" stroke="currentColor" stroke-linejoin="round" stroke-width="2"></path>
+      </svg>
+    </label>
+  `;
+}
+
+function updatePnrRowsStatusLocally(recordId, nextStatus, payload = {}) {
+  const id = String(recordId || "");
+  if (!id) return;
+  const apply = (row) => {
+    if (!row || String(row.pnrRecordId || row.recordId || row.id || "") !== id) return row;
+    return {
+      ...row,
+      statusPrevious: payload.status_previous || row.statusNormalizado || "",
+      statusNormalizado: nextStatus,
+      statusUpdatedAt: payload.status_updated_at || new Date().toISOString(),
+      statusUpdatedBy: payload.status_updated_by || row.statusUpdatedBy || "",
+      manualStatusOverride: true,
+      _search: buildPnrSearchText({ ...row, statusNormalizado: nextStatus }),
+    };
+  };
+  pnrRows = pnrRows.map(apply);
+  pnrRemoteState.rows = pnrRemoteState.rows.map(apply);
+  resetDerivedDataCache();
+}
+
+async function updatePnrRecordStatus(recordId, nextStatus, options = {}) {
+  const normalizedStatus = getPnrEditableStatusValue(nextStatus);
+  if (!recordId || !normalizedStatus) throw new Error("Status inválido para atualização.");
+  if (!window.supabaseClient || !currentUser || !canEdit()) throw new Error("Usuário sem permissão para editar status.");
+  const currentStatus = options.currentStatus || "";
+  if (currentStatus === normalizedStatus) return null;
+  const timestamp = new Date().toISOString();
+  const updatedBy = currentUser.email || currentUser.id || "";
+  const payload = {
+    status_normalizado: normalizedStatus,
+    status_current: normalizedStatus,
+    status_previous: currentStatus,
+    status_updated_at: timestamp,
+    manual_status_override: true,
+    status_updated_by: updatedBy,
+  };
+  let { data, error } = await window.supabaseClient
+    .from("desvios_pnr_records")
+    .update(payload)
+    .eq("id", recordId)
+    .select(getPnrStatusUpdateSelectColumns(true))
+    .single();
+  if (error && /manual_status_override|status_updated_by|status_previous|status_current|status_updated_at|updated_at|PGRST204|schema cache|Could not find/i.test(`${error.code || ""} ${error.message || ""} ${error.details || ""}`)) {
+    const fallbackPayload = { ...payload };
+    delete fallbackPayload.manual_status_override;
+    delete fallbackPayload.status_updated_by;
+    delete fallbackPayload.status_previous;
+    delete fallbackPayload.status_current;
+    delete fallbackPayload.status_updated_at;
+    ({ data, error } = await window.supabaseClient
+      .from("desvios_pnr_records")
+      .update(fallbackPayload)
+      .eq("id", recordId)
+      .select(getPnrStatusUpdateSelectColumns(false))
+      .single());
+  }
+  if (error) throw error;
+  const fileId = data?.file_id || options.fileId || "";
+  await refreshPnrMetricsSummaryForFiles(fileId ? [fileId] : []);
+  updatePnrRowsStatusLocally(recordId, normalizedStatus, {
+    status_previous: currentStatus,
+    status_updated_at: timestamp,
+    status_updated_by: updatedBy,
+  });
+  console.info("[PNR Status Edit]", {
+    recordId,
+    fileId,
+    previousStatus: currentStatus,
+    nextStatus: normalizedStatus,
+    updatedBy,
+  });
+  return data;
+}
+
+async function handlePnrStatusEditChange(select) {
+  const recordId = select?.dataset?.recordId || "";
+  const previousStatus = select?.dataset?.currentStatus || "";
+  const nextStatus = select?.value || "";
+  const fileId = select?.dataset?.fileId || "";
+  if (!recordId || !nextStatus || previousStatus === nextStatus) return;
+  pnrStatusUpdateState.savingIds.add(String(recordId));
+  select.disabled = true;
+  select.closest(".pnr-status-edit")?.classList.add("is-saving");
+  try {
+    await updatePnrRecordStatus(recordId, nextStatus, { currentStatus: previousStatus, fileId });
+    showToast("Status do PNR atualizado.", "good", 3200);
+    pnrStatusUpdateState.savingIds.delete(String(recordId));
+    state.page = Math.max(1, state.page);
+    persistState();
+    renderPnrTableOnly();
+    await refreshPnrRemoteDashboard({ force: true, reason: "status-edit" });
+  } catch (error) {
+    console.error("[PNR Status Edit] Não foi possível atualizar status.", error);
+    select.value = getPnrEditableStatusValue(previousStatus) || previousStatus;
+    showToast("Não foi possível atualizar o status. Tente novamente.", "error", 5200);
+    pnrStatusUpdateState.savingIds.delete(String(recordId));
+    renderPnrTableOnly();
+  }
 }
 
 function getPnrExportRows() {
@@ -12466,11 +12627,15 @@ function normalizePnrStatus(value) {
   const original = repairPnrText(value).trim();
   const normalized = normalizeText(original);
   if (!normalized) return "";
+  if (normalized.includes("AGUARDANDO") && normalized.includes("COMPROVANTE")) return "Aguardando Comprovante";
+  if (normalized.includes("COM") && normalized.includes("PENALIDADE")) return "Com Penalidade";
+  if (normalized.includes("COMPROVANTE") && normalized.includes("CARREGADO") && !normalized.includes("SEM") && !normalized.includes("SIN")) return "Comprovante Carregado";
+  if ((normalized.includes("SEM") || normalized.includes("SIN")) && normalized.includes("COMPROVANTE") && normalized.includes("CARREGADO")) return "Sin Comprovante Carregado";
+  if (normalized.includes("REVISAO") || normalized.includes("REVISA")) return "Em Revisão";
   if (normalized.includes("ANULADO")) return "Anulado";
   if (normalized.includes("ENVIADO") && normalized.includes("FATURAMENTO")) return "Enviado para faturamento";
   if (normalized.includes("FATURADO")) return "Faturado";
-  if (normalized.includes("ANALISE") || normalized.includes("ANALISA")) return "Em análise";
-  if (normalized.includes("ABERTO")) return "Aberto";
+  if (normalized.includes("ANALISE") || normalized.includes("ANALISA") || normalized.includes("ABERTO")) return "Em aberto/análise";
   return titleCasePt(original);
 }
 
@@ -12834,11 +12999,17 @@ function normalizePnrStoredRow(row) {
     row.observacao_cruzamento ||
     (baseIdentificada ? "Identificado pela estação de origem do arquivo PNR" : idMotorista ? "Sem correspondência suficiente nas bases de 2026" : "ID do motorista não informado");
   const normalized = {
+    pnrRecordId: row.pnrRecordId || row.record_id || row.recordId || row.id || "",
+    fileId: row.fileId || row.file_id || "",
     idCaso: formatPnrId(row.idCaso || row.id_caso || row["ID DO CASO"]),
     dataCaso,
     tipo: repairPnrText(row.tipo || row.TIPO || "").trim(),
     statusOriginal,
-    statusNormalizado: row.statusNormalizado || row.status_normalizado || normalizePnrStatus(statusOriginal),
+    statusNormalizado: row.statusNormalizado || row.status_current || row.status_normalizado || normalizePnrStatus(statusOriginal),
+    statusPrevious: row.statusPrevious || row.status_previous || "",
+    statusUpdatedAt: row.statusUpdatedAt || row.status_updated_at || "",
+    statusUpdatedBy: row.statusUpdatedBy || row.status_updated_by || "",
+    manualStatusOverride: row.manualStatusOverride === true || row.manual_status_override === true,
     periodoFaturamento: periodoOriginal,
     periodoFaturamentoOriginal: periodoOriginal,
     sourcePeriodo: periodoOriginal,
@@ -16100,6 +16271,8 @@ function mapPnrRowToProcessedRecord(row, fileRecord) {
     status_previous: "",
     status_current: row.statusNormalizado || row.statusOriginal || "",
     status_updated_at: null,
+    status_updated_by: "",
+    manual_status_override: false,
     raw_data: {},
   };
 }
