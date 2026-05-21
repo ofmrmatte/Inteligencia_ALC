@@ -108,6 +108,7 @@ const KEEP_RAW_UPLOADS_IN_STORAGE = false;
 const PROCESSED_ONLY_STORAGE_PREFIX = "processed-only";
 const PROCESSED_RECORDS_BATCH_SIZE = 500;
 const PNR_PROCESSED_RECORDS_BATCH_SIZE = 500;
+const PNR_DEDUPE_LOOKUP_BATCH_SIZE = 80;
 const PNR_IMPORT_STALL_TIMEOUT_MS = 120000;
 const PNR_IMPORT_BATCH_TIMEOUT_MS = 90000;
 const PNR_IMPORT_PROGRESS_TOAST_INTERVAL_MS = 12000;
@@ -16944,8 +16945,8 @@ async function fetchExistingPnrRecordsByDedupeKey(tableName, keys) {
   const uniqueKeys = [...new Set((Array.isArray(keys) ? keys : []).filter(Boolean))];
   const fullSelect = "id,file_id,dedupe_key,status_normalizado,status_current,periodo_faturamento,periodo_faturamento_original,source_period,source_periodo,source_quinzena,quinzena_ref,month_key,quinzena_key,data_encerramento_caso,data_caso,first_seen_at,last_seen_at,status_updated_at,created_at";
   const fallbackSelect = "id,file_id,dedupe_key,status_normalizado,periodo_faturamento,periodo_faturamento_original,source_periodo,quinzena_ref,month_key,quinzena_key,data_encerramento_caso,data_caso,created_at";
-  for (let index = 0; index < uniqueKeys.length; index += PNR_PROCESSED_RECORDS_BATCH_SIZE) {
-    const batch = uniqueKeys.slice(index, index + PNR_PROCESSED_RECORDS_BATCH_SIZE);
+  for (let index = 0; index < uniqueKeys.length; index += PNR_DEDUPE_LOOKUP_BATCH_SIZE) {
+    const batch = uniqueKeys.slice(index, index + PNR_DEDUPE_LOOKUP_BATCH_SIZE);
     console.info("[PNR Batch Insert]", {
       stage: "dedupe lookup",
       index,
