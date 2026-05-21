@@ -260,31 +260,6 @@
   min-height: 16rem;
 }
 
-.pnr-evolution-row {
-  grid-template-columns: minmax(8.8rem, 10rem) minmax(9rem, 1fr) minmax(3.4rem, auto) minmax(7.8rem, auto);
-  gap: 0.65rem;
-}
-
-.pnr-evolution-row > span:first-child {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  color: var(--text);
-  font-weight: 800;
-}
-
-.pnr-evolution-row__track {
-  min-width: 0;
-}
-
-.pnr-evolution-row strong,
-.pnr-evolution-row small {
-  position: relative;
-  z-index: 1;
-  white-space: nowrap;
-}
-
 .pnr-table-wrap {
   max-height: 600px;
   border-radius: 14px;
@@ -509,10 +484,6 @@ body[data-theme="light"] .pnr-filter-menu {
     grid-template-columns: 1fr;
   }
 
-  .pnr-evolution-row {
-    grid-template-columns: 1fr;
-    align-items: stretch;
-  }
 }
 
 *,
@@ -2215,95 +2186,6 @@ body[data-theme="light"] .pnr-value-timeline__summary span {
     justify-content: flex-start;
     width: 100%;
   }
-}
-
-.pnr-bar-list,
-.pnr-ranking-list,
-.pnr-evolution-list {
-  display: grid;
-  gap: 0.75rem;
-  margin-top: 1rem;
-}
-
-.pnr-bar-row,
-.pnr-ranking-row,
-.pnr-evolution-row {
-  border: 1px solid rgba(164, 183, 202, 0.16);
-  border-radius: 0.65rem;
-  background: rgba(255, 255, 255, 0.025);
-}
-
-.pnr-bar-row {
-  display: grid;
-  gap: 0.5rem;
-  padding: 0.72rem 0.78rem;
-}
-
-.pnr-bar-row__label {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 0.75rem;
-}
-
-.pnr-bar-row__label strong,
-.pnr-ranking-row strong {
-  color: var(--text);
-}
-
-.pnr-bar-row__label span,
-.pnr-ranking-row small,
-.pnr-evolution-row small {
-  color: var(--muted);
-}
-
-.pnr-bar-row__track,
-.pnr-evolution-row__track {
-  height: 8px;
-  overflow: hidden;
-  border-radius: 999px;
-  background: rgba(164, 183, 202, 0.16);
-}
-
-.pnr-bar-row__track span,
-.pnr-evolution-row__track span {
-  display: block;
-  height: 100%;
-  border-radius: inherit;
-  background: linear-gradient(90deg, var(--accent), var(--accent-2));
-}
-
-.pnr-ranking-row {
-  display: grid;
-  grid-template-columns: auto 1fr auto;
-  align-items: center;
-  gap: 0.75rem;
-  padding: 0.72rem 0.78rem;
-}
-
-.pnr-ranking-row__index {
-  display: inline-grid;
-  place-items: center;
-  width: 28px;
-  height: 28px;
-  border-radius: 999px;
-  background: rgba(59, 166, 255, 0.12);
-  color: var(--accent);
-  font-weight: 800;
-}
-
-.pnr-ranking-row div {
-  display: grid;
-  gap: 0.15rem;
-  min-width: 0;
-}
-
-.pnr-evolution-row {
-  display: grid;
-  grid-template-columns: 72px 1fr 48px 112px;
-  align-items: center;
-  gap: 0.75rem;
-  padding: 0.72rem 0.78rem;
 }
 
 .pnr-table-panel {
@@ -7717,13 +7599,6 @@ body:not([data-theme="light"]) .custom-filter__button {
     width: 100%;
   }
 
-  .pnr-evolution-row {
-    grid-template-columns: 64px 1fr 42px;
-  }
-
-  .pnr-evolution-row small {
-    grid-column: 2 / -1;
-  }
 }
 
 /* Final overrides for the PNR page, kept at the end to beat older panel/table rules. */

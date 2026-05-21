@@ -122,6 +122,7 @@ const FILE_DELETE_MODES = {
 let processedRecordsUnavailable = false;
 let isExportingPackageExcel = false;
 let isExportingPnrExcel = false;
+let isExportingPreFaturaExcel = false;
 const SHEET_ORDER = ["SVC PERDIDOS", "XPT PERDIDOS", "PNR"];
 const SHEET_TABS = [PRE_FATURA_VIEW, PACKAGE_MANAGEMENT_VIEW, DEVIATION_MANAGEMENT_VIEW];
 const SHEET_DISPLAY_LABELS = {
@@ -999,6 +1000,12 @@ function bindEvents() {
     if (!button) return;
     event.preventDefault();
     await exportPackageManagementExcel(button);
+  });
+  document.addEventListener("click", async (event) => {
+    const button = event.target.closest("[data-prefatura-export-excel]");
+    if (!button) return;
+    event.preventDefault();
+    await exportPreFaturaExcel(button);
   });
   document.addEventListener("click", async (event) => {
     const button = event.target.closest("[data-pnr-export-excel]");
@@ -4925,59 +4932,6 @@ function renderPnrFilterControls() {
   `;
 }
 
-function renderPnrBarList(rows, options = {}) {
-  if (!rows.length) return emptyState("Sem dados", "Nenhum registro encontrado no recorte.");
-  const max = Math.max(...rows.map((row) => row.count), 1);
-  return `
-    <div class="pnr-bar-list">
-      ${rows.map((row) => `
-        <div class="pnr-bar-row pnr-tooltip-target" data-tooltip-title="${escapeAttribute(row.label)}" data-tooltip-lines="${escapeAttribute(`${integer.format(row.count)} casos|${formatPercent(row.share)} do recorte${options.showValue ? `|${currency.format(row.totalValue || 0)}` : ""}`)}">
-          <div class="pnr-bar-row__label">
-            <strong>${escapeHtml(row.label)}</strong>
-            <span>${integer.format(row.count)} · ${formatPercent(row.share)}</span>
-          </div>
-          <div class="pnr-bar-row__track"><span style="width:${Math.max(3, (row.count / max) * 100)}%"></span></div>
-        </div>
-      `).join("")}
-    </div>
-  `;
-}
-
-function renderPnrRankingList(rows, emptyTitle) {
-  if (!rows.length) return emptyState(emptyTitle, "Nenhum registro encontrado no recorte.");
-  return `
-    <div class="pnr-ranking-list">
-      ${rows.map((row, index) => `
-        <div class="pnr-ranking-row pnr-tooltip-target" data-tooltip-title="${escapeAttribute(row.label)}" data-tooltip-lines="${escapeAttribute(`${row.detail ? `${row.detail}|` : ""}${integer.format(row.count)} PNRs|${currency.format(row.totalValue)}|${formatPercent(row.share)} do recorte`)}">
-          <span class="pnr-ranking-row__index">${index + 1}</span>
-          <div>
-            <strong>${escapeHtml(row.label)}</strong>
-            <small>${escapeHtml(row.detail ? `${row.detail} · ` : "")}${integer.format(row.count)} casos · ${currency.format(row.totalValue)}</small>
-          </div>
-          <span>${formatPercent(row.share)}</span>
-        </div>
-      `).join("")}
-    </div>
-  `;
-}
-
-function renderPnrEvolution(rows) {
-  if (!rows.length) return emptyState("Sem evolução", "Nenhum mês encontrado no recorte.");
-  const max = Math.max(...rows.map((row) => row.count), 1);
-  return `
-    <div class="pnr-evolution-list">
-      ${rows.map((row) => `
-        <div class="pnr-evolution-row pnr-tooltip-target" data-tooltip-title="${escapeAttribute(row.label)}" data-tooltip-lines="${escapeAttribute(`${integer.format(row.count)} casos|${currency.format(row.totalValue)}`)}">
-          <span>${escapeHtml(row.label)}</span>
-          <div class="pnr-evolution-row__track"><span style="width:${Math.max(3, (row.count / max) * 100)}%"></span></div>
-          <strong>${integer.format(row.count)}</strong>
-          <small>${currency.format(row.totalValue)}</small>
-        </div>
-      `).join("")}
-    </div>
-  `;
-}
-
 function formatPnrAxisCurrency(value) {
   const abs = Math.abs(Number(value || 0));
   const sign = Number(value || 0) < 0 ? "-" : "";
@@ -5510,7 +5464,7 @@ function renderPnrPage() {
       evolutionRows: pnrRemoteState.evolutionRows,
     }
     : getPnrAnalysisData(filteredRows);
-  const { summary, statusRows, operationRows, stationRows, driverRows, evolutionRows } = analysis;
+  const { summary, statusRows, evolutionRows } = analysis;
   const cards = buildPnrKpiCards(summary, statusRows);
   const pnrUpdatingBadge = (remotePending || pnrRemoteState.loadingSummary || pnrRemoteState.loadingCharts || pnrRemoteState.loadingTable) && summary.count
     ? renderDashboardUpdatingBadge(DASHBOARD_MODULE_KEYS.desviosPnr)
@@ -5545,14 +5499,6 @@ function renderPnrPage() {
             ${renderPnrValueTimelineHeaderMeta((remotePending || pnrRemoteState.loadingCharts) && !evolutionRows.length ? [] : evolutionRows)}
           </div>
           ${(remotePending || pnrRemoteState.loadingCharts) && !evolutionRows.length ? renderPnrSkeleton("Carregando evolução", "Buscando valores anulados e faturados.") : renderPnrValueTimelineChart(evolutionRows)}
-        </article>
-        <article class="panel pnr-chart-panel">
-          <div class="panel__header"><div><h3>Estações com maior volume</h3><p>Ranking por estação de origem</p></div></div>
-          ${(remotePending || pnrRemoteState.loadingCharts) && !stationRows.length ? renderPnrSkeleton("Carregando ranking", "Buscando top 10 estações.") : renderPnrRankingList(stationRows, "Sem estações")}
-        </article>
-        <article class="panel pnr-chart-panel">
-          <div class="panel__header"><div><h3>Motoristas com maior volume de PNR</h3><p>Nome localizado por cruzamento ou ID do motorista</p></div></div>
-          ${(remotePending || pnrRemoteState.loadingCharts) && !driverRows.length ? renderPnrSkeleton("Carregando ranking", "Buscando top 10 motoristas.") : renderPnrRankingList(driverRows, "Sem motoristas")}
         </article>
       </section>
 
@@ -6810,6 +6756,7 @@ function getPackageManagementRowsForView() {
 
 function restorePrefaturaTableHeader() {
   setPackageExportButtonVisible(false);
+  setPreFaturaExportButtonVisible(true);
   if (el.tableTitle) el.tableTitle.textContent = "Detalhamento dos registros";
   if (el.tableDescription) el.tableDescription.innerHTML = `<span id="result-count">0</span> registros visíveis após os filtros`;
   el.resultCount = document.getElementById("result-count") || el.resultCount;
@@ -6833,6 +6780,8 @@ function restorePrefaturaTableHeader() {
 function setPackageExportButtonVisible(visible) {
   if (!el.tableActions) return;
   const existing = el.tableActions.querySelector("[data-package-export-excel]");
+  const prefaturaExport = el.tableActions.querySelector("[data-prefatura-export-excel]");
+  if (visible && prefaturaExport) prefaturaExport.remove();
   if (!visible) {
     if (existing) existing.remove();
     return;
@@ -6852,11 +6801,44 @@ function setPackageExportButtonVisible(visible) {
   );
 }
 
+function setPreFaturaExportButtonVisible(visible) {
+  if (!el.tableActions) return;
+  const existing = el.tableActions.querySelector("[data-prefatura-export-excel]");
+  const packageExport = el.tableActions.querySelector("[data-package-export-excel]");
+  if (visible && packageExport) packageExport.remove();
+  if (!visible) {
+    if (existing) existing.remove();
+    return;
+  }
+  if (existing) return;
+  el.tableActions.insertAdjacentHTML(
+    "afterbegin",
+    `
+      <button class="secondary-button secondary-button--icon table-export-button" type="button" data-prefatura-export-excel title="Baixar Excel" aria-label="Baixar Excel">
+        <svg viewBox="0 0 24 24" aria-hidden="true">
+          <path d="M12 3v11" fill="none" stroke="currentColor" stroke-linecap="round" stroke-width="2"></path>
+          <path d="m7 10 5 5 5-5" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2"></path>
+          <path d="M5 19h14" fill="none" stroke="currentColor" stroke-linecap="round" stroke-width="2"></path>
+        </svg>
+      </button>
+    `
+  );
+}
+
 function syncPackageExportButtonState(totalRows = 0) {
   const button = el.tableActions?.querySelector("[data-package-export-excel]");
   if (!button) return;
   button.disabled = isExportingPackageExcel || Number(totalRows) <= 0;
   button.setAttribute("aria-busy", isExportingPackageExcel ? "true" : "false");
+  button.title = Number(totalRows) > 0 ? "Baixar Excel" : "Nenhum registro para exportar";
+  button.setAttribute("aria-label", button.title);
+}
+
+function syncPreFaturaExportButtonState(totalRows = 0) {
+  const button = el.tableActions?.querySelector("[data-prefatura-export-excel]");
+  if (!button) return;
+  button.disabled = isExportingPreFaturaExcel || Number(totalRows) <= 0;
+  button.setAttribute("aria-busy", isExportingPreFaturaExcel ? "true" : "false");
   button.title = Number(totalRows) > 0 ? "Baixar Excel" : "Nenhum registro para exportar";
   button.setAttribute("aria-label", button.title);
 }
@@ -10367,6 +10349,7 @@ function renderTable(rows, summary) {
   el.pageIndicator.textContent = `Página ${integer.format(state.page)} de ${integer.format(pageCount)}`;
   el.prevPage.disabled = state.page <= 1;
   el.nextPage.disabled = state.page >= pageCount;
+  syncPreFaturaExportButtonState(totalRows);
 
   if (!rows.length) {
     el.tableBody.innerHTML = `
@@ -10457,6 +10440,51 @@ function getPackageManagementExportRows() {
   return sortRows(getPackageManagementRowsForView()).filter(isPackageManagementDetailRow);
 }
 
+function getPreFaturaRowPeriodType(row) {
+  return normalizePeriodMode(row?.period_type || row?.periodType || getPeriodModeFromLabel(`${row?.quinzena || ""} ${row?.period_label || ""} ${row?.arquivo_origem || ""}`));
+}
+
+function filterPreFaturaRowsForExport(rows) {
+  const options = getAvailableMonthOptions(PRE_FATURA_FILE_CATEGORY);
+  const selectedMonths = getPrefaturaMonthSelectionValues();
+  const allMonthsSelected = !options.length || selectedMonths.length === options.length;
+  const selectedDivisions = getPrefaturaDivisionsForTypes();
+  const normalizedPeriod = normalizePeriodMode(state.prefaturaPeriod || state.period || "month");
+  const query = normalize(state.query);
+  return (Array.isArray(rows) ? rows : [])
+    .filter((row) => (row.file_category || PRE_FATURA_FILE_CATEGORY) !== PACKAGE_MANAGEMENT_FILE_CATEGORY)
+    .filter((row) => selectedDivisions.length >= MAIN_TYPE_OPTIONS.length || selectedDivisions.includes(getRowDivision(row)))
+    .filter((row) => allMonthsSelected || selectedMonths.includes(getRowMonthKey(row)))
+    .filter((row) => normalizedPeriod === "month" || getPreFaturaRowPeriodType(row) === normalizedPeriod)
+    .filter((row) => !query || String(row._search || "").includes(query));
+}
+
+async function fetchPreFaturaExportRows() {
+  if (window.supabaseClient && currentUser && moduleHasConfirmedBase(DASHBOARD_MODULE_KEYS.preFatura)) {
+    try {
+      const processedRows = await fetchAllProcessedRowsFromTable("pre_fatura_records");
+      const rows = processedRows.map((record) => {
+        const raw = record.raw_data || {};
+        const fileRecord = {
+          id: record.file_id || "prefatura-export",
+          file_name: raw.arquivo_origem || "Pré-Fatura",
+          file_type: PRE_FATURA_FILE_CATEGORY,
+          metadata: {
+            file_category: PRE_FATURA_FILE_CATEGORY,
+            semantic_file_type: PRE_FATURA_FILE_CATEGORY,
+            raw_file_deleted: true,
+          },
+        };
+        return mapProcessedPreFaturaRecord(record, fileRecord);
+      }).filter(Boolean);
+      return sortRows(filterPreFaturaRowsForExport(rows));
+    } catch (error) {
+      console.warn("[Pré-Fatura Export] Falha ao buscar tabela persistida; usando dados carregados na tela.", error);
+    }
+  }
+  return sortRows(getFilteredRows());
+}
+
 function getPackageDecisionExportText(row) {
   const display = getPackageDecisionDisplay(row);
   const parts = [display.primary, display.note].filter((part) => part && part !== "—");
@@ -10538,6 +10566,24 @@ function buildPackageManagementExportSheetRows(rows) {
       "Data": formatPackageExportDate(row.data_normalizada || row.data_sort || row.data) || "—",
       "ID de Envio": numericIdEnvio,
       "Decisão ADM": getPackageDecisionExportText(row) || "—",
+    };
+  });
+}
+
+function buildPreFaturaExportSheetRows(rows) {
+  return rows.map((row) => {
+    const idEnvio = formatId(row.id_pacote || row.id_envio || "");
+    const numericIdEnvio = idEnvio && /^\d+$/.test(idEnvio) ? Number(idEnvio) : idEnvio;
+    return {
+      "Base": row.base || "—",
+      "Driver": formatDriverName(row.motorista || row.driver || "", "Sem driver"),
+      "Placa": row.placa || "—",
+      "Tipo": row.tipo_desconto || row.tipo_registro || "—",
+      "Aba": getSheetDisplayLabel(row.aba_origem || row.divisao || "") || "—",
+      "Data": formatPackageExportDate(row.data_normalizada || row.data_sort || row.data) || "—",
+      "ID do pacote": numericIdEnvio,
+      "Nº rota": row.n_rota || row.rota || "—",
+      "Desconto": Number(row.valor_numerico || 0),
     };
   });
 }
@@ -10929,26 +10975,6 @@ function addPackageExportTable(worksheet, exportRows) {
   worksheet.views = [{ state: "frozen", ySplit: headerRowNumber, topLeftCell: "A9", zoomScale: 85, zoomScaleNormal: 85, activeCell: "C10" }];
 }
 
-async function protectPackageExportHeader(worksheet, exportRows) {
-  const lastDataRow = 8 + Math.max(0, exportRows.length);
-  for (let rowNumber = 9; rowNumber <= lastDataRow; rowNumber += 1) {
-    worksheet.getRow(rowNumber).eachCell((cell) => {
-      cell.protection = { locked: false };
-    });
-  }
-  styleExcelRange(worksheet, "A1:I8", {
-    protection: { locked: true },
-  });
-  await worksheet.protect("alc-dashboard", {
-    selectLockedCells: true,
-    selectUnlockedCells: true,
-    sort: true,
-    autoFilter: true,
-    objects: false,
-    scenarios: false,
-  });
-}
-
 async function buildStyledPackageManagementWorkbook(rows, exportRows) {
   console.log("[Excel] ExcelJS disponível:", typeof window.ExcelJS !== "undefined");
   const ExcelJS = await loadExcelExportEngine();
@@ -10978,11 +11004,218 @@ async function buildStyledPackageManagementWorkbook(rows, exportRows) {
   await addPackageExportLogo(worksheet, workbook);
   console.log("[Excel] Aplicando tabela");
   addPackageExportTable(worksheet, exportRows);
-  console.log("[Excel] Protegendo cabeçalho");
-  await protectPackageExportHeader(worksheet, exportRows);
   console.log("[Excel] Gerando buffer");
   const buffer = await workbook.xlsx.writeBuffer();
   return new Blob([buffer], { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" });
+}
+
+function getPreFaturaExportScopeLabel(rows) {
+  const options = getAvailableMonthOptions(PRE_FATURA_FILE_CATEGORY);
+  const selectedMonths = getPrefaturaMonthSelectionValues();
+  if (!options.length || selectedMonths.length === options.length) return "Base completa";
+  if (selectedMonths.length === 1) return getMonthLabelFromKey(selectedMonths[0]);
+  return `${selectedMonths.length} meses`;
+}
+
+function buildPreFaturaExcelFileName(rows) {
+  const dateLabel = new Date().toLocaleDateString("pt-BR").replace(/\//g, "-");
+  const scope = sanitizeExcelFileName(getPreFaturaExportScopeLabel(rows).replace(/\s*\/\s*/g, "-"));
+  return `Relatorio_Pre_Fatura_${scope}_${dateLabel}.xlsx`;
+}
+
+function configurePreFaturaExportHeader(worksheet, rows, exportRows) {
+  const darkBlue = "0B1F33";
+  const aqua = "19D3C5";
+  const white = "FFFFFF";
+  const mutedBlue = "E8F1F8";
+  const textDark = "1F2A37";
+  const borderColor = "D8E3ED";
+  const scopeLabel = getPreFaturaExportScopeLabel(rows);
+  const selectedTypes = getTypeSelectionValues(state.prefaturaTipo);
+  const typeLabel = selectedTypes.length === MAIN_TYPE_OPTIONS.length ? "Todos" : selectedTypes.join(" + ");
+
+  styleExcelRange(worksheet, "A1:I5", {
+    fill: { type: "pattern", pattern: "solid", fgColor: { argb: darkBlue } },
+    font: { name: "Arial", color: { argb: white } },
+    alignment: { vertical: "middle" },
+  });
+  worksheet.getRow(1).height = 21;
+  worksheet.getRow(2).height = 21;
+  worksheet.getRow(3).height = 15.6;
+  worksheet.getRow(4).height = 14.4;
+  worksheet.getRow(5).height = 14.4;
+  worksheet.mergeCells("A1:A5");
+  worksheet.mergeCells("B2:C2");
+  worksheet.mergeCells("B3:C3");
+  worksheet.getCell("A1").alignment = { horizontal: "center", vertical: "middle" };
+  worksheet.getCell("B2").value = "Painel de Inteligência";
+  worksheet.getCell("B2").font = { name: "Arial", size: 16, bold: true, color: { argb: white } };
+  worksheet.getCell("B3").value = "Pré-Fatura — Detalhamento de Registros";
+  worksheet.getCell("B3").font = { name: "Arial", size: 12, bold: true, color: { argb: white } };
+  worksheet.getCell("I1").value = "Setor: LOSS";
+  worksheet.getCell("I2").value = `Período: ${scopeLabel}`;
+  worksheet.getCell("I3").value = `Tipo: ${typeLabel}`;
+  worksheet.getCell("I4").value = `Gerado em: ${formatCurrentDateTime()}`;
+  ["I1", "I2", "I3", "I4"].forEach((address) => {
+    worksheet.getCell(address).font = { name: "Arial", size: 10, bold: address === "I1", color: { argb: white } };
+    worksheet.getCell(address).alignment = { horizontal: "left", vertical: "middle" };
+  });
+
+  worksheet.getRow(6).values = ["Resumo do recorte", "Registros exportados", "Filtro de período", "Filtro de tipo", "", "", "", "", ""];
+  worksheet.getRow(7).values = ["", exportRows.length, getPeriodModeLabel(state.prefaturaPeriod || state.period || "month"), typeLabel, "", "", "", "", ""];
+  styleExcelRange(worksheet, "A6:I6", {
+    fill: { type: "pattern", pattern: "solid", fgColor: { argb: aqua } },
+    font: { name: "Arial", size: 12, italic: true, color: { argb: white } },
+    alignment: { horizontal: "center", vertical: "middle" },
+    border: {
+      top: { style: "thin", color: { argb: borderColor } },
+      left: { style: "thin", color: { argb: borderColor } },
+      bottom: { style: "thin", color: { argb: borderColor } },
+      right: { style: "thin", color: { argb: borderColor } },
+    },
+  });
+  styleExcelRange(worksheet, "A7:I7", {
+    fill: { type: "pattern", pattern: "solid", fgColor: { argb: mutedBlue } },
+    font: { name: "Arial", size: 11, bold: true, color: { argb: textDark } },
+    alignment: { vertical: "middle" },
+    border: {
+      top: { style: "thin", color: { argb: borderColor } },
+      left: { style: "thin", color: { argb: borderColor } },
+      bottom: { style: "thin", color: { argb: borderColor } },
+      right: { style: "thin", color: { argb: borderColor } },
+    },
+  });
+}
+
+function addPreFaturaExportTable(worksheet, exportRows) {
+  const headerRowNumber = 8;
+  const headers = ["Base", "Driver", "Placa", "Tipo", "Aba", "Data", "ID do pacote", "Nº rota", "Desconto"];
+  worksheet.addTable({
+    name: "Tabela_Pre_Fatura",
+    displayName: "Tabela_Pre_Fatura",
+    ref: `A${headerRowNumber}`,
+    headerRow: true,
+    totalsRow: false,
+    style: {
+      theme: "TableStyleMedium2",
+      showFirstColumn: true,
+      showLastColumn: true,
+      showRowStripes: false,
+      showColumnStripes: false,
+    },
+    columns: headers.map((name) => ({ name, filterButton: true })),
+    rows: exportRows.map((item) => headers.map((header) => item[header])),
+  });
+  worksheet.getRow(headerRowNumber).height = 14.4;
+  worksheet.getRow(headerRowNumber).eachCell((cell) => {
+    cell.font = { name: "Arial", size: 10, bold: true, italic: true, color: { argb: "102A43" } };
+    cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "DCEAF5" } };
+    cell.alignment = { vertical: "middle", horizontal: "left" };
+    cell.border = {
+      top: { style: "thin", color: { argb: "B9CAD8" } },
+      left: { style: "thin", color: { argb: "B9CAD8" } },
+      bottom: { style: "thin", color: { argb: "B9CAD8" } },
+      right: { style: "thin", color: { argb: "B9CAD8" } },
+    };
+  });
+  exportRows.forEach((item, index) => {
+    const rowNumber = headerRowNumber + 1 + index;
+    const row = worksheet.getRow(rowNumber);
+    row.values = headers.map((header) => item[header]);
+    row.height = 22.05;
+    row.eachCell((cell, colNumber) => {
+      cell.font = { name: "Arial", size: 10, bold: colNumber === 4 || colNumber === 9, color: { argb: colNumber === 9 ? "FF0000" : "1F2A37" } };
+      cell.alignment = { vertical: "middle", horizontal: colNumber === 9 ? "right" : "left" };
+      cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: index % 2 === 0 ? "FFFFFF" : "F7FAFC" } };
+      cell.border = {
+        top: { style: "thin", color: { argb: "E0E7EF" } },
+        left: { style: "thin", color: { argb: "E0E7EF" } },
+        bottom: { style: "thin", color: { argb: "E0E7EF" } },
+        right: { style: "thin", color: { argb: "E0E7EF" } },
+      };
+      if (colNumber === 7 || colNumber === 8) cell.numFmt = "@";
+      if (colNumber === 9) cell.numFmt = '_-"R$" * #,##0.00_-;-"R$" * #,##0.00_-;_-"R$" * "-"??_-;_-@_-';
+    });
+    row.getCell(7).value = String(item["ID do pacote"] || "");
+    row.getCell(8).value = String(item["Nº rota"] || "");
+  });
+  worksheet.views = [{ state: "frozen", ySplit: headerRowNumber, topLeftCell: "A9", zoomScale: 85, zoomScaleNormal: 85, activeCell: "A9" }];
+}
+
+function autoFitPreFaturaExportColumns(worksheet, exportRows) {
+  const headers = ["Base", "Driver", "Placa", "Tipo", "Aba", "Data", "ID do pacote", "Nº rota", "Desconto"];
+  const minWidths = [18, 24, 12, 16, 18, 12, 16, 12, 14];
+  const maxWidths = [34, 40, 18, 24, 28, 16, 22, 18, 18];
+  headers.forEach((header, index) => {
+    const contentWidth = Math.max(header.length, ...exportRows.map((row) => String(row?.[header] ?? "").length));
+    worksheet.getColumn(index + 1).width = Math.min(maxWidths[index], Math.max(minWidths[index], Math.ceil(contentWidth * 1.08) + 2));
+  });
+}
+
+async function buildStyledPreFaturaWorkbook(rows, exportRows) {
+  const ExcelJS = await loadExcelExportEngine();
+  const workbook = new ExcelJS.Workbook();
+  workbook.creator = "Painel de Inteligência";
+  workbook.created = new Date();
+  workbook.modified = new Date();
+  const worksheet = workbook.addWorksheet("Pré-Fatura", {
+    properties: { defaultRowHeight: 20 },
+    pageSetup: { orientation: "landscape", fitToPage: true, fitToWidth: 1, fitToHeight: 0 },
+  });
+  worksheet.columns = [
+    { key: "base", width: 24 },
+    { key: "driver", width: 28 },
+    { key: "placa", width: 14 },
+    { key: "tipo", width: 18 },
+    { key: "aba", width: 20 },
+    { key: "data", width: 13 },
+    { key: "idPacote", width: 16 },
+    { key: "rota", width: 14 },
+    { key: "desconto", width: 15 },
+  ];
+  configurePreFaturaExportHeader(worksheet, rows, exportRows);
+  await addPackageExportLogo(worksheet, workbook);
+  addPreFaturaExportTable(worksheet, exportRows);
+  autoFitPreFaturaExportColumns(worksheet, exportRows);
+  const buffer = await workbook.xlsx.writeBuffer();
+  return new Blob([buffer], { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" });
+}
+
+async function exportPreFaturaExcel(button) {
+  if (isExportingPreFaturaExcel) return;
+  isExportingPreFaturaExcel = true;
+  if (button) {
+    button.classList.add("is-loading");
+    button.disabled = true;
+    button.setAttribute("aria-busy", "true");
+    button.setAttribute("title", "Gerando planilha...");
+    button.setAttribute("aria-label", "Gerando planilha");
+  }
+  try {
+    showToast("Gerando planilha de Pré-Fatura...", "info", 3200);
+    const rows = await fetchPreFaturaExportRows();
+    if (!rows.length) {
+      showToast("Nenhum registro de Pré-Fatura para exportar.", "warn", 4200);
+      return;
+    }
+    const exportRows = buildPreFaturaExportSheetRows(rows);
+    const blob = await buildStyledPreFaturaWorkbook(rows, exportRows);
+    downloadBlob(blob, buildPreFaturaExcelFileName(rows));
+    showToast(`Excel de Pré-Fatura baixado com ${integer.format(exportRows.length)} registros.`, "good", 4200);
+  } catch (error) {
+    console.error("[Pré-Fatura Export] Falha ao exportar tabela detalhada:", error);
+    showToast("Não foi possível exportar a tabela de Pré-Fatura.", "error", 5200);
+  } finally {
+    isExportingPreFaturaExcel = false;
+    if (button) {
+      button.classList.remove("is-loading");
+      button.disabled = false;
+      button.setAttribute("aria-busy", "false");
+      button.setAttribute("title", "Baixar Excel");
+      button.setAttribute("aria-label", "Baixar Excel");
+    }
+    syncPreFaturaExportButtonState(getFilteredRows().length);
+  }
 }
 
 async function exportPackageManagementExcel(button) {
@@ -13616,6 +13849,13 @@ async function getPersistedProcessedRowsCount(fileRecord) {
   }
 }
 
+async function getPersistedRowsCountForProcessedDashboardFile(record, moduleKey = "") {
+  if (!record) return 0;
+  const mappedRecord = mapProcessedDashboardFileToDashboardRecord(record, moduleKey || record.module_key || "");
+  if (!mappedRecord?.id || String(mappedRecord.id).startsWith("processed:")) return 0;
+  return getPersistedProcessedRowsCount(mappedRecord);
+}
+
 async function getProcessedTableTotalCount(fileCategory) {
   if (!window.supabaseClient) return 0;
   const tableName = getProcessedRecordsTable(fileCategory);
@@ -13626,29 +13866,41 @@ async function getProcessedTableTotalCount(fileCategory) {
   return Number(count || 0);
 }
 
-async function validatePnrImportPersistence(fileRecord, processedSaveResult, expectedRows = 0, metadata = {}) {
-  if (getFileRecordCategory(fileRecord) !== DEVIATION_PNR_FILE_CATEGORY) return null;
-  const fileRole = metadata.file_role || getDashboardFileRole(fileRecord);
+async function validateDashboardImportPersistence(fileRecord, processedSaveResult, expectedRows = 0, metadata = {}) {
+  const fileCategory = getFileRecordCategory(fileRecord);
+  const moduleKey = getDashboardModuleKeyForFileCategory(fileCategory);
+  const fileRole = fileCategory === DEVIATION_PNR_FILE_CATEGORY ? metadata.file_role || getDashboardFileRole(fileRecord) : "";
   const [fileRows, totalRows] = await Promise.all([
     getPersistedProcessedRowsCount(fileRecord),
-    getProcessedTableTotalCount(DEVIATION_PNR_FILE_CATEGORY),
+    getProcessedTableTotalCount(fileCategory),
   ]);
-  console.info("[PNR Import]", {
+  const isPnr = fileCategory === DEVIATION_PNR_FILE_CATEGORY;
+  console.info(isPnr ? "[PNR Import]" : "[Module Import]", {
     stage: "persistência validada",
+    moduleKey,
     fileName: fileRecord?.file_name,
     fileRole,
     expectedRows,
     fileRows,
     totalRows,
-    inserted: processedSaveResult?.inserted ?? 0,
+    inserted: processedSaveResult?.inserted ?? (processedSaveResult === true ? fileRows : 0),
     updated: processedSaveResult?.updated ?? 0,
     ignored: processedSaveResult?.ignored ?? 0,
   });
-  const affectedRows = Number(processedSaveResult?.inserted || 0) + Number(processedSaveResult?.updated || 0) + Number(processedSaveResult?.ignoredOlder || 0);
-  if (!processedSaveResult || totalRows <= 0 || affectedRows <= 0) {
-    throw new Error("A importação de PNR não encontrou registros consolidados em desvios_pnr_records. O arquivo não será marcado como processado.");
+  const affectedRows = processedSaveResult === true
+    ? fileRows
+    : Number(processedSaveResult?.inserted || 0) + Number(processedSaveResult?.updated || 0) + Number(processedSaveResult?.ignoredOlder || 0);
+  const hasPersistedRows = isPnr ? totalRows > 0 : fileRows > 0;
+  if (!processedSaveResult || totalRows <= 0 || !hasPersistedRows || affectedRows <= 0) {
+    const tableName = getProcessedRecordsTable(fileCategory);
+    throw new Error(`A importação não encontrou registros persistidos em ${tableName}. O arquivo não será marcado como processado.`);
   }
   return { fileRows, totalRows };
+}
+
+async function validatePnrImportPersistence(fileRecord, processedSaveResult, expectedRows = 0, metadata = {}) {
+  if (getFileRecordCategory(fileRecord) !== DEVIATION_PNR_FILE_CATEGORY) return null;
+  return validateDashboardImportPersistence(fileRecord, processedSaveResult, expectedRows, metadata);
 }
 
 async function refreshPnrDashboardAfterImport(fileRecord, metadata = {}) {
@@ -13749,6 +14001,110 @@ async function refreshPnrDashboardAfterImport(fileRecord, metadata = {}) {
     });
     renderAll();
     showToast("Importação gravada, mas a atualização da aba PNR falhou. Verifique o console e tente reprocessar.", "error", 7200);
+    return null;
+  }
+}
+
+async function refreshDashboardModuleAfterImport(fileRecord, metadata = {}) {
+  const fileCategory = getFileRecordCategory(fileRecord);
+  const moduleKey = getDashboardModuleKeyForFileCategory(fileCategory);
+  if (moduleKey === DASHBOARD_MODULE_KEYS.desviosPnr) {
+    return refreshPnrDashboardAfterImport(fileRecord, metadata);
+  }
+  const expectedRows = Number(metadata.row_count || metadata.total_rows_imported || metadata.parsed_rows || metadata.record_count || 0) || 0;
+  try {
+    console.info("[Post Import Refresh]", {
+      stage: "início do refresh pós-importação",
+      moduleKey,
+      fileName: fileRecord?.file_name,
+      row_count: expectedRows,
+      raw_file_deleted: metadata.raw_file_deleted === true,
+    });
+    clearModulePostImportLocalState(moduleKey);
+    moduleLoadingState[moduleKey] = true;
+    setModuleBaseState(moduleKey, {
+      status: MODULE_BASE_STATUS.refreshing,
+      hasHydratedFromSupabase: false,
+      hasCheckedPersistedData: false,
+      error: null,
+      source: "post-import",
+      reason: `${moduleKey}-post-import`,
+    });
+    if (moduleKey === DASHBOARD_MODULE_KEYS.pacotes) {
+      packageManagementRowsLoadedKey = "";
+      packageManagementRows = [];
+    }
+    if (moduleKey === DASHBOARD_MODULE_KEYS.preFatura) {
+      state.appView = "dashboard";
+      state.sheet = PRE_FATURA_VIEW;
+      state.preFaturaView = state.preFaturaView || PREFATURA_VIEW_OVERVIEW;
+    }
+    if (moduleKey === DASHBOARD_MODULE_KEYS.pacotes) {
+      state.appView = "dashboard";
+      state.sheet = PACKAGE_MANAGEMENT_VIEW;
+    }
+    const baseState = await checkModulePersistedData(moduleKey, { reason: `${moduleKey}-post-import` });
+    const totalPersisted = Number(baseState.totalPersisted || baseState.total || 0);
+    if (totalPersisted <= 0) {
+      throw new Error(`A importação informou sucesso, mas a tabela persistida do módulo ${moduleKey} continua sem registros.`);
+    }
+    const files = await loadDashboardFilesFromSupabase({ loadActive: false, render: false, validateStorage: false, showLoading: false });
+    const activeRecords = files.length ? files : dashboardFileRecords;
+    if (moduleKey === DASHBOARD_MODULE_KEYS.preFatura) {
+      const dataset = await loadPersistedDatasetForModule(DASHBOARD_MODULE_KEYS.preFatura, PRE_FATURA_FILE_CATEGORY);
+      if (!dataset?.rows?.length) throw new Error("A base Pré-Fatura tem registros persistidos, mas não retornou linhas para renderização.");
+      replaceDashboardData(dataset.rows, {
+        selectedFiles: activeRecords.filter((record) => getFileRecordCategory(record) === PRE_FATURA_FILE_CATEGORY),
+        selectedDatasets: [dataset],
+        allHistoricalDatasets: [dataset],
+        selectedMonth: "all",
+        selectedPeriod: state.prefaturaPeriod || state.period,
+        fileCategory: PRE_FATURA_FILE_CATEGORY,
+      });
+    }
+    if (moduleKey === DASHBOARD_MODULE_KEYS.pacotes) {
+      const packageDatasets = await loadPackageManagementRowsForCards(activeRecords, new Map());
+      if (!packageManagementRows.length && !packageDatasets.length) {
+        throw new Error("A base Gestão de Pacotes tem registros persistidos, mas não retornou linhas para renderização.");
+      }
+    }
+    moduleLoadingState[moduleKey] = false;
+    setModuleBaseState(moduleKey, {
+      status: MODULE_BASE_STATUS.loaded,
+      hasHydratedFromSupabase: true,
+      hasCheckedPersistedData: true,
+      moduleHasPersistedData: true,
+      hasPersistedData: true,
+      totalPersisted,
+      total: totalPersisted,
+      filteredTotal: totalPersisted,
+      error: null,
+      source: "Supabase",
+      reason: `${moduleKey}-post-import-refresh-complete`,
+    });
+    console.info("[Post Import Refresh]", {
+      stage: "fim do refresh pós-importação",
+      moduleKey,
+      fileName: fileRecord?.file_name,
+      totalPersisted,
+      files: activeRecords.filter((record) => getDashboardFileModuleKey(record) === moduleKey).length,
+    });
+    hydrateControls();
+    renderAll();
+    return totalPersisted;
+  } catch (error) {
+    moduleLoadingState[moduleKey] = false;
+    console.error("[Post Import Refresh] Falha ao atualizar módulo após upload:", { moduleKey, error });
+    setModuleBaseState(moduleKey, {
+      status: MODULE_BASE_STATUS.error,
+      hasHydratedFromSupabase: true,
+      hasCheckedPersistedData: true,
+      error: error?.message || String(error),
+      source: "post-import",
+      reason: `${moduleKey}-post-import-refresh-error`,
+    });
+    renderAll();
+    showToast("Importação gravada, mas a atualização da aba falhou. Verifique o console e tente reprocessar.", "error", 7200);
     return null;
   }
 }
@@ -13861,7 +14217,7 @@ async function updateDuplicateDashboardFileRecord(record, uploadMetadata, previe
     dashboard_file_id: data.id,
   };
   const processedSaveResult = await saveProcessedRowsForFile(data, previewDataset.rows);
-  const validation = await validatePnrImportPersistence(data, processedSaveResult, previewDataset.rows.length, nextMetadata);
+  const validation = await validateDashboardImportPersistence(data, processedSaveResult, previewDataset.rows.length, nextMetadata);
   await upsertProcessedDashboardFile({
     moduleKey: getDashboardModuleKeyForFileCategory(fileCategory),
     fileRecord: data,
@@ -14009,7 +14365,7 @@ async function uploadDashboardFile(file) {
     return;
   }
   if (!isSpreadsheetImportFile(file)) {
-    showToast("Formatos aceitos: XLSX e CSV.", "warn", 5200);
+    showToast("Formatos aceitos: XLSX, XLS, XLTX e CSV.", "warn", 5200);
     return;
   }
 
@@ -14054,20 +14410,25 @@ async function uploadDashboardFile(file) {
   const duplicatedBeforeParse = await findDashboardFileByHash(guessedFileCategory, preflightHash);
   const duplicatedProcessedRowsCount = duplicatedBeforeParse ? await getPersistedProcessedRowsCount(duplicatedBeforeParse) : 0;
   const alreadyProcessedRowsCount = Number(alreadyProcessed?.row_count || 0);
+  const alreadyProcessedPersistedRowsCount = alreadyProcessed
+    ? await getPersistedRowsCountForProcessedDashboardFile(alreadyProcessed, moduleKey)
+    : 0;
   const pnrTableTotalForDuplicate = guessedFileCategory === DEVIATION_PNR_FILE_CATEGORY
     ? await getProcessedTableTotalCount(DEVIATION_PNR_FILE_CATEGORY).catch(() => 0)
     : 1;
   const alreadyProcessedIsValid = alreadyProcessedRowsCount > 0 &&
+    alreadyProcessedPersistedRowsCount > 0 &&
     String(alreadyProcessed?.status || "").toLowerCase() === "processed" &&
     (guessedFileCategory !== DEVIATION_PNR_FILE_CATEGORY || pnrTableTotalForDuplicate > 0);
   const duplicatedRecordIsValid = duplicatedProcessedRowsCount > 0 &&
     (guessedFileCategory !== DEVIATION_PNR_FILE_CATEGORY || getDashboardFileRole(duplicatedBeforeParse) === uploadFileRole);
+  const duplicateRowsForSummary = alreadyProcessedPersistedRowsCount || duplicatedProcessedRowsCount || alreadyProcessedRowsCount;
   if (alreadyProcessedIsValid || duplicatedRecordIsValid) {
     window.dashboardCacheService?.log?.(moduleKey, "arquivo já processado; evitando reprocessamento", {
       fileName: file.name,
       hash: preflightHash,
       controlRows: alreadyProcessedRowsCount,
-      persistedRows: duplicatedProcessedRowsCount,
+      persistedRows: duplicateRowsForSummary,
       fileRole: uploadFileRole,
     });
     showToast("Arquivo já processado. Dados carregados da base.", "info", 5200);
@@ -14075,23 +14436,21 @@ async function uploadDashboardFile(file) {
     finishDashboardImportState({ status: "already-processed" });
     showDashboardImportSummary({
       original_name: file.name,
-      total_rows_imported: alreadyProcessedRowsCount || duplicatedProcessedRowsCount,
-      total_rows_read: alreadyProcessedRowsCount || duplicatedProcessedRowsCount,
+      total_rows_imported: duplicateRowsForSummary,
+      total_rows_read: duplicateRowsForSummary,
       sheet_count: 1,
-    }, { fileCategory: guessedFileCategory }, { rowsImported: alreadyProcessedRowsCount || duplicatedProcessedRowsCount });
+    }, { fileCategory: guessedFileCategory }, { rowsImported: duplicateRowsForSummary });
     setDashboardVisualState("", { render: false });
     await loadDashboardFilesFromSupabase({ loadActive: true, render: true, validateStorage: false, showLoading: false });
-    if (guessedFileCategory === DEVIATION_PNR_FILE_CATEGORY) {
-      const processedRecord = alreadyProcessed ? mapProcessedDashboardFileToDashboardRecord(alreadyProcessed, DASHBOARD_MODULE_KEYS.desviosPnr) : null;
-      const refreshRecord = duplicatedBeforeParse || processedRecord;
-      if (refreshRecord) {
-        await refreshPnrDashboardAfterImport(refreshRecord, {
-          ...(refreshRecord.metadata || {}),
-          row_count: alreadyProcessedRowsCount || duplicatedProcessedRowsCount,
-          total_rows_imported: alreadyProcessedRowsCount || duplicatedProcessedRowsCount,
-          status: "processed",
-        });
-      }
+    const processedRecord = alreadyProcessed ? mapProcessedDashboardFileToDashboardRecord(alreadyProcessed, moduleKey) : null;
+    const refreshRecord = duplicatedBeforeParse || processedRecord;
+    if (refreshRecord) {
+      await refreshDashboardModuleAfterImport(refreshRecord, {
+        ...(refreshRecord.metadata || {}),
+        row_count: duplicateRowsForSummary,
+        total_rows_imported: duplicateRowsForSummary,
+        status: "processed",
+      });
     }
     return;
   }
@@ -14151,13 +14510,13 @@ async function uploadDashboardFile(file) {
     duplicatedBeforeParse.file_size = file.size;
     setDashboardImportState({ stage: "Gravando dados no Supabase...", progress: 74 }, { render: true });
     const processedSaveResult = await saveProcessedRowsForFile(duplicatedBeforeParse, pendingDataset.rows);
-    const pendingPnrValidation = await validatePnrImportPersistence(duplicatedBeforeParse, processedSaveResult, pendingDataset.rows.length, pendingMetadata);
+    const pendingValidation = await validateDashboardImportPersistence(duplicatedBeforeParse, processedSaveResult, pendingDataset.rows.length, pendingMetadata);
     setDashboardImportState({ stage: "Atualizando indicadores...", progress: 88 }, { render: true });
     await upsertProcessedDashboardFile({
       moduleKey: getDashboardModuleKeyForFileCategory(pendingDataset.fileCategory),
       fileRecord: duplicatedBeforeParse,
       fileHash: preflightHash,
-      rowCount: pendingPnrValidation?.fileRows || pendingDataset.rows.length,
+      rowCount: pendingValidation?.fileRows || pendingDataset.rows.length,
       competencia: pendingMetadata.competencia,
       status: processedSaveResult ? "processed" : "pending",
       metadata: pendingMetadata,
@@ -14167,14 +14526,14 @@ async function uploadDashboardFile(file) {
       status: processedSaveResult ? "processed" : "pending",
     });
     showDashboardImportSummary(pendingMetadata, pendingDataset, {
-      rowsImported: pendingPnrValidation?.fileRows || pendingDataset.rows.length,
-      totalRows: pendingPnrValidation?.totalRows,
+      rowsImported: pendingValidation?.fileRows || pendingDataset.rows.length,
+      totalRows: pendingValidation?.totalRows,
     });
     showToast("Registros pendentes processados e incorporados à base.", "good", 5200);
     dashboardFilesLoading = false;
     setDashboardVisualState("", { render: false });
     await loadDashboardFilesFromSupabase({ loadActive: true, render: true, validateStorage: false, showLoading: false });
-    await refreshPnrDashboardAfterImport(duplicatedBeforeParse, pendingMetadata);
+    await refreshDashboardModuleAfterImport(duplicatedBeforeParse, pendingMetadata);
     return;
   }
   showToast("Novo arquivo identificado. Processando e incorporando à base...", "info", 4200);
@@ -14275,7 +14634,7 @@ async function uploadDashboardFile(file) {
       duplicatesIgnored: uploadMetadata.duplicate_rows_skipped || 0,
     });
     showToast("Arquivo já existia no painel. Os metadados foram atualizados sem duplicar.", "info", 5200);
-    await refreshPnrDashboardAfterImport(data, uploadMetadata);
+    await refreshDashboardModuleAfterImport(data, uploadMetadata);
     return;
   }
 
@@ -14355,14 +14714,14 @@ async function uploadDashboardFile(file) {
   }
   setDashboardImportState({ stage: "Validando registros persistidos...", progress: 82 }, { render: true });
   const processedSaveResult = await saveProcessedRowsForFile(data, previewDataset.rows);
-  const pnrValidation = await validatePnrImportPersistence(data, processedSaveResult, previewDataset.rows.length, uploadMetadata);
+  const importValidation = await validateDashboardImportPersistence(data, processedSaveResult, previewDataset.rows.length, uploadMetadata);
   showToast("Atualizando indicadores...", "info", 3000);
   setDashboardImportState({ stage: "Atualizando indicadores...", progress: 90 }, { render: true });
   await upsertProcessedDashboardFile({
     moduleKey: getDashboardModuleKeyForFileCategory(previewDataset.fileCategory),
     fileRecord: data,
     fileHash: previewDataset.fileHash,
-    rowCount: pnrValidation?.fileRows || previewDataset.rows.length,
+    rowCount: importValidation?.fileRows || previewDataset.rows.length,
     competencia: uploadMetadata.competencia,
     storagePath,
     rawFileDeleted: !KEEP_RAW_UPLOADS_IN_STORAGE,
@@ -14412,9 +14771,9 @@ async function uploadDashboardFile(file) {
     status: "processed",
   });
   showDashboardImportSummary(uploadMetadata, previewDataset, {
-    rowsImported: pnrValidation?.fileRows || uploadMetadata.total_rows_imported || previewDataset.rows.length,
+    rowsImported: importValidation?.fileRows || uploadMetadata.total_rows_imported || previewDataset.rows.length,
     duplicatesIgnored: uploadMetadata.duplicate_rows_skipped || 0,
-    totalRows: pnrValidation?.totalRows,
+    totalRows: importValidation?.totalRows,
   });
   if (Number(uploadMetadata.sheet_count || 0) > 1) {
     showToast(`Importação concluída. Abas encontradas: ${uploadMetadata.sheet_count}. Abas importadas: ${(uploadMetadata.imported_sheets || []).length}. Abas ignoradas: ${(uploadMetadata.ignored_sheets || []).length}. Registros importados: ${integer.format(uploadMetadata.total_rows_imported || previewDataset.rows.length)}.`, "good", 7600);
@@ -14434,6 +14793,8 @@ async function uploadDashboardFile(file) {
       showToast(`Arquivo complementar de PNR importado. Registros novos: ${inserted}. Registros atualizados: ${updated}. Duplicados ignorados: ${ignored}.`, "good", 7200);
     }
     await refreshPnrDashboardAfterImport(data, uploadMetadata);
+  } else {
+    await refreshDashboardModuleAfterImport(data, uploadMetadata);
   }
 }
 
@@ -14549,6 +14910,8 @@ async function loadDashboardFilesFromSupabase(options = {}) {
     dashboardFileRecords = (Array.isArray(data) ? data : [])
       .filter(isUsableDashboardFileRecord)
       .filter(isDashboardFileActive);
+    dashboardFileRecords = await mergeProcessedDashboardFileRecords(dashboardFileRecords, DASHBOARD_MODULE_KEYS.preFatura);
+    dashboardFileRecords = await mergeProcessedDashboardFileRecords(dashboardFileRecords, DASHBOARD_MODULE_KEYS.pacotes);
     dashboardFileRecords = await mergeProcessedDashboardFileRecords(dashboardFileRecords, DASHBOARD_MODULE_KEYS.desviosPnr);
     await hydrateDashboardFileMetadata(dashboardFileRecords, { inferFromFile: options.inferMissingMetadataFromFile === true });
     if (validateStorage && dashboardFileRecords.length) {
@@ -14883,6 +15246,14 @@ async function loadPackageManagementRowsForCards(records, cachedDatasets = new M
   }
 
   packageManagementRows = datasets.flatMap((dataset) => dataset.rows.map(normalizePackageManagementStoredRow).filter(Boolean));
+  if (!packageManagementRows.length && moduleHasConfirmedBase(DASHBOARD_MODULE_KEYS.pacotes)) {
+    const baseState = getModuleBaseState(DASHBOARD_MODULE_KEYS.pacotes);
+    const dataset = await loadPersistedDatasetForModule(DASHBOARD_MODULE_KEYS.pacotes, PACKAGE_MANAGEMENT_FILE_CATEGORY);
+    packageManagementRows = dataset?.rows?.map(normalizePackageManagementStoredRow).filter(Boolean) || [];
+    packageManagementRowsLoadedKey = `persisted:${baseState.total || packageManagementRows.length}:${baseState.lastCheckedAt || ""}`;
+    resetDerivedDataCache();
+    return dataset ? [dataset] : [];
+  }
   packageManagementRowsLoadedKey = loadKey;
   resetDerivedDataCache();
   return datasets;
@@ -15043,6 +15414,43 @@ function clearPnrPostImportLocalState() {
     removeMatching(window.sessionStorage);
   } catch (error) {
     console.warn("[PNR Post Import Refresh] Não foi possível limpar cache local antigo.", error);
+  }
+}
+
+function clearModulePostImportLocalState(moduleKey) {
+  if (moduleKey === DASHBOARD_MODULE_KEYS.desviosPnr) {
+    clearPnrPostImportLocalState();
+    return;
+  }
+  window.dashboardCacheService?.invalidate?.(moduleKey, "post-import");
+  try {
+    const modulePatterns = {
+      [DASHBOARD_MODULE_KEYS.preFatura]: /pre[_-]?fatura|prefatura/i,
+      [DASHBOARD_MODULE_KEYS.evolucao]: /evolucao|evolu[cç][aã]o/i,
+      [DASHBOARD_MODULE_KEYS.pacotes]: /gest[aã]o[_-]?pacotes|pacotes/i,
+    };
+    const patterns = [
+      modulePatterns[moduleKey],
+      /no[_-]?files/i,
+      /empty[_-]?state/i,
+      /no[_-]?base/i,
+      /base[_-]?missing/i,
+      /uploaded[_-]?files[_-]?empty/i,
+      /dashboard[_-]?files[_-]?empty/i,
+      /module[_-]?empty/i,
+    ].filter(Boolean);
+    const removeMatching = (storage) => {
+      const keys = [];
+      for (let index = 0; index < storage.length; index += 1) {
+        const key = storage.key(index);
+        if (key && patterns.some((pattern) => pattern.test(key))) keys.push(key);
+      }
+      keys.forEach((key) => storage.removeItem(key));
+    };
+    removeMatching(window.localStorage);
+    removeMatching(window.sessionStorage);
+  } catch (error) {
+    console.warn("[Post Import Refresh] Não foi possível limpar cache local antigo.", { moduleKey, error });
   }
 }
 
@@ -15468,6 +15876,28 @@ async function loadDashboardDataByFilters(options = {}) {
       } catch (error) {
         console.error("[PRE-FATURA] Falha ao carregar arquivo:", fileRecord?.file_name, error);
         showToast(`Falha ao carregar ${fileRecord?.file_name || "arquivo"}. Os demais arquivos continuarão.`, "warn", 6200);
+      }
+    }
+    if (!allHistoricalDatasets.length && moduleHasConfirmedBase(DASHBOARD_MODULE_KEYS.preFatura)) {
+      const fallbackDataset = await loadPersistedDatasetForModule(DASHBOARD_MODULE_KEYS.preFatura, PRE_FATURA_FILE_CATEGORY);
+      if (fallbackDataset?.rows?.length) {
+        replaceDashboardData(fallbackDataset.rows, {
+          selectedFiles: categoryFiles,
+          selectedDatasets: [fallbackDataset],
+          allHistoricalDatasets: [fallbackDataset, ...packageDatasets, ...pnrDatasets],
+          selectedMonth: "all",
+          selectedPeriod: state.prefaturaPeriod || state.period,
+          fileCategory: PRE_FATURA_FILE_CATEGORY,
+        });
+        setDashboardVisualState("", { render: false });
+        if (shouldRender) {
+          hydrateControls();
+          renderAll();
+        } else {
+          syncActiveDataset();
+          updateDatasetMeta();
+        }
+        return;
       }
     }
     const selectedFileIds = new Set(selectedFiles.map((file) => file.id));
