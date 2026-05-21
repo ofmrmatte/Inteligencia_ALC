@@ -4,7 +4,8 @@
   "private": true,
   "description": "Painel de Inteligência Operacional.",
   "scripts": {
-    "db:migrate:processed-records": "node scripts/apply-processed-records-migration.mjs"
+    "db:migrate:processed-records": "node scripts/apply-processed-records-migration.mjs",
+    "fix:stuck-pnr-processing": "node scripts/fix-stuck-processing-files.mjs"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.87.1",

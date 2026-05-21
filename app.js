@@ -103,10 +103,14 @@ const DEFAULT_PNR_GOAL_LIMIT = DEFAULT_PNR_GOAL_SETTINGS.monthly_goal;
 const SUPABASE_QUERY_TIMEOUT_MS = 30000;
 const STORAGE_DOWNLOAD_TIMEOUT_MS = 45000;
 const XLSX_PROCESS_TIMEOUT_MS = 60000;
+const PNR_XLSX_PROCESS_TIMEOUT_MS = 300000;
 const KEEP_RAW_UPLOADS_IN_STORAGE = false;
 const PROCESSED_ONLY_STORAGE_PREFIX = "processed-only";
 const PROCESSED_RECORDS_BATCH_SIZE = 500;
-const PNR_PROCESSED_RECORDS_BATCH_SIZE = 100;
+const PNR_PROCESSED_RECORDS_BATCH_SIZE = 500;
+const PNR_IMPORT_STALL_TIMEOUT_MS = 120000;
+const PNR_IMPORT_BATCH_TIMEOUT_MS = 90000;
+const PNR_IMPORT_PROGRESS_TOAST_INTERVAL_MS = 12000;
 const PROCESSED_RECORDS_PAGE_SIZE = 1000;
 const PNR_REMOTE_QUERY_DEBOUNCE_MS = 400;
 const PNR_REMOTE_RPC = "desvios_pnr_dashboard";
@@ -13282,6 +13286,68 @@ function logPnrMasterDetection(fileName = "") {
   return isMaster;
 }
 
+function yieldToMainThread() {
+  return new Promise((resolve) => setTimeout(resolve, 0));
+}
+
+function updatePnrImportProgress(progress = {}) {
+  const now = Date.now();
+  const totalSheets = Math.max(1, Number(progress.totalSheets || dashboardImportState.sheetCount || 1));
+  const sheetIndex = Math.max(0, Number(progress.sheetIndex || dashboardImportState.sheetIndex || 0));
+  const rowsRead = Number(progress.rowsRead || dashboardImportState.rowsRead || 0);
+  const rowsImported = Number(progress.rowsImported || dashboardImportState.rowsImported || 0);
+  const duplicatesIgnored = Number(progress.duplicatesIgnored || dashboardImportState.duplicatesIgnored || 0);
+  const sheetName = progress.sheetName || dashboardImportState.sheetName || "";
+  const stage = progress.stage ||
+    (sheetName
+      ? `Processando aba ${Math.min(sheetIndex || 1, totalSheets)} de ${totalSheets}: ${sheetName}`
+      : "Processando registros PNR...");
+  const percent = Number.isFinite(progress.progress)
+    ? progress.progress
+    : Math.min(88, 40 + Math.round((Math.max(1, sheetIndex) / totalSheets) * 32));
+
+  setDashboardImportState({
+    stage,
+    sheetName,
+    sheetIndex,
+    sheetCount: totalSheets,
+    rowsRead,
+    rowsImported,
+    duplicatesIgnored,
+    progress: percent,
+  }, { render: true });
+
+  console.info("[PNR Import Progress]", {
+    fileName: dashboardImportState.fileName,
+    fileRole: getPnrFileRole(dashboardImportState.fileName || ""),
+    sheetName,
+    sheetIndex,
+    totalSheets,
+    rowsRead,
+    rowsImported,
+    duplicatesIgnored,
+    stage,
+  });
+
+  if (!updatePnrImportProgress.lastToastAt || now - updatePnrImportProgress.lastToastAt > PNR_IMPORT_PROGRESS_TOAST_INTERVAL_MS) {
+    updatePnrImportProgress.lastToastAt = now;
+    showToast(`${stage}. Linhas lidas: ${integer.format(rowsRead)}. Importados: ${integer.format(rowsImported)}.`, "info", 5200);
+  }
+}
+
+async function withPnrBatchTimeout(promise, label, details = {}) {
+  try {
+    return await withTimeout(
+      promise,
+      PNR_IMPORT_BATCH_TIMEOUT_MS,
+      `Tempo limite excedido ao ${label}.`,
+    );
+  } catch (error) {
+    console.error("[PNR Batch Insert]", { label, ...details, error });
+    throw error;
+  }
+}
+
 function getPnrCalculatedHeaderSet() {
   return new Set(PNR_CALCULATED_HEADERS.map(normalizePnrHeader));
 }
@@ -13321,7 +13387,7 @@ function isPnrSummaryRow(rowObject) {
   );
 }
 
-function normalizePnrWorkbook(workbook, fileName = "") {
+async function normalizePnrWorkbook(workbook, fileName = "") {
   const records = [];
   let skipped = 0;
   const importedSheets = [];
@@ -13332,17 +13398,28 @@ function normalizePnrWorkbook(workbook, fileName = "") {
   const sourceFileType = fileRole === "master" ? "master" : "quinzena";
   let detectedMasterFile = fileNameLooksMaster;
   const filePeriod = getPnrPeriodFromAny(fileName);
-  workbook.SheetNames.forEach((sheetName) => {
+  for (let sheetIndex = 0; sheetIndex < workbook.SheetNames.length; sheetIndex += 1) {
+    const sheetName = workbook.SheetNames[sheetIndex];
+    updatePnrImportProgress({
+      stage: `Processando aba ${sheetIndex + 1} de ${workbook.SheetNames.length}: ${sheetName}`,
+      sheetName,
+      sheetIndex: sheetIndex + 1,
+      totalSheets: workbook.SheetNames.length,
+      rowsRead: totalRowsRead,
+      rowsImported: records.length,
+      progress: Math.min(68, 38 + Math.round((sheetIndex / Math.max(1, workbook.SheetNames.length)) * 24)),
+    });
+    await yieldToMainThread();
     const sheet = workbook.Sheets[sheetName];
     const matrix = XLSX.utils.sheet_to_json(sheet, { header: 1, raw: false, defval: null });
     if (!matrix.length) {
       ignoredSheets.push({ sheetName, reason: "Aba vazia", rowsRead: 0, importedRows: 0, ignoredRows: 0 });
-      return;
+      continue;
     }
     const headerIndex = matrix.findIndex((row) => rowLooksLikePnrHeader(row || []));
     if (headerIndex < 0) {
       ignoredSheets.push({ sheetName, reason: "Cabeçalho PNR não encontrado", rowsRead: Math.max(matrix.length - 1, 0), importedRows: 0, ignoredRows: Math.max(matrix.length - 1, 0) });
-      return;
+      continue;
     }
     const rawHeaders = matrix[headerIndex] || [];
     const sheetHasCalculatedColumns = hasPnrCalculatedHeaders(rawHeaders);
@@ -13351,7 +13428,7 @@ function normalizePnrWorkbook(workbook, fileName = "") {
       validatePnrSourceHeaders(rawHeaders, { isMaster: sheetIsMaster });
     } catch (error) {
       ignoredSheets.push({ sheetName, reason: error.message || "Cabeçalho PNR inválido", rowsRead: Math.max(matrix.length - headerIndex - 1, 0), importedRows: 0, ignoredRows: Math.max(matrix.length - headerIndex - 1, 0) });
-      return;
+      continue;
     }
     if (sheetIsMaster) detectedMasterFile = true;
     const headers = rawHeaders.map(normalizePnrHeader);
@@ -13359,8 +13436,22 @@ function normalizePnrWorkbook(workbook, fileName = "") {
     let sheetSkipped = 0;
     const rowsRead = Math.max(matrix.length - headerIndex - 1, 0);
     totalRowsRead += rowsRead;
-    matrix.slice(headerIndex + 1).forEach((row) => {
-      if (!row || row.every((cell) => cell === null || cell === "")) return;
+    const dataRows = matrix.slice(headerIndex + 1);
+    for (let rowIndex = 0; rowIndex < dataRows.length; rowIndex += 1) {
+      const row = dataRows[rowIndex];
+      if (rowIndex > 0 && rowIndex % 1000 === 0) {
+        updatePnrImportProgress({
+          stage: `Processando aba ${sheetIndex + 1} de ${workbook.SheetNames.length}: ${sheetName}`,
+          sheetName,
+          sheetIndex: sheetIndex + 1,
+          totalSheets: workbook.SheetNames.length,
+          rowsRead: totalRowsRead - rowsRead + rowIndex,
+          rowsImported: records.length,
+          progress: Math.min(70, 40 + Math.round(((sheetIndex + rowIndex / Math.max(1, dataRows.length)) / Math.max(1, workbook.SheetNames.length)) * 26)),
+        });
+        await yieldToMainThread();
+      }
+      if (!row || row.every((cell) => cell === null || cell === "")) continue;
       const rowObject = {};
       headers.forEach((header, index) => {
         if (header) rowObject[header] = row[index];
@@ -13368,7 +13459,7 @@ function normalizePnrWorkbook(workbook, fileName = "") {
       if (isPnrSummaryRow(rowObject)) {
         skipped += 1;
         sheetSkipped += 1;
-        return;
+        continue;
       }
       const dataCaso = getPnrCell(rowObject, "DATA DO CASO");
       const periodoFaturamento = getPnrCell(rowObject, "PERIODO DE FATURAMENTO", "PERÍODO DE FATURAMENTO");
@@ -13422,18 +13513,28 @@ function normalizePnrWorkbook(workbook, fileName = "") {
       if (!normalized.idEnvio || !normalized.idRota || !normalized.produtos || !normalized.statusOriginal || !(normalized.periodoFaturamento || normalized.quinzenaRef) || !normalized.dedupeKey) {
         skipped += 1;
         sheetSkipped += 1;
-        return;
+        continue;
       }
       normalized.sheetName = sheetName;
       records.push(normalized);
-    });
+    }
     const importedRows = records.length - sheetStartCount;
     if (importedRows) {
       importedSheets.push({ sheetName, rowsRead, importedRows, ignoredRows: sheetSkipped });
     } else {
       ignoredSheets.push({ sheetName, reason: "Nenhuma linha PNR válida", rowsRead, importedRows: 0, ignoredRows: rowsRead });
     }
-  });
+    updatePnrImportProgress({
+      stage: `Aba concluída: ${sheetName}`,
+      sheetName,
+      sheetIndex: sheetIndex + 1,
+      totalSheets: workbook.SheetNames.length,
+      rowsRead: totalRowsRead,
+      rowsImported: records.length,
+      progress: Math.min(72, 42 + Math.round(((sheetIndex + 1) / Math.max(1, workbook.SheetNames.length)) * 26)),
+    });
+    await yieldToMainThread();
+  }
   const deduped = dedupePnrRecords(records);
   const years = deduped.rows
     .map((row) => Number(row.ano || String(row.monthKey || "").slice(0, 4)))
@@ -14554,7 +14655,7 @@ async function updateDuplicateDashboardFileRecord(record, uploadMetadata, previe
     file_id: data.id,
     dashboard_file_id: data.id,
   };
-  const processedSaveResult = await saveProcessedRowsForFile(data, previewDataset.rows);
+  const processedSaveResult = await saveProcessedRowsForFileOrFail(data, previewDataset.rows, nextMetadata);
   const validation = await validateDashboardImportPersistence(data, processedSaveResult, previewDataset.rows.length, nextMetadata);
   await upsertProcessedDashboardFile({
     moduleKey: getDashboardModuleKeyForFileCategory(fileCategory),
@@ -14573,18 +14674,20 @@ async function updateDuplicateDashboardFileRecord(record, uploadMetadata, previe
 }
 
 async function processDashboardFile(file, fileRecord = null, options = {}) {
+  const fileName = fileRecord?.file_name || file.name;
+  const expectedCategory = options.fileCategory || getFileRecordCategory(fileRecord || { file_name: fileName });
+  const fileReadTimeout = expectedCategory === DEVIATION_PNR_FILE_CATEGORY ? PNR_XLSX_PROCESS_TIMEOUT_MS : XLSX_PROCESS_TIMEOUT_MS;
   setDashboardImportState({
-    fileName: fileRecord?.file_name || file.name,
+    fileName,
     fileType: isCsvFile(file || file.name) ? "csv" : "xlsx",
     stage: "Preparando arquivo...",
     progress: Math.max(8, Number(dashboardImportState.progress || 0)),
   }, { render: false });
   const buffer = await withTimeout(
     file.arrayBuffer(),
-    XLSX_PROCESS_TIMEOUT_MS,
+    fileReadTimeout,
     "Tempo limite excedido ao ler o arquivo.",
   );
-  const fileName = fileRecord?.file_name || file.name;
   const isCsv = isCsvFile(file || fileName);
   let workbook;
   let csvStats = null;
@@ -14609,7 +14712,7 @@ async function processDashboardFile(file, fileRecord = null, options = {}) {
     showToast(`Detectando abas: ${workbook.SheetNames.length} encontrada(s).`, "info", 2800);
   }
   const fileHash = options.calculateHash ? await calculateSha256FromBuffer(buffer) : fileRecord?.metadata?.file_hash || "";
-  let fileCategory = options.fileCategory || getFileRecordCategory(fileRecord || { file_name: fileName });
+  let fileCategory = expectedCategory;
   if (fileCategory === PRE_FATURA_FILE_CATEGORY && workbookLooksLikePnr(workbook)) {
     fileCategory = DEVIATION_PNR_FILE_CATEGORY;
   }
@@ -14623,7 +14726,7 @@ async function processDashboardFile(file, fileRecord = null, options = {}) {
   }, { render: true });
   showToast("Normalizando colunas...", "info", 2600);
   const rows = fileCategory === DEVIATION_PNR_FILE_CATEGORY
-    ? normalizePnrWorkbook(workbook, fileName)
+    ? await normalizePnrWorkbook(workbook, fileName)
     : fileCategory === PACKAGE_MANAGEMENT_FILE_CATEGORY
       ? normalizePackageManagementWorkbook(workbook, fileName)
       : normalizeWorkbook(workbook);
@@ -14721,13 +14824,14 @@ async function uploadDashboardFile(file) {
   updateDatasetMeta();
   showToast(isCsvFile(file) ? "Lendo CSV..." : "Lendo arquivo XLSX...", "info", 3200);
   setDashboardImportState({ stage: "Calculando assinatura do arquivo...", progress: 10 }, { render: true });
+  const guessedFileCategory = getUploadFileCategory(file.name);
+  const fileReadTimeout = guessedFileCategory === DEVIATION_PNR_FILE_CATEGORY ? PNR_XLSX_PROCESS_TIMEOUT_MS : XLSX_PROCESS_TIMEOUT_MS;
   const preflightBuffer = await withTimeout(
     file.arrayBuffer(),
-    XLSX_PROCESS_TIMEOUT_MS,
+    fileReadTimeout,
     "Tempo limite excedido ao ler o arquivo para validação.",
   );
   const preflightHash = await calculateSha256FromBuffer(preflightBuffer);
-  const guessedFileCategory = getUploadFileCategory(file.name);
   const moduleKey = getDashboardModuleKeyForFileCategory(guessedFileCategory);
   const uploadFileRole = guessedFileCategory === DEVIATION_PNR_FILE_CATEGORY ? getPnrFileRole(file.name) : "";
   if (guessedFileCategory === DEVIATION_PNR_FILE_CATEGORY) {
@@ -14847,7 +14951,7 @@ async function uploadDashboardFile(file) {
     duplicatedBeforeParse.file_type = pendingDataset.fileCategory;
     duplicatedBeforeParse.file_size = file.size;
     setDashboardImportState({ stage: "Gravando dados no Supabase...", progress: 74 }, { render: true });
-    const processedSaveResult = await saveProcessedRowsForFile(duplicatedBeforeParse, pendingDataset.rows);
+    const processedSaveResult = await saveProcessedRowsForFileOrFail(duplicatedBeforeParse, pendingDataset.rows, pendingMetadata);
     const pendingValidation = await validateDashboardImportPersistence(duplicatedBeforeParse, processedSaveResult, pendingDataset.rows.length, pendingMetadata);
     setDashboardImportState({ stage: "Atualizando indicadores...", progress: 88 }, { render: true });
     await upsertProcessedDashboardFile({
@@ -15051,7 +15155,7 @@ async function uploadDashboardFile(file) {
     await deactivateOtherPreFaturaRecords(data.id);
   }
   setDashboardImportState({ stage: "Validando registros persistidos...", progress: 82 }, { render: true });
-  const processedSaveResult = await saveProcessedRowsForFile(data, previewDataset.rows);
+  const processedSaveResult = await saveProcessedRowsForFileOrFail(data, previewDataset.rows, uploadMetadata);
   const importValidation = await validateDashboardImportPersistence(data, processedSaveResult, previewDataset.rows.length, uploadMetadata);
   showToast("Atualizando indicadores...", "info", 3000);
   setDashboardImportState({ stage: "Atualizando indicadores...", progress: 90 }, { render: true });
@@ -16781,6 +16885,60 @@ async function updateProcessedFileMetadata(fileRecord, payloadLength, extraMetad
   Object.assign(fileRecord, { status: "processed", metadata });
 }
 
+async function markPnrImportFailed(fileRecord, error, extraMetadata = {}) {
+  if (!window.supabaseClient || !fileRecord?.id) return;
+  const failedAt = new Date().toISOString();
+  const metadata = {
+    ...(fileRecord.metadata || {}),
+    ...extraMetadata,
+    import_failed_at: failedAt,
+    processing_finished_at: failedAt,
+    processing_error: error?.message || String(error || "Erro desconhecido"),
+    processing_status: "failed",
+  };
+  console.error("[PNR Import Finalize]", {
+    fileName: fileRecord.file_name,
+    fileRole: getPnrSourceFileTypeForFileRecord(fileRecord),
+    status: "failed",
+    error,
+  });
+  await window.supabaseClient
+    .from("dashboard_files")
+    .update({
+      status: "failed",
+      metadata,
+      updated_at: failedAt,
+    })
+    .eq("id", fileRecord.id);
+  Object.assign(fileRecord, { status: "failed", metadata });
+  const moduleKey = getDashboardModuleKeyForFileCategory(getFileRecordCategory(fileRecord));
+  const fileHash = metadata.file_hash || metadata.hash || "";
+  if (moduleKey && fileHash) {
+    await upsertProcessedDashboardFile({
+      moduleKey,
+      fileRecord,
+      fileHash,
+      rowCount: Number(metadata.row_count || metadata.record_count || 0) || 0,
+      competencia: metadata.competencia || "",
+      status: "failed",
+      storagePath: fileRecord.storage_path || metadata.storage_path || "",
+      rawFileDeleted: metadata.raw_file_deleted === true,
+      metadata,
+    });
+  }
+}
+
+async function saveProcessedRowsForFileOrFail(fileRecord, rows, metadata = {}) {
+  try {
+    return await saveProcessedRowsForFile(fileRecord, rows);
+  } catch (error) {
+    if (getFileRecordCategory(fileRecord) === DEVIATION_PNR_FILE_CATEGORY) {
+      await markPnrImportFailed(fileRecord, error, metadata);
+    }
+    throw error;
+  }
+}
+
 async function fetchExistingPnrRecordsByDedupeKey(tableName, keys) {
   const existing = new Map();
   const uniqueKeys = [...new Set((Array.isArray(keys) ? keys : []).filter(Boolean))];
@@ -16788,15 +16946,29 @@ async function fetchExistingPnrRecordsByDedupeKey(tableName, keys) {
   const fallbackSelect = "id,file_id,dedupe_key,status_normalizado,periodo_faturamento,periodo_faturamento_original,source_periodo,quinzena_ref,month_key,quinzena_key,data_encerramento_caso,data_caso,created_at";
   for (let index = 0; index < uniqueKeys.length; index += PNR_PROCESSED_RECORDS_BATCH_SIZE) {
     const batch = uniqueKeys.slice(index, index + PNR_PROCESSED_RECORDS_BATCH_SIZE);
-    let { data, error } = await window.supabaseClient
-      .from(tableName)
-      .select(fullSelect)
-      .in("dedupe_key", batch);
-    if (error && /source_file_type|source_period|source_quinzena|first_seen_at|last_seen_at|status_previous|status_current|status_updated_at|upload_batch_id|PGRST204|schema cache|Could not find/i.test(`${error.code || ""} ${error.message || ""} ${error.details || ""}`)) {
-      ({ data, error } = await window.supabaseClient
+    console.info("[PNR Batch Insert]", {
+      stage: "dedupe lookup",
+      index,
+      size: batch.length,
+      totalKeys: uniqueKeys.length,
+    });
+    let { data, error } = await withPnrBatchTimeout(
+      window.supabaseClient
         .from(tableName)
-        .select(fallbackSelect)
-        .in("dedupe_key", batch));
+        .select(fullSelect)
+        .in("dedupe_key", batch),
+      "consultar duplicidades PNR",
+      { index, size: batch.length },
+    );
+    if (error && /source_file_type|source_period|source_quinzena|first_seen_at|last_seen_at|status_previous|status_current|status_updated_at|upload_batch_id|PGRST204|schema cache|Could not find/i.test(`${error.code || ""} ${error.message || ""} ${error.details || ""}`)) {
+      ({ data, error } = await withPnrBatchTimeout(
+        window.supabaseClient
+          .from(tableName)
+          .select(fallbackSelect)
+          .in("dedupe_key", batch),
+        "consultar duplicidades PNR em modo compatível",
+        { index, size: batch.length },
+      ));
     }
     if (error) {
       console.error("[PNR Import] Falha ao buscar dedupe existente", { index, size: batch.length, error });
@@ -16805,6 +16977,14 @@ async function fetchExistingPnrRecordsByDedupeKey(tableName, keys) {
     (Array.isArray(data) ? data : []).forEach((record) => {
       if (record?.dedupe_key) existing.set(record.dedupe_key, record);
     });
+    updatePnrImportProgress({
+      stage: "Verificando duplicidades no banco...",
+      rowsRead: Number(dashboardImportState.rowsRead || 0),
+      rowsImported: Number(dashboardImportState.rowsImported || 0),
+      duplicatesIgnored: existing.size,
+      progress: Math.min(78, 70 + Math.round(((index + batch.length) / Math.max(1, uniqueKeys.length)) * 8)),
+    });
+    await yieldToMainThread();
   }
   return existing;
 }
@@ -16854,11 +17034,32 @@ function preparePnrConsolidatedRecord(record, fileRecord, uploadTimestamp) {
 }
 
 async function savePnrProcessedRowsForFile(fileRecord, tableName, payload) {
+  const startedAt = performance.now();
+  let lastProgressAt = performance.now();
   const uploadTimestamp = new Date().toISOString();
   const rows = (Array.isArray(payload) ? payload : [])
     .map((record) => preparePnrConsolidatedRecord(record, fileRecord, uploadTimestamp))
     .filter((record) => record.dedupe_key);
-  await window.supabaseClient.from(tableName).delete().eq("file_id", fileRecord.id);
+  const fileRole = getPnrSourceFileTypeForFileRecord(fileRecord);
+  console.info("[PNR Master Import]", {
+    fileName: fileRecord.file_name,
+    fileRole,
+    totalRows: rows.length,
+    status: "persist-start",
+  });
+  updatePnrImportProgress({
+    stage: "Limpando registros antigos deste arquivo...",
+    rowsRead: rows.length,
+    rowsImported: 0,
+    duplicatesIgnored: 0,
+    progress: 72,
+  });
+  const { error: deleteError } = await withPnrBatchTimeout(
+    window.supabaseClient.from(tableName).delete().eq("file_id", fileRecord.id),
+    "limpar registros antigos do arquivo PNR",
+    { fileId: fileRecord.id },
+  );
+  if (deleteError) throw deleteError;
   const existingByKey = await fetchExistingPnrRecordsByDedupeKey(tableName, rows.map((record) => record.dedupe_key));
   const updates = [];
   const inserts = [];
@@ -16884,33 +17085,93 @@ async function savePnrProcessedRowsForFile(fileRecord, tableName, payload) {
     }
   });
 
+  let rowsPersisted = 0;
   for (let index = 0; index < updates.length; index += PNR_PROCESSED_RECORDS_BATCH_SIZE) {
     const batch = updates.slice(index, index + PNR_PROCESSED_RECORDS_BATCH_SIZE);
-    const { error } = await window.supabaseClient.from(tableName).upsert(batch, { onConflict: "id" });
+    const { error } = await withPnrBatchTimeout(
+      window.supabaseClient.from(tableName).upsert(batch, { onConflict: "id" }),
+      "atualizar registros PNR em lote",
+      { index, size: batch.length },
+    );
     if (error) {
       console.error("[PNR Import] Falha no batch de atualização", { index, size: batch.length, error });
       throw error;
     }
+    rowsPersisted += batch.length;
+    lastProgressAt = performance.now();
+    console.info("[PNR Batch Insert]", {
+      stage: "update",
+      fileName: fileRecord.file_name,
+      fileRole,
+      index,
+      size: batch.length,
+      rowsPersisted,
+      updates: updates.length,
+      inserts: inserts.length,
+    });
+    updatePnrImportProgress({
+      stage: "Atualizando registros PNR no Supabase...",
+      rowsRead: rows.length,
+      rowsImported: rowsPersisted,
+      duplicatesIgnored: ignoredOlder.length,
+      progress: Math.min(86, 78 + Math.round((rowsPersisted / Math.max(1, updates.length + inserts.length)) * 8)),
+    });
+    await yieldToMainThread();
   }
   for (let index = 0; index < inserts.length; index += PNR_PROCESSED_RECORDS_BATCH_SIZE) {
     const batch = inserts.slice(index, index + PNR_PROCESSED_RECORDS_BATCH_SIZE);
-    const { error } = await window.supabaseClient.from(tableName).insert(batch);
+    const { error } = await withPnrBatchTimeout(
+      window.supabaseClient.from(tableName).insert(batch),
+      "inserir registros PNR em lote",
+      { index, size: batch.length },
+    );
     if (error) {
       console.error("[PNR Import] Falha no batch de inserção", { index, size: batch.length, error });
       throw error;
+    }
+    rowsPersisted += batch.length;
+    lastProgressAt = performance.now();
+    console.info("[PNR Batch Insert]", {
+      stage: "insert",
+      fileName: fileRecord.file_name,
+      fileRole,
+      index,
+      size: batch.length,
+      rowsPersisted,
+      updates: updates.length,
+      inserts: inserts.length,
+    });
+    updatePnrImportProgress({
+      stage: "Inserindo registros PNR no Supabase...",
+      rowsRead: rows.length,
+      rowsImported: rowsPersisted,
+      duplicatesIgnored: ignoredOlder.length,
+      progress: Math.min(88, 78 + Math.round((rowsPersisted / Math.max(1, updates.length + inserts.length)) * 10)),
+    });
+    await yieldToMainThread();
+    if (performance.now() - lastProgressAt > PNR_IMPORT_STALL_TIMEOUT_MS) {
+      throw new Error("Processamento PNR sem avanço detectado. A importação foi interrompida para permitir nova tentativa.");
     }
   }
 
   const stats = getWorkbookStatsForCategory(DEVIATION_PNR_FILE_CATEGORY);
   const ignored = Number(stats.duplicateRowsSkipped || 0) + ignoredOlder.length;
-  console.info("[PNR Import] consolidação concluída", {
+  console.info("[PNR Import Finalize]", {
     fileName: fileRecord.file_name,
-    fileType: getPnrSourceFileTypeForFileRecord(fileRecord),
+    fileType: fileRole,
     rowsRead: rows.length,
     inserted: inserts.length,
     updated: updates.length,
     ignoredOlder: ignoredOlder.length,
     invalidRows: Number(stats.skipped || stats.errors || 0),
+    ms: Math.round(performance.now() - startedAt),
+  });
+  updatePnrImportProgress({
+    stage: "Finalizando importação PNR...",
+    rowsRead: rows.length,
+    rowsImported: inserts.length + updates.length,
+    duplicatesIgnored: ignored,
+    progress: 89,
   });
   await updateProcessedFileMetadata(fileRecord, rows.length, {
     records_new: inserts.length,
@@ -16952,6 +17213,7 @@ async function saveProcessedRowsForFile(fileRecord, rows) {
       return false;
     }
     console.error("[PROCESSED RECORDS] Falha ao salvar linhas processadas:", error);
+    if (fileCategory === DEVIATION_PNR_FILE_CATEGORY) throw error;
     return false;
   }
 }
