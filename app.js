@@ -23,6 +23,7 @@ const PRE_FATURA_FILE_CATEGORY = "PRE_FATURA";
 const PACKAGE_MANAGEMENT_FILE_CATEGORY = "GESTAO_PACOTES";
 const DEVIATION_PNR_FILE_CATEGORY = "DESVIOS_PNR";
 const DEVIATION_CATEGORY_PNRS = "PNRS";
+const DEVIATION_CATEGORY_MISSING_PACKAGES = "PACOTES_FALTANTES";
 const DASHBOARD_MODULE_KEYS = {
   preFatura: "pre-fatura",
   evolucao: "evolucao-mensal",
@@ -55,6 +56,7 @@ const DASHBOARD_EMPTY_STATE_COPY = {
 };
 const DEVIATION_CATEGORIES = [
   { key: DEVIATION_CATEGORY_PNRS, label: "PNRs", enabled: true },
+  { key: DEVIATION_CATEGORY_MISSING_PACKAGES, label: "Pacotes Faltantes", enabled: true },
 ];
 const PREFATURA_CATEGORIES = [
   { key: PREFATURA_VIEW_OVERVIEW, label: "Visão geral", enabled: true },
@@ -196,6 +198,13 @@ const STATE_DEFAULT = {
   pnrFonteCruzamento: "Todos",
   pnrMotorista: "Todos",
   pnrRota: "Todos",
+  missingPackagesText: "",
+  missingPackagesDate: "Todos",
+  missingPackagesBase: "Todos",
+  missingPackagesDriver: "Todos",
+  missingPackagesCaseStatus: "Todos",
+  missingPackagesMeliStatus: "Todos",
+  missingPackagesDeadline: "Todos",
   base: "Todos",
   motorista: "Todos",
   period: "month",
@@ -310,6 +319,7 @@ let isPreFaturaCategoryMenuOpen = false;
 let isDeviationCategoryMenuOpen = false;
 let activePnrFilterMenu = "";
 let activePnrStatusDropdownRecordId = "";
+let activeMissingPackageStatusDropdown = "";
 let isPnrSearchExpanded = false;
 let activeDropdownPortalKind = "";
 let chartViewportObserver = null;
@@ -318,6 +328,10 @@ let chartAnimationToken = 0;
 let evolutionScrollObservers = [];
 let pdfLogoLoadPromise = null;
 let supabaseAuthListenerBound = false;
+let missingPackagesRows = [];
+let isLoadingMissingPackages = false;
+let isImportingMissingPackages = false;
+let isExportingMissingPackagesExcel = false;
 let pendingAvatarFile = null;
 let pendingAvatarPreviewUrl = "";
 let pendingAvatarSourceUrl = "";
@@ -1026,6 +1040,88 @@ function bindEvents() {
     event.preventDefault();
     await savePendingPnrStatusEdits(button);
   });
+  document.addEventListener("click", async (event) => {
+    const button = event.target.closest("[data-missing-packages-process]");
+    if (button) {
+      event.preventDefault();
+      await processMissingPackagesText();
+      return;
+    }
+    const clearText = event.target.closest("[data-missing-packages-clear-text]");
+    if (clearText) {
+      event.preventDefault();
+      state.missingPackagesText = "";
+      persistState();
+      renderAll();
+      return;
+    }
+    const exportButton = event.target.closest("[data-missing-packages-export]");
+    if (exportButton) {
+      event.preventDefault();
+      await exportMissingPackagesExcel(exportButton);
+      return;
+    }
+    const statusToggle = event.target.closest("[data-missing-status-toggle]");
+    if (statusToggle) {
+      event.preventDefault();
+      openMissingPackageStatusDropdown(statusToggle);
+      return;
+    }
+    const statusOption = event.target.closest("[data-missing-status-option]");
+    if (statusOption) {
+      event.preventDefault();
+      await applyMissingPackageStatusOption(statusOption);
+      return;
+    }
+    const pageButton = event.target.closest("[data-missing-packages-page]");
+    if (pageButton) {
+      const totalRows = getFilteredMissingPackagesRows().length;
+      const totalPages = Math.max(1, Math.ceil(totalRows / state.pageSize));
+      state.page = pageButton.dataset.missingPackagesPage === "next" ? Math.min(totalPages, state.page + 1) : Math.max(1, state.page - 1);
+      persistState();
+      renderAll();
+      return;
+    }
+    if (!event.target.closest("[data-missing-status-dropdown]")) closeMissingPackageStatusDropdown();
+  });
+  document.addEventListener("input", (event) => {
+    const textarea = event.target.closest("[data-missing-packages-text]");
+    if (!textarea) return;
+    state.missingPackagesText = textarea.value || "";
+    persistState();
+  });
+  document.addEventListener("change", (event) => {
+    const field = event.target.closest("[data-missing-packages-filter]");
+    if (!field) return;
+    const key = field.dataset.missingPackagesFilter;
+    const map = {
+      data: "missingPackagesDate",
+      base: "missingPackagesBase",
+      driver: "missingPackagesDriver",
+      statusCaso: "missingPackagesCaseStatus",
+      statusMeli: "missingPackagesMeliStatus",
+      prazo: "missingPackagesDeadline",
+    };
+    if (map[key]) {
+      state[map[key]] = field.value || "Todos";
+      state.page = 1;
+      persistState();
+      renderAll();
+    }
+  });
+  document.addEventListener("click", (event) => {
+    const clear = event.target.closest("[data-missing-packages-clear]");
+    if (!clear) return;
+    state.missingPackagesDate = "Todos";
+    state.missingPackagesBase = "Todos";
+    state.missingPackagesDriver = "Todos";
+    state.missingPackagesCaseStatus = "Todos";
+    state.missingPackagesMeliStatus = "Todos";
+    state.missingPackagesDeadline = "Todos";
+    state.page = 1;
+    persistState();
+    renderAll();
+  });
   document.addEventListener("click", (event) => {
     const toggle = event.target.closest("[data-pnr-status-toggle]");
     if (toggle) {
@@ -1260,6 +1356,11 @@ function bindEvents() {
     if (event.key !== "Escape") return;
     if (activePnrStatusDropdownRecordId) {
       closePnrStatusDropdown();
+      event.preventDefault();
+      return;
+    }
+    if (activeMissingPackageStatusDropdown) {
+      closeMissingPackageStatusDropdown();
       event.preventDefault();
       return;
     }
@@ -2450,6 +2551,7 @@ function hydrateControls() {
 
 function updateGlobalPeriodFiltersVisibility(isEvolutionView = state.sheet === MONTHLY_BASE_VIEW || (state.sheet === PRE_FATURA_VIEW && state.preFaturaView === PREFATURA_VIEW_EVOLUTION)) {
   const isPnrDeviationView = state.sheet === DEVIATION_MANAGEMENT_VIEW && state.activeDesvioCategory === DEVIATION_CATEGORY_PNRS;
+  const isMissingPackagesView = state.sheet === DEVIATION_MANAGEMENT_VIEW && state.activeDesvioCategory === DEVIATION_CATEGORY_MISSING_PACKAGES;
   const hideDataFilters = isEvolutionView || state.sheet === DEVIATION_MANAGEMENT_VIEW;
   const searchFilter = el.searchInput?.closest(".global-search-filter");
   const monthFilter = el.monthFilter || el.monthSelect?.closest(".global-period-filter");
@@ -2463,11 +2565,11 @@ function updateGlobalPeriodFiltersVisibility(isEvolutionView = state.sheet === M
   if (typeFilter) typeFilter.hidden = hideDataFilters;
   if (el.globalPeriodFilters) el.globalPeriodFilters.hidden = hideDataFilters;
   if (pnrToolbarFilters) {
-    pnrToolbarFilters.hidden = !isPnrDeviationView;
-    pnrToolbarFilters.innerHTML = isPnrDeviationView ? renderPnrFilterControls() : "";
+    pnrToolbarFilters.hidden = !(isPnrDeviationView || isMissingPackagesView);
+    pnrToolbarFilters.innerHTML = isPnrDeviationView ? renderPnrFilterControls() : isMissingPackagesView ? renderMissingPackagesFilterControls() : "";
   }
   if (el.viewToolbar) {
-    el.viewToolbar.classList.toggle("is-evolution-view", isEvolutionView || (state.sheet === DEVIATION_MANAGEMENT_VIEW && !isPnrDeviationView));
+    el.viewToolbar.classList.toggle("is-evolution-view", isEvolutionView || (state.sheet === DEVIATION_MANAGEMENT_VIEW && !isPnrDeviationView && !isMissingPackagesView));
     el.viewToolbar.classList.toggle("is-prefatura-evolution-view", state.sheet === PRE_FATURA_VIEW && state.preFaturaView === PREFATURA_VIEW_EVOLUTION);
     el.viewToolbar.classList.toggle("is-package-view", state.sheet === PACKAGE_MANAGEMENT_VIEW);
     el.viewToolbar.classList.toggle("is-pnr-view", isPnrDeviationView);
@@ -2826,7 +2928,7 @@ function renderDeviationSettingsCategories(filesCount = 0) {
   return `
     <div class="settings-deviation-categories" aria-label="Categorias da Gestão de Desvios">
       ${DEVIATION_CATEGORIES.map((category) => {
-        const enabled = category.key === DEVIATION_CATEGORY_PNRS;
+        const enabled = category.enabled === true;
         return `
           <span class="settings-deviation-category ${enabled ? "is-enabled is-active" : "is-disabled"}">
             <span>${escapeHtml(category.label)}</span>
@@ -2976,7 +3078,7 @@ function renderTabs() {
             aria-expanded="${isDeviationCategoryMenuOpen ? "true" : "false"}"
           >
             <span class="sheet-tab__label">${escapeHtml(label)}</span>
-            ${sheet === state.sheet && state.activeDesvioCategory === DEVIATION_CATEGORY_PNRS ? '<span class="sheet-tab__badge">PNR</span>' : ""}
+            ${sheet === state.sheet && state.activeDesvioCategory ? `<span class="sheet-tab__badge">${escapeHtml(state.activeDesvioCategory === DEVIATION_CATEGORY_PNRS ? "PNR" : getDeviationCategoryLabel(state.activeDesvioCategory))}</span>` : ""}
           </button>
           ${renderDeviationCategoryMenu()}
         </span>
@@ -3646,6 +3748,8 @@ function handleDeviationCategorySelection(categoryKey) {
       hydrateControls();
       renderAll();
     });
+  } else if (state.activeDesvioCategory === DEVIATION_CATEGORY_MISSING_PACKAGES) {
+    void loadMissingPackagesFromSupabase({ render: true });
   }
 }
 
@@ -3689,6 +3793,512 @@ function renderDeviationCategoryMenu() {
   }).join("")}
     </div>
   `;
+}
+
+function normalizeMissingPackageRow(record = {}) {
+  const statusCaso = record.status_caso || record.statusCaso || "Pendente";
+  const statusContatoMeli = record.status_contato_meli || record.statusContatoMeli || "Em tratativa";
+  const row = {
+    id: record.id || "",
+    dataFechamento: record.data_fechamento || record.dataFechamento || "",
+    base: record.base || "",
+    tipoBase: record.tipo_base || record.tipoBase || "XPT",
+    driverNome: record.driver_nome || record.driverNome || "",
+    idEnvio: record.id_envio || record.idEnvio || "",
+    caso: record.caso || "Pacote faltante",
+    motivoOriginal: record.motivo_original || record.motivoOriginal || "Faltante",
+    statusCaso,
+    statusContatoMeli,
+    prazoTratativa: record.prazo_tratativa || record.prazoTratativa || "",
+    situacaoPrazoSalva: record.situacao_prazo || record.situacaoPrazo || "",
+    importedAt: record.imported_at || record.importedAt || "",
+    importedBy: record.imported_by || record.importedBy || "",
+    sourceHash: record.source_hash || record.sourceHash || "",
+    dedupeKey: record.dedupe_key || record.dedupeKey || "",
+    updatedAt: record.updated_at || record.updatedAt || "",
+  };
+  row.situacaoPrazo = getMissingPackageDeadlineStatus(row);
+  return row;
+}
+
+function parseMissingPackageDate(value = "") {
+  const parsed = parseDateValue(value);
+  if (parsed.iso) return parsed.iso;
+  const match = String(value || "").match(/(\d{1,2})[\/.-](\d{1,2})[\/.-](\d{2,4})/);
+  if (!match) return "";
+  const year = match[3].length === 2 ? `20${match[3]}` : match[3];
+  return `${year}-${match[2].padStart(2, "0")}-${match[1].padStart(2, "0")}`;
+}
+
+function parseMissingPackagesText(text = "") {
+  const lines = String(text || "").replace(/\r/g, "").split("\n").map((line) => line.trim());
+  const header = {
+    base: "",
+    dataFechamento: "",
+    ds: "",
+    rotas: 0,
+    pacotes: 0,
+    insucessos: 0,
+  };
+  const ignoredLines = [];
+  const drivers = new Set();
+  const records = [];
+  let currentDriver = "";
+
+  lines.forEach((line) => {
+    if (!line) return;
+    const normalized = normalizeText(line);
+    const closingMatch = line.match(/^Fechamento\s+(.+)$/i);
+    if (closingMatch) {
+      header.base = closingMatch[1].trim().split(/\s+/)[0] || "";
+      return;
+    }
+    const dateMatch = line.match(/^Data\s*:\s*(.+)$/i);
+    if (dateMatch) {
+      header.dataFechamento = parseMissingPackageDate(dateMatch[1]);
+      return;
+    }
+    const dsMatch = line.match(/^DS\s*:\s*([\d.,]+)/i);
+    if (dsMatch) {
+      header.ds = Number(String(dsMatch[1]).replace(/\./g, "").replace(",", ".")) || 0;
+      return;
+    }
+    const rotasMatch = normalized.match(/rotas\s*[: ]\s*([\d.]+)/);
+    if (rotasMatch) {
+      header.rotas = Number(rotasMatch[1].replace(/\./g, "")) || 0;
+      return;
+    }
+    const pacotesMatch = normalized.match(/pacotes\s*[: ]\s*([\d.]+)/);
+    if (pacotesMatch) {
+      header.pacotes = Number(pacotesMatch[1].replace(/\./g, "")) || 0;
+      return;
+    }
+    const insucessosMatch = normalized.match(/insucessos\s*[: ]\s*([\d.]+)/);
+    if (insucessosMatch) {
+      header.insucessos = Number(insucessosMatch[1].replace(/\./g, "")) || 0;
+      return;
+    }
+    const driverMatch = line.match(/^Driver\s*:\s*(.+)$/i);
+    if (driverMatch) {
+      currentDriver = driverMatch[1].trim();
+      if (currentDriver) drivers.add(currentDriver);
+      return;
+    }
+    const packageMatch = line.match(/^(\d{8,})\s+(.+)$/);
+    if (!packageMatch) return;
+    const idEnvio = packageMatch[1].trim();
+    const motivo = packageMatch[2].trim();
+    if (!/\bfaltante\b/i.test(normalizeText(motivo))) {
+      ignoredLines.push(line);
+      return;
+    }
+    records.push({
+      dataFechamento: header.dataFechamento,
+      base: header.base,
+      tipoBase: "XPT",
+      driverNome: currentDriver,
+      idEnvio,
+      caso: "Pacote faltante",
+      motivoOriginal: motivo,
+    });
+  });
+
+  return {
+    header,
+    driversRead: drivers.size,
+    records,
+    ignoredLines,
+  };
+}
+
+function buildMissingPackageDedupeKey(record = {}) {
+  return [
+    record.dataFechamento,
+    normalizeText(record.base),
+    normalizeText(record.driverNome),
+    String(record.idEnvio || "").trim(),
+    "pacote faltante",
+  ].join("|");
+}
+
+function getMissingPackageDeadlineStatus(row = {}) {
+  if (row.statusCaso === "Resolvido" || row.statusCaso === "Cancelado" || row.statusContatoMeli === "Concluído") return "Concluído";
+  const deadline = row.prazoTratativa ? new Date(row.prazoTratativa) : null;
+  if (!deadline || Number.isNaN(deadline.getTime())) return "Dentro do prazo";
+  const remainingMs = deadline.getTime() - Date.now();
+  if (remainingMs <= 0) return "Vencido";
+  if (remainingMs <= 12 * 60 * 60 * 1000) return "Próximo do vencimento";
+  return "Dentro do prazo";
+}
+
+async function getMissingPackageSourceHash(text = "") {
+  const bytes = new TextEncoder().encode(String(text || ""));
+  return calculateSha256FromBuffer(bytes.buffer);
+}
+
+async function loadMissingPackagesFromSupabase(options = {}) {
+  if (!window.supabaseClient || !currentUser) return [];
+  isLoadingMissingPackages = true;
+  if (options.render) renderAll();
+  try {
+    const { data, error } = await withTimeout(
+      window.supabaseClient
+        .from("gestao_desvios_pacotes_faltantes")
+        .select("*")
+        .order("imported_at", { ascending: false }),
+      SUPABASE_QUERY_TIMEOUT_MS,
+      "Tempo limite excedido ao carregar Pacotes Faltantes.",
+    );
+    if (error) throw error;
+    missingPackagesRows = (Array.isArray(data) ? data : []).map(normalizeMissingPackageRow);
+    return missingPackagesRows;
+  } catch (error) {
+    console.error("[Pacotes Faltantes] Falha ao carregar registros.", error);
+    showToast("Não foi possível carregar Pacotes Faltantes.", "error", 5200);
+    return missingPackagesRows;
+  } finally {
+    isLoadingMissingPackages = false;
+    if (options.render) {
+      hydrateControls();
+      renderAll();
+    }
+  }
+}
+
+async function fetchExistingMissingPackageKeys(keys = []) {
+  const existing = new Set();
+  const uniqueKeys = [...new Set(keys.filter(Boolean))];
+  for (let index = 0; index < uniqueKeys.length; index += 80) {
+    const batch = uniqueKeys.slice(index, index + 80);
+    const { data, error } = await window.supabaseClient
+      .from("gestao_desvios_pacotes_faltantes")
+      .select("dedupe_key")
+      .in("dedupe_key", batch);
+    if (error) throw error;
+    (Array.isArray(data) ? data : []).forEach((row) => {
+      if (row.dedupe_key) existing.add(row.dedupe_key);
+    });
+  }
+  return existing;
+}
+
+async function processMissingPackagesText() {
+  if (!window.supabaseClient || !currentUser) {
+    showToast("Faça login para importar Pacotes Faltantes.", "warn", 4200);
+    return;
+  }
+  const text = state.missingPackagesText || "";
+  if (!text.trim()) {
+    showToast("Cole o texto do dispatcher antes de processar.", "warn", 4200);
+    return;
+  }
+  isImportingMissingPackages = true;
+  renderAll();
+  try {
+    const parsed = parseMissingPackagesText(text);
+    if (!parsed.header.base || !parsed.header.dataFechamento) {
+      throw new Error("Não foi possível identificar base e data do fechamento.");
+    }
+    const sourceHash = await getMissingPackageSourceHash(text);
+    const now = new Date();
+    const prazo = new Date(now.getTime() + 48 * 60 * 60 * 1000).toISOString();
+    const prepared = parsed.records.map((record) => ({
+      data_fechamento: record.dataFechamento,
+      base: record.base,
+      tipo_base: "XPT",
+      driver_nome: record.driverNome,
+      id_envio: record.idEnvio,
+      caso: "Pacote faltante",
+      motivo_original: record.motivoOriginal || "Faltante",
+      status_caso: "Pendente",
+      status_contato_meli: "Em tratativa",
+      prazo_tratativa: prazo,
+      situacao_prazo: "Dentro do prazo",
+      imported_at: now.toISOString(),
+      imported_by: currentUser.email || currentUser.id || "",
+      source_hash: sourceHash,
+      dedupe_key: buildMissingPackageDedupeKey(record),
+    }));
+    const existingKeys = await fetchExistingMissingPackageKeys(prepared.map((record) => record.dedupe_key));
+    const inserts = prepared.filter((record) => !existingKeys.has(record.dedupe_key));
+    if (inserts.length) {
+      const { error } = await window.supabaseClient
+        .from("gestao_desvios_pacotes_faltantes")
+        .insert(inserts);
+      if (error) throw error;
+    }
+    await loadMissingPackagesFromSupabase({ render: false });
+    state.page = 1;
+    persistState();
+    showToast(`Importação concluída. Base: ${parsed.header.base}. Faltantes: ${integer.format(parsed.records.length)}. Importados: ${integer.format(inserts.length)}. Duplicados ignorados: ${integer.format(prepared.length - inserts.length)}.`, "good", 7600);
+  } catch (error) {
+    console.error("[Pacotes Faltantes] Falha ao processar texto.", error);
+    showToast(error?.message || "Não foi possível processar o texto.", "error", 6200);
+  } finally {
+    isImportingMissingPackages = false;
+    hydrateControls();
+    renderAll();
+  }
+}
+
+function getFilteredMissingPackagesRows() {
+  return (Array.isArray(missingPackagesRows) ? missingPackagesRows : []).filter((row) => {
+    const prazo = getMissingPackageDeadlineStatus(row);
+    return (state.missingPackagesDate === "Todos" || row.dataFechamento === state.missingPackagesDate) &&
+      (state.missingPackagesBase === "Todos" || row.base === state.missingPackagesBase) &&
+      (state.missingPackagesDriver === "Todos" || row.driverNome === state.missingPackagesDriver) &&
+      (state.missingPackagesCaseStatus === "Todos" || row.statusCaso === state.missingPackagesCaseStatus) &&
+      (state.missingPackagesMeliStatus === "Todos" || row.statusContatoMeli === state.missingPackagesMeliStatus) &&
+      (state.missingPackagesDeadline === "Todos" || prazo === state.missingPackagesDeadline);
+  });
+}
+
+function getMissingPackagesMetrics(rows = getFilteredMissingPackagesRows()) {
+  const total = rows.length;
+  const count = (predicate) => rows.filter(predicate).length;
+  return {
+    total,
+    pendentes: count((row) => row.statusCaso === "Pendente"),
+    emRota: count((row) => row.statusCaso === "Em rota"),
+    emTratativa: count((row) => row.statusContatoMeli === "Em tratativa"),
+    aguardandoMeli: count((row) => row.statusContatoMeli === "Aguardando Méli"),
+    concluidos: count((row) => row.statusContatoMeli === "Concluído" || row.statusCaso === "Resolvido"),
+    prazoCritico: count((row) => ["Vencido", "Próximo do vencimento"].includes(getMissingPackageDeadlineStatus(row))),
+  };
+}
+
+function renderMissingPackagesCards(rows) {
+  const metrics = getMissingPackagesMetrics(rows);
+  const pct = (value) => metrics.total ? `${formatNumberPt((value / metrics.total) * 100, 1)}% do recorte` : "0% do recorte";
+  const cards = [
+    ["Total de faltantes", metrics.total, "kpi-card--volume", "Casos extraídos como Faltante"],
+    ["Pendentes", metrics.pendentes, "kpi-card--neutral", "Status do caso pendente"],
+    ["Em rota", metrics.emRota, "kpi-card--neutral", "Casos em rota"],
+    ["Em tratativa Méli", metrics.emTratativa, "kpi-card--finance", "Contato em tratativa"],
+    ["Aguardando Méli", metrics.aguardandoMeli, "kpi-card--neutral", "Aguardando retorno Méli"],
+    ["Prazo crítico", metrics.prazoCritico, "kpi-card--problem", "Vencidos ou próximos"],
+  ];
+  return `<section class="pnr-kpi-grid missing-packages-kpi-grid">${cards.map(([label, value, tone, description]) => `
+    <article class="kpi-card ${tone}">
+      <div class="kpi-card__label"><span>${escapeHtml(label)}</span></div>
+      <div class="kpi-card__value">${integer.format(value)}</div>
+      <div class="kpi-card__delta">${pct(value)}</div>
+      <p class="kpi-card__description">${escapeHtml(description)}</p>
+    </article>
+  `).join("")}</section>`;
+}
+
+function renderMissingStatusCell(row = {}, type = "case") {
+  const options = type === "meli" ? MISSING_PACKAGE_MELI_STATUS_OPTIONS : MISSING_PACKAGE_CASE_STATUS_OPTIONS;
+  const value = type === "meli" ? row.statusContatoMeli : row.statusCaso;
+  const key = `${row.id}:${type}`;
+  return `
+    <span class="pnr-status-edit">
+      <button type="button" class="pnr-status-pill" data-missing-status-toggle data-record-id="${escapeAttribute(row.id)}" data-status-type="${escapeAttribute(type)}" data-value="${escapeAttribute(value)}" aria-haspopup="menu" aria-expanded="${activeMissingPackageStatusDropdown === key ? "true" : "false"}">
+        <span>${escapeHtml(value || "—")}</span>
+        <svg viewBox="0 0 20 20" aria-hidden="true"><path d="m5 7 5 5 5-5" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8"></path></svg>
+      </button>
+    </span>
+  `;
+}
+
+function openMissingPackageStatusDropdown(button) {
+  if (!button) return;
+  const recordId = button.dataset.recordId || "";
+  const type = button.dataset.statusType || "case";
+  const key = `${recordId}:${type}`;
+  if (activeMissingPackageStatusDropdown === key && document.querySelector("[data-missing-status-dropdown]")) {
+    closeMissingPackageStatusDropdown();
+    return;
+  }
+  closeMissingPackageStatusDropdown();
+  activeMissingPackageStatusDropdown = key;
+  const options = type === "meli" ? MISSING_PACKAGE_MELI_STATUS_OPTIONS : MISSING_PACKAGE_CASE_STATUS_OPTIONS;
+  const currentValue = button.dataset.value || "";
+  const rect = button.getBoundingClientRect();
+  const menu = document.createElement("div");
+  const menuWidth = Math.max(220, rect.width);
+  menu.className = "pnr-status-dropdown";
+  menu.dataset.missingStatusDropdown = key;
+  menu.dataset.dropdownPortalMenu = "true";
+  menu.style.position = "fixed";
+  menu.style.minWidth = `${menuWidth}px`;
+  menu.style.left = `${Math.min(Math.max(12, rect.left), window.innerWidth - menuWidth - 12)}px`;
+  menu.style.top = `${rect.bottom + 8}px`;
+  menu.style.zIndex = "9999";
+  menu.innerHTML = options.map((status) => `
+    <button type="button" class="pnr-status-dropdown__item${status === currentValue ? " is-selected" : ""}" data-missing-status-option data-record-id="${escapeAttribute(recordId)}" data-status-type="${escapeAttribute(type)}" data-value="${escapeAttribute(status)}">
+      <span>${escapeHtml(status)}</span>
+      ${status === currentValue ? '<svg viewBox="0 0 20 20" aria-hidden="true"><path d="m4.5 10 3.5 3.5 7.5-8" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2"></path></svg>' : ""}
+    </button>
+  `).join("");
+  document.body.appendChild(menu);
+}
+
+function closeMissingPackageStatusDropdown() {
+  activeMissingPackageStatusDropdown = "";
+  document.querySelectorAll("[data-missing-status-dropdown]").forEach((menu) => menu.remove());
+}
+
+async function applyMissingPackageStatusOption(button) {
+  const recordId = button?.dataset?.recordId || "";
+  const type = button?.dataset?.statusType || "case";
+  const value = button?.dataset?.value || "";
+  if (!recordId || !value || !window.supabaseClient) return;
+  closeMissingPackageStatusDropdown();
+  const currentRow = missingPackagesRows.find((row) => row.id === recordId) || {};
+  const nextRow = type === "meli" ? { ...currentRow, statusContatoMeli: value } : { ...currentRow, statusCaso: value };
+  const situacaoPrazo = getMissingPackageDeadlineStatus(nextRow);
+  const payload = type === "meli"
+    ? { status_contato_meli: value, situacao_prazo: situacaoPrazo, contato_updated_at: new Date().toISOString(), updated_at: new Date().toISOString() }
+    : { status_caso: value, situacao_prazo: situacaoPrazo, status_updated_at: new Date().toISOString(), updated_at: new Date().toISOString() };
+  try {
+    const { data, error } = await window.supabaseClient
+      .from("gestao_desvios_pacotes_faltantes")
+      .update(payload)
+      .eq("id", recordId)
+      .select("*")
+      .single();
+    if (error) throw error;
+    missingPackagesRows = missingPackagesRows.map((row) => row.id === recordId ? normalizeMissingPackageRow(data) : row);
+    showToast("Status de Pacote Faltante salvo.", "good", 3200);
+    renderAll();
+  } catch (error) {
+    console.error("[Pacotes Faltantes] Falha ao salvar status.", error);
+    showToast("Não foi possível salvar o status.", "error", 5200);
+  }
+}
+
+function formatMissingPackageCell(row, column) {
+  const value = row[column.key];
+  if (column.format === "date") return escapeHtml(formatDate(value));
+  if (column.format === "datetime") return escapeHtml(formatDateTime(value));
+  if (column.format === "missingStatus") return renderMissingStatusCell(row, column.statusType);
+  if (column.format === "deadline") return `<span class="deadline-pill deadline-pill--${getMissingPackageDeadlineStatus(row).toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/[^a-z0-9]+/g, "-")}">${escapeHtml(getMissingPackageDeadlineStatus(row))}</span>`;
+  if (column.format === "textStrong") return `<strong>${escapeHtml(value || "—")}</strong>`;
+  return escapeHtml(value || "—");
+}
+
+function renderMissingPackagesTable(rows) {
+  const totalRows = rows.length;
+  const totalPages = Math.max(1, Math.ceil(totalRows / state.pageSize));
+  state.page = Math.min(Math.max(1, state.page), totalPages);
+  const pagedRows = rows.slice((state.page - 1) * state.pageSize, state.page * state.pageSize);
+  const tableMinWidth = MISSING_PACKAGE_TABLE_COLUMNS.reduce((sum, column) => sum + column.width, 0);
+  return `
+    <article class="panel pnr-table-panel missing-packages-table-panel">
+      <div class="panel__header">
+        <div>
+          <h3>Tabela de Pacotes Faltantes</h3>
+          <p>${integer.format(totalRows)} registros no recorte</p>
+        </div>
+        <div class="pnr-table-actions">
+          ${renderPnrPageSizeControl()}
+          <button class="secondary-button secondary-button--icon table-export-button pnr-table-export-button" type="button" data-missing-packages-export title="Baixar Excel" aria-label="Baixar Excel" ${!totalRows || isExportingMissingPackagesExcel ? "disabled" : ""}>
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M12 3v11" fill="none" stroke="currentColor" stroke-linecap="round" stroke-width="2"></path>
+              <path d="m7 10 5 5 5-5" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2"></path>
+              <path d="M5 19h14" fill="none" stroke="currentColor" stroke-linecap="round" stroke-width="2"></path>
+            </svg>
+          </button>
+        </div>
+      </div>
+      <div class="table-wrap pnr-table-wrap">
+        <table style="min-width:${tableMinWidth}px">
+          <colgroup>${MISSING_PACKAGE_TABLE_COLUMNS.map((column) => `<col style="width:${column.width}px; min-width:${column.width}px">`).join("")}</colgroup>
+          <thead><tr>${MISSING_PACKAGE_TABLE_COLUMNS.map((column) => `<th>${escapeHtml(column.label)}</th>`).join("")}</tr></thead>
+          <tbody>
+            ${pagedRows.length ? pagedRows.map((row) => `<tr>${MISSING_PACKAGE_TABLE_COLUMNS.map((column) => `<td>${formatMissingPackageCell(row, column)}</td>`).join("")}</tr>`).join("") : `<tr><td colspan="${MISSING_PACKAGE_TABLE_COLUMNS.length}">${emptyState("Nenhum pacote faltante encontrado", "Cole um fechamento do dispatcher ou ajuste os filtros.")}</td></tr>`}
+          </tbody>
+        </table>
+      </div>
+      <div class="table-footer">
+        <div>${totalRows ? `${integer.format((state.page - 1) * state.pageSize + 1)}-${integer.format(Math.min(state.page * state.pageSize, totalRows))}` : "0-0"} de ${integer.format(totalRows)}</div>
+        <div class="pagination">
+          <button type="button" class="secondary-button secondary-button--icon pnr-pagination-button" data-missing-packages-page="prev"${state.page <= 1 ? " disabled" : ""} aria-label="Página anterior"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m15 6-6 6 6 6" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2"></path></svg></button>
+          <span>Página ${integer.format(state.page)} de ${integer.format(totalPages)}</span>
+          <button type="button" class="secondary-button secondary-button--icon pnr-pagination-button" data-missing-packages-page="next"${state.page >= totalPages ? " disabled" : ""} aria-label="Próxima página"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m9 6 6 6-6 6" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2"></path></svg></button>
+        </div>
+      </div>
+    </article>
+  `;
+}
+
+function renderMissingPackagesImportPanel() {
+  return `
+    <article class="panel missing-packages-import-panel">
+      <div class="panel__header">
+        <div>
+          <h3>Importar fechamento do dispatcher</h3>
+          <p>Cole aqui o texto enviado pelo dispatcher. O sistema irá extrair somente os pacotes marcados como Faltante.</p>
+        </div>
+      </div>
+      <textarea class="missing-packages-textarea" data-missing-packages-text placeholder="Cole o fechamento aqui...">${escapeHtml(state.missingPackagesText || "")}</textarea>
+      <div class="missing-packages-import-actions">
+        <button type="button" class="primary-button" data-missing-packages-process ${isImportingMissingPackages ? "disabled" : ""}>${isImportingMissingPackages ? "Processando..." : "Processar texto"}</button>
+        <button type="button" class="secondary-button" data-missing-packages-clear-text>Limpar texto</button>
+      </div>
+    </article>
+  `;
+}
+
+function renderMissingPackagesPage() {
+  if (isLoadingMissingPackages && !missingPackagesRows.length) {
+    return `<section class="pnr-page missing-packages-page">${renderPnrSkeleton("Carregando Pacotes Faltantes", "Consultando registros salvos.")}</section>`;
+  }
+  const rows = getFilteredMissingPackagesRows();
+  const critical = rows.filter((row) => ["Vencido", "Próximo do vencimento"].includes(getMissingPackageDeadlineStatus(row))).length;
+  return `
+    <section class="pnr-page missing-packages-page">
+      ${critical ? `<div class="missing-packages-alert">Há ${integer.format(critical)} pacote(s) faltante(s) com prazo vencido ou próximo do vencimento.</div>` : ""}
+      ${renderMissingPackagesImportPanel()}
+      ${renderMissingPackagesCards(rows)}
+      ${renderMissingPackagesTable(rows)}
+    </section>
+  `;
+}
+
+async function exportMissingPackagesExcel(button) {
+  if (isExportingMissingPackagesExcel) return;
+  isExportingMissingPackagesExcel = true;
+  if (button) button.disabled = true;
+  try {
+    const rows = getFilteredMissingPackagesRows();
+    if (!rows.length) {
+      showToast("Nenhum Pacote Faltante para exportar.", "warn", 4200);
+      return;
+    }
+    const workbook = new ExcelJS.Workbook();
+    workbook.creator = "Painel de Inteligência";
+    workbook.created = new Date();
+    const worksheet = workbook.addWorksheet("Pacotes Faltantes");
+    worksheet.addRow(["Painel de Inteligência", "Gestão de Desvios - Pacotes Faltantes"]);
+    worksheet.addRow(["Gerado em", formatDateTime(new Date())]);
+    worksheet.addRow([]);
+    worksheet.addRow(MISSING_PACKAGE_TABLE_COLUMNS.map((column) => column.label));
+    rows.forEach((row) => worksheet.addRow(MISSING_PACKAGE_TABLE_COLUMNS.map((column) => {
+      if (column.format === "date") return formatDate(row[column.key]);
+      if (column.format === "datetime") return formatDateTime(row[column.key]);
+      if (column.format === "deadline") return getMissingPackageDeadlineStatus(row);
+      return row[column.key] || "";
+    })));
+    worksheet.columns.forEach((column) => {
+      let max = 12;
+      column.eachCell({ includeEmpty: true }, (cell) => {
+        max = Math.max(max, String(cell.value || "").length + 2);
+      });
+      column.width = Math.min(max, 38);
+    });
+    const buffer = await workbook.xlsx.writeBuffer();
+    downloadBlob(new Blob([buffer], { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" }), `Pacotes_Faltantes_${new Date().toISOString().slice(0, 10)}.xlsx`);
+    showToast(`Excel de Pacotes Faltantes baixado com ${integer.format(rows.length)} registros.`, "good", 4200);
+  } catch (error) {
+    console.error("[Pacotes Faltantes] Falha ao exportar.", error);
+    showToast("Não foi possível exportar Pacotes Faltantes.", "error", 5200);
+  } finally {
+    isExportingMissingPackagesExcel = false;
+    if (button) button.disabled = false;
+  }
 }
 
 function renderDeviationManagementView() {
@@ -4278,6 +4888,10 @@ function addPnrSummaryStatus(summary, status, value = 0, count = 1) {
     summary.valorFaturado += safeValue;
     return;
   }
+  if (state.activeDesvioCategory === DEVIATION_CATEGORY_MISSING_PACKAGES) {
+    el.deviationManagementView.innerHTML = renderMissingPackagesPage();
+    return;
+  }
   if (metricType === "anulado") {
     summary.anulado += safeCount;
     summary.valorAnulado += safeValue;
@@ -4424,6 +5038,22 @@ const PNR_MANUAL_STATUS_OPTIONS = [
   "Em Revisão",
   "Sin Comprovante Carregado",
   "Em aberto/análise",
+];
+
+const MISSING_PACKAGE_CASE_STATUS_OPTIONS = ["Pendente", "Em rota", "Não localizado", "Resolvido", "Cancelado"];
+const MISSING_PACKAGE_MELI_STATUS_OPTIONS = ["Em tratativa", "Aguardando Méli", "Concluído"];
+const MISSING_PACKAGE_TABLE_COLUMNS = [
+  { key: "dataFechamento", label: "Data", width: 112, format: "date" },
+  { key: "base", label: "Base", width: 95, format: "text" },
+  { key: "tipoBase", label: "Tipo de base", width: 110, format: "text" },
+  { key: "driverNome", label: "Driver", width: 230, format: "textStrong" },
+  { key: "idEnvio", label: "ID do pacote/envio", width: 165, format: "text" },
+  { key: "caso", label: "Caso", width: 155, format: "text" },
+  { key: "statusCaso", label: "Status do caso", width: 165, format: "missingStatus", statusType: "case" },
+  { key: "statusContatoMeli", label: "Status contato Méli", width: 175, format: "missingStatus", statusType: "meli" },
+  { key: "prazoTratativa", label: "Prazo de tratativa", width: 160, format: "datetime" },
+  { key: "situacaoPrazo", label: "Situação do prazo", width: 155, format: "deadline" },
+  { key: "importedAt", label: "Importado em", width: 155, format: "datetime" },
 ];
 
 const pnrStatusUpdateState = {
@@ -5255,6 +5885,58 @@ function renderPnrFilterControls() {
         ${renderPnrFilterSelect("status", "Status", state.pnrStatus, filterOptions.statuses)}
         ${renderPnrFilterSelect("estacao", "Origem", state.pnrEstacao, filterOptions.estacoes)}
         <button type="button" class="secondary-button dashboard-clear-button dashboard-filter-action" data-pnr-clear aria-label="Limpar filtros">
+          <svg viewBox="0 0 24 24" aria-hidden="true">
+            <path d="M6 6l12 12M18 6 6 18" fill="none" stroke="currentColor" stroke-linecap="round" stroke-width="1.9"></path>
+          </svg>
+          <span>Limpar</span>
+        </button>
+      </div>
+    </div>
+  `;
+}
+
+function renderMissingPackagesFilterSelect(name, label, value, options) {
+  const normalizedValue = String(value || "Todos");
+  return `
+    <label class="dashboard-filter-select ${name === "driver" ? "dashboard-filter-lg" : "dashboard-filter-md"}">
+      <span>${escapeHtml(label)}</span>
+      <select data-missing-packages-filter="${escapeAttribute(name)}">
+        <option value="Todos"${normalizedValue === "Todos" ? " selected" : ""}>Todos</option>
+        ${(Array.isArray(options) ? options : []).filter(Boolean).map((option) => {
+          const optionValue = String(option.value ?? option);
+          const optionLabel = String(option.label ?? option);
+          return `<option value="${escapeAttribute(optionValue)}"${optionValue === normalizedValue ? " selected" : ""}>${escapeHtml(optionLabel)}</option>`;
+        }).join("")}
+      </select>
+    </label>
+  `;
+}
+
+function getMissingPackagesFilterOptions() {
+  const rows = Array.isArray(missingPackagesRows) ? missingPackagesRows : [];
+  const unique = (getter) => [...new Set(rows.map(getter).filter(Boolean))].sort((a, b) => String(a).localeCompare(String(b), "pt-BR"));
+  return {
+    datas: unique((row) => row.dataFechamento).map((value) => ({ value, label: formatDate(value) })),
+    bases: unique((row) => row.base),
+    drivers: unique((row) => row.driverNome),
+    statusCaso: MISSING_PACKAGE_CASE_STATUS_OPTIONS,
+    statusMeli: MISSING_PACKAGE_MELI_STATUS_OPTIONS,
+    prazos: ["Dentro do prazo", "Próximo do vencimento", "Vencido", "Concluído"],
+  };
+}
+
+function renderMissingPackagesFilterControls() {
+  const options = getMissingPackagesFilterOptions();
+  return `
+    <div class="pnr-filter-bar missing-packages-filter-bar">
+      <div class="pnr-filter-row dashboard-filter-bar">
+        ${renderMissingPackagesFilterSelect("data", "Data", state.missingPackagesDate, options.datas)}
+        ${renderMissingPackagesFilterSelect("base", "Base", state.missingPackagesBase, options.bases)}
+        ${renderMissingPackagesFilterSelect("driver", "Driver", state.missingPackagesDriver, options.drivers)}
+        ${renderMissingPackagesFilterSelect("statusCaso", "Status", state.missingPackagesCaseStatus, options.statusCaso)}
+        ${renderMissingPackagesFilterSelect("statusMeli", "Contato Méli", state.missingPackagesMeliStatus, options.statusMeli)}
+        ${renderMissingPackagesFilterSelect("prazo", "Prazo", state.missingPackagesDeadline, options.prazos)}
+        <button type="button" class="secondary-button dashboard-clear-button dashboard-filter-action" data-missing-packages-clear aria-label="Limpar filtros">
           <svg viewBox="0 0 24 24" aria-hidden="true">
             <path d="M6 6l12 12M18 6 6 18" fill="none" stroke="currentColor" stroke-linecap="round" stroke-width="1.9"></path>
           </svg>
@@ -8620,6 +9302,10 @@ async function downloadMonthlyReport() {
   }
   if (state.sheet === DEVIATION_MANAGEMENT_VIEW && state.activeDesvioCategory === DEVIATION_CATEGORY_PNRS) {
     await downloadPnrReport();
+    return;
+  }
+  if (state.sheet === DEVIATION_MANAGEMENT_VIEW && state.activeDesvioCategory === DEVIATION_CATEGORY_MISSING_PACKAGES) {
+    showToast("Relatório analítico de Pacotes Faltantes será habilitado em uma próxima etapa. Use o download Excel por enquanto.", "info", 5200);
     return;
   }
   if (state.sheet === PACKAGE_MANAGEMENT_VIEW) {
@@ -14289,6 +14975,21 @@ async function getPersistedProcessedRowsCount(fileRecord) {
   }
 }
 
+async function getPnrUploadBatchRowsCount(fileRecord) {
+  if (!window.supabaseClient || !fileRecord?.id) return 0;
+  try {
+    const { count, error } = await window.supabaseClient
+      .from("desvios_pnr_records")
+      .select("id", { count: "exact", head: true })
+      .eq("upload_batch_id", fileRecord.id);
+    if (error) throw error;
+    return Number(count || 0);
+  } catch (error) {
+    if (!isMissingProcessedRecordsTableError(error)) console.warn("[PNR Import] Não foi possível contar upload_batch_id.", error);
+    return 0;
+  }
+}
+
 async function getPersistedRowsCountForProcessedDashboardFile(record, moduleKey = "") {
   if (!record) return 0;
   const mappedRecord = mapProcessedDashboardFileToDashboardRecord(record, moduleKey || record.module_key || "");
@@ -14310,11 +15011,12 @@ async function validateDashboardImportPersistence(fileRecord, processedSaveResul
   const fileCategory = getFileRecordCategory(fileRecord);
   const moduleKey = getDashboardModuleKeyForFileCategory(fileCategory);
   const fileRole = fileCategory === DEVIATION_PNR_FILE_CATEGORY ? metadata.file_role || getDashboardFileRole(fileRecord) : "";
-  const [fileRows, totalRows] = await Promise.all([
+  const isPnr = fileCategory === DEVIATION_PNR_FILE_CATEGORY;
+  const [fileRows, batchRows, totalRows] = await Promise.all([
     getPersistedProcessedRowsCount(fileRecord),
+    isPnr ? getPnrUploadBatchRowsCount(fileRecord) : Promise.resolve(0),
     getProcessedTableTotalCount(fileCategory),
   ]);
-  const isPnr = fileCategory === DEVIATION_PNR_FILE_CATEGORY;
   console.info(isPnr ? "[PNR Import]" : "[Module Import]", {
     stage: "persistência validada",
     moduleKey,
@@ -14322,6 +15024,7 @@ async function validateDashboardImportPersistence(fileRecord, processedSaveResul
     fileRole,
     expectedRows,
     fileRows,
+    batchRows,
     totalRows,
     inserted: processedSaveResult?.inserted ?? (processedSaveResult === true ? fileRows : 0),
     updated: processedSaveResult?.updated ?? 0,
@@ -14330,12 +15033,17 @@ async function validateDashboardImportPersistence(fileRecord, processedSaveResul
   const affectedRows = processedSaveResult === true
     ? fileRows
     : Number(processedSaveResult?.inserted || 0) + Number(processedSaveResult?.updated || 0) + Number(processedSaveResult?.ignoredOlder || 0);
-  const hasPersistedRows = isPnr ? totalRows > 0 : fileRows > 0;
-  if (!processedSaveResult || totalRows <= 0 || !hasPersistedRows || affectedRows <= 0) {
+  const pnrPersistedRows = Math.max(Number(fileRows || 0), Number(batchRows || 0), Number(totalRows || 0));
+  const hasPersistedRows = isPnr ? pnrPersistedRows > 0 : fileRows > 0;
+  const hasValidPnrResult = isPnr && processedSaveResult && totalRows > 0 && (
+    affectedRows > 0 ||
+    Number(expectedRows || metadata.total_rows_imported || metadata.parsed_rows || 0) > 0
+  );
+  if (!processedSaveResult || totalRows <= 0 || !hasPersistedRows || (!hasValidPnrResult && affectedRows <= 0)) {
     const tableName = getProcessedRecordsTable(fileCategory);
     throw new Error(`A importação não encontrou registros persistidos em ${tableName}. O arquivo não será marcado como processado.`);
   }
-  return { fileRows, totalRows };
+  return { fileRows: isPnr ? Math.max(fileRows, batchRows, affectedRows) : fileRows, batchRows, totalRows };
 }
 
 async function validatePnrImportPersistence(fileRecord, processedSaveResult, expectedRows = 0, metadata = {}) {
@@ -15424,6 +16132,8 @@ async function loadDashboardFilesFromSupabase(options = {}) {
           console.error("[Gestão Desvios PNR] Falha ao iniciar carga independente:", error);
         });
       }
+    } else if (loadActive && state.sheet === DEVIATION_MANAGEMENT_VIEW && state.activeDesvioCategory === DEVIATION_CATEGORY_MISSING_PACKAGES) {
+      void loadMissingPackagesFromSupabase({ render: false });
     } else if (loadActive && activeFile) {
       await loadDashboardDataByFilters({ files: dashboardFileRecords, render: false, silent: true, showLoading: shouldShowLoading });
     } else if (loadActive) {
@@ -17034,6 +17744,50 @@ function preparePnrConsolidatedRecord(record, fileRecord, uploadTimestamp) {
   };
 }
 
+function prunePnrRecordForLegacySchema(record = {}) {
+  const pruned = { ...record };
+  [
+    "source_file_type",
+    "source_period",
+    "source_quinzena",
+    "upload_batch_id",
+    "first_seen_at",
+    "last_seen_at",
+    "status_previous",
+    "status_current",
+    "status_updated_at",
+    "status_updated_by",
+    "manual_status_override",
+  ].forEach((key) => {
+    delete pruned[key];
+  });
+  return pruned;
+}
+
+async function writePnrRecordsBatch(tableName, batch, action, details = {}) {
+  const execute = (records) => action === "update"
+    ? window.supabaseClient.from(tableName).upsert(records, { onConflict: "id" })
+    : window.supabaseClient.from(tableName).insert(records);
+  let { error } = await withPnrBatchTimeout(
+    execute(batch),
+    action === "update" ? "atualizar registros PNR em lote" : "inserir registros PNR em lote",
+    details,
+  );
+  if (error && isMissingProcessedRecordsTableError(error)) {
+    console.warn("[PNR Batch Insert] Schema PNR online sem colunas opcionais; tentando lote em modo compatível.", {
+      action,
+      ...details,
+      error,
+    });
+    ({ error } = await withPnrBatchTimeout(
+      execute(batch.map(prunePnrRecordForLegacySchema)),
+      action === "update" ? "atualizar registros PNR em lote compatível" : "inserir registros PNR em lote compatível",
+      details,
+    ));
+  }
+  return { error };
+}
+
 async function savePnrProcessedRowsForFile(fileRecord, tableName, payload) {
   const startedAt = performance.now();
   let lastProgressAt = performance.now();
@@ -17089,11 +17843,7 @@ async function savePnrProcessedRowsForFile(fileRecord, tableName, payload) {
   let rowsPersisted = 0;
   for (let index = 0; index < updates.length; index += PNR_PROCESSED_RECORDS_BATCH_SIZE) {
     const batch = updates.slice(index, index + PNR_PROCESSED_RECORDS_BATCH_SIZE);
-    const { error } = await withPnrBatchTimeout(
-      window.supabaseClient.from(tableName).upsert(batch, { onConflict: "id" }),
-      "atualizar registros PNR em lote",
-      { index, size: batch.length },
-    );
+    const { error } = await writePnrRecordsBatch(tableName, batch, "update", { index, size: batch.length });
     if (error) {
       console.error("[PNR Import] Falha no batch de atualização", { index, size: batch.length, error });
       throw error;
@@ -17121,11 +17871,7 @@ async function savePnrProcessedRowsForFile(fileRecord, tableName, payload) {
   }
   for (let index = 0; index < inserts.length; index += PNR_PROCESSED_RECORDS_BATCH_SIZE) {
     const batch = inserts.slice(index, index + PNR_PROCESSED_RECORDS_BATCH_SIZE);
-    const { error } = await withPnrBatchTimeout(
-      window.supabaseClient.from(tableName).insert(batch),
-      "inserir registros PNR em lote",
-      { index, size: batch.length },
-    );
+    const { error } = await writePnrRecordsBatch(tableName, batch, "insert", { index, size: batch.length });
     if (error) {
       console.error("[PNR Import] Falha no batch de inserção", { index, size: batch.length, error });
       throw error;
@@ -19111,6 +19857,13 @@ function normalizeLoadedState(loadedState) {
   loadedState.pnrFonteCruzamento = "Todos";
   loadedState.pnrMotorista = "Todos";
   loadedState.pnrRota = "Todos";
+  loadedState.missingPackagesText = String(loadedState.missingPackagesText || "");
+  loadedState.missingPackagesDate = loadedState.missingPackagesDate || "Todos";
+  loadedState.missingPackagesBase = loadedState.missingPackagesBase || "Todos";
+  loadedState.missingPackagesDriver = loadedState.missingPackagesDriver || "Todos";
+  loadedState.missingPackagesCaseStatus = loadedState.missingPackagesCaseStatus || "Todos";
+  loadedState.missingPackagesMeliStatus = loadedState.missingPackagesMeliStatus || "Todos";
+  loadedState.missingPackagesDeadline = loadedState.missingPackagesDeadline || "Todos";
   loadedState.period = loadedState.prefaturaPeriod;
   loadedState.tipo = "Todos";
   return loadedState;

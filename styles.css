@@ -528,6 +528,84 @@
   border-style: dashed;
 }
 
+.missing-packages-import-panel {
+  display: grid;
+  gap: 1rem;
+}
+
+.missing-packages-textarea {
+  width: 100%;
+  min-height: 210px;
+  resize: vertical;
+  border: 1px solid var(--line);
+  border-radius: 18px;
+  padding: 1rem;
+  background: rgba(255, 255, 255, 0.72);
+  color: var(--text);
+  font: inherit;
+  line-height: 1.5;
+  outline: none;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.45);
+}
+
+.missing-packages-textarea:focus {
+  border-color: rgba(59, 166, 255, 0.45);
+  box-shadow: 0 0 0 4px rgba(59, 166, 255, 0.12);
+}
+
+.missing-packages-import-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.7rem;
+}
+
+.missing-packages-alert {
+  border: 1px solid rgba(255, 159, 67, 0.28);
+  border-radius: 16px;
+  padding: 0.8rem 1rem;
+  color: var(--text);
+  background: rgba(255, 159, 67, 0.12);
+  font-weight: 700;
+}
+
+.deadline-pill {
+  display: inline-flex;
+  align-items: center;
+  min-height: 28px;
+  padding: 0.22rem 0.62rem;
+  border-radius: 999px;
+  border: 1px solid rgba(59, 166, 255, 0.18);
+  background: rgba(59, 166, 255, 0.08);
+  color: var(--text-muted);
+  font-size: 0.78rem;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.deadline-pill--vencido {
+  border-color: rgba(255, 107, 107, 0.25);
+  background: rgba(255, 107, 107, 0.12);
+  color: #c73a3a;
+}
+
+.deadline-pill--proximo-do-vencimento {
+  border-color: rgba(255, 159, 67, 0.28);
+  background: rgba(255, 159, 67, 0.14);
+  color: #b86a00;
+}
+
+.deadline-pill--concluido {
+  border-color: rgba(88, 214, 141, 0.26);
+  background: rgba(88, 214, 141, 0.12);
+  color: #168a53;
+}
+
+body:not([data-theme="light"]) .missing-packages-textarea {
+  background: rgba(15, 23, 42, 0.58);
+  border-color: rgba(148, 163, 184, 0.16);
+  color: var(--text);
+}
+
 .pnr-progress {
   position: relative;
   height: 0.42rem;
