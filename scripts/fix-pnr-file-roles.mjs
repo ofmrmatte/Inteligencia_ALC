@@ -81,7 +81,7 @@ try {
   const processed = await sql`
     select id, file_name, file_role, row_count, status, metadata
     from public.processed_dashboard_files
-    where module_key = 'gestao-desvios-pnr'
+    where module_key in ('desvios_pnr', 'desvios-pnr', 'gestao-desvios-pnr')
     order by created_at nulls last, file_name
   `;
   const dashboard = await sql`

@@ -116,7 +116,7 @@ async function fetchStuckProcessedFiles() {
   const { data, error } = await supabase
     .from("processed_dashboard_files")
     .select("*")
-    .in("module_key", ["gestao-desvios-pnr", "desvios_pnr"])
+    .in("module_key", ["desvios_pnr", "desvios-pnr", "gestao-desvios-pnr"])
     .in("status", ["processing", "pending"])
     .lte("created_at", cutoff)
     .order("created_at", { ascending: true });

@@ -75,9 +75,9 @@ A permissao administrativa vem da tabela `profiles`, pelos campos `role = 'admin
 ### Buckets de Storage
 
 - `dashboard-files`
-  - bucket privado para arquivos Excel do dashboard;
-  - usuarios autenticados podem ler;
-  - somente administradores devem enviar e deletar.
+  - bucket legado/operacional para arquivos brutos quando a configuracao permitir;
+  - com `KEEP_RAW_UPLOADS_IN_STORAGE=false`, uploads do painel usam o arquivo apenas para extracao e nao dependem do bucket para renderizar as abas;
+  - scripts de manutencao podem consultar ou limpar objetos brutos antigos sem transformar Storage em fonte da tela.
 
 - `avatars`
   - imagens de perfil dos usuarios;
@@ -88,9 +88,9 @@ A permissao administrativa vem da tabela `profiles`, pelos campos `role = 'admin
 1. Acessar o painel pela URL de producao.
 2. Clicar no icone de usuario no canto superior direito.
 3. Fazer login com uma conta cadastrada no Supabase Auth.
-4. Se for administrador, usar **Enviar arquivo** para carregar uma ou mais planilhas Excel.
-5. O arquivo e salvo no Supabase Storage e seus metadados sao salvos em `dashboard_files`.
-6. O painel carrega os arquivos salvos, aplica os filtros de mes/periodo e recalcula os indicadores.
+4. Se for administrador, usar **Enviar arquivo** para carregar uma ou mais planilhas Excel/CSV.
+5. O parser do modulo extrai os campos usados, grava os registros normalizados nas tabelas persistidas e registra metadados em `dashboard_files`/`processed_dashboard_files`.
+6. Com `KEEP_RAW_UPLOADS_IN_STORAGE=false`, o bruto nao vira fonte da tela; o painel recarrega cards, filtros, graficos e tabelas pelos registros processados no banco/RPC.
 7. A meta PNR/LOSS e carregada de `dashboard_settings` e aparece igual para todos os usuarios.
 8. Usuarios comuns podem visualizar os indicadores e baixar relatorios.
 9. Administradores podem excluir arquivos, trocar arquivo ativo, editar usuarios, ajustar a meta global e consultar auditoria em **Configuracoes gerais**.
@@ -125,7 +125,7 @@ Nao commitar o `.env`. Ele fica ignorado pelo Git.
 
 ### Registros processados
 
-O painel agora suporta leitura por tabelas processadas para evitar baixar e reprocessar XLSX a cada abertura. Aplique a migracao uma vez com uma URL Postgres do Supabase:
+O painel usa leitura processed-only para evitar baixar e reprocessar XLSX/CSV a cada abertura. Aplique a migracao uma vez com uma URL Postgres do Supabase:
 
 ```powershell
 npm run db:migrate:processed-records
@@ -135,6 +135,8 @@ Tabelas criadas:
 
 - `pre_fatura_records`
 - `gestao_pacotes_records`
+- `desvios_pnr_records`
+- `gestao_desvios_pacotes_faltantes`
 - `dashboard_metrics_cache`
 
 Se as tabelas ainda nao existirem, o dashboard exibe estado controlado e solicita nova importacao pelo upload do painel.
@@ -153,4 +155,4 @@ Se as tabelas ainda nao existirem, o dashboard exibe estado controlado e solicit
 
 ## Relatorios
 
-O Relatorio Executivo usa o recorte selecionado para KPIs, rankings e diagnostico principal. Para comparativo e tendencia, o painel busca o historico disponivel em `dashboard_files` e compara o recorte atual com o mes anterior disponivel quando existir.
+O Relatorio Executivo usa o recorte selecionado para KPIs, rankings e diagnostico principal. Para comparativo e tendencia, o painel usa os registros persistidos e os metadados disponiveis em `dashboard_files`/`processed_dashboard_files` quando existir historico compativel.

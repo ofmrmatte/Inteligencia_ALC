@@ -27,15 +27,19 @@ const supabase = createClient(supabaseUrl, serviceKey || anonKey, {
 });
 
 const MODULE_TABLES = {
+  pre_fatura: "pre_fatura_records",
   "pre-fatura": "pre_fatura_records",
+  gestao_pacotes: "gestao_pacotes_records",
   "gestao-pacotes": "gestao_pacotes_records",
+  desvios_pnr: "desvios_pnr_records",
+  "desvios-pnr": "desvios_pnr_records",
   "gestao-desvios-pnr": "desvios_pnr_records",
 };
 
 const FILE_TYPE_MODULES = {
-  PRE_FATURA: "pre-fatura",
-  GESTAO_PACOTES: "gestao-pacotes",
-  DESVIOS_PNR: "gestao-desvios-pnr",
+  PRE_FATURA: "pre_fatura",
+  GESTAO_PACOTES: "gestao_pacotes",
+  DESVIOS_PNR: "desvios_pnr",
 };
 
 const VALID_FILE_TYPES = new Set(Object.keys(FILE_TYPE_MODULES));

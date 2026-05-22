@@ -345,7 +345,7 @@ async function main() {
       .eq("id", file.id);
     if (metadata.file_hash) {
       await supabase.from("processed_dashboard_files").upsert({
-        module_key: "gestao-desvios-pnr",
+        module_key: "desvios_pnr",
         file_name: file.file_name,
         file_hash: metadata.file_hash,
         file_size: file.file_size || metadata.size_bytes || null,

@@ -21,8 +21,12 @@ if (!serviceKey) {
 }
 
 const MODULE_TABLES = {
+  pre_fatura: "pre_fatura_records",
   "pre-fatura": "pre_fatura_records",
+  gestao_pacotes: "gestao_pacotes_records",
   "gestao-pacotes": "gestao_pacotes_records",
+  desvios_pnr: "desvios_pnr_records",
+  "desvios-pnr": "desvios_pnr_records",
   "gestao-desvios-pnr": "desvios_pnr_records",
 };
 

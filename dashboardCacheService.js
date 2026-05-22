@@ -1,7 +1,7 @@
 (function initDashboardCacheService() {
   const STORAGE_KEY = "alc-dashboard-module-cache-v1";
-  const CACHE_VERSION = "dashboard-cache-v2";
-  const RESET_VERSION = "dashboard-reset-2026-05-20-v2";
+  const CACHE_VERSION = "dashboard-cache-v3";
+  const RESET_VERSION = "dashboard-reset-2026-05-22-canonical-module-keys-v1";
   const RESET_MARKER_KEY = "alc-dashboard-reset-version";
   const DEFAULT_TIMEOUT_MS = 30000;
 
@@ -54,6 +54,16 @@
 
   resetLocalDashboardCachesOnce();
 
+  function normalizeModuleKey(value = "") {
+    const key = String(value || "").trim();
+    if (["pre-fatura", "pre_fatura"].includes(key)) return "pre_fatura";
+    if (["gestao-pacotes", "gestao_pacotes"].includes(key)) return "gestao_pacotes";
+    if (["gestao-desvios-pnr", "desvios-pnr", "desvios_pnr"].includes(key)) return "desvios_pnr";
+    if (["pacotes-faltantes", "pacotes_faltantes"].includes(key)) return "pacotes_faltantes";
+    if (["evolucao-mensal", "evolucao_mensal"].includes(key)) return "evolucao_mensal";
+    return key;
+  }
+
   function readAll() {
     try {
       const parsed = JSON.parse(window.localStorage.getItem(STORAGE_KEY) || "{}");
@@ -73,22 +83,23 @@
   }
 
   function get(moduleKey) {
-    const entry = readAll()[moduleKey];
+    const entry = readAll()[normalizeModuleKey(moduleKey)];
     if (!entry || entry.version !== CACHE_VERSION) return null;
     return entry;
   }
 
   function set(moduleKey, payload = {}) {
+    const normalizedModuleKey = normalizeModuleKey(moduleKey);
     const cache = readAll();
     const entry = {
       ...payload,
-      moduleKey,
+      moduleKey: normalizedModuleKey,
       version: CACHE_VERSION,
       updatedAt: new Date().toISOString(),
     };
-    cache[moduleKey] = entry;
+    cache[normalizedModuleKey] = entry;
     writeAll(cache);
-    log(moduleKey, "cache local atualizado", {
+    log(normalizedModuleKey, "cache local atualizado", {
       status: entry.status,
       signature: entry.signature,
       total: entry.total,
@@ -97,14 +108,16 @@
   }
 
   function invalidate(moduleKey, reason = "") {
+    const normalizedModuleKey = normalizeModuleKey(moduleKey);
     const cache = readAll();
-    if (!cache[moduleKey]) return;
-    delete cache[moduleKey];
+    if (!cache[normalizedModuleKey]) return;
+    delete cache[normalizedModuleKey];
     writeAll(cache);
-    log(moduleKey, "cache local invalidado", { reason });
+    log(normalizedModuleKey, "cache local invalidado", { reason });
   }
 
   function buildFilesSignature(moduleKey, files = []) {
+    const normalizedModuleKey = normalizeModuleKey(moduleKey);
     const parts = (Array.isArray(files) ? files : [])
       .map((file) => {
         const metadata = file?.metadata || {};
@@ -121,7 +134,7 @@
         ].join(":");
       })
       .sort();
-    return `${CACHE_VERSION}:${moduleKey}:${parts.join("|") || "__empty"}`;
+    return `${CACHE_VERSION}:${normalizedModuleKey}:${parts.join("|") || "__empty"}`;
   }
 
   function log(moduleKey, message, details) {
