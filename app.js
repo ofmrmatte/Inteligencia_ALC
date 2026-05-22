@@ -22,6 +22,7 @@ const PREFATURA_VIEW_EVOLUTION = "evolucao_mensal";
 const PRE_FATURA_FILE_CATEGORY = "PRE_FATURA";
 const PACKAGE_MANAGEMENT_FILE_CATEGORY = "GESTAO_PACOTES";
 const DEVIATION_PNR_FILE_CATEGORY = "DESVIOS_PNR";
+const MISSING_PACKAGES_FILE_CATEGORY = "PACOTES_FALTANTES";
 const DEVIATION_CATEGORY_PNRS = "PNRS";
 const DEVIATION_CATEGORY_MISSING_PACKAGES = "PACOTES_FALTANTES";
 const DASHBOARD_MODULE_KEYS = {
@@ -57,24 +58,27 @@ const DASHBOARD_EMPTY_STATE_COPY = {
   },
   [DASHBOARD_MODULE_KEYS.pacotesFaltantes]: {
     title: "Pacotes Faltantes ainda não importados.",
-    description: "Cole o fechamento do dispatcher para alimentar esta categoria.",
+    description: "Envie um arquivo CSV ou XLSX para alimentar esta categoria.",
   },
 };
 const DEVIATION_CATEGORIES = [
   { key: DEVIATION_CATEGORY_PNRS, label: "PNRs", enabled: true },
   { key: DEVIATION_CATEGORY_MISSING_PACKAGES, label: "Pacotes Faltantes", enabled: true },
 ];
-const MISSING_PACKAGE_CASE_STATUS_OPTIONS = ["Pendente", "Concluído", "Em rota"];
-const MISSING_PACKAGE_MELI_STATUS_OPTIONS = ["E-mail Enviado", "Aguardando MELI", "Concluído"];
+const MISSING_PACKAGE_CASE_STATUS_OPTIONS = ["Pendente", "Em rota", "Não localizado", "Resolvido", "Cancelado"];
+const MISSING_PACKAGE_MELI_STATUS_OPTIONS = ["Em tratativa", "Aguardando Méli", "Concluído"];
 const MISSING_PACKAGE_TABLE_COLUMNS = [
   { key: "dataFechamento", label: "Data do Caso", width: 130, format: "date" },
   { key: "importedAt", label: "Data de importação", width: 170, format: "datetime" },
   { key: "base", label: "Base", width: 95, format: "text" },
+  { key: "tipoBase", label: "Tipo de base", width: 110, format: "text" },
   { key: "driverNome", label: "Driver", width: 260, format: "textStrong" },
   { key: "idEnvio", label: "ID do Pacote/Envio", width: 175, format: "text" },
+  { key: "caso", label: "Caso", width: 150, format: "text" },
   { key: "statusCaso", label: "Status do Caso", width: 165, format: "missingStatus", statusType: "case" },
   { key: "statusContatoMeli", label: "Contato Méli", width: 180, format: "missingStatus", statusType: "meli" },
   { key: "prazoTratativa", label: "Prazo da tratativa", width: 170, format: "datetime" },
+  { key: "situacaoPrazo", label: "Situação do prazo", width: 170, format: "deadline" },
 ];
 const PREFATURA_CATEGORIES = [
   { key: PREFATURA_VIEW_OVERVIEW, label: "Visão geral", enabled: true },
@@ -216,7 +220,6 @@ const STATE_DEFAULT = {
   pnrFonteCruzamento: "Todos",
   pnrMotorista: "Todos",
   pnrRota: "Todos",
-  missingPackagesText: "",
   missingPackagesDate: "Todos",
   missingPackagesBase: "Todos",
   missingPackagesDriver: "Todos",
@@ -352,7 +355,6 @@ let pdfLogoLoadPromise = null;
 let supabaseAuthListenerBound = false;
 let missingPackagesRows = [];
 let isLoadingMissingPackages = false;
-let isImportingMissingPackages = false;
 let isExportingMissingPackagesExcel = false;
 let isDeletingMissingPackages = false;
 let isMissingPackagesSelectionMode = false;
@@ -1066,18 +1068,10 @@ function bindEvents() {
     await savePendingPnrStatusEdits(button);
   });
   document.addEventListener("click", async (event) => {
-    const button = event.target.closest("[data-missing-packages-process]");
+    const button = event.target.closest("[data-missing-packages-upload]");
     if (button) {
       event.preventDefault();
-      await processMissingPackagesText();
-      return;
-    }
-    const clearText = event.target.closest("[data-missing-packages-clear-text]");
-    if (clearText) {
-      event.preventDefault();
-      state.missingPackagesText = "";
-      persistState();
-      renderAll();
+      if (ensureUploadPermission()) el.fileInput?.click();
       return;
     }
     const exportButton = event.target.closest("[data-missing-packages-export]");
@@ -1138,12 +1132,6 @@ function bindEvents() {
       return;
     }
     if (!event.target.closest("[data-missing-status-dropdown]")) closeMissingPackageStatusDropdown();
-  });
-  document.addEventListener("input", (event) => {
-    const textarea = event.target.closest("[data-missing-packages-text]");
-    if (!textarea) return;
-    state.missingPackagesText = textarea.value || "";
-    persistState();
   });
   document.addEventListener("change", (event) => {
     const field = event.target.closest("[data-missing-packages-filter]");
@@ -1928,7 +1916,11 @@ function removeDetachedPnrFilterMenus() {
 }
 
 function getCurrentFileCategory(sheet = state.sheet) {
-  if (sheet === DEVIATION_MANAGEMENT_VIEW) return DEVIATION_PNR_FILE_CATEGORY;
+  if (sheet === DEVIATION_MANAGEMENT_VIEW) {
+    return state.activeDesvioCategory === DEVIATION_CATEGORY_MISSING_PACKAGES
+      ? MISSING_PACKAGES_FILE_CATEGORY
+      : DEVIATION_PNR_FILE_CATEGORY;
+  }
   return sheet === PACKAGE_MANAGEMENT_VIEW ? PACKAGE_MANAGEMENT_FILE_CATEGORY : PRE_FATURA_FILE_CATEGORY;
 }
 
@@ -2298,7 +2290,10 @@ function getPrefaturaComparisonSheet() {
 }
 
 function isDashboardFileCategory(value) {
-  return value === PRE_FATURA_FILE_CATEGORY || value === PACKAGE_MANAGEMENT_FILE_CATEGORY || value === DEVIATION_PNR_FILE_CATEGORY;
+  return value === PRE_FATURA_FILE_CATEGORY ||
+    value === PACKAGE_MANAGEMENT_FILE_CATEGORY ||
+    value === DEVIATION_PNR_FILE_CATEGORY ||
+    value === MISSING_PACKAGES_FILE_CATEGORY;
 }
 
 function withTimeout(promise, timeoutMs, message) {
@@ -2314,8 +2309,13 @@ function withTimeout(promise, timeoutMs, message) {
   });
 }
 
+function delay(ms) {
+  return new Promise((resolve) => window.setTimeout(resolve, ms));
+}
+
 function identificarTipoArquivo(nomeArquivo) {
   const nome = normalizeText(nomeArquivo);
+  if (nome.includes("PACOTES FALTANTES") || nome.includes("PACOTE FALTANTE") || nome.includes("FALTANTES")) return MISSING_PACKAGES_FILE_CATEGORY;
   if (nome.includes("GESTAO DE PACOTES")) return PACKAGE_MANAGEMENT_FILE_CATEGORY;
   if (nome.includes("DESVIOS PNR") || nome.includes("PNRS") || /\bPNR\b/.test(nome)) return DEVIATION_PNR_FILE_CATEGORY;
   return PRE_FATURA_FILE_CATEGORY;
@@ -2338,7 +2338,10 @@ function isSpreadsheetImportFile(fileOrName) {
 
 function getUploadFileCategory(fileName = "") {
   const currentCategory = getCurrentFileCategory();
-  if (currentCategory === DEVIATION_PNR_FILE_CATEGORY || currentCategory === PACKAGE_MANAGEMENT_FILE_CATEGORY || currentCategory === PRE_FATURA_FILE_CATEGORY) {
+  if (currentCategory === DEVIATION_PNR_FILE_CATEGORY ||
+    currentCategory === PACKAGE_MANAGEMENT_FILE_CATEGORY ||
+    currentCategory === PRE_FATURA_FILE_CATEGORY ||
+    currentCategory === MISSING_PACKAGES_FILE_CATEGORY) {
     return currentCategory;
   }
   return identificarTipoArquivo(fileName);
@@ -2360,10 +2363,12 @@ function getFileRecordCategory(fileRecord) {
   const nameCategory = identificarTipoArquivo(fileRecord?.metadata?.original_name || fileRecord?.file_name || fileRecord?.fileName || "");
   if (nameCategory === PACKAGE_MANAGEMENT_FILE_CATEGORY) return PACKAGE_MANAGEMENT_FILE_CATEGORY;
   if (nameCategory === DEVIATION_PNR_FILE_CATEGORY) return DEVIATION_PNR_FILE_CATEGORY;
+  if (nameCategory === MISSING_PACKAGES_FILE_CATEGORY) return MISSING_PACKAGES_FILE_CATEGORY;
 
   const storagePath = String(fileRecord?.storage_path || fileRecord?.storagePath || "");
   if (storagePath.startsWith("gestao-pacotes/")) return PACKAGE_MANAGEMENT_FILE_CATEGORY;
   if (storagePath.startsWith("gestao-desvios/pnrs/")) return DEVIATION_PNR_FILE_CATEGORY;
+  if (storagePath.startsWith("gestao-desvios/pacotes-faltantes/")) return MISSING_PACKAGES_FILE_CATEGORY;
   if (storagePath.startsWith("pre-fatura/")) return PRE_FATURA_FILE_CATEGORY;
 
   return nameCategory;
@@ -2376,6 +2381,7 @@ function getFileRecordMimeType(fileRecord, fallback = "") {
 
 function inferRowsFileCategory(rows) {
   if (Array.isArray(rows) && rows.some((row) => row?.file_category === DEVIATION_PNR_FILE_CATEGORY || row?.tipo_registro === DEVIATION_PNR_FILE_CATEGORY)) return DEVIATION_PNR_FILE_CATEGORY;
+  if (Array.isArray(rows) && rows.some((row) => row?.file_category === MISSING_PACKAGES_FILE_CATEGORY || row?.tipo_registro === MISSING_PACKAGES_FILE_CATEGORY)) return MISSING_PACKAGES_FILE_CATEGORY;
   return Array.isArray(rows) && rows.some((row) => row?.file_category === PACKAGE_MANAGEMENT_FILE_CATEGORY) ? PACKAGE_MANAGEMENT_FILE_CATEGORY : PRE_FATURA_FILE_CATEGORY;
 }
 
@@ -2402,6 +2408,9 @@ function getDashboardFileDisplayName(fileOrDataset) {
   if (metadata.display_name) return metadata.display_name;
   const fileName = fileOrDataset.file_name || fileOrDataset.fileName || fileOrDataset.label || "arquivo.xlsx";
   const category = fileOrDataset.fileCategory || getFileRecordCategory(fileOrDataset.remoteRecord || fileOrDataset);
+  if (category === MISSING_PACKAGES_FILE_CATEGORY) {
+    return `Pacotes Faltantes · ${String(fileName || "arquivo").replace(/\.[^.]+$/, "")}`;
+  }
   if (category === PACKAGE_MANAGEMENT_FILE_CATEGORY) {
     return buildPackageManagementDisplayName(fileName, metadata);
   }
@@ -2949,11 +2958,13 @@ function getSettingsFilesForActiveTab() {
 
 function getSettingsFileCategoryLabel(category) {
   if (category === DEVIATION_PNR_FILE_CATEGORY) return "Gestão de Desvios";
+  if (category === MISSING_PACKAGES_FILE_CATEGORY) return "Pacotes Faltantes";
   return category === PACKAGE_MANAGEMENT_FILE_CATEGORY ? "Gestão de Pacotes" : "Pré-Fatura";
 }
 
 function getSettingsFileTabLabel(category) {
   if (category === DEVIATION_PNR_FILE_CATEGORY) return "Gestão de Desvios";
+  if (category === MISSING_PACKAGES_FILE_CATEGORY) return "Pacotes Faltantes";
   return getSettingsFileCategoryLabel(category);
 }
 
@@ -2982,6 +2993,7 @@ function getPnrSettingsFileTypeLabel(file) {
 function getSettingsFilePrimaryLabel(file) {
   if (isPnrMasterDashboardFile(file)) return "Base Mestre";
   if (getFileRecordCategory(file) === DEVIATION_PNR_FILE_CATEGORY) return getPnrSettingsFileTypeLabel(file);
+  if (getFileRecordCategory(file) === MISSING_PACKAGES_FILE_CATEGORY) return "Arquivo de Pacotes Faltantes";
   const category = getSettingsFileCategoryLabel(getFileRecordCategory(file));
   return `${category} · ${formatSettingsFilePeriod(file)}`;
 }
@@ -2999,16 +3011,25 @@ function categoryAwareFullMonthLabel(file, period = getFileRecordPeriod(file)) {
 }
 
 function renderDeviationSettingsCategories(filesCount = 0) {
-  const pnrRowsLabel = filesCount ? `${integer.format(filesCount)} arquivo${filesCount === 1 ? "" : "s"}` : "Sem arquivos";
+  const pnrCount = dashboardFileRecords
+    .filter(isUsableDashboardFileRecord)
+    .filter(isDashboardFileActive)
+    .filter((file) => getFileRecordCategory(file) === DEVIATION_PNR_FILE_CATEGORY).length;
+  const missingCount = dashboardFileRecords
+    .filter(isUsableDashboardFileRecord)
+    .filter(isDashboardFileActive)
+    .filter((file) => getFileRecordCategory(file) === MISSING_PACKAGES_FILE_CATEGORY).length;
+  const pnrRowsLabel = pnrCount ? `${integer.format(pnrCount)} arquivo${pnrCount === 1 ? "" : "s"}` : "Sem arquivos";
+  const missingRowsLabel = missingCount ? `${integer.format(missingCount)} arquivo${missingCount === 1 ? "" : "s"}` : "Sem arquivos";
   return `
     <div class="settings-deviation-categories" aria-label="Categorias da Gestão de Desvios">
-      <span class="settings-deviation-category is-enabled is-active">
+      <span class="settings-deviation-category is-enabled${settingsFilesTab === DEVIATION_PNR_FILE_CATEGORY ? " is-active" : ""}">
         <span>PNRs</span>
         <small>${escapeHtml(pnrRowsLabel)}</small>
       </span>
-      <span class="settings-deviation-category is-disabled" title="Pacotes Faltantes não possui arquivos importados. A entrada é feita por texto colado na própria aba.">
+      <span class="settings-deviation-category is-enabled${settingsFilesTab === MISSING_PACKAGES_FILE_CATEGORY ? " is-active" : ""}">
         <span>Pacotes Faltantes</span>
-        <small>Não usa arquivos</small>
+        <small>${escapeHtml(missingRowsLabel)}</small>
       </span>
     </div>
   `;
@@ -3043,6 +3064,7 @@ function renderSettingsFileManagement() {
     [PRE_FATURA_FILE_CATEGORY, "Pré-Fatura"],
     [PACKAGE_MANAGEMENT_FILE_CATEGORY, "Gestão de Pacotes"],
     [DEVIATION_PNR_FILE_CATEGORY, "Gestão de Desvios"],
+    [MISSING_PACKAGES_FILE_CATEGORY, "Pacotes Faltantes"],
   ];
   el.settingsFilesTabs.innerHTML = tabs
     .map(([category, label]) => `
@@ -3073,7 +3095,7 @@ function renderSettingsFileManagement() {
   }
   if (!files.length) {
     el.settingsFilesList.innerHTML = `
-      ${settingsFilesTab === DEVIATION_PNR_FILE_CATEGORY ? renderDeviationSettingsCategories(0) : ""}
+      ${[DEVIATION_PNR_FILE_CATEGORY, MISSING_PACKAGES_FILE_CATEGORY].includes(settingsFilesTab) ? renderDeviationSettingsCategories(0) : ""}
       <div class="settings-files-empty">Nenhum arquivo de ${escapeHtml(getSettingsFileTabLabel(settingsFilesTab))} encontrado.</div>
     `;
     return;
@@ -3081,7 +3103,7 @@ function renderSettingsFileManagement() {
 
   const allSelected = selectedCount === files.length;
   el.settingsFilesList.innerHTML = `
-    ${settingsFilesTab === DEVIATION_PNR_FILE_CATEGORY ? renderDeviationSettingsCategories(files.length) : ""}
+    ${[DEVIATION_PNR_FILE_CATEGORY, MISSING_PACKAGES_FILE_CATEGORY].includes(settingsFilesTab) ? renderDeviationSettingsCategories(files.length) : ""}
     <label class="settings-files-select-all">
       <input type="checkbox" data-settings-file-select-all ${allSelected ? "checked" : ""} ${permissions.canDeleteFile ? "" : "disabled"}>
       <span class="type-filter__check" aria-hidden="true"></span>
@@ -3871,21 +3893,23 @@ function renderDeviationCategoryMenu() {
 
 function normalizeMissingPackageCaseStatus(value = "") {
   const normalized = normalizeText(value);
-  if (normalized === "concluido" || normalized === "resolvido" || normalized === "cancelado") return "Concluído";
+  if (normalized === "resolvido" || normalized === "concluido") return "Resolvido";
+  if (normalized === "cancelado") return "Cancelado";
   if (normalized === "em rota") return "Em rota";
+  if (normalized === "nao localizado" || normalized === "nao-localizado") return "Não localizado";
   return "Pendente";
 }
 
 function normalizeMissingPackageMeliStatus(value = "") {
   const normalized = normalizeText(value);
   if (normalized === "concluido") return "Concluído";
-  if (normalized.includes("aguardando")) return "Aguardando MELI";
-  return "E-mail Enviado";
+  if (normalized.includes("aguardando")) return "Aguardando Méli";
+  return "Em tratativa";
 }
 
 function normalizeMissingPackageRow(record = {}) {
   const statusCaso = normalizeMissingPackageCaseStatus(record.status_caso || record.statusCaso || "Pendente");
-  const statusContatoMeli = normalizeMissingPackageMeliStatus(record.status_contato_meli || record.statusContatoMeli || "E-mail Enviado");
+  const statusContatoMeli = normalizeMissingPackageMeliStatus(record.status_contato_meli || record.statusContatoMeli || "Em tratativa");
   const row = {
     id: record.id || "",
     dataFechamento: record.data_fechamento || record.dataFechamento || "",
@@ -3902,6 +3926,8 @@ function normalizeMissingPackageRow(record = {}) {
     importedAt: record.imported_at || record.importedAt || "",
     importedBy: record.imported_by || record.importedBy || "",
     sourceHash: record.source_hash || record.sourceHash || "",
+    sourceFileId: record.source_file_id || record.sourceFileId || "",
+    fileName: record.file_name || record.fileName || "",
     dedupeKey: record.dedupe_key || record.dedupeKey || "",
     updatedAt: record.updated_at || record.updatedAt || "",
   };
@@ -3918,87 +3944,6 @@ function parseMissingPackageDate(value = "") {
   return `${year}-${match[2].padStart(2, "0")}-${match[1].padStart(2, "0")}`;
 }
 
-function parseMissingPackagesText(text = "") {
-  const lines = String(text || "").replace(/\r/g, "").split("\n").map((line) => line.trim());
-  const header = {
-    base: "",
-    dataFechamento: "",
-    ds: "",
-    rotas: 0,
-    pacotes: 0,
-    insucessos: 0,
-  };
-  const ignoredLines = [];
-  const drivers = new Set();
-  const records = [];
-  let currentDriver = "";
-
-  lines.forEach((line) => {
-    if (!line) return;
-    const normalized = normalizeText(line);
-    const closingMatch = line.match(/^Fechamento\s+(.+)$/i);
-    if (closingMatch) {
-      header.base = closingMatch[1].trim().split(/\s+/)[0] || "";
-      return;
-    }
-    const dateMatch = line.match(/^Data\s*:\s*(.+)$/i);
-    if (dateMatch) {
-      header.dataFechamento = parseMissingPackageDate(dateMatch[1]);
-      return;
-    }
-    const dsMatch = line.match(/^DS\s*:\s*([\d.,]+)/i);
-    if (dsMatch) {
-      header.ds = Number(String(dsMatch[1]).replace(/\./g, "").replace(",", ".")) || 0;
-      return;
-    }
-    const rotasMatch = normalized.match(/rotas\s*[: ]\s*([\d.]+)/);
-    if (rotasMatch) {
-      header.rotas = Number(rotasMatch[1].replace(/\./g, "")) || 0;
-      return;
-    }
-    const pacotesMatch = normalized.match(/pacotes\s*[: ]\s*([\d.]+)/);
-    if (pacotesMatch) {
-      header.pacotes = Number(pacotesMatch[1].replace(/\./g, "")) || 0;
-      return;
-    }
-    const insucessosMatch = normalized.match(/insucessos\s*[: ]\s*([\d.]+)/);
-    if (insucessosMatch) {
-      header.insucessos = Number(insucessosMatch[1].replace(/\./g, "")) || 0;
-      return;
-    }
-    const driverMatch = line.match(/^Driver\s*:\s*(.+)$/i);
-    if (driverMatch) {
-      currentDriver = formatDriverName(driverMatch[1], "");
-      if (currentDriver) drivers.add(currentDriver);
-      return;
-    }
-    const packageMatch = line.match(/^(\d{8,})\s+(.+)$/);
-    if (!packageMatch) return;
-    const idEnvio = packageMatch[1].trim();
-    const motivo = packageMatch[2].trim();
-    if (!/\bfaltante\b/i.test(normalizeText(motivo))) {
-      ignoredLines.push(line);
-      return;
-    }
-    records.push({
-      dataFechamento: header.dataFechamento,
-      base: header.base,
-      tipoBase: "XPT",
-      driverNome: currentDriver,
-      idEnvio,
-      caso: "Pacote faltante",
-      motivoOriginal: motivo,
-    });
-  });
-
-  return {
-    header,
-    driversRead: drivers.size,
-    records,
-    ignoredLines,
-  };
-}
-
 function buildMissingPackageDedupeKey(record = {}) {
   return [
     record.dataFechamento,
@@ -4010,18 +3955,13 @@ function buildMissingPackageDedupeKey(record = {}) {
 }
 
 function getMissingPackageDeadlineStatus(row = {}) {
-  if (row.statusCaso === "Concluído" || row.statusContatoMeli === "Concluído") return "Concluído";
+  if (["Resolvido", "Cancelado"].includes(row.statusCaso) || row.statusContatoMeli === "Concluído") return "Concluído";
   const deadline = row.prazoTratativa ? new Date(row.prazoTratativa) : null;
   if (!deadline || Number.isNaN(deadline.getTime())) return "Dentro do prazo";
   const remainingMs = deadline.getTime() - Date.now();
   if (remainingMs <= 0) return "Vencido";
   if (remainingMs <= 12 * 60 * 60 * 1000) return "Próximo do vencimento";
   return "Dentro do prazo";
-}
-
-async function getMissingPackageSourceHash(text = "") {
-  const bytes = new TextEncoder().encode(String(text || ""));
-  return calculateSha256FromBuffer(bytes.buffer);
 }
 
 async function loadMissingPackagesFromSupabase(options = {}) {
@@ -4070,65 +4010,6 @@ async function fetchExistingMissingPackageKeys(keys = []) {
   return existing;
 }
 
-async function processMissingPackagesText() {
-  if (!window.supabaseClient || !currentUser) {
-    showToast("Faça login para importar Pacotes Faltantes.", "warn", 4200);
-    return;
-  }
-  const text = state.missingPackagesText || "";
-  if (!text.trim()) {
-    showToast("Cole o texto do dispatcher antes de processar.", "warn", 4200);
-    return;
-  }
-  isImportingMissingPackages = true;
-  renderAll();
-  try {
-    const parsed = parseMissingPackagesText(text);
-    if (!parsed.header.base || !parsed.header.dataFechamento) {
-      throw new Error("Não foi possível identificar base e data do fechamento.");
-    }
-    const sourceHash = await getMissingPackageSourceHash(text);
-    const now = new Date();
-    const prazo = new Date(now.getTime() + 48 * 60 * 60 * 1000).toISOString();
-    const prepared = parsed.records.map((record) => ({
-      data_fechamento: record.dataFechamento,
-      base: record.base,
-      tipo_base: "XPT",
-      driver_nome: record.driverNome,
-      id_envio: record.idEnvio,
-      caso: "Pacote faltante",
-      motivo_original: record.motivoOriginal || "Faltante",
-      status_caso: "Pendente",
-      status_contato_meli: "E-mail Enviado",
-      prazo_tratativa: prazo,
-      situacao_prazo: "Dentro do prazo",
-      imported_at: now.toISOString(),
-      imported_by: currentUser.email || currentUser.id || "",
-      source_hash: sourceHash,
-      dedupe_key: buildMissingPackageDedupeKey(record),
-    }));
-    const existingKeys = await fetchExistingMissingPackageKeys(prepared.map((record) => record.dedupe_key));
-    const inserts = prepared.filter((record) => !existingKeys.has(record.dedupe_key));
-    if (inserts.length) {
-      const { error } = await window.supabaseClient
-        .from("gestao_desvios_pacotes_faltantes")
-        .insert(inserts);
-      if (error) throw error;
-    }
-    await loadMissingPackagesFromSupabase({ render: false });
-    state.page = 1;
-    persistState();
-    showToast(`Importação concluída. Base: ${parsed.header.base}. Faltantes: ${integer.format(parsed.records.length)}. Importados: ${integer.format(inserts.length)}. Duplicados ignorados: ${integer.format(prepared.length - inserts.length)}.`, "good", 7600);
-  } catch (error) {
-    console.error("[Pacotes Faltantes] Falha ao processar texto.", error);
-    showToast(error?.message || "Não foi possível processar o texto.", "error", 6200);
-  } finally {
-    isImportingMissingPackages = false;
-    hydrateControls();
-    renderAll();
-  }
-}
-
 function getFilteredMissingPackagesRows() {
   const selectedCaseStatus = state.missingPackagesCaseStatus === "Todos" ? "Todos" : normalizeMissingPackageCaseStatus(state.missingPackagesCaseStatus);
   const selectedMeliStatus = state.missingPackagesMeliStatus === "Todos" ? "Todos" : normalizeMissingPackageMeliStatus(state.missingPackagesMeliStatus);
@@ -4174,9 +4055,9 @@ function getMissingPackagesMetrics(rows = getFilteredMissingPackagesRows()) {
     total,
     pendentes: count((row) => row.statusCaso === "Pendente"),
     emRota: count((row) => row.statusCaso === "Em rota"),
-    emailEnviado: count((row) => row.statusContatoMeli === "E-mail Enviado"),
-    aguardandoMeli: count((row) => row.statusContatoMeli === "Aguardando MELI"),
-    concluidos: count((row) => row.statusContatoMeli === "Concluído" || row.statusCaso === "Concluído"),
+    emTratativa: count((row) => row.statusContatoMeli === "Em tratativa"),
+    aguardandoMeli: count((row) => row.statusContatoMeli === "Aguardando Méli"),
+    concluidos: count((row) => row.statusContatoMeli === "Concluído" || row.statusCaso === "Resolvido"),
     prazoCritico: count((row) => ["Vencido", "Próximo do vencimento"].includes(getMissingPackageDeadlineStatus(row))),
   };
 }
@@ -4189,7 +4070,7 @@ function renderMissingPackagesCards(rows) {
     { label: "Pendentes", value: integer.format(metrics.pendentes), tone: "kpi-card--neutral", delta: pct(metrics.pendentes), description: "Status do caso pendente" },
     { label: "Concluídos", value: integer.format(metrics.concluidos), tone: "kpi-card--neutral", delta: pct(metrics.concluidos), description: "Casos encerrados" },
     { label: "Em rota", value: integer.format(metrics.emRota), tone: "kpi-card--neutral", delta: pct(metrics.emRota), description: "Casos em rota" },
-    { label: "Aguardando MELI", value: integer.format(metrics.aguardandoMeli), tone: "kpi-card--finance", delta: pct(metrics.aguardandoMeli), description: "Contato aguardando retorno" },
+    { label: "Aguardando Méli", value: integer.format(metrics.aguardandoMeli), tone: "kpi-card--finance", delta: pct(metrics.aguardandoMeli), description: "Contato aguardando retorno" },
     { label: "Prazo crítico", value: integer.format(metrics.prazoCritico), tone: "kpi-card--problem", delta: pct(metrics.prazoCritico), description: "Vencidos ou próximos" },
   ];
   return `<section class="kpi-grid__group kpi-grid__group--main pnr-kpi-grid missing-packages-kpi-grid" aria-label="Cards de Pacotes Faltantes">${cards.map((card, index) => renderKpiCard(card, index)).join("")}</section>`;
@@ -4391,7 +4272,7 @@ function renderMissingPackagesTable(rows) {
             </label>
           </th>` : `<th>${escapeHtml(column.label)}</th>`).join("")}</tr></thead>
           <tbody>
-            ${pagedRows.length ? pagedRows.map((row) => `<tr>${tableColumns.map((column) => `<td>${formatMissingPackageCell(row, column)}</td>`).join("")}</tr>`).join("") : `<tr><td colspan="${tableColumns.length}">${emptyState("Nenhum pacote faltante encontrado", "Cole um fechamento do dispatcher ou ajuste os filtros.")}</td></tr>`}
+            ${pagedRows.length ? pagedRows.map((row) => `<tr>${tableColumns.map((column) => `<td>${formatMissingPackageCell(row, column)}</td>`).join("")}</tr>`).join("") : `<tr><td colspan="${tableColumns.length}">${emptyState("Nenhum pacote faltante encontrado", "Importe um arquivo CSV/XLSX ou ajuste os filtros.")}</td></tr>`}
           </tbody>
         </table>
       </div>
@@ -4408,26 +4289,35 @@ function renderMissingPackagesTable(rows) {
 }
 
 function renderMissingPackagesImportPanel() {
+  const moduleFiles = filterDashboardRecordsByModule(dashboardFileRecords, DASHBOARD_MODULE_KEYS.pacotesFaltantes)
+    .filter(isUsableDashboardFileRecord)
+    .slice(0, 5);
   return `
     <article class="panel missing-packages-import-panel">
       <div class="panel__header">
         <div>
-          <h3>Importar fechamento do dispatcher</h3>
-          <p>Cole aqui o texto enviado pelo dispatcher. O sistema irá extrair somente os pacotes marcados como Faltante.</p>
+          <h3>Importar arquivo de Pacotes Faltantes</h3>
+          <p>Envie CSV ou XLSX. O sistema extrai somente linhas cujo motivo/caso contenha Faltante.</p>
         </div>
       </div>
-      <div class="missing-packages-text-shell">
-        <textarea class="missing-packages-textarea" data-missing-packages-text placeholder="Cole o fechamento aqui...">${escapeHtml(state.missingPackagesText || "")}</textarea>
+      <div class="missing-packages-upload-dropzone">
+        <div class="missing-packages-upload-dropzone__icon" aria-hidden="true">
+          <svg viewBox="0 0 24 24"><path d="M12 16V4m0 0-4.5 4.5M12 4l4.5 4.5" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8"></path><path d="M5 16v2a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2v-2" fill="none" stroke="currentColor" stroke-linecap="round" stroke-width="1.8"></path></svg>
+        </div>
+        <div>
+          <strong>Selecionar arquivo CSV/XLSX</strong>
+          <span>Formato recomendado: CSV. Arquivos XLSX podem ser mais lentos para processar.</span>
+        </div>
+        <button type="button" class="secondary-button missing-packages-action missing-packages-action--primary" data-missing-packages-upload>
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 16V4m0 0-4 4m4-4 4 4M5 20h14" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.9"></path></svg>
+          <span>Selecionar arquivo</span>
+        </button>
       </div>
-      <div class="missing-packages-import-actions">
-        <button type="button" class="secondary-button missing-packages-action missing-packages-action--primary" data-missing-packages-process ${isImportingMissingPackages ? "disabled" : ""}>
-          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m5 12 4 4L19 6" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2"></path></svg>
-          <span>${isImportingMissingPackages ? "Processando..." : "Processar texto"}</span>
-        </button>
-        <button type="button" class="secondary-button missing-packages-action" data-missing-packages-clear-text>
-          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6 6 18" fill="none" stroke="currentColor" stroke-linecap="round" stroke-width="1.9"></path></svg>
-          <span>Limpar texto</span>
-        </button>
+      <div class="missing-packages-file-history">
+        <span>Arquivos processados</span>
+        ${moduleFiles.length
+          ? `<ul>${moduleFiles.map((file) => `<li><strong>${escapeHtml(file.file_name || file.metadata?.original_name || "Arquivo")}</strong><small>${escapeHtml(formatDateTime(file.created_at || file.updated_at))} · ${escapeHtml(getFileRowsCount(file) ? `${integer.format(getFileRowsCount(file))} registros` : "processado")}</small></li>`).join("")}</ul>`
+          : `<p>Nenhum arquivo importado para Pacotes Faltantes.</p>`}
       </div>
     </article>
   `;
@@ -4460,11 +4350,14 @@ function buildMissingPackagesExportRows(rows = []) {
     "Data do Caso": formatDate(row.dataFechamento),
     "Data de importação": formatDateTime(row.importedAt),
     Base: row.base || "",
+    "Tipo de base": row.tipoBase || "XPT",
     Driver: formatDriverName(row.driverNome, ""),
     "ID do Pacote/Envio": String(row.idEnvio || ""),
+    Caso: row.caso || "Pacote faltante",
     "Status do Caso": row.statusCaso || "",
     "Contato Méli": row.statusContatoMeli || "",
     "Prazo da tratativa": formatDateTime(row.prazoTratativa),
+    "Situação do prazo": getMissingPackageDeadlineStatus(row),
   }));
 }
 
@@ -9577,6 +9470,11 @@ async function loadGlobalGoalSettings() {
     globalGoalSettings = normalizeGoalSettings(data?.value);
     return globalGoalSettings;
   } catch (error) {
+    if (isMissingProcessedRecordsTableError(error) || /dashboard_settings|schema cache|Could not find/i.test(`${error.code || ""} ${error.message || ""} ${error.details || ""}`)) {
+      console.warn("[SETTINGS] Tabela de metas indisponível; usando padrão local.", error);
+      globalGoalSettings = getDefaultGoalSettings();
+      return globalGoalSettings;
+    }
     console.error("Erro ao carregar meta global:", error);
     globalGoalSettings = getDefaultGoalSettings();
     showToast("Erro ao carregar configuração de meta.", "warn", 5200);
@@ -10549,8 +10447,8 @@ function buildReportPdfBlob({ analysis, summary }) {
       ["PNR", integer.format(summary.pnrCount), `${analysis.pnrShare}% dos registros`, colors.red, colors.dangerSoft],
       ["Pacotes perdidos", integer.format(summary.packageCount), `${analysis.packageShare}% dos registros`, colors.blue, colors.blueSoft],
       ["Registros", integer.format(summary.count), `${integer.format(summary.baseCount)} bases e ${integer.format(summary.driverCount)} drivers`, colors.blue, colors.white],
-      ["Média mensal", currency.format(analysis.monthlyAverage), "", colors.orange, colors.white],
-      ["Mês crítico", analysis.criticalMonthLabel, formatCurrencyShort(analysis.criticalMonth.totalValue), colors.red, colors.dangerSoft],
+      [analysis.scope.periodMode === "month" ? "Média mensal" : "Média quinzenal", currency.format(analysis.monthlyAverage), "", colors.orange, colors.white],
+      [analysis.criticalImpactTitle || "Maior impacto", analysis.criticalMonthLabel, formatCurrencyShort(analysis.criticalMonth.totalValue), colors.red, colors.dangerSoft],
       ["Categoria líder", analysis.dominantCategoryLabel, `${analysis.dominantCategoryShare}% do impacto`, colors.teal, colors.greenSoft],
     ];
     ensure(160);
@@ -10934,7 +10832,8 @@ function buildReportAnalysis({ rows, filteredRows, summary, scope: providedScope
   const totalOccurrences = Math.max(summary.count, 1);
   const ticketAverage = summary.count ? summary.totalValue / summary.count : 0;
   const monthlyAverage = comparisonRows.length ? comparisonRows.reduce((acc, row) => acc + Number(row.totalValue || 0), 0) / comparisonRows.length : summary.totalValue;
-  const criticalMonth = comparisonRows.reduce((best, row) => (Number(row.totalValue || 0) > Number(best.totalValue || 0) ? row : best), comparisonRows[0] || fallbackRow);
+  const historicalCriticalMonth = comparisonRows.reduce((best, row) => (Number(row.totalValue || 0) > Number(best.totalValue || 0) ? row : best), comparisonRows[0] || fallbackRow);
+  const criticalMonth = pickReportCriticalImpact(scope, summary, historicalCriticalMonth);
   const volumeMonth = comparisonRows.reduce((best, row) => (Number(row.count || 0) > Number(best.count || 0) ? row : best), comparisonRows[0] || fallbackRow);
   const topBase = topBases[0] || { label: "Não identificado", total: 0, count: 0 };
   const topDriver = topDrivers[0] || { label: "Não identificado", total: 0, count: 0 };
@@ -11012,7 +10911,8 @@ function buildReportAnalysis({ rows, filteredRows, summary, scope: providedScope
     monthlyAverage,
     criticalMonth,
     volumeMonth,
-    criticalMonthLabel: shortMonthYear(criticalMonth.label),
+    criticalMonthLabel: formatReportImpactPeriodLabel(criticalMonth, scope),
+    criticalImpactTitle: getReportImpactTitle(scope, criticalMonth),
     volumeMonthLabel: shortMonthYear(volumeMonth.label),
     pnrShare,
     packageShare,
@@ -11316,11 +11216,74 @@ function getReportTrendReferenceLabel(scope, previousMonth) {
   return `${periodLabel} de ${monthLabel}`;
 }
 
+function getReportImpactKind(scope, row = null) {
+  const mode = normalizePeriodMode(row?.periodMode || scope?.periodMode || "month");
+  return mode === "month" ? "mensal" : "quinzenal";
+}
+
+function getReportImpactTitle(scope, row = null) {
+  return getReportImpactKind(scope, row) === "mensal" ? "Maior impacto mensal" : "Maior impacto quinzenal";
+}
+
+function formatReportImpactPeriodLabel(row, scope) {
+  const mode = normalizePeriodMode(row?.periodMode || scope?.periodMode || "month");
+  const label = row?.label || scope?.monthLabel || scope?.label || "Recorte";
+  const monthLabel = shortMonthYear(label);
+  if (mode === "month") return monthLabel;
+  return `${monthLabel} — ${getPeriodModeLabel(mode).toLowerCase()}`;
+}
+
+function buildCurrentScopeImpactRow(scope, summary) {
+  return {
+    key: `current:${scope?.key || "all"}:${scope?.periodMode || "month"}`,
+    label: scope?.monthLabel || scope?.label || "Recorte atual",
+    count: Number(summary?.count || 0),
+    totalValue: Number(summary?.totalValue || 0),
+    periodMode: normalizePeriodMode(scope?.periodMode || "month"),
+    isCurrentScope: true,
+  };
+}
+
+function pickReportCriticalImpact(scope, summary, historicalCriticalRow) {
+  const currentRow = buildCurrentScopeImpactRow(scope, summary);
+  const historicalRow = historicalCriticalRow
+    ? {
+      ...historicalCriticalRow,
+      periodMode: normalizePeriodMode(historicalCriticalRow.periodMode || scope?.periodMode || "month"),
+    }
+    : null;
+  if (scope?.mode === "annual") {
+    return historicalRow || currentRow;
+  }
+  if (!historicalRow || Number(currentRow.totalValue || 0) >= Number(historicalRow.totalValue || 0)) {
+    return currentRow;
+  }
+  return historicalRow;
+}
+
+function buildReportImpactContext(scope, summary, criticalImpact) {
+  const current = buildCurrentScopeImpactRow(scope, summary);
+  const peak = criticalImpact || current;
+  const peakKind = getReportImpactKind(scope, peak);
+  const peakTitle = getReportImpactTitle(scope, peak);
+  const peakText = `${formatReportImpactPeriodLabel(peak, scope)} com ${currency.format(peak.totalValue || 0)}`;
+  return {
+    currentText: `${scope?.label || "Recorte atual"} com ${currency.format(summary?.totalValue || 0)}`,
+    peakKind,
+    peakTitle,
+    peakText,
+    peakSentence: `${formatReportImpactPeriodLabel(peak, scope)} teve o maior impacto ${peakKind}, com ${currency.format(peak.totalValue || 0)} em descontos.`,
+    monthlyText: peakKind === "mensal" ? peakText : "Não calculado neste relatório quinzenal.",
+    biweeklyText: peakKind === "quinzenal" ? peakText : "Não aplicado ao recorte mensal.",
+  };
+}
+
 function buildIntelligentSummary({ scope, summary, criticalMonth, volumeMonth, dominantCategory, topBase, topDriver, topBaseShare, topDriverShare, trend, ticketAverage, pnrShare, packageShare }) {
   const period = scope.mode === "annual" ? `No consolidado anual de ${scope.year}` : `Em ${scope.label}`;
+  const impactContext = buildReportImpactContext(scope, summary, criticalMonth);
   const impactSentence =
     scope.mode === "annual"
-      ? `${shortMonthYear(criticalMonth.label)} teve o maior impacto financeiro, com ${currency.format(criticalMonth.totalValue)} em descontos.`
+      ? impactContext.peakSentence
       : `o recorte registra ${currency.format(summary.totalValue)} em descontos e ticket médio de ${currency.format(ticketAverage)} por registro válido.`;
   return [
     `${period}, ${impactSentence}`,
@@ -11332,17 +11295,18 @@ function buildIntelligentSummary({ scope, summary, criticalMonth, volumeMonth, d
 }
 
 function buildReportDiagnostics({ scope, summary, criticalMonth, volumeMonth, dominantCategory, topBase, topDriver, ticketAverage, trend }) {
+  const impactContext = buildReportImpactContext(scope, summary, criticalMonth);
   return [
     {
-      title: scope.mode === "annual" ? "Mês mais crítico" : "Impacto do recorte",
+      title: scope.mode === "annual" ? impactContext.peakTitle : "Impacto do recorte atual",
       text:
         scope.mode === "annual"
-          ? `${shortMonthYear(criticalMonth.label)} concentrou ${currency.format(criticalMonth.totalValue)} em descontos.`
+          ? `${impactContext.peakTitle}: ${impactContext.peakText}.`
           : `${scope.label} concentrou ${currency.format(summary.totalValue)} em descontos, com ticket médio de ${currency.format(ticketAverage)}.`,
     },
     {
       title: "Volume operacional",
-      text: `${shortMonthYear(volumeMonth.label)} teve ${integer.format(volumeMonth.count)} registros; a categoria ${reportCategoryLabel(dominantCategory.label)} foi a mais relevante.`,
+      text: `${formatReportImpactPeriodLabel(volumeMonth, scope)} teve ${integer.format(volumeMonth.count)} registros; a categoria ${reportCategoryLabel(dominantCategory.label)} foi a mais relevante.`,
     },
     {
       title: "Prioridade",
@@ -11368,9 +11332,9 @@ function buildReportAlerts({ scope, summary, comparisonRows, monthlyAverage, top
     comparisonRows
       .filter((row) => row.totalValue > monthlyAverage * 1.2)
       .slice(0, 3)
-      .forEach((row) => alerts.push({ title: "Mês acima da média", text: `${shortMonthYear(row.label)} ficou acima da média mensal em valor de descontos.` }));
+      .forEach((row) => alerts.push({ title: "Período acima da média", text: `${formatReportImpactPeriodLabel(row, scope)} ficou acima da média em valor de descontos.` }));
   }
-  if (trend.direction === "up") alerts.push({ title: "Tendência de alta", text: "O período apresenta aumento de ofensividade financeira e precisa de plano de contenção." });
+  if (trend.direction === "up") alerts.push({ title: "Tendência de alta", text: "O período apresenta aumento do impacto financeiro e precisa de plano de contenção." });
   if (missingBaseCount) alerts.push({ title: "Cadastro de base", text: `${integer.format(missingBaseCount)} registro(s) sem base identificada exigem correção cadastral.` });
   if (missingDriverCount) alerts.push({ title: "Cadastro de driver", text: `${integer.format(missingDriverCount)} registro(s) sem driver identificado exigem correção cadastral.` });
   if (dominantCategory.total > 0) alerts.push({ title: "Categoria líder", text: `${reportCategoryLabel(dominantCategory.label)} representa ${categoryShareMap[dominantCategory.label] || "0,0"}% do impacto financeiro por categoria.` });
@@ -11385,23 +11349,26 @@ function buildReportRecommendations({ topBase, topDriver, dominantCategory, miss
     `Investigar a categoria ${reportCategoryLabel(dominantCategory.label)} para identificar causa raiz.`,
     "Medir a evolução no próximo fechamento para confirmar eficiência das ações.",
   ];
-  if (trend.direction === "up") recommendations.unshift("Criar plano de contenção imediato para reduzir a ofensividade no próximo mês.");
+  if (trend.direction === "up") recommendations.unshift("Criar plano de contenção imediato para reduzir a recorrência de PNRs no próximo mês.");
   if (missingBaseCount || missingDriverCount) recommendations.push("Corrigir cadastros e registros não identificados antes da próxima análise.");
   return recommendations;
 }
 
 function buildReportConclusionText({ scope, summary, topBase, topDriver, dominantCategory, criticalMonth, trend, recommendations }) {
+  const impactContext = buildReportImpactContext(scope, summary, criticalMonth);
   const periodText = scope.mode === "annual" ? `O período anual ${scope.year}` : `O recorte ${scope.label}`;
-  const periodImpact = `O impacto financeiro do período foi ${currency.format(summary.totalValue)}.`;
-  const criticalText = `O mês de maior impacto financeiro foi ${shortMonthYear(criticalMonth.label)}, com ${currency.format(criticalMonth.totalValue)}.`;
+  const periodImpact = `O impacto do recorte atual foi ${currency.format(summary.totalValue)}.`;
+  const criticalText = `${impactContext.peakTitle}: ${impactContext.peakText}.`;
   return `${periodText} mostra que o principal problema está em ${reportCategoryLabel(dominantCategory.label)}, com maior impacto financeiro na base ${topBase.label} e prioridade de acompanhamento para o driver ${topDriver.label}. ${periodImpact} ${criticalText} A tendência indica: ${trend.text} A primeira ação recomendada é: ${recommendations[0]}`;
 }
 
 function buildReportConclusionItems({ scope, summary, topBase, topDriver, dominantCategory, criticalMonth, trend, recommendations }) {
+  const impactContext = buildReportImpactContext(scope, summary, criticalMonth);
   return [
     { label: "Principal problema", text: reportCategoryLabel(dominantCategory.label) },
-    { label: "Impacto financeiro do período", text: `${scope.label} com ${currency.format(summary.totalValue)}` },
-    { label: "Mês de maior impacto financeiro", text: `${shortMonthYear(criticalMonth.label)} com ${currency.format(criticalMonth.totalValue)}` },
+    { label: "Impacto do recorte atual", text: impactContext.currentText },
+    { label: "Maior impacto mensal", text: impactContext.monthlyText },
+    { label: "Maior impacto quinzenal", text: impactContext.biweeklyText },
     { label: "Prioridade operacional", text: `Base ${topBase.label}; driver ${topDriver.label}.` },
     { label: "Tendência", text: trend.text },
     { label: "Primeira ação recomendada", text: recommendations[0] },
@@ -14868,6 +14835,117 @@ function normalizePackageManagementWorkbook(workbook, fileName = "") {
   return records;
 }
 
+function findMissingPackageHeaderRow(matrix = []) {
+  for (let index = 0; index < Math.min(matrix.length, 12); index += 1) {
+    const headers = (matrix[index] || []).map((value) => String(value || "").trim());
+    const idIndex = findHeaderIndex(headers, ["ID DO PACOTE/ENVIO", "ID PACOTE/ENVIO", "PACOTE/ENVIO", "ID DO PACOTE", "ID PACOTE", "ID DO ENVIO", "ID ENVIO", "ENVIO", "PACOTE", "ID"]);
+    const motiveIndex = findHeaderIndex(headers, ["MOTIVO", "OCORRENCIA", "OCORRÊNCIA", "DESCRICAO", "DESCRIÇÃO", "CASO", "TIPO"]);
+    if (idIndex >= 0 && motiveIndex >= 0) return index;
+  }
+  return 0;
+}
+
+function normalizeMissingPackageWorkbook(workbook, fileName = "") {
+  const records = [];
+  const importedSheets = [];
+  const ignoredSheets = [];
+  let totalRowsRead = 0;
+  let totalRowsSkipped = 0;
+
+  workbook.SheetNames.forEach((sheetName) => {
+    const sheet = workbook.Sheets[sheetName];
+    const matrix = XLSX.utils.sheet_to_json(sheet, { header: 1, raw: true, defval: null });
+    if (!matrix.length) {
+      ignoredSheets.push({ sheetName, reason: "Aba vazia", rowsRead: 0, importedRows: 0, ignoredRows: 0 });
+      return;
+    }
+    const headerIndex = findMissingPackageHeaderRow(matrix);
+    const headers = (matrix[headerIndex] || []).map((value) => String(value || "").trim());
+    const idx = {
+      data: findHeaderIndex(headers, ["DATA", "DATA DO CASO", "DATA DO FECHAMENTO", "COMPETENCIA", "COMPETÊNCIA", "REFERENCIA", "REFERÊNCIA"]),
+      base: findHeaderIndex(headers, ["BASE", "ESTACAO", "ESTAÇÃO", "UNIDADE", "ORIGEM", "SVC", "XPT"]),
+      driver: findHeaderIndex(headers, ["DRIVER", "MOTORISTA", "NOME DO MOTORISTA", "NOME MOTORISTA", "ENTREGADOR"]),
+      id: findHeaderIndex(headers, ["ID DO PACOTE/ENVIO", "ID PACOTE/ENVIO", "PACOTE/ENVIO", "ID DO PACOTE", "ID PACOTE", "ID DO ENVIO", "ID ENVIO", "ENVIO", "PACOTE", "ID"]),
+      motivo: findHeaderIndex(headers, ["MOTIVO", "OCORRENCIA", "OCORRÊNCIA", "DESCRICAO", "DESCRIÇÃO", "CASO", "TIPO"]),
+    };
+    const rowsRead = Math.max(matrix.length - headerIndex - 1, 0);
+    totalRowsRead += rowsRead;
+    if (idx.id < 0 || idx.motivo < 0) {
+      ignoredSheets.push({ sheetName, reason: "Cabeçalho de Pacotes Faltantes não reconhecido", rowsRead, importedRows: 0, ignoredRows: rowsRead });
+      totalRowsSkipped += rowsRead;
+      return;
+    }
+    const sheetStartCount = records.length;
+    let sheetSkipped = 0;
+    for (let index = headerIndex + 1; index < matrix.length; index += 1) {
+      const row = matrix[index];
+      if (!row || row.every((cell) => cell == null || String(cell).trim() === "")) continue;
+      const motivo = readCell(row, idx.motivo);
+      if (!/\bfaltante\b/i.test(normalizeText(motivo))) {
+        totalRowsSkipped += 1;
+        sheetSkipped += 1;
+        continue;
+      }
+      const idEnvio = formatId(readCell(row, idx.id));
+      if (!idEnvio) {
+        totalRowsSkipped += 1;
+        sheetSkipped += 1;
+        continue;
+      }
+      const dataValue = readCell(row, idx.data);
+      const dataFechamento = parseMissingPackageDate(dataValue) || new Date().toISOString().slice(0, 10);
+      const base = readCell(row, idx.base) || "";
+      const driverNome = formatDriverName(readCell(row, idx.driver) || "", "");
+      const normalized = {
+        file_category: MISSING_PACKAGES_FILE_CATEGORY,
+        tipo_registro: MISSING_PACKAGES_FILE_CATEGORY,
+        dataFechamento,
+        data_fechamento: dataFechamento,
+        base,
+        tipoBase: "XPT",
+        tipo_base: "XPT",
+        driverNome,
+        driver_nome: driverNome,
+        idEnvio,
+        id_envio: idEnvio,
+        caso: "Pacote faltante",
+        motivoOriginal: motivo || "Faltante",
+        motivo_original: motivo || "Faltante",
+        statusCaso: "Pendente",
+        status_caso: "Pendente",
+        statusContatoMeli: "Em tratativa",
+        status_contato_meli: "Em tratativa",
+        arquivo_origem: fileName,
+      };
+      normalized.dedupeKey = buildMissingPackageDedupeKey(normalized);
+      records.push(normalized);
+    }
+    const importedRows = records.length - sheetStartCount;
+    if (importedRows) {
+      importedSheets.push({ sheetName, rowsRead, importedRows, ignoredRows: sheetSkipped });
+    } else {
+      ignoredSheets.push({ sheetName, reason: "Nenhuma linha Faltante encontrada", rowsRead, importedRows: 0, ignoredRows: rowsRead });
+    }
+  });
+
+  normalizeMissingPackageWorkbook.lastStats = {
+    originalRows: totalRowsRead || records.length + totalRowsSkipped,
+    consolidatedRows: records.length,
+    duplicatesSkipped: 0,
+    sheetCount: workbook.SheetNames.length,
+    importedSheets,
+    ignoredSheets,
+    importedSheetNames: importedSheets.map((sheet) => sheet.sheetName),
+    ignoredSheetNames: ignoredSheets.map((sheet) => sheet.sheetName),
+    totalRowsRead: totalRowsRead || records.length + totalRowsSkipped,
+    totalRowsImported: records.length,
+    sheetsImported: importedSheets.length,
+    sheetsIgnored: ignoredSheets.length,
+    totalRowsSkipped,
+  };
+  return records;
+}
+
 function normalizePackageManagementStoredRow(row) {
   if (!row || typeof row !== "object") return null;
   const existingCategory = row.categoria_final || row.categoria || "";
@@ -15254,6 +15332,7 @@ async function findDashboardFileByHash(fileCategory, fileHash) {
 
 function getDashboardModuleKeyForFileCategory(fileCategory) {
   if (fileCategory === DEVIATION_PNR_FILE_CATEGORY) return DASHBOARD_MODULE_KEYS.desviosPnr;
+  if (fileCategory === MISSING_PACKAGES_FILE_CATEGORY) return DASHBOARD_MODULE_KEYS.pacotesFaltantes;
   if (fileCategory === PACKAGE_MANAGEMENT_FILE_CATEGORY) return DASHBOARD_MODULE_KEYS.pacotes;
   return DASHBOARD_MODULE_KEYS.preFatura;
 }
@@ -15336,6 +15415,7 @@ function getProcessedDashboardModuleKeyAliases(moduleKey) {
   if (moduleKey === DASHBOARD_MODULE_KEYS.preFatura) return [moduleKey, "pre_fatura"];
   if (moduleKey === DASHBOARD_MODULE_KEYS.pacotes) return [moduleKey, "gestao_pacotes"];
   if (moduleKey === DASHBOARD_MODULE_KEYS.evolucao) return [moduleKey, "evolucao_mensal"];
+  if (moduleKey === DASHBOARD_MODULE_KEYS.pacotesFaltantes) return [moduleKey, "pacotes_faltantes"];
   return [moduleKey].filter(Boolean);
 }
 
@@ -15345,9 +15425,11 @@ function mapProcessedDashboardFileToDashboardRecord(record = {}, moduleKey = "")
   const resolvedModuleKey = moduleKey || record.module_key || "";
   const category = resolvedModuleKey === DASHBOARD_MODULE_KEYS.desviosPnr || record.module_key === "desvios_pnr"
     ? DEVIATION_PNR_FILE_CATEGORY
-    : resolvedModuleKey === DASHBOARD_MODULE_KEYS.pacotes || record.module_key === "gestao_pacotes"
-      ? PACKAGE_MANAGEMENT_FILE_CATEGORY
-      : PRE_FATURA_FILE_CATEGORY;
+    : resolvedModuleKey === DASHBOARD_MODULE_KEYS.pacotesFaltantes || record.module_key === "pacotes_faltantes"
+      ? MISSING_PACKAGES_FILE_CATEGORY
+      : resolvedModuleKey === DASHBOARD_MODULE_KEYS.pacotes || record.module_key === "gestao_pacotes"
+        ? PACKAGE_MANAGEMENT_FILE_CATEGORY
+        : PRE_FATURA_FILE_CATEGORY;
   const sourceDashboardFileId = metadata.dashboard_file_id || metadata.file_id || record.dashboard_file_id || "";
   const fileName = record.file_name || metadata.original_name || metadata.display_name || "Arquivo importado";
   const rowCount = Number(record.row_count || metadata.row_count || metadata.record_count || metadata.parsed_rows || metadata.total_rows_imported || 0) || 0;
@@ -15489,13 +15571,28 @@ async function getPersistedProcessedRowsCount(fileRecord) {
   if (!window.supabaseClient || !fileRecord?.id) return 0;
   try {
     const tableName = getProcessedRecordsTable(getFileRecordCategory(fileRecord));
+    const queryColumn = getFileRecordCategory(fileRecord) === MISSING_PACKAGES_FILE_CATEGORY ? "source_file_id" : "file_id";
     const { count, error } = await window.supabaseClient
       .from(tableName)
       .select("id", { count: "exact", head: true })
-      .eq("file_id", fileRecord.id);
+      .eq(queryColumn, fileRecord.id);
     if (error) throw error;
     return Number(count || 0);
   } catch (error) {
+    if (getFileRecordCategory(fileRecord) === MISSING_PACKAGES_FILE_CATEGORY) {
+      const fileName = fileRecord.file_name || fileRecord.metadata?.original_name || "";
+      if (fileName && /source_file_id|42703|schema cache|Could not find|column/i.test(`${error.code || ""} ${error.message || ""} ${error.details || ""}`)) {
+        try {
+          const { count, error: fallbackError } = await window.supabaseClient
+            .from("gestao_desvios_pacotes_faltantes")
+            .select("id", { count: "exact", head: true })
+            .contains("raw_data", { arquivo_origem: fileName });
+          if (!fallbackError) return Number(count || 0);
+        } catch (_) {
+          return 0;
+        }
+      }
+    }
     if (isMissingProcessedRecordsTableError(error)) return 0;
     console.warn("[Painel Cache] Não foi possível contar registros processados do arquivo.", error);
     return 0;
@@ -15559,9 +15656,9 @@ async function validateDashboardImportPersistence(fileRecord, processedSaveResul
   });
   const affectedRows = processedSaveResult === true
     ? fileRows
-    : Number(processedSaveResult?.inserted || 0) + Number(processedSaveResult?.updated || 0) + Number(processedSaveResult?.ignoredOlder || 0);
+    : Number(processedSaveResult?.inserted || 0) + Number(processedSaveResult?.updated || 0) + Number(processedSaveResult?.ignored || 0) + Number(processedSaveResult?.ignoredOlder || 0);
   const pnrPersistedRows = Math.max(Number(fileRows || 0), Number(batchRows || 0), Number(totalRows || 0));
-  const hasPersistedRows = isPnr ? pnrPersistedRows > 0 : fileRows > 0;
+  const hasPersistedRows = isPnr ? pnrPersistedRows > 0 : (fileCategory === MISSING_PACKAGES_FILE_CATEGORY ? totalRows > 0 && affectedRows > 0 : fileRows > 0);
   const hasValidPnrResult = isPnr && processedSaveResult && totalRows > 0 && (
     affectedRows > 0 ||
     Number(expectedRows || metadata.total_rows_imported || metadata.parsed_rows || 0) > 0
@@ -15724,6 +15821,11 @@ async function refreshDashboardModuleAfterImport(fileRecord, metadata = {}) {
       state.appView = "dashboard";
       state.sheet = PACKAGE_MANAGEMENT_VIEW;
     }
+    if (moduleKey === DASHBOARD_MODULE_KEYS.pacotesFaltantes) {
+      state.appView = "dashboard";
+      state.sheet = DEVIATION_MANAGEMENT_VIEW;
+      state.activeDesvioCategory = DEVIATION_CATEGORY_MISSING_PACKAGES;
+    }
     const baseState = await checkModulePersistedData(moduleKey, { reason: `${moduleKey}-post-import` });
     const totalPersisted = Number(baseState.totalPersisted || baseState.total || 0);
     if (totalPersisted <= 0) {
@@ -15753,6 +15855,12 @@ async function refreshDashboardModuleAfterImport(fileRecord, metadata = {}) {
       const packageDatasets = await loadPackageManagementRowsForCards(activeRecords, new Map());
       if (!packageManagementRows.length && !packageDatasets.length) {
         throw new Error("A base Gestão de Pacotes tem registros persistidos, mas não retornou linhas para renderização.");
+      }
+    }
+    if (moduleKey === DASHBOARD_MODULE_KEYS.pacotesFaltantes) {
+      await loadMissingPackagesFromSupabase({ render: false });
+      if (!missingPackagesRows.length && totalPersisted > 0) {
+        throw new Error("A base Pacotes Faltantes tem registros persistidos, mas não retornou linhas para renderização.");
       }
     }
     moduleLoadingState[moduleKey] = false;
@@ -15975,9 +16083,11 @@ async function processDashboardFile(file, fileRecord = null, options = {}) {
   showToast("Normalizando colunas...", "info", 2600);
   const rows = fileCategory === DEVIATION_PNR_FILE_CATEGORY
     ? await normalizePnrWorkbook(workbook, fileName)
-    : fileCategory === PACKAGE_MANAGEMENT_FILE_CATEGORY
-      ? normalizePackageManagementWorkbook(workbook, fileName)
-      : normalizeWorkbook(workbook);
+    : fileCategory === MISSING_PACKAGES_FILE_CATEGORY
+      ? normalizeMissingPackageWorkbook(workbook, fileName)
+      : fileCategory === PACKAGE_MANAGEMENT_FILE_CATEGORY
+        ? normalizePackageManagementWorkbook(workbook, fileName)
+        : normalizeWorkbook(workbook);
   const stats = getWorkbookStatsForCategory(fileCategory);
   setDashboardImportState({
     stage: "Validando registros...",
@@ -16007,11 +16117,20 @@ async function processDashboardFile(file, fileRecord = null, options = {}) {
 
 function getWorkbookStatsForCategory(fileCategory) {
   if (fileCategory === DEVIATION_PNR_FILE_CATEGORY) return normalizePnrWorkbook.lastStats || {};
+  if (fileCategory === MISSING_PACKAGES_FILE_CATEGORY) return normalizeMissingPackageWorkbook.lastStats || {};
   if (fileCategory === PACKAGE_MANAGEMENT_FILE_CATEGORY) return normalizePackageManagementWorkbook.lastStats || {};
   return normalizeWorkbook.lastStats || {};
 }
 
 function applyUploadedFileState(previewDataset, uploadedPeriod) {
+  if (previewDataset.fileCategory === MISSING_PACKAGES_FILE_CATEGORY) {
+    state.sheet = DEVIATION_MANAGEMENT_VIEW;
+    state.activeDesvioCategory = DEVIATION_CATEGORY_MISSING_PACKAGES;
+    state.page = 1;
+    selectedMissingPackageIds.clear();
+    isMissingPackagesSelectionMode = false;
+    return;
+  }
   if (previewDataset.fileCategory === DEVIATION_PNR_FILE_CATEGORY) {
     state.sheet = DEVIATION_MANAGEMENT_VIEW;
     state.activeDesvioCategory = DEVIATION_CATEGORY_PNRS;
@@ -16341,9 +16460,11 @@ async function uploadDashboardFile(file) {
     .replace(/[^\w.-]+/g, "_");
   const storageFolder = previewDataset.fileCategory === DEVIATION_PNR_FILE_CATEGORY
     ? "gestao-desvios/pnrs"
-    : previewDataset.fileCategory === PACKAGE_MANAGEMENT_FILE_CATEGORY
-      ? "gestao-pacotes"
-      : "pre-fatura";
+    : previewDataset.fileCategory === MISSING_PACKAGES_FILE_CATEGORY
+      ? "gestao-desvios/pacotes-faltantes"
+      : previewDataset.fileCategory === PACKAGE_MANAGEMENT_FILE_CATEGORY
+        ? "gestao-pacotes"
+        : "pre-fatura";
   const storagePath = KEEP_RAW_UPLOADS_IN_STORAGE
     ? `${storageFolder}/${referenceYear || "sem-ano"}/${referenceMonth || "sem-mes"}/${Date.now()}_${safeName}`
     : `${PROCESSED_ONLY_STORAGE_PREFIX}/${storageFolder}/${referenceYear || "sem-ano"}/${referenceMonth || "sem-mes"}/${Date.now()}_${safeName}`;
@@ -16611,7 +16732,7 @@ async function loadDashboardFilesFromSupabase(options = {}) {
       .filter(isUsableDashboardFileRecord)
       .filter(isDashboardFileActive);
     const mergeModules = modulesToMerge
-      .filter((moduleKey) => moduleKey !== DASHBOARD_MODULE_KEYS.evolucao && moduleKey !== DASHBOARD_MODULE_KEYS.pacotesFaltantes);
+      .filter((moduleKey) => moduleKey !== DASHBOARD_MODULE_KEYS.evolucao);
     const mergeResults = await Promise.allSettled(
       mergeModules.map((moduleKey) => mergeProcessedDashboardFileRecords(dashboardFileRecords, moduleKey)),
     );
@@ -17884,6 +18005,7 @@ async function loadDashboardDataByFilters(options = {}) {
 
 function getProcessedRecordsTable(fileCategory) {
   if (fileCategory === DEVIATION_PNR_FILE_CATEGORY) return "desvios_pnr_records";
+  if (fileCategory === MISSING_PACKAGES_FILE_CATEGORY) return "gestao_desvios_pacotes_faltantes";
   return fileCategory === PACKAGE_MANAGEMENT_FILE_CATEGORY ? "gestao_pacotes_records" : "pre_fatura_records";
 }
 
@@ -18046,8 +18168,49 @@ function mapPnrRowToProcessedRecord(row, fileRecord) {
   };
 }
 
+function mapMissingPackageRowToProcessedRecord(row, fileRecord) {
+  const nowIso = new Date().toISOString();
+  const importedAt = row.importedAt || row.imported_at || nowIso;
+  const prazo = row.prazoTratativa || row.prazo_tratativa || new Date(new Date(importedAt).getTime() + 48 * 60 * 60 * 1000).toISOString();
+  const normalized = {
+    dataFechamento: row.dataFechamento || row.data_fechamento || "",
+    base: row.base || "",
+    driverNome: row.driverNome || row.driver_nome || "",
+    idEnvio: row.idEnvio || row.id_envio || "",
+    caso: row.caso || "Pacote faltante",
+  };
+  return {
+    data_fechamento: toDatabaseDate(normalized.dataFechamento) || new Date().toISOString().slice(0, 10),
+    base: normalized.base || "Não identificada",
+    tipo_base: "XPT",
+    driver_nome: formatDriverName(normalized.driverNome || "", "") || "Não identificado",
+    id_envio: formatId(normalized.idEnvio || ""),
+    caso: "Pacote faltante",
+    motivo_original: row.motivoOriginal || row.motivo_original || "Faltante",
+    status_caso: normalizeMissingPackageCaseStatus(row.statusCaso || row.status_caso || "Pendente"),
+    status_contato_meli: normalizeMissingPackageMeliStatus(row.statusContatoMeli || row.status_contato_meli || "Em tratativa"),
+    prazo_tratativa: prazo,
+    situacao_prazo: getMissingPackageDeadlineStatus({
+      statusCaso: row.statusCaso || row.status_caso || "Pendente",
+      statusContatoMeli: row.statusContatoMeli || row.status_contato_meli || "Em tratativa",
+      prazoTratativa: prazo,
+    }),
+    imported_at: importedAt,
+    imported_by: currentUser?.email || currentUser?.id || "",
+    source_hash: fileRecord?.metadata?.file_hash || "",
+    source_file_id: fileRecord?.id || "",
+    file_name: fileRecord?.file_name || row.arquivo_origem || "",
+    dedupe_key: row.dedupeKey || row.dedupe_key || buildMissingPackageDedupeKey(normalized),
+    raw_data: {
+      file_category: MISSING_PACKAGES_FILE_CATEGORY,
+      arquivo_origem: fileRecord?.file_name || row.arquivo_origem || "",
+    },
+  };
+}
+
 function mapRowToProcessedRecord(row, fileRecord, fileCategory) {
   if (fileCategory === DEVIATION_PNR_FILE_CATEGORY) return mapPnrRowToProcessedRecord(row, fileRecord);
+  if (fileCategory === MISSING_PACKAGES_FILE_CATEGORY) return mapMissingPackageRowToProcessedRecord(row, fileRecord);
   return fileCategory === PACKAGE_MANAGEMENT_FILE_CATEGORY ? mapPackageRowToProcessedRecord(row, fileRecord) : mapPreFaturaRowToProcessedRecord(row, fileRecord);
 }
 
@@ -18645,6 +18808,34 @@ async function saveProcessedRowsForFile(fileRecord, rows) {
   try {
     if (fileCategory === DEVIATION_PNR_FILE_CATEGORY) {
       return await savePnrProcessedRowsForFile(fileRecord, tableName, payload);
+    }
+    if (fileCategory === MISSING_PACKAGES_FILE_CATEGORY) {
+      await window.supabaseClient.from(tableName).delete().eq("source_file_id", fileRecord.id);
+      let inserted = 0;
+      let ignored = 0;
+      for (let index = 0; index < payload.length; index += PROCESSED_RECORDS_BATCH_SIZE) {
+        const batch = payload.slice(index, index + PROCESSED_RECORDS_BATCH_SIZE);
+        const keys = batch.map((record) => record.dedupe_key).filter(Boolean);
+        const existingKeys = await fetchExistingMissingPackageKeys(keys);
+        const inserts = batch.filter((record) => !existingKeys.has(record.dedupe_key));
+        ignored += batch.length - inserts.length;
+        if (!inserts.length) continue;
+        let { error } = await window.supabaseClient.from(tableName).insert(inserts);
+        if (error && /source_file_id|file_name|raw_data|PGRST204|42703|schema cache|Could not find|column/i.test(`${error.code || ""} ${error.message || ""} ${error.details || ""}`)) {
+          const legacyInserts = inserts.map((record) => {
+            const fallback = { ...record };
+            delete fallback.source_file_id;
+            delete fallback.file_name;
+            delete fallback.raw_data;
+            return fallback;
+          });
+          ({ error } = await window.supabaseClient.from(tableName).insert(legacyInserts));
+        }
+        if (error) throw error;
+        inserted += inserts.length;
+      }
+      await updateProcessedFileMetadata(fileRecord, inserted, { duplicates_ignored: ignored });
+      return { inserted, updated: 0, ignored };
     }
     await window.supabaseClient.from(tableName).delete().eq("file_id", fileRecord.id);
     for (let index = 0; index < payload.length; index += PROCESSED_RECORDS_BATCH_SIZE) {
@@ -19411,6 +19602,10 @@ async function deleteImportedRowsForRecord(record = {}) {
   const before = await countRowsInPersistedTable(tableName).catch(() => null);
   let removed = 0;
   removed += await tryDeleteRowsByColumn(tableName, "file_id", ids);
+  if (category === MISSING_PACKAGES_FILE_CATEGORY) {
+    removed += await tryDeleteRowsByColumn(tableName, "source_file_id", ids);
+    if (fileName) removed += await tryDeleteRowsByColumn(tableName, "file_name", [fileName]);
+  }
   if (category === DEVIATION_PNR_FILE_CATEGORY) {
     removed += await tryDeleteRowsByColumn(tableName, "upload_batch_id", ids);
     if (!ids.length && fileName) removed += await tryDeleteRowsByColumn(tableName, "source_file_name", [fileName]);
@@ -19454,6 +19649,12 @@ async function refreshAfterFileDeletion(records = [], mode = FILE_DELETE_MODES.w
   if (affectedModules.has(DASHBOARD_MODULE_KEYS.desviosPnr)) {
     clearPnrPostImportLocalState();
     resetPnrRemoteState();
+  }
+  if (affectedModules.has(DASHBOARD_MODULE_KEYS.pacotesFaltantes)) {
+    missingPackagesRows = [];
+    selectedMissingPackageIds.clear();
+    isMissingPackagesSelectionMode = false;
+    await loadMissingPackagesFromSupabase({ render: false });
   }
 
   const files = await loadDashboardFilesFromSupabase({ loadActive: true, render: false, validateStorage: false, showLoading: false });
@@ -19872,16 +20073,42 @@ async function applyAuthenticatedUser(user, options = {}) {
   debugAuth("[PROFILE] Perfil carregado:", currentProfile);
   debugAuth("[PROFILE] is_admin:", currentProfile?.is_admin);
 
+  updateAccessControls();
+  updateDatasetMeta();
+  renderAccountPage();
+  renderSettingsFileManagement();
+  renderAll();
+
   const settingsPromise = loadGlobalGoalSettings().catch((settingsError) => {
     console.error("[SETTINGS] Erro ao carregar metas globais:", settingsError);
     globalGoalSettings = getDefaultGoalSettings();
   });
 
-  await loadDashboardFilesFromSupabase({
+  const dashboardLoadPromise = loadDashboardFilesFromSupabase({
     loadActive: true,
     render: false,
     showLoading: options.showLoading === true || (!hasInitialLoadCompleted && !hasLoadedDashboardData()),
+  }).catch((dashboardError) => {
+    console.error("[AUTH] Login concluído, mas a carga do painel falhou.", dashboardError);
+    showToast("Login realizado. Não foi possível carregar os dados agora; tente atualizar.", "warn", 6200);
+    return null;
   });
+
+  const loadedDuringLogin = await Promise.race([
+    dashboardLoadPromise.then(() => true),
+    delay(3500).then(() => false),
+  ]);
+
+  if (!loadedDuringLogin) {
+    console.warn("[AUTH] Carga do painel segue em segundo plano após login.");
+    void dashboardLoadPromise.finally(() => {
+      hydrateControls();
+      updateDatasetMeta();
+      renderAccountPage();
+      renderSettingsFileManagement();
+      renderAll();
+    });
+  }
 
   await settingsPromise;
   if (canEdit()) {
@@ -20570,7 +20797,6 @@ function normalizeLoadedState(loadedState) {
   loadedState.pnrFonteCruzamento = "Todos";
   loadedState.pnrMotorista = "Todos";
   loadedState.pnrRota = "Todos";
-  loadedState.missingPackagesText = String(loadedState.missingPackagesText || "");
   loadedState.missingPackagesDate = loadedState.missingPackagesDate || "Todos";
   loadedState.missingPackagesBase = loadedState.missingPackagesBase || "Todos";
   loadedState.missingPackagesDriver = loadedState.missingPackagesDriver || "Todos";

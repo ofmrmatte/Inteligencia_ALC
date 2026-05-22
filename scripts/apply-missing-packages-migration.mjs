@@ -18,6 +18,7 @@ const migrations = [
   "supabase/migrations/20260521_create_gestao_desvios_pacotes_faltantes.sql",
   "supabase/migrations/20260521_grant_gestao_desvios_pacotes_faltantes.sql",
   "supabase/migrations/20260521_allow_authenticated_manage_pacotes_faltantes.sql",
+  "supabase/migrations/20260522_missing_packages_file_import_metadata.sql",
 ];
 
 try {
