@@ -20178,6 +20178,32 @@ async function loadUserProfile(user) {
   return profile;
 }
 
+function getLoginErrorMessage(error) {
+  const code = String(error?.code || error?.error_code || "").toLowerCase();
+  const status = Number(error?.status || error?.statusCode || 0);
+  const message = String(error?.message || "").toLowerCase();
+
+  if (code === "invalid_credentials" || message.includes("invalid login credentials") || message.includes("invalid_credentials")) {
+    return "E-mail ou senha inválidos.";
+  }
+  if (code === "email_not_confirmed" || message.includes("email not confirmed")) {
+    return "Confirme seu e-mail antes de acessar.";
+  }
+  if (code === "email_address_invalid" || message.includes("email address") || message.includes("invalid email")) {
+    return "E-mail inválido. Confira o endereço digitado.";
+  }
+  if (status === 429 || code.includes("over") || message.includes("rate limit") || message.includes("too many")) {
+    return "Muitas tentativas de login. Aguarde alguns minutos e tente novamente.";
+  }
+  if (message.includes("failed to fetch") || message.includes("network") || message.includes("fetch")) {
+    return "Falha de conexão com o Supabase. Verifique a internet e tente novamente.";
+  }
+  if (message.includes("signup") || message.includes("password login") || message.includes("disabled")) {
+    return `Login por senha indisponível no Supabase: ${error.message}`;
+  }
+  return error?.message ? `Erro ao fazer login: ${error.message}` : "Erro ao fazer login. Verifique o Supabase.";
+}
+
 async function loginUser(event) {
   event?.preventDefault();
   debugAuth("[LOGIN] Clique no botão Entrar");
@@ -20204,16 +20230,12 @@ async function loginUser(event) {
     debugAuth("[LOGIN] Erro Supabase:", error);
 
     if (error) {
-      const message = String(error?.message || "").toLowerCase();
-      if (message.includes("invalid login credentials")) {
-        showToast("E-mail ou senha inválidos.", "error", 5200);
-        return;
-      }
-      if (message.includes("email not confirmed")) {
-        showToast("Confirme seu e-mail antes de acessar.", "warn", 5600);
-        return;
-      }
-      showToast("Erro ao fazer login. Verifique o Supabase.", "error", 6200);
+      console.error("[LOGIN] Falha Supabase:", {
+        code: error.code || error.error_code || "",
+        status: error.status || "",
+        message: error.message || "",
+      });
+      showToast(getLoginErrorMessage(error), "error", 6200);
       return;
     }
 
@@ -20244,16 +20266,7 @@ async function loginUser(event) {
     setAccountMenuOpen(false);
   } catch (error) {
     console.error("[LOGIN] Erro inesperado:", error);
-    const message = String(error?.message || "").toLowerCase();
-    if (message.includes("invalid login credentials")) {
-      showToast("E-mail ou senha inválidos.", "error", 5200);
-      return;
-    }
-    if (message.includes("email not confirmed")) {
-      showToast("Confirme seu e-mail antes de acessar.", "warn", 5600);
-      return;
-    }
-    showToast("Não foi possível conectar ao Supabase.", "error", 6200);
+    showToast(getLoginErrorMessage(error), "error", 6200);
   }
 }
 
