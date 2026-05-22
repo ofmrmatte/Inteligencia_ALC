@@ -11281,11 +11281,11 @@ function buildReportPdfBlob({ analysis, summary }) {
 function buildReportAnalysis({ rows, filteredRows, summary, scope: providedScope = null, typeSelection = state.prefaturaTipo, reportMode = "prefatura", packageRows = [], packageComparison = null }) {
   const scope = providedScope || getReportScope();
   const yearRows = rows.filter((row) => String(row.key).startsWith(`${scope.year}-`));
-  const activeMonth = scope.mode === "monthly" ? rows.find((row) => row.key === scope.key) || null : null;
-  const activeIndex = activeMonth ? rows.findIndex((row) => row.key === activeMonth.key) : -1;
-  const previousMonth = activeIndex > 0 ? rows[activeIndex - 1] : null;
+  const comparisonPair = scope.mode === "monthly" ? findEquivalentPrefaturaComparisonRows(rows, scope) : { active: null, previous: null };
+  const activeMonth = comparisonPair.active;
+  const previousMonth = comparisonPair.previous;
   const fallbackRow = {
-    key: scope.key || `${scope.year}-01`,
+    key: getPrefaturaComparisonKey(scope.key || `${scope.year}-01`, scope.periodMode),
     label: scope.mode === "annual" ? `Anual / ${scope.year}` : scope.label.replace("/", " / "),
     count: summary.count,
     totalValue: summary.totalValue,
@@ -11294,6 +11294,7 @@ function buildReportAnalysis({ rows, filteredRows, summary, scope: providedScope
     previous: previousMonth,
     deltaValue: activeMonth && previousMonth ? activeMonth.totalValue - previousMonth.totalValue : 0,
     deltaPct: activeMonth && previousMonth && previousMonth.totalValue ? ((activeMonth.totalValue - previousMonth.totalValue) / previousMonth.totalValue) * 100 : 0,
+    periodMode: normalizePeriodMode(scope.periodMode),
   };
   const timelineRows = (
     scope.mode === "annual"
@@ -11675,11 +11676,11 @@ function buildPackageReportIntelligentSummary({ scope, comparison }) {
 function buildReportTrend(scope, activeMonth, previousMonth, comparisonRows) {
   if (scope.mode === "monthly") {
     if (!activeMonth || !previousMonth) {
-      return { direction: "neutral", pct: 0, text: "Não há mês anterior carregado para comparação direta." };
+      return { direction: "neutral", pct: 0, text: "Não há período anterior equivalente para comparação segura." };
     }
     const deltaPct = calculateVariation(activeMonth.totalValue, previousMonth.totalValue);
     if (deltaPct == null) {
-      return { direction: "neutral", pct: 0, text: `Mês anterior ${shortMonthYear(previousMonth.label)} sem valor base para comparação percentual.` };
+      return { direction: "neutral", pct: 0, text: `${getReportTrendReferenceLabel(scope, previousMonth)} sem valor base para comparação percentual.` };
     }
     const reference = getReportTrendReferenceLabel(scope, previousMonth);
     const text = formatTotalDiscountComparison({
@@ -11687,10 +11688,10 @@ function buildReportTrend(scope, activeMonth, previousMonth, comparisonRows) {
       previousValue: previousMonth.totalValue,
       previousLabel: reference,
       isAllMonths: false,
-    }).replace(" vs. ", " em relação a ");
+    }).replace(" · ", " em relação a ");
     if (deltaPct > 0.5) return { direction: "up", pct: deltaPct, text: `${text}.` };
     if (deltaPct < -0.5) return { direction: "down", pct: deltaPct, text: `${text}.` };
-    return { direction: "neutral", pct: deltaPct, text: "Estabilidade financeira frente ao mês anterior." };
+    return { direction: "neutral", pct: deltaPct, text: "Sem variação financeira relevante frente ao período equivalente anterior." };
   }
   const first = comparisonRows[0] || null;
   const last = comparisonRows[comparisonRows.length - 1] || null;
@@ -11704,7 +11705,9 @@ function buildReportTrend(scope, activeMonth, previousMonth, comparisonRows) {
 }
 
 function getReportTrendReferenceLabel(scope, previousMonth) {
-  const monthLabel = shortMonthYear(previousMonth.label);
+  const previousKey = String(previousMonth?.monthKey || previousMonth?.key || "");
+  const monthKey = previousKey.match(/^\d{4}-\d{2}/)?.[0] || "";
+  const monthLabel = monthKey ? shortMonthYear(getMonthLabelFromKey(monthKey)) : shortMonthYear(previousMonth?.label);
   if (scope.periodMode === "month") return monthLabel;
   const previousPeriodMode = previousMonth.periodMode || scope.periodMode;
   const periodLabel = getPeriodModeLabel(previousPeriodMode).toLowerCase();
@@ -12132,12 +12135,11 @@ async function hydrateTotalDiscountComparison(summary) {
   }
 
   try {
-    let rows = buildMonthlyComparison();
+    const viewMode = getPrefaturaComparisonViewMode(scope.periodMode);
+    let rows = buildMonthlyComparisonFromDatasets(library.datasets, { types: state.prefaturaTipo, viewMode });
     if (!rows.length) rows = await buildReportHistoricalComparisonRows(scope);
     if (requestId !== totalDiscountComparisonRequest) return;
-    const activeMonth = rows.find((row) => row.key === scope.key) || null;
-    const activeIndex = activeMonth ? rows.findIndex((row) => row.key === activeMonth.key) : -1;
-    const previousMonth = activeIndex > 0 ? rows[activeIndex - 1] : null;
+    const { previous: previousMonth } = findEquivalentPrefaturaComparisonRows(rows, scope);
     target.textContent = formatTotalDiscountComparison({
       selectedMonth: scope.key,
       selectedPeriod: scope.periodMode,
@@ -12157,11 +12159,11 @@ async function hydrateTotalDiscountComparison(summary) {
 function formatTotalDiscountComparison({ currentValue, previousValue, previousLabel, isAllMonths }) {
   if (isAllMonths) return "Consolidado dos meses carregados";
   const variation = calculateVariation(currentValue, previousValue);
-  if (variation == null) return "Sem mês anterior carregado";
+  if (variation == null) return "Sem base comparativa anterior";
   const absVariation = formatNumberPt(Math.abs(variation), 1);
-  if (variation < -0.05) return `Redução de ${absVariation}% vs. ${previousLabel}`;
-  if (variation > 0.05) return `Aumento de ${absVariation}% vs. ${previousLabel}`;
-  return `Estável vs. ${previousLabel}`;
+  if (variation < -0.005) return `Redução de ${absVariation}% · ${previousLabel}`;
+  if (variation > 0.005) return `Aumento de ${absVariation}% · ${previousLabel}`;
+  return `Sem variação · ${previousLabel}`;
 }
 
 function renderBaseRankingGroup(title, items, maxValue, offset) {
@@ -13381,6 +13383,42 @@ function buildMonthlyComparison() {
   return buildMonthlyComparisonFromDatasets(library.datasets, { types: state.prefaturaTipo, viewMode: comparisonPeriodView });
 }
 
+function getPrefaturaComparisonViewMode(periodMode) {
+  return normalizePeriodMode(periodMode) === "month" ? "monthly" : "biweekly";
+}
+
+function getPrefaturaComparisonKey(monthKey, periodMode) {
+  const normalizedPeriod = normalizePeriodMode(periodMode);
+  const normalizedMonth = String(monthKey || "");
+  return normalizedPeriod === "month" ? normalizedMonth : `${normalizedMonth}-${normalizedPeriod}`;
+}
+
+function getComparisonRowPeriodMode(row) {
+  const keyPeriod = String(row?.key || "").match(/-(q1|q2)$/)?.[1] || "";
+  return normalizePeriodMode(row?.periodMode || keyPeriod || "month");
+}
+
+function findEquivalentPrefaturaComparisonRows(rows, scope) {
+  const normalizedPeriod = normalizePeriodMode(scope?.periodMode || "month");
+  const targetKey = getPrefaturaComparisonKey(scope?.key, normalizedPeriod);
+  const sortedRows = (Array.isArray(rows) ? rows : []).slice().sort((a, b) => {
+    const aSort = Number(a?.sort || 0);
+    const bSort = Number(b?.sort || 0);
+    return aSort - bSort || String(a?.key || "").localeCompare(String(b?.key || ""), "pt-BR");
+  });
+  const active =
+    sortedRows.find((row) => row.key === targetKey) ||
+    (normalizedPeriod === "month" ? sortedRows.find((row) => row.key === scope?.key) : null) ||
+    null;
+  if (!active) return { active: null, previous: null };
+  const comparableRows = sortedRows.filter((row) => getComparisonRowPeriodMode(row) === normalizedPeriod);
+  const activeIndex = comparableRows.findIndex((row) => row.key === active.key);
+  return {
+    active,
+    previous: activeIndex > 0 ? comparableRows[activeIndex - 1] : null,
+  };
+}
+
 function buildMonthlyComparisonFromDatasets(datasets, options = {}) {
   const sheet = options.sheet || state.sheet;
   const viewMode = options.viewMode === "biweekly" ? "biweekly" : "monthly";
@@ -13397,6 +13435,8 @@ function buildMonthlyComparisonFromDatasets(datasets, options = {}) {
     if (!map.has(key)) {
       map.set(key, {
         key,
+        monthKey: period.key,
+        periodMode: viewMode === "biweekly" ? periodType : "month",
         sort: viewMode === "biweekly" ? period.sort * 10 + quarterOrder : period.sort,
         label: viewMode === "biweekly" ? formatEvolutionPeriodLabel({ ...dataset, rows: scopedRows }, "biweekly") : period.monthLabel,
         datasetId: dataset.id,
@@ -13433,34 +13473,30 @@ function getMonthlyComparisonRows(rows, sheet = state.sheet) {
 
 async function buildReportHistoricalComparisonRows(scope, typeSelection = state.prefaturaTipo) {
   const files = await getReportAvailableFileRecords();
-  if (!files.length) return buildMonthlyComparisonFromDatasets(library.datasets, { types: typeSelection, viewMode: "monthly" });
+  const viewMode = getPrefaturaComparisonViewMode(scope?.periodMode);
+  if (!files.length) return buildMonthlyComparisonFromDatasets(library.datasets, { types: typeSelection, viewMode });
 
   if (scope.mode === "annual") {
     const annualFiles = getFilesByMonthAndPeriod(files, "all", scope.periodMode, PRE_FATURA_FILE_CATEGORY)
       .filter((file) => getFileRecordPeriod(file).key.startsWith(`${scope.year}-`));
-    return buildReportMonthlyComparisonForFiles(annualFiles.length ? annualFiles : files.filter((file) => getFileRecordPeriod(file).key.startsWith(`${scope.year}-`)), typeSelection);
+    return buildReportMonthlyComparisonForFiles(annualFiles.length ? annualFiles : files.filter((file) => getFileRecordPeriod(file).key.startsWith(`${scope.year}-`)), typeSelection, viewMode);
   }
 
   const availableMonthKeys = Array.from(new Set(files.map((file) => getFileRecordPeriod(file).key))).sort();
   const previousKey = getPreviousMonthKey(scope.key, availableMonthKeys);
   const selectedFiles = getFilesByMonthAndPeriod(files, scope.key, scope.periodMode, PRE_FATURA_FILE_CATEGORY);
   let previousFiles = [];
-  let previousPeriodMode = scope.periodMode;
 
   if (previousKey) {
     previousFiles = getFilesByMonthAndPeriod(files, previousKey, scope.periodMode, PRE_FATURA_FILE_CATEGORY);
-    if (!previousFiles.length && scope.periodMode !== "month") {
-      previousFiles = getFilesByMonthAndPeriod(files, previousKey, "month", PRE_FATURA_FILE_CATEGORY);
-      previousPeriodMode = "month";
-    }
   }
 
   const comparisonFiles = uniqueDashboardFileRecords([...previousFiles, ...selectedFiles]);
-  const comparisonRows = await buildReportMonthlyComparisonForFiles(comparisonFiles, typeSelection);
+  const comparisonRows = await buildReportMonthlyComparisonForFiles(comparisonFiles, typeSelection, viewMode);
   return comparisonRows.map((row) => ({
     ...row,
-    periodMode: row.key === previousKey ? previousPeriodMode : row.key === scope.key ? scope.periodMode : row.periodMode,
-    comparisonFallback: row.key === previousKey && previousPeriodMode !== scope.periodMode,
+    periodMode: getComparisonRowPeriodMode(row),
+    comparisonFallback: false,
   }));
 }
 
@@ -13481,7 +13517,7 @@ async function getReportAvailableFileRecords() {
   return (files || []).filter(isUsableDashboardFileRecord).filter((file) => getFileRecordCategory(file) === PRE_FATURA_FILE_CATEGORY);
 }
 
-async function buildReportMonthlyComparisonForFiles(files, typeSelection = state.prefaturaTipo) {
+async function buildReportMonthlyComparisonForFiles(files, typeSelection = state.prefaturaTipo, viewMode = "monthly") {
   const datasets = [];
   const datasetById = new Map(
     (Array.isArray(library.datasets) ? library.datasets : [])
@@ -13503,7 +13539,7 @@ async function buildReportMonthlyComparisonForFiles(files, typeSelection = state
       }
     }
   }
-  return buildMonthlyComparisonFromDatasets(datasets, { types: typeSelection });
+  return buildMonthlyComparisonFromDatasets(datasets, { types: typeSelection, viewMode });
 }
 
 function uniqueDashboardFileRecords(files) {
