@@ -11282,8 +11282,19 @@ function buildReportAnalysis({ rows, filteredRows, summary, scope: providedScope
   const scope = providedScope || getReportScope();
   const yearRows = rows.filter((row) => String(row.key).startsWith(`${scope.year}-`));
   const comparisonPair = scope.mode === "monthly" ? findEquivalentPrefaturaComparisonRows(rows, scope) : { active: null, previous: null };
-  const activeMonth = comparisonPair.active;
   const previousMonth = comparisonPair.previous;
+  const currentScopeRow = buildCurrentScopeImpactRow(scope, summary);
+  const activeMonth = scope.mode === "monthly"
+    ? {
+      ...currentScopeRow,
+      key: getPrefaturaComparisonKey(scope.key || `${scope.year}-01`, scope.periodMode),
+      label: scope.monthLabel || scope.label.replace("/", " / "),
+      monthKey: scope.key,
+      previous: previousMonth,
+      deltaValue: previousMonth ? Number(summary.totalValue || 0) - Number(previousMonth.totalValue || 0) : 0,
+      deltaPct: previousMonth?.totalValue ? calculateVariation(summary.totalValue, previousMonth.totalValue) || 0 : 0,
+    }
+    : comparisonPair.active;
   const fallbackRow = {
     key: getPrefaturaComparisonKey(scope.key || `${scope.year}-01`, scope.periodMode),
     label: scope.mode === "annual" ? `Anual / ${scope.year}` : scope.label.replace("/", " / "),
@@ -11300,7 +11311,7 @@ function buildReportAnalysis({ rows, filteredRows, summary, scope: providedScope
     scope.mode === "annual"
       ? yearRows
       : activeMonth
-        ? rows.filter((row) => row.key === previousMonth?.key || row.key === activeMonth.key)
+        ? [previousMonth, activeMonth]
         : [fallbackRow]
   ).filter(Boolean);
   const comparisonRows = timelineRows.length ? timelineRows : [fallbackRow];
@@ -11726,6 +11737,9 @@ function getReportImpactTitle(scope, row = null) {
 function formatReportImpactPeriodLabel(row, scope) {
   const mode = normalizePeriodMode(row?.periodMode || scope?.periodMode || "month");
   const label = row?.label || scope?.monthLabel || scope?.label || "Recorte";
+  if (/^anual\b/i.test(String(label || ""))) {
+    return `Anual ${scope?.year || ""}`.trim();
+  }
   const monthLabel = shortMonthYear(label);
   if (mode === "month") return monthLabel;
   return `${monthLabel} — ${getPeriodModeLabel(mode).toLowerCase()}`;
