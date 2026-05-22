@@ -105,7 +105,7 @@ for (const line of lines.slice(1)) {
     caso: "Pacote faltante",
     motivo_original: motivo || "Faltante",
     status_caso: "Pendente",
-    status_contato_meli: "Em tratativa",
+    status_contato_meli: "E-mail Enviado",
     prazo_tratativa: new Date(importedAt.getTime() + 48 * 60 * 60 * 1000).toISOString(),
     situacao_prazo: "Dentro do prazo",
     imported_at: importedAt.toISOString(),
@@ -174,7 +174,7 @@ try {
   const [statusUpdate] = await sql`
     update public.gestao_desvios_pacotes_faltantes
        set status_caso = 'Em rota',
-           status_contato_meli = 'Aguardando Méli',
+           status_contato_meli = 'Aguardando MELI',
            updated_at = now(),
            status_updated_at = now(),
            contato_updated_at = now()
@@ -188,7 +188,7 @@ try {
     missingExtracted: records.length,
     ignoredNonMissing: ignored,
     persistedRows: rows.length,
-    statusEditPersisted: statusUpdate?.status_caso === "Em rota" && statusUpdate?.status_contato_meli === "Aguardando Méli",
+    statusEditPersisted: statusUpdate?.status_caso === "Em rota" && statusUpdate?.status_contato_meli === "Aguardando MELI",
     importedIds: rows.map((row) => row.id_envio),
     cleanup: shouldCleanup ? "enabled" : "disabled",
   };

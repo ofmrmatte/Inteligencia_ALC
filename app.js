@@ -65,8 +65,8 @@ const DEVIATION_CATEGORIES = [
   { key: DEVIATION_CATEGORY_PNRS, label: "PNRs", enabled: true },
   { key: DEVIATION_CATEGORY_MISSING_PACKAGES, label: "Pacotes Faltantes", enabled: true },
 ];
-const MISSING_PACKAGE_CASE_STATUS_OPTIONS = ["Pendente", "Em rota", "Não localizado", "Resolvido", "Cancelado"];
-const MISSING_PACKAGE_MELI_STATUS_OPTIONS = ["Em tratativa", "Aguardando Méli", "Concluído"];
+const MISSING_PACKAGE_CASE_STATUS_OPTIONS = ["Pendente", "Concluído", "Em rota"];
+const MISSING_PACKAGE_MELI_STATUS_OPTIONS = ["E-mail Enviado", "Aguardando MELI", "Concluído"];
 const MISSING_PACKAGE_TABLE_COLUMNS = [
   { key: "dataFechamento", label: "Data do Caso", width: 130, format: "date" },
   { key: "importedAt", label: "Data de importação", width: 170, format: "datetime" },
@@ -3892,23 +3892,21 @@ function renderDeviationCategoryMenu() {
 
 function normalizeMissingPackageCaseStatus(value = "") {
   const normalized = normalizeText(value);
-  if (normalized === "resolvido" || normalized === "concluido") return "Resolvido";
-  if (normalized === "cancelado") return "Cancelado";
+  if (normalized === "resolvido" || normalized === "concluido") return "Concluído";
   if (normalized === "em rota") return "Em rota";
-  if (normalized === "nao localizado" || normalized === "nao-localizado") return "Não localizado";
   return "Pendente";
 }
 
 function normalizeMissingPackageMeliStatus(value = "") {
   const normalized = normalizeText(value);
   if (normalized === "concluido") return "Concluído";
-  if (normalized.includes("aguardando")) return "Aguardando Méli";
-  return "Em tratativa";
+  if (normalized.includes("aguardando")) return "Aguardando MELI";
+  return "E-mail Enviado";
 }
 
 function normalizeMissingPackageRow(record = {}) {
   const statusCaso = normalizeMissingPackageCaseStatus(record.status_caso || record.statusCaso || "Pendente");
-  const statusContatoMeli = normalizeMissingPackageMeliStatus(record.status_contato_meli || record.statusContatoMeli || "Em tratativa");
+  const statusContatoMeli = normalizeMissingPackageMeliStatus(record.status_contato_meli || record.statusContatoMeli || "E-mail Enviado");
   const row = {
     id: record.id || "",
     dataFechamento: record.data_fechamento || record.dataFechamento || "",
@@ -3954,7 +3952,7 @@ function buildMissingPackageDedupeKey(record = {}) {
 }
 
 function getMissingPackageDeadlineStatus(row = {}) {
-  if (["Resolvido", "Cancelado"].includes(row.statusCaso) || row.statusContatoMeli === "Concluído") return "Concluído";
+  if (row.statusCaso === "Concluído" || row.statusContatoMeli === "Concluído") return "Concluído";
   const deadline = row.prazoTratativa ? new Date(row.prazoTratativa) : null;
   if (!deadline || Number.isNaN(deadline.getTime())) return "Dentro do prazo";
   const remainingMs = deadline.getTime() - Date.now();
@@ -4054,9 +4052,9 @@ function getMissingPackagesMetrics(rows = getFilteredMissingPackagesRows()) {
     total,
     pendentes: count((row) => row.statusCaso === "Pendente"),
     emRota: count((row) => row.statusCaso === "Em rota"),
-    emTratativa: count((row) => row.statusContatoMeli === "Em tratativa"),
-    aguardandoMeli: count((row) => row.statusContatoMeli === "Aguardando Méli"),
-    concluidos: count((row) => row.statusContatoMeli === "Concluído" || row.statusCaso === "Resolvido"),
+    emailEnviado: count((row) => row.statusContatoMeli === "E-mail Enviado"),
+    aguardandoMeli: count((row) => row.statusContatoMeli === "Aguardando MELI"),
+    concluidos: count((row) => row.statusContatoMeli === "Concluído" || row.statusCaso === "Concluído"),
     prazoCritico: count((row) => ["Vencido", "Próximo do vencimento"].includes(getMissingPackageDeadlineStatus(row))),
   };
 }
@@ -4133,10 +4131,11 @@ async function applyMissingPackageStatusOption(button) {
   const value = button?.dataset?.value || "";
   if (!recordId || !value || !window.supabaseClient) return;
   closeMissingPackageStatusDropdown();
-  const currentRow = missingPackagesRows.find((row) => row.id === recordId) || {};
+  const sameRecord = (row) => String(row?.id || "") === String(recordId);
+  const currentRow = missingPackagesRows.find(sameRecord) || {};
   const nextRow = type === "meli" ? { ...currentRow, statusContatoMeli: value } : { ...currentRow, statusCaso: value };
   const situacaoPrazo = getMissingPackageDeadlineStatus(nextRow);
-  missingPackagesRows = missingPackagesRows.map((row) => row.id === recordId ? normalizeMissingPackageRow({
+  missingPackagesRows = missingPackagesRows.map((row) => sameRecord(row) ? normalizeMissingPackageRow({
     ...row,
     statusCaso: nextRow.statusCaso,
     statusContatoMeli: nextRow.statusContatoMeli,
@@ -4156,12 +4155,12 @@ async function applyMissingPackageStatusOption(button) {
       .maybeSingle();
     if (error) throw error;
     if (!data) throw new Error("Nenhum registro foi atualizado. Verifique a permissão de edição no Supabase.");
-    missingPackagesRows = missingPackagesRows.map((row) => row.id === recordId ? normalizeMissingPackageRow(data) : row);
+    missingPackagesRows = missingPackagesRows.map((row) => sameRecord(row) ? normalizeMissingPackageRow(data) : row);
     showToast("Status de Pacote Faltante salvo.", "good", 3200);
     renderAll();
   } catch (error) {
     console.error("[Pacotes Faltantes] Falha ao salvar status.", error);
-    missingPackagesRows = missingPackagesRows.map((row) => row.id === recordId ? currentRow : row);
+    missingPackagesRows = missingPackagesRows.map((row) => sameRecord(row) ? currentRow : row);
     renderAll();
     showToast("Não foi possível salvar o status.", "error", 5200);
   }
@@ -4471,9 +4470,9 @@ function addMissingPackagesExportTable(worksheet, exportRows) {
         bottom: { style: "thin", color: { argb: "E0E7EF" } },
         right: { style: "thin", color: { argb: "E0E7EF" } },
       };
-      if (colNumber === 5) cell.numFmt = "@";
+      if (colNumber === 6) cell.numFmt = "@";
     });
-    row.getCell(5).value = String(item["ID do Pacote/Envio"] || "");
+    row.getCell(6).value = String(item["ID do Pacote/Envio"] || "");
   });
   worksheet.views = [{ state: "frozen", ySplit: headerRowNumber, topLeftCell: "A9", zoomScale: 85, zoomScaleNormal: 85, activeCell: "A9" }];
 }
@@ -14912,8 +14911,8 @@ function normalizeMissingPackageWorkbook(workbook, fileName = "") {
         motivo_original: motivo || "Faltante",
         statusCaso: "Pendente",
         status_caso: "Pendente",
-        statusContatoMeli: "Em tratativa",
-        status_contato_meli: "Em tratativa",
+        statusContatoMeli: "E-mail Enviado",
+        status_contato_meli: "E-mail Enviado",
         arquivo_origem: fileName,
       };
       normalized.dedupeKey = buildMissingPackageDedupeKey(normalized);
@@ -18236,11 +18235,11 @@ function mapMissingPackageRowToProcessedRecord(row, fileRecord) {
     caso: "Pacote faltante",
     motivo_original: row.motivoOriginal || row.motivo_original || "Faltante",
     status_caso: normalizeMissingPackageCaseStatus(row.statusCaso || row.status_caso || "Pendente"),
-    status_contato_meli: normalizeMissingPackageMeliStatus(row.statusContatoMeli || row.status_contato_meli || "Em tratativa"),
+    status_contato_meli: normalizeMissingPackageMeliStatus(row.statusContatoMeli || row.status_contato_meli || "E-mail Enviado"),
     prazo_tratativa: prazo,
     situacao_prazo: getMissingPackageDeadlineStatus({
       statusCaso: row.statusCaso || row.status_caso || "Pendente",
-      statusContatoMeli: row.statusContatoMeli || row.status_contato_meli || "Em tratativa",
+      statusContatoMeli: row.statusContatoMeli || row.status_contato_meli || "E-mail Enviado",
       prazoTratativa: prazo,
     }),
     imported_at: importedAt,
