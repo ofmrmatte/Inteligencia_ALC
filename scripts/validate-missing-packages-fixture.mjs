@@ -74,6 +74,41 @@ function dedupeKey(record) {
   ].join("|");
 }
 
+function isWeekendDate(date) {
+  const value = date instanceof Date ? date : new Date(date);
+  const day = value.getDay();
+  return day === 0 || day === 6;
+}
+
+function moveToNextBusinessDate(date) {
+  const next = new Date(date);
+  while (isWeekendDate(next)) {
+    next.setDate(next.getDate() + 1);
+  }
+  return next;
+}
+
+function addBusinessHoursSkippingWeekends(value, hours = 48) {
+  const start = value ? new Date(value) : new Date();
+  if (Number.isNaN(start.getTime())) return new Date(Date.now() + hours * 60 * 60 * 1000).toISOString();
+  let cursor = moveToNextBusinessDate(start);
+  let remainingMs = Math.max(0, Number(hours) || 0) * 60 * 60 * 1000;
+  while (remainingMs > 0) {
+    cursor = moveToNextBusinessDate(cursor);
+    const nextMidnight = new Date(cursor);
+    nextMidnight.setDate(nextMidnight.getDate() + 1);
+    nextMidnight.setHours(0, 0, 0, 0);
+    const availableToday = Math.max(0, nextMidnight.getTime() - cursor.getTime());
+    const step = Math.min(remainingMs, availableToday);
+    cursor = new Date(cursor.getTime() + step);
+    remainingMs -= step;
+    if (remainingMs > 0) {
+      cursor = moveToNextBusinessDate(cursor);
+    }
+  }
+  return cursor.toISOString();
+}
+
 const csv = await readFile(fixturePath, "utf8");
 const lines = csv.split(/\r?\n/).filter((line) => line.trim());
 const headers = parseCsvLine(lines[0]).map(normalizeText);
@@ -106,7 +141,7 @@ for (const line of lines.slice(1)) {
     motivo_original: motivo || "Faltante",
     status_caso: "Pendente",
     status_contato_meli: "E-mail Enviado",
-    prazo_tratativa: new Date(importedAt.getTime() + 48 * 60 * 60 * 1000).toISOString(),
+    prazo_tratativa: addBusinessHoursSkippingWeekends(importedAt, 48),
     situacao_prazo: "Dentro do prazo",
     imported_at: importedAt.toISOString(),
     source_file_id: null,

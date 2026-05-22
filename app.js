@@ -3951,6 +3951,41 @@ function buildMissingPackageDedupeKey(record = {}) {
   ].join("|");
 }
 
+function isWeekendDate(date) {
+  const value = date instanceof Date ? date : new Date(date);
+  const day = value.getDay();
+  return day === 0 || day === 6;
+}
+
+function moveToNextBusinessDate(date) {
+  const next = new Date(date);
+  while (isWeekendDate(next)) {
+    next.setDate(next.getDate() + 1);
+  }
+  return next;
+}
+
+function addBusinessHoursSkippingWeekends(value, hours = 48) {
+  const start = value ? new Date(value) : new Date();
+  if (Number.isNaN(start.getTime())) return new Date(Date.now() + hours * 60 * 60 * 1000).toISOString();
+  let cursor = moveToNextBusinessDate(start);
+  let remainingMs = Math.max(0, Number(hours) || 0) * 60 * 60 * 1000;
+  while (remainingMs > 0) {
+    cursor = moveToNextBusinessDate(cursor);
+    const nextMidnight = new Date(cursor);
+    nextMidnight.setDate(nextMidnight.getDate() + 1);
+    nextMidnight.setHours(0, 0, 0, 0);
+    const availableToday = Math.max(0, nextMidnight.getTime() - cursor.getTime());
+    const step = Math.min(remainingMs, availableToday);
+    cursor = new Date(cursor.getTime() + step);
+    remainingMs -= step;
+    if (remainingMs > 0) {
+      cursor = moveToNextBusinessDate(cursor);
+    }
+  }
+  return cursor.toISOString();
+}
+
 function getMissingPackageDeadlineStatus(row = {}) {
   if (row.statusCaso === "Concluído" || row.statusContatoMeli === "Concluído") return "Concluído";
   const deadline = row.prazoTratativa ? new Date(row.prazoTratativa) : null;
@@ -4155,7 +4190,14 @@ async function applyMissingPackageStatusOption(button) {
       .maybeSingle();
     if (error) throw error;
     if (!data) throw new Error("Nenhum registro foi atualizado. Verifique a permissão de edição no Supabase.");
-    missingPackagesRows = missingPackagesRows.map((row) => sameRecord(row) ? normalizeMissingPackageRow(data) : row);
+    const confirmedRow = normalizeMissingPackageRow({
+      ...currentRow,
+      ...data,
+      status_caso: type === "case" ? value : (data.status_caso || currentRow.statusCaso),
+      status_contato_meli: type === "meli" ? value : (data.status_contato_meli || currentRow.statusContatoMeli),
+      situacao_prazo: situacaoPrazo,
+    });
+    missingPackagesRows = missingPackagesRows.map((row) => sameRecord(row) ? confirmedRow : row);
     showToast("Status de Pacote Faltante salvo.", "good", 3200);
     renderAll();
   } catch (error) {
@@ -9597,7 +9639,7 @@ async function downloadMonthlyReport() {
     return;
   }
   if (state.sheet === DEVIATION_MANAGEMENT_VIEW && state.activeDesvioCategory === DEVIATION_CATEGORY_MISSING_PACKAGES) {
-    showToast("Relatório analítico de Pacotes Faltantes será habilitado em uma próxima etapa. Use o download Excel por enquanto.", "info", 5200);
+    await downloadMissingPackagesReport();
     return;
   }
   if (state.sheet === PACKAGE_MANAGEMENT_VIEW) {
@@ -9606,10 +9648,14 @@ async function downloadMonthlyReport() {
   }
   const reportScope = getReportScope();
   const allMonthlyRows = await buildReportHistoricalComparisonRows(reportScope, state.prefaturaTipo);
-  await ensurePackageManagementRowsForReport();
   const filteredRows = getFilteredRows();
   const summary = buildSummary(filteredRows);
-  const analysis = buildReportAnalysis({ rows: allMonthlyRows, filteredRows, summary, scope: reportScope, typeSelection: state.prefaturaTipo });
+  if (!filteredRows.length) {
+    showToast("Não há dados suficientes para gerar relatório deste módulo no recorte selecionado.", "warn", 5200);
+    return;
+  }
+  const analysis = buildReportAnalysis({ rows: allMonthlyRows, filteredRows, summary, scope: reportScope, typeSelection: state.prefaturaTipo, reportMode: "prefatura" });
+  assertReportModuleIsolation(analysis, DASHBOARD_MODULE_KEYS.preFatura);
   await ensurePdfLogoImage();
   const pdf = buildReportPdfBlob({ analysis, filteredRows, summary });
   downloadBlob(pdf, analysis.fileName);
@@ -9625,26 +9671,14 @@ async function downloadPackageManagementReport() {
   const reportScope = getPackageReportScope();
   await ensurePackageManagementRowsForReport();
   const packageRows = getPackageManagementRowsForView();
-  const prefaturaRows = await loadPrefaturaRowsForReportScope(reportScope, {
-    monthSelection: getPackageMonthSelectionValues(),
-    periodMode: state.packagePeriod || "month",
-    typeSelection: state.packageTipo,
-  });
-  const packageComparison = buildPackageManagementComparison(packageRows, prefaturaRows);
-  const summary = buildPackageReportSummary(packageComparison, packageRows);
-  const allMonthlyRows = await buildReportHistoricalComparisonRows(reportScope, state.packageTipo);
-  const analysis = buildReportAnalysis({
-    rows: allMonthlyRows,
-    filteredRows: prefaturaRows,
-    summary,
-    scope: reportScope,
-    typeSelection: state.packageTipo,
-    reportMode: "package",
-    packageRows,
-    packageComparison,
-  });
+  if (!packageRows.length) {
+    showToast("Não há dados suficientes para gerar relatório deste módulo no recorte selecionado.", "warn", 5200);
+    return;
+  }
+  const analysis = buildPackageOnlyReportAnalysis({ rows: packageRows, scope: reportScope });
+  assertReportModuleIsolation(analysis, DASHBOARD_MODULE_KEYS.pacotes);
   await ensurePdfLogoImage();
-  const pdf = buildReportPdfBlob({ analysis, filteredRows: prefaturaRows, summary });
+  const pdf = buildModuleExecutiveReportPdfBlob(analysis);
   downloadBlob(pdf, analysis.fileName);
   await logAudit("generate_report", "report", null, {
     selected_months: getPackageMonthSelectionValues(),
@@ -9654,6 +9688,48 @@ async function downloadPackageManagementReport() {
     report_tab: PACKAGE_MANAGEMENT_VIEW,
   });
   showToast("Relatório de Gestão de Pacotes baixado.", "good", 4200);
+}
+
+async function downloadMissingPackagesReport() {
+  if (!ensureReportPermission()) return;
+  const button = el.reportButton;
+  const previousText = button?.textContent || "Relatório";
+  if (button) {
+    button.disabled = true;
+    button.textContent = "Gerando relatório...";
+    button.setAttribute("aria-busy", "true");
+  }
+  try {
+    if (!missingPackagesRows.length) {
+      await loadMissingPackagesFromSupabase({ render: false });
+    }
+    const rows = getFilteredMissingPackagesRows();
+    if (!rows.length) {
+      showToast("Não há dados suficientes para gerar relatório deste módulo no recorte selecionado.", "warn", 5200);
+      return;
+    }
+    const analysis = buildMissingPackagesReportAnalysis(rows);
+    assertReportModuleIsolation(analysis, DASHBOARD_MODULE_KEYS.pacotesFaltantes);
+    await ensurePdfLogoImage();
+    const pdf = buildModuleExecutiveReportPdfBlob(analysis);
+    downloadBlob(pdf, analysis.fileName);
+    await logAudit("generate_report", "report", null, {
+      report_tab: DEVIATION_MANAGEMENT_VIEW,
+      report_category: DEVIATION_CATEGORY_MISSING_PACKAGES,
+      records_count: rows.length,
+      filters: analysis.filterItems,
+    });
+    showToast("Relatório de Pacotes Faltantes baixado.", "good", 4200);
+  } catch (error) {
+    console.error("[Pacotes Faltantes Report] Falha ao gerar relatório:", error);
+    showToast("Não foi possível gerar o relatório agora. Tente novamente.", "error", 6200);
+  } finally {
+    if (button) {
+      button.disabled = false;
+      button.textContent = previousText;
+      button.setAttribute("aria-busy", "false");
+    }
+  }
 }
 
 async function downloadPnrReport() {
@@ -9674,6 +9750,7 @@ async function downloadPnrReport() {
     }
     await ensurePdfLogoImage();
     const analysis = buildPnrReportAnalysis(rows);
+    assertReportModuleIsolation(analysis, DASHBOARD_MODULE_KEYS.desviosPnr);
     const pdf = buildPnrReportPdfBlob(analysis);
     downloadBlob(pdf, analysis.fileName);
     await logAudit("generate_report", "report", null, {
@@ -9693,6 +9770,425 @@ async function downloadPnrReport() {
       button.setAttribute("aria-busy", "false");
     }
   }
+}
+
+function assertReportModuleIsolation(analysis, expectedModuleKey) {
+  const moduleKey = normalizeDashboardModuleKey(analysis?.moduleKey || "");
+  if (moduleKey !== expectedModuleKey) {
+    console.error("[Report Isolation] Fonte de relatório inválida.", {
+      expectedModuleKey,
+      receivedModuleKey: analysis?.moduleKey,
+      sourceTable: analysis?.sourceTable,
+    });
+    throw new Error("Relatório bloqueado por mistura de módulo.");
+  }
+  return true;
+}
+
+function getReportDateLabel() {
+  return new Date().toLocaleDateString("pt-BR").replace(/\//g, "-");
+}
+
+function buildReportFilterItems(items = []) {
+  return items
+    .filter((item) => item && item.value != null && String(item.value).trim() && String(item.value) !== "Todos" && String(item.value) !== "Todas")
+    .map((item) => ({ label: item.label, value: String(item.value) }));
+}
+
+function getReportPeriodLabelFromRows(rows = [], dateGetter = (row) => row.data_normalizada || row.dataFechamento || row.importedAt) {
+  const dates = (Array.isArray(rows) ? rows : [])
+    .map(dateGetter)
+    .map((value) => value ? new Date(value) : null)
+    .filter((date) => date && !Number.isNaN(date.getTime()))
+    .sort((a, b) => a - b);
+  if (!dates.length) return "Base completa";
+  const first = dates[0].toISOString().slice(0, 10);
+  const last = dates[dates.length - 1].toISOString().slice(0, 10);
+  return first === last ? formatDate(first) : `${formatDate(first)} a ${formatDate(last)}`;
+}
+
+function buildReportTopRows(rows = [], key, valueGetter = () => 1, limit = 8) {
+  const map = new Map();
+  (Array.isArray(rows) ? rows : []).forEach((row) => {
+    const raw = typeof key === "function" ? key(row) : row?.[key];
+    const label = key === "motorista" || key === "driver" || key === "driverNome"
+      ? formatDriverName(raw || "", "Não identificado")
+      : reportLabel(raw || "Não identificado");
+    if (!map.has(label)) map.set(label, { label, count: 0, total: 0 });
+    const item = map.get(label);
+    item.count += 1;
+    item.total += Number(valueGetter(row) || 0);
+  });
+  const totalRows = Math.max((Array.isArray(rows) ? rows : []).length, 1);
+  return Array.from(map.values())
+    .map((item) => ({ ...item, share: (item.count / totalRows) * 100 }))
+    .sort((a, b) => b.total - a.total || b.count - a.count || String(a.label).localeCompare(String(b.label), "pt-BR"))
+    .slice(0, limit);
+}
+
+function buildPackageOnlyReportAnalysis({ rows = [], scope = getPackageReportScope() } = {}) {
+  const validRows = (Array.isArray(rows) ? rows : []).filter(isPackageManagementDetailRow);
+  const summary = buildPackageManagementSummary(validRows);
+  const totalValue = Number(summary.alcValue || 0) + Number(summary.driverValue || 0) + Number(summary.dispatcherValue || 0);
+  const distribution = buildPackageTypeDistribution(validRows);
+  const categoryRows = ["ALC", "DRIVER", "DISPATCHER", "MERCADO_LIVRE", "INDEFINIDO"].map((category) => {
+    const categoryRows = validRows.filter((row) => row.categoria_final === category);
+    const value = categoryRows.reduce((acc, row) => acc + Math.abs(Number(row.valor_numerico || 0)), 0);
+    return {
+      label: PACKAGE_CATEGORY_LABELS[category] || category,
+      count: categoryRows.length,
+      total: value,
+      share: validRows.length ? (categoryRows.length / validRows.length) * 100 : 0,
+    };
+  })
+    .filter((item) => item.count || item.total)
+    .sort((a, b) => b.total - a.total || b.count - a.count || String(a.label).localeCompare(String(b.label), "pt-BR"));
+  const topBases = buildReportTopRows(validRows, (row) => getBaseIdentity(row) || row.base || row.base_normalizada, (row) => Math.abs(Number(row.valor_numerico || 0)), 8);
+  const topDrivers = buildReportTopRows(validRows, (row) => row.motorista || row.driver, (row) => Math.abs(Number(row.valor_numerico || 0)), 8);
+  const evolutionRows = buildPackageMonthlyEvolutionRows(validRows);
+  const peakValue = evolutionRows.reduce((best, row) => {
+    const value = Number(row.alcValue || 0) + Number(row.driverValue || 0) + Number(row.dispatcherValue || 0);
+    const bestValue = Number(best.alcValue || 0) + Number(best.driverValue || 0) + Number(best.dispatcherValue || 0);
+    return value > bestValue ? row : best;
+  }, evolutionRows[0] || null);
+  const previous = evolutionRows.length > 1 ? evolutionRows[evolutionRows.length - 2] : null;
+  const current = evolutionRows.length ? evolutionRows[evolutionRows.length - 1] : null;
+  const currentValue = current ? Number(current.alcValue || 0) + Number(current.driverValue || 0) + Number(current.dispatcherValue || 0) : 0;
+  const previousValue = previous ? Number(previous.alcValue || 0) + Number(previous.driverValue || 0) + Number(previous.dispatcherValue || 0) : 0;
+  const trendText = previous && previousValue
+    ? `O último período (${current.label}) ficou ${formatSignedPct(((currentValue - previousValue) / previousValue) * 100)} em relação a ${previous.label}.`
+    : "Não há período anterior suficiente para comparação segura.";
+  const dominantCategory = categoryRows[0] || { label: "Sem categoria dominante", count: 0, total: 0, share: 0 };
+  const topBase = topBases[0] || { label: "Não identificada", count: 0, total: 0, share: 0 };
+  const topDriver = topDrivers[0] || { label: "Não identificado", count: 0, total: 0, share: 0 };
+  const recommendations = [
+    `Priorizar a base ${topBase.label}, que concentra ${integer.format(topBase.count)} ocorrência(s) e ${currency.format(topBase.total)} no recorte.`,
+    `Revisar o driver ${topDriver.label} e os demais nomes recorrentes para separar falha de execução, orientação necessária e reincidência operacional.`,
+    "Separar tratativas de Driver, Dispatcher, Mercado Livre e ALC antes de fechar o desconto financeiro.",
+    "Monitorar mensalmente os valores absorvidos pela ALC e os descontos mantidos com Driver para reduzir perda recorrente.",
+  ];
+  return {
+    moduleKey: DASHBOARD_MODULE_KEYS.pacotes,
+    sourceTable: "gestao_pacotes_records",
+    reportSubtitle: "Gestão de Pacotes",
+    title: "Relatório Executivo — Gestão de Pacotes",
+    fileName: `Relatorio_Executivo_Gestao_Pacotes_${getReportDateLabel()}.pdf`,
+    generatedAt: `Gerado em: ${formatCurrentDateTime(new Date())}`,
+    periodLabel: scope?.label || getReportPeriodLabelFromRows(validRows),
+    scopeLabel: scope?.label || "Recorte atual",
+    filterItems: buildReportFilterItems([
+      { label: "Mês", value: getMonthSelectionLabel(getPackageMonthSelectionValues(), getAvailablePackageMonthOptions()) },
+      { label: "Período", value: getPeriodModeLabel(state.packagePeriod || "month") },
+      { label: "Tipo", value: getActiveTypeFilter() },
+      { label: "Busca", value: state.query },
+    ]),
+    metrics: [
+      { label: "Ocorrências", value: integer.format(summary.count), note: "registros da Gestão de Pacotes" },
+      { label: "Absorvido pela ALC", value: currency.format(summary.alcValue), note: "impacto financeiro interno" },
+      { label: "Desconto Driver", value: currency.format(summary.driverValue), note: `${integer.format(summary.driverErrors)} erro(s) de driver` },
+      { label: "Dispatcher", value: currency.format(summary.dispatcherValue), note: `${integer.format(summary.dispatcherErrors)} erro(s) de dispatcher` },
+    ],
+    sections: [
+      {
+        title: "Sumário executivo",
+        text: `No recorte ${scope?.label || "analisado"}, a Gestão de Pacotes reúne ${integer.format(summary.count)} ocorrência(s) e ${currency.format(totalValue)} distribuídos entre valores absorvidos pela ALC, descontos mantidos com Driver e direcionamentos ao Dispatcher. A maior concentração financeira está em ${topBase.label}, enquanto ${topDriver.label} aparece como principal recorrência por motorista/driver.`,
+      },
+      {
+        title: "Diagnóstico financeiro",
+        text: `O valor absorvido pela ALC soma ${currency.format(summary.alcValue)}, enquanto os descontos mantidos com Driver somam ${currency.format(summary.driverValue)} e os direcionamentos ao Dispatcher somam ${currency.format(summary.dispatcherValue)}. A categoria com maior concentração no recorte é ${dominantCategory.label}, com ${integer.format(dominantCategory.count)} ocorrência(s), o que indica onde a tratativa financeira deve começar.`,
+      },
+      {
+        title: "Diagnóstico operacional",
+        text: `Foram identificados ${integer.format(summary.driverErrors)} erro(s) associados a Driver, ${integer.format(summary.dispatcherErrors)} erro(s) associados a Dispatcher e ${integer.format(summary.mercadoLivreErrors)} ocorrência(s) atribuídas ao Mercado Livre. Essa separação ajuda a direcionar a ação correta: orientação operacional, revisão de fluxo de despacho ou contestação com o marketplace.`,
+      },
+      {
+        title: "Tendência do período",
+        text: `${trendText} ${peakValue ? `O maior impacto mensal ocorreu em ${peakValue.label}, combinando ${currency.format(Number(peakValue.alcValue || 0) + Number(peakValue.driverValue || 0) + Number(peakValue.dispatcherValue || 0))} nos grupos financeiros principais.` : "Ainda não há série temporal suficiente para identificar pico mensal."}`,
+      },
+      {
+        title: "Conclusão executiva",
+        text: `A prioridade do recorte é reduzir a concentração em ${topBase.label}, acompanhar ${topDriver.label} e separar rapidamente responsabilidades entre ALC, Driver, Dispatcher e Mercado Livre. O relatório usa exclusivamente dados de Gestão de Pacotes e não compara este resultado com outros módulos.`,
+      },
+    ],
+    tables: [
+      {
+        title: "Distribuição por responsabilidade",
+        headers: ["Responsabilidade", "Qtd.", "%", "Valor"],
+        rows: categoryRows.map((item) => [item.label, integer.format(item.count), `${formatNumberPt(item.share, 1)}%`, formatCurrencyShort(item.total)]),
+      },
+      {
+        title: "Bases com maior impacto",
+        headers: ["Base", "Qtd.", "%", "Valor"],
+        rows: topBases.map((item) => [item.label, integer.format(item.count), `${formatNumberPt(item.share, 1)}%`, formatCurrencyShort(item.total)]),
+      },
+      {
+        title: "Drivers com maior recorrência",
+        headers: ["Driver", "Qtd.", "%", "Valor"],
+        rows: topDrivers.map((item) => [item.label, integer.format(item.count), `${formatNumberPt(item.share, 1)}%`, formatCurrencyShort(item.total)]),
+      },
+    ],
+    recommendations,
+  };
+}
+
+function buildMissingPackagesReportAnalysis(rows = []) {
+  const validRows = (Array.isArray(rows) ? rows : []).map(normalizeMissingPackageRow);
+  const metrics = getMissingPackagesMetrics(validRows);
+  const topBases = buildReportTopRows(validRows, "base", () => 1, 8);
+  const topDrivers = buildReportTopRows(validRows, "driverNome", () => 1, 8);
+  const statusRows = ["Pendente", "Em rota", "Concluído"].map((status) => {
+    const count = validRows.filter((row) => row.statusCaso === status).length;
+    return { label: status, count, share: validRows.length ? (count / validRows.length) * 100 : 0 };
+  }).filter((item) => item.count);
+  const contatoRows = ["E-mail Enviado", "Aguardando MELI", "Concluído"].map((status) => {
+    const count = validRows.filter((row) => row.statusContatoMeli === status).length;
+    return { label: status, count, share: validRows.length ? (count / validRows.length) * 100 : 0 };
+  }).filter((item) => item.count);
+  const prazoRows = ["Dentro do prazo", "Próximo do vencimento", "Vencido", "Concluído"].map((status) => {
+    const count = validRows.filter((row) => getMissingPackageDeadlineStatus(row) === status).length;
+    return { label: status, count, share: validRows.length ? (count / validRows.length) * 100 : 0 };
+  }).filter((item) => item.count);
+  const topBase = topBases[0] || { label: "Não identificada", count: 0, share: 0 };
+  const topDriver = topDrivers[0] || { label: "Não identificado", count: 0, share: 0 };
+  const criticalCount = metrics.prazoCritico || 0;
+  const pendingCount = metrics.pendentes || 0;
+  return {
+    moduleKey: DASHBOARD_MODULE_KEYS.pacotesFaltantes,
+    sourceTable: "gestao_desvios_pacotes_faltantes",
+    reportSubtitle: "Gestão de Desvios / Pacotes Faltantes",
+    title: "Relatório Executivo — Pacotes Faltantes",
+    fileName: `Relatorio_Executivo_Pacotes_Faltantes_${getReportDateLabel()}.pdf`,
+    generatedAt: `Gerado em: ${formatCurrentDateTime(new Date())}`,
+    periodLabel: getReportPeriodLabelFromRows(validRows, (row) => row.dataFechamento || row.importedAt),
+    scopeLabel: "Recorte atual",
+    filterItems: buildReportFilterItems([
+      { label: "Data", value: state.missingPackagesDate === "Todos" ? "Todas" : formatDate(state.missingPackagesDate) },
+      { label: "Base", value: state.missingPackagesBase },
+      { label: "Driver", value: state.missingPackagesDriver },
+      { label: "Status", value: state.missingPackagesCaseStatus },
+      { label: "Contato Méli", value: state.missingPackagesMeliStatus },
+      { label: "Prazo", value: state.missingPackagesDeadline },
+    ]),
+    metrics: [
+      { label: "Total de faltantes", value: integer.format(metrics.total), note: "casos no recorte" },
+      { label: "Pendentes", value: integer.format(metrics.pendentes), note: `${formatNumberPt(metrics.total ? (metrics.pendentes / metrics.total) * 100 : 0, 1)}% do recorte` },
+      { label: "Aguardando MELI", value: integer.format(metrics.aguardandoMeli), note: "contato pendente" },
+      { label: "Prazo crítico", value: integer.format(metrics.prazoCritico), note: "vencidos ou próximos" },
+    ],
+    sections: [
+      {
+        title: "Sumário executivo",
+        text: `O recorte de Pacotes Faltantes contém ${integer.format(metrics.total)} caso(s), com ${integer.format(pendingCount)} pendente(s) e ${integer.format(criticalCount)} em prazo crítico. A maior concentração por base está em ${topBase.label}, enquanto ${topDriver.label} aparece como principal recorrência por driver.`,
+      },
+      {
+        title: "Diagnóstico operacional",
+        text: `A leitura operacional precisa priorizar os casos pendentes e em rota, porque eles ainda dependem de tratativa antes do encerramento. Casos concluídos deixam de pressionar o prazo, enquanto pendentes com contato Méli aberto devem ser acompanhados até retorno formal.`,
+      },
+      {
+        title: "Prazo de 48 horas",
+        text: `O prazo de tratativa considera 48 horas úteis, sem contar sábado e domingo. Existem ${integer.format(criticalCount)} caso(s) vencido(s) ou próximos do vencimento, que devem entrar como prioridade operacional antes dos demais registros do recorte.`,
+      },
+      {
+        title: "Conclusão executiva",
+        text: `A rotina deve focar primeiro nos casos críticos por prazo, depois nos drivers com recorrência e nas bases com maior concentração. Este relatório usa exclusivamente a tabela de Pacotes Faltantes e não reaproveita dados externos de outros módulos.`,
+      },
+    ],
+    tables: [
+      {
+        title: "Status do caso",
+        headers: ["Status", "Qtd.", "%"],
+        rows: statusRows.map((item) => [item.label, integer.format(item.count), `${formatNumberPt(item.share, 1)}%`]),
+      },
+      {
+        title: "Contato Méli",
+        headers: ["Status", "Qtd.", "%"],
+        rows: contatoRows.map((item) => [item.label, integer.format(item.count), `${formatNumberPt(item.share, 1)}%`]),
+      },
+      {
+        title: "Situação do prazo",
+        headers: ["Prazo", "Qtd.", "%"],
+        rows: prazoRows.map((item) => [item.label, integer.format(item.count), `${formatNumberPt(item.share, 1)}%`]),
+      },
+      {
+        title: "Bases com maior concentração",
+        headers: ["Base", "Qtd.", "%"],
+        rows: topBases.map((item) => [item.label, integer.format(item.count), `${formatNumberPt(item.share, 1)}%`]),
+      },
+      {
+        title: "Drivers com maior recorrência",
+        headers: ["Driver", "Qtd.", "%"],
+        rows: topDrivers.map((item) => [item.label, integer.format(item.count), `${formatNumberPt(item.share, 1)}%`]),
+      },
+    ],
+    recommendations: [
+      "Atuar primeiro nos casos vencidos e próximos do vencimento, mantendo fila diária de tratativa.",
+      "Acionar o Méli nos registros com contato pendente e registrar retorno antes de concluir o caso.",
+      `Revisar a base ${topBase.label} para identificar causa operacional da concentração de faltantes.`,
+      `Acompanhar ${topDriver.label} e demais drivers recorrentes com orientação operacional direcionada.`,
+    ],
+  };
+}
+
+function buildModuleExecutiveReportPdfBlob(analysis) {
+  const pages = [];
+  let commands = [];
+  let y = 734;
+  const page = { width: 595, height: 842, margin: 34, bottom: 42 };
+  const contentW = page.width - page.margin * 2;
+  const colors = {
+    ink: "0.06 0.13 0.22",
+    muted: "0.36 0.44 0.55",
+    soft: "0.95 0.98 1",
+    line: "0.82 0.87 0.93",
+    tableHead: "0.90 0.94 0.98",
+    navy: "0.04 0.18 0.31",
+    teal: "0.05 0.55 0.48",
+    blue: "0.08 0.47 0.78",
+    green: "0.08 0.52 0.28",
+    orange: "0.74 0.35 0",
+    white: "1 1 1",
+    blueSoft: "0.91 0.96 1",
+    greenSoft: "0.91 0.98 0.94",
+    warm: "1 0.95 0.88",
+  };
+  const addText = (text, x, yy, size = 10, color = colors.ink, align = "left", font = "F1") => {
+    const value = String(text ?? "");
+    const offset = align === "right" ? estimatePdfTextWidth(value, size) : align === "center" ? estimatePdfTextWidth(value, size) / 2 : 0;
+    commands.push(`${color} rg BT /${font} ${size} Tf ${Math.max(0, x - offset).toFixed(1)} ${yy.toFixed(1)} Td <${pdfTextHex(value)}> Tj ET`);
+  };
+  const addRect = (x, yy, w, h, color) => commands.push(`${color} rg ${x.toFixed(1)} ${yy.toFixed(1)} ${w.toFixed(1)} ${h.toFixed(1)} re f`);
+  const addStrokeRect = (x, yy, w, h, color = colors.line) => commands.push(`${color} RG ${x.toFixed(1)} ${yy.toFixed(1)} ${w.toFixed(1)} ${h.toFixed(1)} re S`);
+  const addLine = (x1, y1, x2, y2, color = colors.line, width = 0.7) => commands.push(`${color} RG ${width} w ${x1.toFixed(1)} ${y1.toFixed(1)} m ${x2.toFixed(1)} ${y2.toFixed(1)} l S`);
+  const addPdfImage = (name, x, yy, w, h) => commands.push(`q ${w.toFixed(1)} 0 0 ${h.toFixed(1)} ${x.toFixed(1)} ${yy.toFixed(1)} cm /${name} Do Q`);
+  const addWrappedText = (text, x, top, width, size = 9, color = colors.ink, lineHeight = 11.5, maxLines = 8) => {
+    const lines = wrapPdfText(text, width, size, maxLines);
+    lines.forEach((line, index) => addText(line, x, top - index * lineHeight, size, color));
+    return lines.length * lineHeight;
+  };
+  const addPage = () => {
+    if (commands.length) pages.push(commands.join("\n"));
+    commands = [];
+    const infoW = 176;
+    const infoX = page.width - page.margin - infoW;
+    commands.push(`${colors.soft} rg 0 0 ${page.width} ${page.height} re f`);
+    addRect(0, 754, page.width, 88, colors.navy);
+    addRect(0, 754, page.width, 5, colors.teal);
+    addRect(infoX, 773, infoW, 52, "0.06 0.24 0.36");
+    addStrokeRect(infoX, 773, infoW, 52, "0.16 0.42 0.55");
+    if (PDF_LOGO_IMAGE.base64) addPdfImage(PDF_LOGO_IMAGE.name, page.margin, 768, 60, 60);
+    addText("Painel de Inteligência", page.margin + 74, 815, 8.2, "0.77 0.88 0.96", "left", "F2");
+    addText("Relatório Executivo", page.margin + 74, 798, 14.1, colors.white, "left", "F2");
+    addText(analysis.reportSubtitle || analysis.title || "Relatório", page.margin + 74, 784, 10.2, "0.86 0.95 1", "left");
+    addText("Setor: Loss", infoX + 14, 810, 8.2, colors.white, "left", "F2");
+    addText(`Período: ${analysis.periodLabel || analysis.scopeLabel || "Recorte atual"}`, infoX + 14, 796, 7.7, "0.82 0.92 0.98", "left");
+    addText(analysis.generatedAt || `Gerado em: ${formatCurrentDateTime()}`, infoX + 14, 783, 7.7, "0.82 0.92 0.98", "left");
+    y = 734;
+  };
+  const ensure = (height) => {
+    if (y - height < page.bottom) addPage();
+  };
+  const card = (x, top, w, h, fill = colors.white, accent = "") => {
+    addRect(x, top - h, w, h, fill);
+    addStrokeRect(x, top - h, w, h);
+    if (accent) addRect(x, top - h, 4, h, accent);
+  };
+  const sectionTitle = (title, meta = "") => {
+    ensure(34);
+    addText(meta ? `${title} — ${meta}` : title, page.margin, y, 12.2, colors.ink, "left", "F2");
+    y -= 10;
+    addLine(page.margin, y, page.width - page.margin, y);
+    y -= 16;
+  };
+  const drawFilters = () => {
+    const items = Array.isArray(analysis.filterItems) ? analysis.filterItems : [];
+    if (!items.length) return;
+    ensure(58);
+    card(page.margin, y, contentW, 48, colors.white, colors.blue);
+    addText("Filtros aplicados", page.margin + 14, y - 17, 9, colors.ink, "left", "F2");
+    addWrappedText(items.map((item) => `${item.label}: ${item.value}`).join(" · "), page.margin + 14, y - 32, contentW - 28, 7.6, colors.muted, 9, 2);
+    y -= 64;
+  };
+  const drawMetrics = () => {
+    const metrics = Array.isArray(analysis.metrics) ? analysis.metrics : [];
+    if (!metrics.length) return;
+    ensure(90);
+    const gap = 10;
+    const w = (contentW - gap * 3) / 4;
+    metrics.slice(0, 4).forEach((metric, index) => {
+      const x = page.margin + index * (w + gap);
+      card(x, y, w, 62, index % 2 ? colors.white : colors.blueSoft, index === 1 ? colors.orange : colors.teal);
+      addText(metric.label, x + 10, y - 16, 7.5, colors.muted);
+      addWrappedText(metric.value, x + 10, y - 34, w - 20, 12.2, index === 1 ? colors.orange : colors.teal, 11, 2);
+      addWrappedText(metric.note || "", x + 10, y - 51, w - 20, 6.8, colors.muted, 7.5, 1);
+    });
+    y -= 84;
+  };
+  const drawParagraph = (section) => {
+    const text = String(section?.text || "");
+    const lines = wrapPdfText(text, contentW - 32, 9, 12);
+    const height = Math.max(72, 32 + lines.length * 11.5);
+    ensure(height + 36);
+    sectionTitle(section.title || "Análise", analysis.scopeLabel || "Recorte atual");
+    card(page.margin, y, contentW, height, colors.white, colors.teal);
+    addWrappedText(text, page.margin + 16, y - 18, contentW - 32, 9, colors.ink, 11.5, 12);
+    y -= height + 22;
+  };
+  const drawTable = (table) => {
+    const rows = (Array.isArray(table?.rows) ? table.rows : []).slice(0, 10);
+    if (!rows.length) return;
+    const colCount = Math.max((table.headers || []).length, rows[0]?.length || 1);
+    const height = 46 + rows.length * 18;
+    ensure(height + 34);
+    sectionTitle(table.title || "Tabela", "dados do módulo");
+    card(page.margin, y, contentW, height, colors.white, colors.blue);
+    addRect(page.margin + 10, y - 32, contentW - 20, 18, colors.tableHead);
+    const widths = Array.from({ length: colCount }, (_, index) => index === 0 ? contentW * 0.46 : (contentW * 0.54) / Math.max(colCount - 1, 1));
+    let cursor = page.margin + 14;
+    (table.headers || []).forEach((header, index) => {
+      const align = index === 0 ? "left" : "right";
+      addText(clipPdfText(header, widths[index] - 8, 7.2), align === "right" ? cursor + widths[index] - 4 : cursor, y - 26, 7.2, colors.muted, align);
+      cursor += widths[index];
+    });
+    rows.forEach((row, rowIndex) => {
+      const rowY = y - 50 - rowIndex * 18;
+      if (rowIndex % 2 === 1) addRect(page.margin + 10, rowY - 7, contentW - 20, 16, "0.97 0.985 1");
+      cursor = page.margin + 14;
+      row.forEach((cell, index) => {
+        const align = index === 0 ? "left" : "right";
+        addText(clipPdfText(cell, widths[index] - 8, 7.4), align === "right" ? cursor + widths[index] - 4 : cursor, rowY, 7.4, colors.ink, align);
+        cursor += widths[index];
+      });
+    });
+    y -= height + 22;
+  };
+  const drawRecommendations = () => {
+    const recommendations = Array.isArray(analysis.recommendations) ? analysis.recommendations.filter(Boolean) : [];
+    if (!recommendations.length) return;
+    const height = Math.max(82, 30 + recommendations.length * 23);
+    ensure(height + 34);
+    sectionTitle("Recomendações", "ações práticas");
+    card(page.margin, y, contentW, height, colors.greenSoft, colors.green);
+    recommendations.forEach((item, index) => {
+      const rowY = y - 22 - index * 23;
+      addText(`${index + 1}.`, page.margin + 18, rowY, 8.4, colors.green, "left", "F2");
+      addWrappedText(item, page.margin + 44, rowY, contentW - 62, 8.2, colors.ink, 10, 2);
+    });
+    y -= height + 22;
+  };
+
+  addPage();
+  drawFilters();
+  drawMetrics();
+  (analysis.sections || []).forEach(drawParagraph);
+  (analysis.tables || []).forEach(drawTable);
+  drawRecommendations();
+  pages.push(commands.join("\n"));
+  const totalPages = pages.length;
+  const pagesWithFooter = pages.map((content, index) => {
+    const pageLabel = `Página ${index + 1} de ${totalPages}`;
+    return `${content}\n${colors.line} RG 0.5 w ${page.margin.toFixed(1)} 28.0 m ${(page.width - page.margin).toFixed(1)} 28.0 l S\n${colors.muted} rg BT /F1 7.3 Tf ${page.margin.toFixed(1)} 16.0 Td <${pdfTextHex("ALC Pereira & Filho Transportes · Painel de Inteligência Operacional · Relatório gerado automaticamente")}> Tj ET\n${colors.muted} rg BT /F1 7.3 Tf ${(page.width - page.margin - estimatePdfTextWidth(pageLabel, 7.3)).toFixed(1)} 16.0 Td <${pdfTextHex(pageLabel)}> Tj ET`;
+  });
+  return createPdfBlob(pagesWithFooter);
 }
 
 async function ensurePdfLogoImage() {
@@ -9850,6 +10346,8 @@ function buildPnrReportAnalysis(rows) {
   ].map((item) => ({ ...item, share: (item.count / total) * 100 }));
 
   const analysis = {
+    moduleKey: DASHBOARD_MODULE_KEYS.desviosPnr,
+    sourceTable: "desvios_pnr_records",
     rows: safeRows,
     summary,
     filters,
@@ -9969,7 +10467,7 @@ function buildPnrQualityAnalysisText(analysis) {
   if (!totalIssues) {
     return "A base do recorte não apresenta ausência relevante nos campos críticos avaliados para origem, estação, motorista, datas e status. A rastreabilidade é suficiente para leitura executiva e acompanhamento operacional.";
   }
-  return `A qualidade dos dados exige atenção em ${integer.format(totalIssues)} ocorrências de campos críticos ausentes ou não identificados. O principal ponto é ${worst.label}, com ${integer.format(worst.count)} registros. Essas lacunas afetam rastreabilidade, priorização por base e leitura temporal, principalmente quando a base PNR depende de cruzamento com Pré-Fatura e Gestão de Pacotes.`;
+  return `A qualidade dos dados exige atenção em ${integer.format(totalIssues)} ocorrências de campos críticos ausentes ou não identificados. O principal ponto é ${worst.label}, com ${integer.format(worst.count)} registros. Essas lacunas afetam rastreabilidade, priorização por base, leitura temporal e confiabilidade da análise executiva do recorte PNR.`;
 }
 
 function buildPnrAttentionPoints(analysis) {
@@ -10442,8 +10940,8 @@ function buildReportPdfBlob({ analysis, summary }) {
     const metrics = [
       ["Impacto financeiro", currency.format(summary.totalValue), "", colors.orange, colors.warm],
       ["Ticket médio", currency.format(analysis.ticketAverage), "por registro válido", colors.teal, colors.white],
-      ["PNR", integer.format(summary.pnrCount), `${analysis.pnrShare}% dos registros`, colors.red, colors.dangerSoft],
-      ["Pacotes perdidos", integer.format(summary.packageCount), `${analysis.packageShare}% dos registros`, colors.blue, colors.blueSoft],
+      ["Bases", integer.format(summary.baseCount), "bases no recorte", colors.blue, colors.blueSoft],
+      ["Drivers", integer.format(summary.driverCount), "drivers no recorte", colors.green, colors.greenSoft],
       ["Registros", integer.format(summary.count), `${integer.format(summary.baseCount)} bases e ${integer.format(summary.driverCount)} drivers`, colors.blue, colors.white],
       [analysis.scope.periodMode === "month" ? "Média mensal" : "Média quinzenal", currency.format(analysis.monthlyAverage), "", colors.orange, colors.white],
       [analysis.criticalImpactTitle || "Maior impacto", analysis.criticalMonthLabel, formatCurrencyShort(analysis.criticalMonth.totalValue), colors.red, colors.dangerSoft],
@@ -10760,16 +11258,13 @@ function buildReportPdfBlob({ analysis, summary }) {
     drawConclusion();
   } else {
     drawKpiGrid();
-  drawParagraphCard("Análise inteligente do período", analysis.intelligentSummary, 132);
-  drawDiagnosticCards();
-  drawMonthlyTable();
-  drawAlertCards();
-  drawRankings();
-  addPage();
-  drawCategoryTable();
-  drawPackageManagementComparison();
-  drawNumberedList("Recomendações de ação", "próximos passos", analysis.recommendations);
-  drawConclusion();
+    drawParagraphCard("Análise inteligente do período", analysis.intelligentSummary, 132);
+    drawDiagnosticCards();
+    drawMonthlyTable();
+    drawAlertCards();
+    drawRankings();
+    drawNumberedList("Recomendações de ação", "próximos passos", analysis.recommendations);
+    drawConclusion();
 
   }
 
@@ -10897,6 +11392,8 @@ function buildReportAnalysis({ rows, filteredRows, summary, scope: providedScope
   });
 
   return {
+    moduleKey: reportMode === "package" ? DASHBOARD_MODULE_KEYS.pacotes : DASHBOARD_MODULE_KEYS.preFatura,
+    sourceTable: reportMode === "package" ? "gestao_pacotes_records" : "pre_fatura_records",
     title: scope.title,
     fileName: scope.fileName,
     scope,
@@ -10914,7 +11411,7 @@ function buildReportAnalysis({ rows, filteredRows, summary, scope: providedScope
     volumeMonthLabel: shortMonthYear(volumeMonth.label),
     pnrShare,
     packageShare,
-    dominantCategoryLabel: reportCategoryLabel(dominantCategory.label),
+    dominantCategoryLabel: reportMode === "package" ? reportCategoryLabel(dominantCategory.label) : "Tipo de desconto líder",
     dominantCategoryShare: categoryShareMap[dominantCategory.label] || "0,0",
     categoryTotals,
     categoryShareMap,
@@ -11285,9 +11782,9 @@ function buildIntelligentSummary({ scope, summary, criticalMonth, volumeMonth, d
       : `o recorte registra ${currency.format(summary.totalValue)} em descontos e ticket médio de ${currency.format(ticketAverage)} por registro válido.`;
   return [
     `${period}, ${impactSentence}`,
-    `A categoria ${reportCategoryLabel(dominantCategory.label)} concentra ${currency.format(dominantCategory.total)} e lidera a pressão operacional.`,
+    `O principal tipo de desconto concentra ${currency.format(dominantCategory.total)} e lidera a pressão operacional do recorte.`,
     `A base ${topBase.label} responde por ${topBaseShare}% do impacto financeiro, enquanto o driver ${topDriver.label} concentra ${topDriverShare}%.`,
-    `O volume de PNR representa ${pnrShare}% dos registros e pacotes perdidos representam ${packageShare}%.`,
+    `A leitura por tipo de desconto indica concentração de ${pnrShare}% no grupo mais recorrente e ${packageShare}% no segundo grupo mais relevante.`,
     `A tendência indica: ${trend.text}`,
   ].join("\n");
 }
@@ -11304,7 +11801,7 @@ function buildReportDiagnostics({ scope, summary, criticalMonth, volumeMonth, do
     },
     {
       title: "Volume operacional",
-      text: `${formatReportImpactPeriodLabel(volumeMonth, scope)} teve ${integer.format(volumeMonth.count)} registros; a categoria ${reportCategoryLabel(dominantCategory.label)} foi a mais relevante.`,
+      text: `${formatReportImpactPeriodLabel(volumeMonth, scope)} teve ${integer.format(volumeMonth.count)} registros; o principal tipo de desconto foi o mais relevante no recorte.`,
     },
     {
       title: "Prioridade",
@@ -11335,7 +11832,7 @@ function buildReportAlerts({ scope, summary, comparisonRows, monthlyAverage, top
   if (trend.direction === "up") alerts.push({ title: "Tendência de alta", text: "O período apresenta aumento do impacto financeiro e precisa de plano de contenção." });
   if (missingBaseCount) alerts.push({ title: "Cadastro de base", text: `${integer.format(missingBaseCount)} registro(s) sem base identificada exigem correção cadastral.` });
   if (missingDriverCount) alerts.push({ title: "Cadastro de driver", text: `${integer.format(missingDriverCount)} registro(s) sem driver identificado exigem correção cadastral.` });
-  if (dominantCategory.total > 0) alerts.push({ title: "Categoria líder", text: `${reportCategoryLabel(dominantCategory.label)} representa ${categoryShareMap[dominantCategory.label] || "0,0"}% do impacto financeiro por categoria.` });
+  if (dominantCategory.total > 0) alerts.push({ title: "Tipo de desconto líder", text: `O principal tipo de desconto representa ${categoryShareMap[dominantCategory.label] || "0,0"}% do impacto financeiro do recorte.` });
   return alerts.length ? alerts : [{ title: "Sem alerta crítico", text: "Não foram encontrados alertas críticos relevantes no recorte atual." }];
 }
 
@@ -11343,11 +11840,11 @@ function buildReportRecommendations({ topBase, topDriver, dominantCategory, miss
   const recommendations = [
     `Priorizar a tratativa da base ${topBase.label}, que lidera o impacto financeiro.`,
     `Acompanhar o driver ${topDriver.label} com plano de redução de recorrência.`,
-    "Separar a análise de PNR, SVC Perdidos e XPT Perdidos para validar causa raiz.",
-    `Investigar a categoria ${reportCategoryLabel(dominantCategory.label)} para identificar causa raiz.`,
+    "Auditar as divergências de valores e validar se o desconto aplicado está coerente com a ocorrência.",
+    "Investigar o tipo de desconto líder para identificar causa raiz e prevenir repetição no próximo fechamento.",
     "Medir a evolução no próximo fechamento para confirmar eficiência das ações.",
   ];
-  if (trend.direction === "up") recommendations.unshift("Criar plano de contenção imediato para reduzir a recorrência de PNRs no próximo mês.");
+  if (trend.direction === "up") recommendations.unshift("Criar plano de contenção imediato para reduzir a recorrência de descontos no próximo mês.");
   if (missingBaseCount || missingDriverCount) recommendations.push("Corrigir cadastros e registros não identificados antes da próxima análise.");
   return recommendations;
 }
@@ -11357,13 +11854,13 @@ function buildReportConclusionText({ scope, summary, topBase, topDriver, dominan
   const periodText = scope.mode === "annual" ? `O período anual ${scope.year}` : `O recorte ${scope.label}`;
   const periodImpact = `O impacto do recorte atual foi ${currency.format(summary.totalValue)}.`;
   const criticalText = `${impactContext.peakTitle}: ${impactContext.peakText}.`;
-  return `${periodText} mostra que o principal problema está em ${reportCategoryLabel(dominantCategory.label)}, com maior impacto financeiro na base ${topBase.label} e prioridade de acompanhamento para o driver ${topDriver.label}. ${periodImpact} ${criticalText} A tendência indica: ${trend.text} A primeira ação recomendada é: ${recommendations[0]}`;
+  return `${periodText} mostra concentração financeira relevante na base ${topBase.label} e prioridade de acompanhamento para o driver ${topDriver.label}. ${periodImpact} ${criticalText} A tendência indica: ${trend.text} A primeira ação recomendada é: ${recommendations[0]}`;
 }
 
 function buildReportConclusionItems({ scope, summary, topBase, topDriver, dominantCategory, criticalMonth, trend, recommendations }) {
   const impactContext = buildReportImpactContext(scope, summary, criticalMonth);
   return [
-    { label: "Principal problema", text: reportCategoryLabel(dominantCategory.label) },
+    { label: "Principal concentração", text: "Tipo de desconto líder no recorte" },
     { label: "Impacto do recorte atual", text: impactContext.currentText },
     { label: "Maior impacto mensal", text: impactContext.monthlyText },
     { label: "Maior impacto quinzenal", text: impactContext.biweeklyText },
@@ -14890,6 +15387,7 @@ function normalizeMissingPackageWorkbook(workbook, fileName = "") {
         sheetSkipped += 1;
         continue;
       }
+      const importedAt = new Date().toISOString();
       const dataValue = readCell(row, idx.data);
       const dataFechamento = parseMissingPackageDate(dataValue) || new Date().toISOString().slice(0, 10);
       const base = readCell(row, idx.base) || "";
@@ -14913,6 +15411,10 @@ function normalizeMissingPackageWorkbook(workbook, fileName = "") {
         status_caso: "Pendente",
         statusContatoMeli: "E-mail Enviado",
         status_contato_meli: "E-mail Enviado",
+        prazoTratativa: addBusinessHoursSkippingWeekends(importedAt, 48),
+        prazo_tratativa: addBusinessHoursSkippingWeekends(importedAt, 48),
+        importedAt,
+        imported_at: importedAt,
         arquivo_origem: fileName,
       };
       normalized.dedupeKey = buildMissingPackageDedupeKey(normalized);
@@ -18218,7 +18720,7 @@ function mapPnrRowToProcessedRecord(row, fileRecord) {
 function mapMissingPackageRowToProcessedRecord(row, fileRecord) {
   const nowIso = new Date().toISOString();
   const importedAt = row.importedAt || row.imported_at || nowIso;
-  const prazo = row.prazoTratativa || row.prazo_tratativa || new Date(new Date(importedAt).getTime() + 48 * 60 * 60 * 1000).toISOString();
+  const prazo = row.prazoTratativa || row.prazo_tratativa || addBusinessHoursSkippingWeekends(importedAt, 48);
   const normalized = {
     dataFechamento: row.dataFechamento || row.data_fechamento || "",
     base: row.base || "",
