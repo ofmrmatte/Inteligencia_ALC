@@ -1,6 +1,9 @@
 node_modules/
 .env
 .env.local
+.env.staging.railway
 logs/
+scripts/railway/exports/
+scripts/railway/logs/
 .DS_Store
 Thumbs.db

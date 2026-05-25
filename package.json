@@ -12,6 +12,13 @@
     "audit:row-counts": "node scripts/check-row-count-reconciliation.mjs",
     "audit:raw-data": "node scripts/audit-raw-data-compaction.mjs",
     "audit:railway": "node scripts/check-railway-sizing.mjs",
+    "railway:check": "node scripts/railway/01-check-railway-connection.mjs",
+    "railway:schema": "node scripts/railway/02-apply-schema.mjs",
+    "railway:export": "node scripts/railway/03-export-supabase-clean.mjs",
+    "railway:import": "node scripts/railway/04-import-railway.mjs",
+    "railway:compare": "node scripts/railway/05-compare-supabase-railway.mjs",
+    "railway:validate": "node scripts/railway/06-validate-railway-dashboard.mjs",
+    "railway:dry-run": "npm run railway:schema -- --dry-run && npm run railway:export -- --dry-run && npm run railway:import -- --dry-run && npm run railway:compare -- --dry-run && npm run railway:validate -- --dry-run",
     "db:migrate:processed-records": "node scripts/apply-processed-records-migration.mjs",
     "db:migrate:missing-packages": "node scripts/apply-missing-packages-migration.mjs",
     "fix:stuck-pnr-processing": "node scripts/fix-stuck-processing-files.mjs"
