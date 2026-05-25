@@ -1338,6 +1338,7 @@ function bindEvents() {
     const preFaturaToggle = event.target.closest("[data-prefatura-toggle]");
     if (preFaturaToggle) {
       event.preventDefault();
+      activateSheetTab(preFaturaToggle);
       togglePreFaturaCategoryMenu();
       return;
     }
@@ -1352,44 +1353,14 @@ function bindEvents() {
     const deviationToggle = event.target.closest("[data-deviation-toggle]");
     if (deviationToggle) {
       event.preventDefault();
+      activateSheetTab(deviationToggle);
       toggleDeviationCategoryMenu();
       return;
     }
 
     const button = event.target.closest("button[data-sheet]");
     if (!button) return;
-    const previousCategory = getCurrentFileCategory();
-    closeTopFilterOverlays();
-    clearTransientDashboardStateForNavigation();
-    state.appView = "dashboard";
-    state.sheet = button.dataset.sheet;
-    if (state.sheet === PRE_FATURA_VIEW) state.preFaturaView = PREFATURA_VIEW_OVERVIEW;
-    state.page = 1;
-    persistState();
-    hydrateControls();
-    renderAll();
-    if (state.sheet === DEVIATION_MANAGEMENT_VIEW) {
-      return;
-    }
-    if (getCurrentFileCategory() !== previousCategory) {
-      if (getCurrentFileCategory() === PACKAGE_MANAGEMENT_FILE_CATEGORY) {
-        void ensurePackageManagementRowsLoaded(dashboardFileRecords).finally(() => {
-          hydrateControls();
-          renderAll();
-        });
-        return;
-      }
-      if (applyDashboardScopeFromLoadedDatasets()) {
-        hydrateControls();
-        renderAll();
-      } else if (getCurrentFileCategory() === PRE_FATURA_FILE_CATEGORY) {
-        void loadDashboardDataByFilters({ force: true, silent: true, showLoading: true }).finally(() => {
-          hydrateControls();
-          renderAll();
-        });
-      }
-      return;
-    }
+    activateSheetTab(button);
   });
 
   document.addEventListener("click", (event) => {
@@ -2249,6 +2220,61 @@ function clearTransientDashboardStateForNavigation() {
   }
 }
 
+function activateSheetTab(button) {
+  const targetSheet = button?.dataset?.sheet;
+  if (!targetSheet) return;
+  const previousSheet = state.sheet;
+  const previousCategory = getCurrentFileCategory();
+  closeTopFilterOverlays();
+  clearTransientDashboardStateForNavigation();
+  state.appView = "dashboard";
+  state.sheet = targetSheet;
+  if (state.sheet === PRE_FATURA_VIEW && previousSheet !== PRE_FATURA_VIEW) {
+    state.preFaturaView = PREFATURA_VIEW_OVERVIEW;
+  }
+  if (state.sheet === DEVIATION_MANAGEMENT_VIEW) {
+    state.activeDesvioCategory = normalizeDeviationCategory(state.activeDesvioCategory) || DEVIATION_CATEGORY_PNRS;
+  }
+  state.page = 1;
+  const shouldLoadPnrRows = state.sheet === DEVIATION_MANAGEMENT_VIEW
+    && state.activeDesvioCategory === DEVIATION_CATEGORY_PNRS
+    && shouldLoadPnrRowsForCurrentView();
+  if (shouldLoadPnrRows) isLoadingPnrRows = true;
+  persistState();
+  hydrateControls();
+  renderAll();
+  if (state.sheet === DEVIATION_MANAGEMENT_VIEW) {
+    if (shouldLoadPnrRows) {
+      void ensurePnrRowsLoaded(dashboardFileRecords).finally(() => {
+        isLoadingPnrRows = false;
+        hydrateControls();
+        renderAll();
+      });
+    } else if (state.activeDesvioCategory === DEVIATION_CATEGORY_MISSING_PACKAGES) {
+      void loadMissingPackagesFromSupabase({ render: true });
+    }
+    return;
+  }
+  if (getCurrentFileCategory() !== previousCategory) {
+    if (getCurrentFileCategory() === PACKAGE_MANAGEMENT_FILE_CATEGORY) {
+      void ensurePackageManagementRowsLoaded(dashboardFileRecords).finally(() => {
+        hydrateControls();
+        renderAll();
+      });
+      return;
+    }
+    if (applyDashboardScopeFromLoadedDatasets()) {
+      hydrateControls();
+      renderAll();
+    } else if (getCurrentFileCategory() === PRE_FATURA_FILE_CATEGORY) {
+      void loadDashboardDataByFilters({ force: true, silent: true, showLoading: true }).finally(() => {
+        hydrateControls();
+        renderAll();
+      });
+    }
+  }
+}
+
 function applyPackageTypeOptionChange(changedInput) {
   const checkedValues = el.typeFilterOptions
     .filter((input) => input.checked)
@@ -2820,6 +2846,7 @@ function isDashboardFileActive(file) {
 function hasPersistedRowsMetadata(fileRecord) {
   const metadata = fileRecord?.metadata || {};
   const candidates = [
+    metadata.row_count_persisted,
     metadata.record_count,
     metadata.parsed_rows,
     metadata.consolidated_rows,
@@ -2832,17 +2859,71 @@ function hasPersistedRowsMetadata(fileRecord) {
   });
 }
 
-function getFileRowsCount(fileRecord, dataset = null) {
-  const rowCount = Number(fileRecord?.row_count);
-  if (Number.isFinite(rowCount) && rowCount > 0) return rowCount;
-  const parsedRows = Number(fileRecord?.metadata?.parsed_rows);
-  if (Number.isFinite(parsedRows) && parsedRows > 0) return parsedRows;
-  const metadataRowCount = Number(fileRecord?.metadata?.row_count);
-  if (Number.isFinite(metadataRowCount) && metadataRowCount > 0) return metadataRowCount;
-  const legacyRows = Number(fileRecord?.metadata?.rows);
-  if (Number.isFinite(legacyRows) && legacyRows > 0) return legacyRows;
+function toPositiveRowCount(value) {
+  const number = Number(value);
+  return Number.isFinite(number) && number > 0 ? Math.trunc(number) : 0;
+}
+
+function firstPositiveRowCount(...values) {
+  for (const value of values) {
+    const count = toPositiveRowCount(value);
+    if (count > 0) return count;
+  }
+  return 0;
+}
+
+function getFileRowCountSummary(fileRecord, dataset = null) {
+  const metadata = fileRecord?.metadata || {};
   const datasetRows = Array.isArray(dataset?.rows) ? dataset.rows.length : 0;
-  return datasetRows > 0 ? datasetRows : 0;
+  const read = firstPositiveRowCount(
+    metadata.row_count_read,
+    metadata.total_rows_read,
+    metadata.original_rows,
+    metadata.csv_detected_rows,
+    metadata.parsed_rows,
+    metadata.record_count,
+    fileRecord?.row_count,
+    datasetRows,
+  );
+  const imported = firstPositiveRowCount(
+    metadata.row_count_imported,
+    metadata.total_rows_imported,
+    metadata.consolidated_rows,
+    metadata.record_count,
+    metadata.parsed_rows,
+    fileRecord?.row_count,
+    datasetRows,
+  );
+  const persisted = firstPositiveRowCount(
+    metadata.row_count_persisted,
+    metadata.persisted_rows,
+    metadata.persisted_row_count,
+    fileRecord?.row_count,
+    datasetRows,
+    imported,
+  );
+  return { read, imported, persisted };
+}
+
+function buildRowCountMetadata(metadata = {}, counts = {}) {
+  const read = firstPositiveRowCount(counts.read, metadata.row_count_read, metadata.total_rows_read, metadata.original_rows, metadata.parsed_rows, metadata.record_count);
+  const imported = firstPositiveRowCount(counts.imported, metadata.row_count_imported, metadata.total_rows_imported, metadata.consolidated_rows, metadata.record_count, metadata.parsed_rows, read);
+  const persisted = firstPositiveRowCount(counts.persisted, metadata.row_count_persisted, metadata.persisted_rows, metadata.persisted_row_count, imported);
+  return {
+    row_count_read: read,
+    row_count_imported: imported,
+    row_count_persisted: persisted,
+    row_count_contract: "read/imported/persisted",
+    row_count_reconciliation_status: imported === persisted ? "aligned" : "deduped",
+    row_count_reconciliation_note: imported === persisted
+      ? "Linhas importadas e persistidas estão alinhadas."
+      : "Diferença esperada por dedupe, atualização ou reprocessamento; a tela usa linhas persistidas como fonte final.",
+  };
+}
+
+function getFileRowsCount(fileRecord, dataset = null) {
+  const counts = getFileRowCountSummary(fileRecord, dataset);
+  return counts.persisted || counts.imported || counts.read || 0;
 }
 
 function getFileRowsLabel(fileRecord, dataset = null) {
@@ -2850,6 +2931,19 @@ function getFileRowsLabel(fileRecord, dataset = null) {
   if (rows > 0) return `${integer.format(rows)} registros`;
   if (fileRecord?.status === "empty_or_parse_error") return "0 registros válidos";
   return "Registros não calculados";
+}
+
+function getFileRowsAuditLabel(fileRecord, dataset = null) {
+  const counts = getFileRowCountSummary(fileRecord, dataset);
+  const entries = [
+    ["Lidos", counts.read],
+    ["Importados", counts.imported],
+    ["Persistidos", counts.persisted],
+  ].filter(([, value]) => value > 0);
+  if (!entries.length) return getFileRowsLabel(fileRecord, dataset);
+  const uniqueCounts = new Set(entries.map(([, value]) => value));
+  if (uniqueCounts.size <= 1) return `${integer.format(counts.persisted || counts.imported || counts.read)} registros persistidos`;
+  return entries.map(([label, value]) => `${label}: ${integer.format(value)}`).join(" · ");
 }
 
 function getFilesForMonth(files, monthKey, fileCategory = getCurrentFileCategory()) {
@@ -3043,8 +3137,8 @@ function formatSettingsFileStatus(file) {
 }
 
 function getSettingsFileRowsLabel(file) {
-  const rows = getFileRowsCount(file);
-  if (rows > 0) return `${integer.format(rows)} registros`;
+  const label = getFileRowsAuditLabel(file);
+  if (label && label !== "Registros não calculados") return label;
   if (file?.status === "empty_or_parse_error") return "0 registros válidos";
   return "—";
 }
@@ -3892,15 +3986,15 @@ function renderDeviationCategoryMenu() {
 
 function normalizeMissingPackageCaseStatus(value = "") {
   const normalized = normalizeText(value);
-  if (normalized === "resolvido" || normalized === "concluido") return "Concluído";
-  if (normalized === "em rota") return "Em rota";
+  if (normalized === "RESOLVIDO" || normalized === "CONCLUIDO") return "Concluído";
+  if (normalized === "EM ROTA") return "Em rota";
   return "Pendente";
 }
 
 function normalizeMissingPackageMeliStatus(value = "") {
   const normalized = normalizeText(value);
-  if (normalized === "concluido") return "Concluído";
-  if (normalized.includes("aguardando")) return "Aguardando MELI";
+  if (normalized === "CONCLUIDO") return "Concluído";
+  if (normalized.includes("AGUARDANDO")) return "Aguardando MELI";
   return "E-mail Enviado";
 }
 
@@ -3997,7 +4091,13 @@ function getMissingPackageDeadlineStatus(row = {}) {
 }
 
 async function loadMissingPackagesFromSupabase(options = {}) {
-  if (!window.supabaseClient || !currentUser) return [];
+  if (!window.supabaseClient) return [];
+  const sessionUser = currentUser || await ensureCurrentUserFromSupabaseSession();
+  if (!sessionUser) {
+    missingPackagesRows = [];
+    if (options.render) renderAll();
+    return [];
+  }
   isLoadingMissingPackages = true;
   if (options.render) renderAll();
   try {
@@ -4211,7 +4311,8 @@ async function applyMissingPackageStatusOption(button) {
 async function deleteSelectedMissingPackages() {
   const ids = Array.from(selectedMissingPackageIds).filter(Boolean);
   if (!ids.length || isDeletingMissingPackages) return;
-  if (!window.supabaseClient || !currentUser) {
+  const sessionUser = currentUser || await ensureCurrentUserFromSupabaseSession();
+  if (!window.supabaseClient || !sessionUser) {
     showToast("Faça login para excluir casos de Pacotes Faltantes.", "warn", 4200);
     return;
   }
@@ -15812,8 +15913,16 @@ function buildUploadPeriodMetadata({ file, previewDataset, referenceYear, refere
   const quinzena = packagePeriod?.quinzena || firstRow.quinzena || periodLabel;
   const detectedPeriodType = normalizePeriodMode(getPeriodModeFromLabel(packagePeriod?.quinzena) || periodType);
   const detectedReferenceMonth = getMonthNumberFromAny(packagePeriod?.mes) || referenceMonth || "";
+  const rowsRead = previewStats.totalRowsRead || previewStats.originalRows || previewDataset.rows.length;
+  const rowsImported = previewStats.totalRowsImported || previewStats.consolidatedRows || previewDataset.rows.length;
+  const rowCountMetadata = buildRowCountMetadata({}, {
+    read: rowsRead,
+    imported: rowsImported,
+    persisted: rowsImported,
+  });
   return {
     parsed_rows: previewDataset.rows.length,
+    ...rowCountMetadata,
     period_label: packagePeriod?.quinzena ? getPeriodModeLabel(detectedPeriodType) : periodLabel,
     period_type: detectedPeriodType,
     file_category: previewDataset.fileCategory,
@@ -15846,8 +15955,8 @@ function buildUploadPeriodMetadata({ file, previewDataset, referenceYear, refere
     sheet_count: previewStats.sheetCount || previewDataset.workbookSheetCount || 1,
     imported_sheets: previewStats.importedSheetNames || [],
     ignored_sheets: previewStats.ignoredSheets || [],
-    total_rows_read: previewStats.totalRowsRead || previewStats.originalRows || previewDataset.rows.length,
-    total_rows_imported: previewStats.totalRowsImported || previewStats.consolidatedRows || previewDataset.rows.length,
+    total_rows_read: rowsRead,
+    total_rows_imported: rowsImported,
     csv_delimiter: previewDataset.csvStats?.delimiter || "",
     csv_detected_rows: previewDataset.csvStats?.rows || "",
     raw_file_deleted: !KEEP_RAW_UPLOADS_IN_STORAGE,
@@ -15999,7 +16108,10 @@ function mapProcessedDashboardFileToDashboardRecord(record = {}, moduleKey = "")
         : PRE_FATURA_FILE_CATEGORY;
   const sourceDashboardFileId = metadata.dashboard_file_id || metadata.file_id || record.dashboard_file_id || "";
   const fileName = record.file_name || metadata.original_name || metadata.display_name || "Arquivo importado";
-  const rowCount = Number(record.row_count || metadata.row_count || metadata.record_count || metadata.parsed_rows || metadata.total_rows_imported || 0) || 0;
+  const rowCountMetadata = buildRowCountMetadata(metadata, {
+    persisted: record.row_count,
+  });
+  const rowCount = rowCountMetadata.row_count_persisted;
   const storagePath = record.storage_path || metadata.storage_path || `${PROCESSED_ONLY_STORAGE_PREFIX}/${category.toLowerCase()}/${record.id || sourceDashboardFileId || "processed"}`;
   return {
     id: sourceDashboardFileId || `processed:${record.id || record.file_hash || fileName}`,
@@ -16018,6 +16130,7 @@ function mapProcessedDashboardFileToDashboardRecord(record = {}, moduleKey = "")
     updated_at: record.processed_at || record.updated_at || metadata.processed_at || metadata.uploaded_at || "",
     metadata: {
       ...metadata,
+      ...rowCountMetadata,
       file_category: category,
       semantic_file_type: category,
       file_type: category,
@@ -16027,9 +16140,9 @@ function mapProcessedDashboardFileToDashboardRecord(record = {}, moduleKey = "")
       file_role: record.file_role || metadata.file_role || metadata.pnr_file_role || "",
       pnr_file_role: record.file_role || metadata.pnr_file_role || metadata.file_role || "",
       row_count: rowCount,
-      record_count: rowCount,
-      parsed_rows: rowCount,
-      total_rows_imported: metadata.total_rows_imported || rowCount,
+      record_count: rowCountMetadata.row_count_imported || rowCount,
+      parsed_rows: rowCountMetadata.row_count_imported || rowCount,
+      total_rows_imported: rowCountMetadata.row_count_imported || metadata.total_rows_imported || rowCount,
       status: record.status || metadata.status || "processed",
       processed_at: record.processed_at || metadata.processed_at || "",
       raw_file_deleted: record.raw_file_deleted === true || metadata.raw_file_deleted === true,
@@ -16100,6 +16213,7 @@ async function mergeProcessedDashboardFileRecords(records = [], moduleKey = DASH
 
 async function upsertProcessedDashboardFile({ moduleKey, fileRecord, fileHash, rowCount, competencia, status = "processed", storagePath = "", rawFileDeleted = false, metadata = {} }) {
   if (!window.supabaseClient || !moduleKey || !fileHash || !fileRecord) return;
+  const rowCountMetadata = buildRowCountMetadata(metadata, { persisted: rowCount });
   const payload = {
     module_key: moduleKey,
     file_name: fileRecord.file_name || fileRecord.fileName || metadata.original_name || "",
@@ -16108,13 +16222,14 @@ async function upsertProcessedDashboardFile({ moduleKey, fileRecord, fileHash, r
     file_size: Number(fileRecord.file_size || metadata.size_bytes || 0) || null,
     last_modified: metadata.last_modified || metadata.uploaded_at || fileRecord.updated_at || "",
     competencia: competencia || metadata.competencia || "",
-    row_count: Number(rowCount || metadata.record_count || metadata.parsed_rows || 0) || 0,
+    row_count: rowCountMetadata.row_count_persisted,
     status,
     processed_at: new Date().toISOString(),
     storage_path: storagePath || fileRecord.storage_path || metadata.storage_path || "",
     raw_file_deleted: rawFileDeleted === true || metadata.raw_file_deleted === true,
     metadata: {
       ...metadata,
+      ...rowCountMetadata,
       file_id: fileRecord.id || metadata.file_id || "",
       dashboard_file_id: fileRecord.id || metadata.dashboard_file_id || "",
       storage_path: storagePath || fileRecord.storage_path || metadata.storage_path || "",
@@ -16240,6 +16355,33 @@ async function validateDashboardImportPersistence(fileRecord, processedSaveResul
 async function validatePnrImportPersistence(fileRecord, processedSaveResult, expectedRows = 0, metadata = {}) {
   if (getFileRecordCategory(fileRecord) !== DEVIATION_PNR_FILE_CATEGORY) return null;
   return validateDashboardImportPersistence(fileRecord, processedSaveResult, expectedRows, metadata);
+}
+
+async function persistDashboardFileRowCountMetadata(fileRecord, metadata = {}, validation = {}) {
+  if (!window.supabaseClient || !fileRecord?.id) return metadata;
+  const rowCountMetadata = buildRowCountMetadata(metadata, {
+    persisted: validation?.fileRows || validation?.persistedRows || metadata.row_count_persisted,
+  });
+  const nextMetadata = {
+    ...(fileRecord.metadata || {}),
+    ...metadata,
+    ...rowCountMetadata,
+    row_count_reconciled_at: new Date().toISOString(),
+  };
+  const { error } = await window.supabaseClient
+    .from("dashboard_files")
+    .update({
+      status: "processed",
+      metadata: nextMetadata,
+      updated_at: new Date().toISOString(),
+    })
+    .eq("id", fileRecord.id);
+  if (error) {
+    console.warn("[Row Count] Não foi possível atualizar metadados de contagem do arquivo.", error);
+    return metadata;
+  }
+  Object.assign(fileRecord, { status: "processed", metadata: nextMetadata });
+  return nextMetadata;
 }
 
 async function refreshPnrDashboardAfterImport(fileRecord, metadata = {}) {
@@ -16580,14 +16722,15 @@ async function updateDuplicateDashboardFileRecord(record, uploadMetadata, previe
   };
   const processedSaveResult = await saveProcessedRowsForFileOrFail(data, previewDataset.rows, nextMetadata);
   const validation = await validateDashboardImportPersistence(data, processedSaveResult, previewDataset.rows.length, nextMetadata);
+  const reconciledMetadata = await persistDashboardFileRowCountMetadata(data, nextMetadata, validation);
   await upsertProcessedDashboardFile({
     moduleKey: getDashboardModuleKeyForFileCategory(fileCategory),
     fileRecord: data,
     fileHash: nextMetadata.file_hash || previewDataset.fileHash,
     rowCount: validation?.fileRows || previewDataset.rows.length,
-    competencia: nextMetadata.competencia,
+    competencia: reconciledMetadata.competencia,
     metadata: {
-      ...nextMetadata,
+      ...reconciledMetadata,
       file_id: data.id,
       dashboard_file_id: data.id,
     },
@@ -17093,6 +17236,7 @@ async function uploadDashboardFile(file) {
   setDashboardImportState({ stage: "Validando registros persistidos...", progress: 82 }, { render: true });
   const processedSaveResult = await saveProcessedRowsForFileOrFail(data, previewDataset.rows, uploadMetadata);
   const importValidation = await validateDashboardImportPersistence(data, processedSaveResult, previewDataset.rows.length, uploadMetadata);
+  const reconciledUploadMetadata = await persistDashboardFileRowCountMetadata(data, uploadMetadata, importValidation);
   showToast("Atualizando indicadores...", "info", 3000);
   setDashboardImportState({ stage: "Atualizando indicadores...", progress: 90 }, { render: true });
   await upsertProcessedDashboardFile({
@@ -17100,11 +17244,11 @@ async function uploadDashboardFile(file) {
     fileRecord: data,
     fileHash: previewDataset.fileHash,
     rowCount: importValidation?.fileRows || previewDataset.rows.length,
-    competencia: uploadMetadata.competencia,
+    competencia: reconciledUploadMetadata.competencia,
     storagePath,
     rawFileDeleted: !KEEP_RAW_UPLOADS_IN_STORAGE,
     metadata: {
-      ...uploadMetadata,
+      ...reconciledUploadMetadata,
       file_id: data.id,
       dashboard_file_id: data.id,
     },
@@ -17115,9 +17259,10 @@ async function uploadDashboardFile(file) {
     sheetCount: uploadMetadata.sheet_count,
     importedSheets: uploadMetadata.imported_sheets,
     ignoredSheets: uploadMetadata.ignored_sheets,
-    totalRowsRead: uploadMetadata.total_rows_read,
-    totalRowsImported: uploadMetadata.total_rows_imported,
-    rawFileDeleted: uploadMetadata.raw_file_deleted,
+    totalRowsRead: reconciledUploadMetadata.total_rows_read,
+    totalRowsImported: reconciledUploadMetadata.total_rows_imported,
+    totalRowsPersisted: reconciledUploadMetadata.row_count_persisted,
+    rawFileDeleted: reconciledUploadMetadata.raw_file_deleted,
   });
 
   const uploadedPeriod = getFileRecordPeriod(data);
@@ -17141,20 +17286,20 @@ async function uploadDashboardFile(file) {
     showToast("Arquivo de origem não foi mantido no Storage após processamento seguro.", "info", 5200);
   }
   finishDashboardImportState({
-    rowsRead: uploadMetadata.total_rows_read || previewDataset.rows.length,
-    rowsImported: uploadMetadata.total_rows_imported || previewDataset.rows.length,
-    duplicatesIgnored: uploadMetadata.duplicate_rows_skipped || 0,
-    importedSheets: uploadMetadata.imported_sheets || [],
-    ignoredSheets: uploadMetadata.ignored_sheets || [],
+    rowsRead: reconciledUploadMetadata.total_rows_read || previewDataset.rows.length,
+    rowsImported: reconciledUploadMetadata.total_rows_imported || previewDataset.rows.length,
+    duplicatesIgnored: reconciledUploadMetadata.duplicate_rows_skipped || 0,
+    importedSheets: reconciledUploadMetadata.imported_sheets || [],
+    ignoredSheets: reconciledUploadMetadata.ignored_sheets || [],
     status: "processed",
   });
-  showDashboardImportSummary(uploadMetadata, previewDataset, {
-    rowsImported: importValidation?.fileRows || uploadMetadata.total_rows_imported || previewDataset.rows.length,
-    duplicatesIgnored: uploadMetadata.duplicate_rows_skipped || 0,
+  showDashboardImportSummary(reconciledUploadMetadata, previewDataset, {
+    rowsImported: importValidation?.fileRows || reconciledUploadMetadata.total_rows_imported || previewDataset.rows.length,
+    duplicatesIgnored: reconciledUploadMetadata.duplicate_rows_skipped || 0,
     totalRows: importValidation?.totalRows,
   });
-  if (Number(uploadMetadata.sheet_count || 0) > 1) {
-    showToast(`Importação concluída. Abas encontradas: ${uploadMetadata.sheet_count}. Abas importadas: ${(uploadMetadata.imported_sheets || []).length}. Abas ignoradas: ${(uploadMetadata.ignored_sheets || []).length}. Registros importados: ${integer.format(uploadMetadata.total_rows_imported || previewDataset.rows.length)}.`, "good", 7600);
+  if (Number(reconciledUploadMetadata.sheet_count || 0) > 1) {
+    showToast(`Importação concluída. Abas encontradas: ${reconciledUploadMetadata.sheet_count}. Abas importadas: ${(reconciledUploadMetadata.imported_sheets || []).length}. Abas ignoradas: ${(reconciledUploadMetadata.ignored_sheets || []).length}. Registros importados: ${integer.format(reconciledUploadMetadata.total_rows_imported || previewDataset.rows.length)}.`, "good", 7600);
   }
   if (previewDataset.fileCategory === DEVIATION_PNR_FILE_CATEGORY) {
     const stats = getWorkbookStatsForCategory(DEVIATION_PNR_FILE_CATEGORY);
@@ -17170,9 +17315,9 @@ async function uploadDashboardFile(file) {
     } else {
       showToast(`Arquivo complementar de PNR importado. Registros novos: ${inserted}. Registros atualizados: ${updated}. Duplicados ignorados: ${ignored}.`, "good", 7200);
     }
-    await refreshPnrDashboardAfterImport(data, uploadMetadata);
+    await refreshPnrDashboardAfterImport(data, reconciledUploadMetadata);
   } else {
-    await refreshDashboardModuleAfterImport(data, uploadMetadata);
+    await refreshDashboardModuleAfterImport(data, reconciledUploadMetadata);
   }
 }
 
@@ -19040,6 +19185,13 @@ async function loadProcessedDatasetForFile(fileRecord) {
 }
 
 async function updateProcessedFileMetadata(fileRecord, payloadLength, extraMetadata = {}) {
+  const rowCountMetadata = buildRowCountMetadata({
+    ...(fileRecord.metadata || {}),
+    ...extraMetadata,
+  }, {
+    imported: payloadLength,
+    persisted: extraMetadata.row_count_persisted || extraMetadata.persisted_rows || payloadLength,
+  });
   const metadata = {
     ...(fileRecord.metadata || {}),
     processed_at: new Date().toISOString(),
@@ -19047,6 +19199,7 @@ async function updateProcessedFileMetadata(fileRecord, payloadLength, extraMetad
     record_count: payloadLength,
     parsed_rows: payloadLength,
     ...extraMetadata,
+    ...rowCountMetadata,
   };
   await window.supabaseClient
     .from("dashboard_files")
@@ -20212,6 +20365,24 @@ function updateAccessControls() {
   renderSettingsFileManagement();
 }
 
+async function ensureCurrentUserFromSupabaseSession() {
+  if (currentUser) return currentUser;
+  if (!window.supabaseClient?.auth) return null;
+  try {
+    const { data, error } = await window.supabaseClient.auth.getSession();
+    if (error) throw error;
+    if (data?.session?.user) {
+      currentUser = data.session.user;
+      updateAccessControls();
+      renderAccountPage();
+      return currentUser;
+    }
+  } catch (error) {
+    console.warn("[AUTH] Não foi possível hidratar a sessão atual.", error);
+  }
+  return null;
+}
+
 function bindSupabaseAuthState() {
   if (supabaseAuthListenerBound || !window.supabaseClient?.auth) return;
   supabaseAuthListenerBound = true;
@@ -20232,6 +20403,9 @@ function bindSupabaseAuthState() {
     if (hasInitialLoadCompleted && currentUser?.id === session.user.id) {
       currentUser = session.user;
       updateAccessControls();
+      if (state.sheet === DEVIATION_MANAGEMENT_VIEW && state.activeDesvioCategory === DEVIATION_CATEGORY_MISSING_PACKAGES) {
+        void loadMissingPackagesFromSupabase({ render: true });
+      }
       return;
     }
     window.setTimeout(() => {

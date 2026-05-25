@@ -111,6 +111,14 @@ function fileHash(record) {
   return record?.file_hash || record?.metadata?.file_hash || "";
 }
 
+function metadataNumber(metadata = {}, keys = []) {
+  for (const key of keys) {
+    const number = Number(metadata?.[key]);
+    if (Number.isFinite(number) && number >= 0) return number;
+  }
+  return 0;
+}
+
 function fileName(record) {
   return record?.file_name || record?.metadata?.original_name || "";
 }
@@ -540,7 +548,7 @@ async function main() {
   for (const file of dashboardFiles) {
     const moduleKey = moduleKeyFromDashboardFile(file);
     const persistedRows = persistedCountCache.get(file.id) || 0;
-    const declaredRows = Number(file.metadata?.parsed_rows || file.metadata?.record_count || 0);
+    const declaredRows = metadataNumber(file.metadata, ["row_count_persisted", "persisted_rows", "persisted_row_count", "parsed_rows", "record_count"]);
     const stale = ageHours(file.updated_at || file.created_at) >= staleHours;
     const validModule = Boolean(moduleKey && MODULE_TABLES[moduleKey]);
     const hash = fileHash(file);
@@ -583,6 +591,7 @@ async function main() {
       dashboardFiles.find((record) => moduleKeyFromDashboardFile(record) === moduleKey && fileName(record).toLowerCase() === fileName(file).toLowerCase());
     const persistedRows = matchedDashboard ? persistedCountCache.get(matchedDashboard.id) || 0 : 0;
     const rowCount = Number(file.row_count || 0);
+    const declaredPersistedRows = metadataNumber(file.metadata, ["row_count_persisted", "persisted_rows", "persisted_row_count"]) || rowCount;
     const stale = ageHours(file.processed_at || file.created_at) >= staleHours;
     const statusKey = `${moduleKey || "sem_modulo"}:${file.status || "sem_status"}:${isRawDeleted(file) ? "raw_deleted" : "raw_kept"}`;
     report.diagnostics.processedDashboardFilesByStatus[statusKey] = (report.diagnostics.processedDashboardFilesByStatus[statusKey] || 0) + 1;
@@ -605,7 +614,7 @@ async function main() {
         reason: "controle processed sem dashboard_file correspondente; revisar antes de remover",
       });
     }
-    if (persistedRows > 0 && (file.status !== "processed" || rowCount !== persistedRows || !isRawDeleted(file))) {
+    if (persistedRows > 0 && (file.status !== "processed" || declaredPersistedRows !== persistedRows || rowCount !== persistedRows || !isRawDeleted(file))) {
       addCandidate("processedDashboardFilesStatusFix", file, "controle diverge da tabela final ou raw_file_deleted", { persisted_rows: persistedRows, declared_rows: rowCount });
     }
   }

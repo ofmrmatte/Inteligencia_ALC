@@ -17,5 +17,12 @@
     return;
   }
 
-  window.supabaseClient = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+  const supabaseFetch = (input, init = {}) => fetch(input, {
+    ...init,
+    cache: "no-store",
+  });
+
+  window.supabaseClient = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
+    global: { fetch: supabaseFetch },
+  });
 })();

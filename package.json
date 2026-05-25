@@ -9,6 +9,8 @@
     "audit:dead-code": "node scripts/find-dead-code.mjs",
     "audit:module-isolation": "node scripts/check-module-isolation.mjs",
     "audit:dedupe": "node scripts/check-dedupe-integrity.mjs",
+    "audit:row-counts": "node scripts/check-row-count-reconciliation.mjs",
+    "audit:raw-data": "node scripts/audit-raw-data-compaction.mjs",
     "audit:railway": "node scripts/check-railway-sizing.mjs",
     "db:migrate:processed-records": "node scripts/apply-processed-records-migration.mjs",
     "db:migrate:missing-packages": "node scripts/apply-missing-packages-migration.mjs",
