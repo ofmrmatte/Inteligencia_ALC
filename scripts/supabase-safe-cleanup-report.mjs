@@ -55,6 +55,7 @@ try {
     select 'pre_fatura_records' as table_name, count(*)::bigint as rows from public.pre_fatura_records
     union all select 'gestao_pacotes_records', count(*)::bigint from public.gestao_pacotes_records
     union all select 'desvios_pnr_records', count(*)::bigint from public.desvios_pnr_records
+    union all select 'gestao_desvios_pacotes_faltantes', count(*)::bigint from public.gestao_desvios_pacotes_faltantes
     union all select 'desvios_pnr_metrics_summary', count(*)::bigint from public.desvios_pnr_metrics_summary
     union all select 'dashboard_metrics_cache', count(*)::bigint from public.dashboard_metrics_cache
   `));

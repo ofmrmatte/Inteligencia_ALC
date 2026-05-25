@@ -34,12 +34,15 @@ const MODULE_TABLES = {
   desvios_pnr: "desvios_pnr_records",
   "desvios-pnr": "desvios_pnr_records",
   "gestao-desvios-pnr": "desvios_pnr_records",
+  pacotes_faltantes: "gestao_desvios_pacotes_faltantes",
+  "pacotes-faltantes": "gestao_desvios_pacotes_faltantes",
 };
 
 const FILE_TYPE_MODULES = {
   PRE_FATURA: "pre_fatura",
   GESTAO_PACOTES: "gestao_pacotes",
   DESVIOS_PNR: "desvios_pnr",
+  PACOTES_FALTANTES: "pacotes_faltantes",
 };
 
 const VALID_FILE_TYPES = new Set(Object.keys(FILE_TYPE_MODULES));
@@ -134,12 +137,17 @@ async function countTable(table) {
   return { count: Number(count || 0) };
 }
 
+function fileIdColumnForTable(table) {
+  return table === "gestao_desvios_pacotes_faltantes" ? "source_file_id" : "file_id";
+}
+
 async function countRowsForFile(table, fileId) {
   if (!table || !fileId) return 0;
+  const fileIdColumn = fileIdColumnForTable(table);
   const { count, error } = await supabase
     .from(table)
     .select("id", { count: "exact", head: true })
-    .eq("file_id", fileId);
+    .eq(fileIdColumn, fileId);
   if (error) return 0;
   return Number(count || 0);
 }
@@ -244,6 +252,7 @@ async function collectOptionalRelationSizes() {
             'pre_fatura_records',
             'gestao_pacotes_records',
             'desvios_pnr_records',
+            'gestao_desvios_pacotes_faltantes',
             'desvios_pnr_metrics_summary'
           )
         order by pg_total_relation_size(c.oid) desc
@@ -487,6 +496,7 @@ async function main() {
     "pre_fatura_records",
     "gestao_pacotes_records",
     "desvios_pnr_records",
+    "gestao_desvios_pacotes_faltantes",
     "desvios_pnr_metrics_summary",
   ];
   report.tablesAnalyzed = analyzedTables;

@@ -28,6 +28,8 @@ const MODULE_TABLES = {
   desvios_pnr: "desvios_pnr_records",
   "desvios-pnr": "desvios_pnr_records",
   "gestao-desvios-pnr": "desvios_pnr_records",
+  pacotes_faltantes: "gestao_desvios_pacotes_faltantes",
+  "pacotes-faltantes": "gestao_desvios_pacotes_faltantes",
 };
 
 async function countPersistedRows(moduleKey, storagePath) {
