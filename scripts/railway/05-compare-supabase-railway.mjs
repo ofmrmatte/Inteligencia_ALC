@@ -73,6 +73,31 @@ function rowsEqual(left, right) {
   return stableJson(left) === stableJson(right);
 }
 
+function normalizeProcessedSummary(rows) {
+  return rows
+    .map((row) => ({
+      key: String(row.key ?? row.module_key ?? ''),
+      files: Number(row.files ?? 0),
+      rows: Number(row.rows ?? 0),
+    }))
+    .sort((left, right) => left.key.localeCompare(right.key));
+}
+
+function fileTypeForModule(moduleKey) {
+  switch (moduleKey) {
+    case 'pre_fatura':
+      return 'PRE_FATURA';
+    case 'gestao_pacotes':
+      return 'GESTAO_PACOTES';
+    case 'desvios_pnr':
+      return 'DESVIOS_PNR';
+    case 'pacotes_faltantes':
+      return 'PACOTES_FALTANTES';
+    default:
+      return '';
+  }
+}
+
 async function groupByColumn(sql, config, column) {
   const columns = await tableColumns(sql, config.schema, config.table);
   if (!columns.some((entry) => entry.name === column)) {
@@ -210,6 +235,96 @@ async function moduleMixingCount(sql) {
   return total;
 }
 
+async function processedDashboardSummary(sql) {
+  if (!(await tableExists(sql, 'public', 'processed_dashboard_files'))) {
+    return [];
+  }
+
+  const rows = await sql`
+    select module_key as key, count(*)::bigint as files, coalesce(sum(row_count), 0)::bigint as rows
+    from public.processed_dashboard_files
+    group by module_key
+    order by module_key
+  `;
+
+  return normalizeProcessedSummary(rows);
+}
+
+async function expectedProcessedDashboardSummary(sql) {
+  if (!(await tableExists(sql, 'public', 'dashboard_files'))) {
+    return [];
+  }
+
+  const summary = [];
+
+  for (const module of CANONICAL_MODULES) {
+    const fileType = fileTypeForModule(module.moduleKey);
+    if (!fileType || !(await tableExists(sql, 'public', module.table))) {
+      continue;
+    }
+
+    const columns = await tableColumns(sql, 'public', module.table);
+    if (!columns.some((column) => column.name === module.fileColumn)) {
+      continue;
+    }
+
+    const rows = await sql.unsafe(
+      `
+        select $1::text as key, count(distinct d.id)::bigint as files, count(r.id)::bigint as rows
+        from public.dashboard_files d
+        left join ${qualifyName('public', module.table)} r
+          on r.${module.fileColumn} = d.id
+        where d.file_type = $2
+          and coalesce(d.status, 'processed') = 'processed'
+      `,
+      [module.moduleKey, fileType],
+    );
+
+    const entry = rows[0] ?? { key: module.moduleKey, files: 0, rows: 0 };
+    if (Number(entry.files ?? 0) > 0 || Number(entry.rows ?? 0) > 0) {
+      summary.push(entry);
+    }
+  }
+
+  return normalizeProcessedSummary(summary);
+}
+
+async function compareProcessedDashboardFiles(sqlSupabase, sqlRailway) {
+  const [supabaseProcessed, railwayProcessed, supabaseExpected, railwayExpected] =
+    await Promise.all([
+      processedDashboardSummary(sqlSupabase),
+      processedDashboardSummary(sqlRailway),
+      expectedProcessedDashboardSummary(sqlSupabase),
+      expectedProcessedDashboardSummary(sqlRailway),
+    ]);
+
+  const expectedOk = rowsEqual(supabaseExpected, railwayExpected);
+  printCheck(
+    'Processed metadata esperado por dados persistidos',
+    expectedOk,
+    `Supabase=${JSON.stringify(supabaseExpected)} Railway=${JSON.stringify(railwayExpected)}`,
+  );
+
+  const railwayOk = rowsEqual(railwayProcessed, railwayExpected);
+  printCheck(
+    'Railway processed_dashboard_files coerente com dados persistidos',
+    railwayOk,
+    `Railway=${JSON.stringify(railwayProcessed)}`,
+  );
+
+  const exactOk = rowsEqual(supabaseProcessed, railwayProcessed);
+  if (!exactOk) {
+    console.log(
+      `[AVISO] Supabase processed_dashboard_files diverge do Railway pós-hardening: Supabase=${JSON.stringify(supabaseProcessed)} Railway=${JSON.stringify(railwayProcessed)}`,
+    );
+    console.log(
+      '[AVISO] Esta divergencia e aceitavel para staging quando o Railway bate com dashboard_files e tabelas persistidas.',
+    );
+  }
+
+  return expectedOk && railwayOk ? 0 : 1;
+}
+
 async function compareGroup(sqlLeft, sqlRight, config, label, getter) {
   const [left, right] = await Promise.all([getter(sqlLeft, config), getter(sqlRight, config)]);
   if (left === null && right === null) {
@@ -225,6 +340,11 @@ async function compareGroup(sqlLeft, sqlRight, config, label, getter) {
 
 async function compareTable(sqlSupabase, sqlRailway, config) {
   let failures = 0;
+
+  if (config.schema === 'public' && config.table === 'processed_dashboard_files') {
+    return compareProcessedDashboardFiles(sqlSupabase, sqlRailway);
+  }
+
   const [supabaseExists, railwayExists] = await Promise.all([
     tableExists(sqlSupabase, config.schema, config.table),
     tableExists(sqlRailway, config.schema, config.table),
@@ -362,29 +482,6 @@ try {
   const mixingOk = supabaseMixing === 0 && railwayMixing === 0;
   printCheck('Mistura entre modulos', mixingOk, `Supabase=${supabaseMixing} Railway=${railwayMixing}`);
   if (!mixingOk) failures += 1;
-
-  const rowCountOk = await compareGroup(
-    supabaseSql,
-    railwaySql,
-    {
-      schema: 'public',
-      table: 'processed_dashboard_files',
-      fullName: 'public.processed_dashboard_files',
-    },
-    'Row_count por module_key',
-    async (sql) => {
-      if (!(await tableExists(sql, 'public', 'processed_dashboard_files'))) {
-        return [];
-      }
-      return sql`
-        select module_key as value, coalesce(sum(row_count), 0)::bigint as total
-        from public.processed_dashboard_files
-        group by module_key
-        order by module_key
-      `;
-    },
-  );
-  if (!rowCountOk) failures += 1;
 
   await compareSizes(supabaseSql, railwaySql);
 

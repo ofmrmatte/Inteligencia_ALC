@@ -18,6 +18,7 @@
     "railway:import": "node scripts/railway/04-import-railway.mjs",
     "railway:compare": "node scripts/railway/05-compare-supabase-railway.mjs",
     "railway:validate": "node scripts/railway/06-validate-railway-dashboard.mjs",
+    "railway:serve-dashboard": "node scripts/railway/07-serve-railway-dashboard.mjs",
     "railway:dry-run": "npm run railway:schema -- --dry-run && npm run railway:export -- --dry-run && npm run railway:import -- --dry-run && npm run railway:compare -- --dry-run && npm run railway:validate -- --dry-run",
     "db:migrate:processed-records": "node scripts/apply-processed-records-migration.mjs",
     "db:migrate:missing-packages": "node scripts/apply-missing-packages-migration.mjs",

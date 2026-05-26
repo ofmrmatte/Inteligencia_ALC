@@ -4429,10 +4429,39 @@ function renderMissingPackagesTable(rows) {
   `;
 }
 
-function renderMissingPackagesImportPanel() {
+function getMissingPackagesFileHistoryRecords() {
   const moduleFiles = filterDashboardRecordsByModule(dashboardFileRecords, DASHBOARD_MODULE_KEYS.pacotesFaltantes)
     .filter(isUsableDashboardFileRecord)
     .slice(0, 5);
+  if (moduleFiles.length) return moduleFiles;
+
+  const grouped = new Map();
+  (Array.isArray(missingPackagesRows) ? missingPackagesRows : []).forEach((row) => {
+    const key = row.sourceFileId || row.fileName || row.sourceHash || "__missing_packages_file";
+    const current = grouped.get(key) || {
+      id: row.sourceFileId || key,
+      file_name: row.fileName || "Arquivo importado",
+      row_count: 0,
+      created_at: row.importedAt || row.updatedAt || "",
+      updated_at: row.updatedAt || row.importedAt || "",
+      metadata: {
+        file_category: MISSING_PACKAGES_FILE_CATEGORY,
+        module_key: DASHBOARD_MODULE_KEYS.pacotesFaltantes,
+      },
+    };
+    current.row_count += 1;
+    current.created_at = current.created_at || row.importedAt || "";
+    current.updated_at = row.updatedAt || current.updated_at || row.importedAt || "";
+    grouped.set(key, current);
+  });
+
+  return Array.from(grouped.values())
+    .sort((left, right) => new Date(right.updated_at || right.created_at || 0) - new Date(left.updated_at || left.created_at || 0))
+    .slice(0, 5);
+}
+
+function renderMissingPackagesImportPanel() {
+  const moduleFiles = getMissingPackagesFileHistoryRecords();
   return `
     <article class="panel missing-packages-import-panel">
       <div class="panel__header">
@@ -13457,11 +13486,10 @@ function buildSummary(rows) {
   const drivers = new Set();
   const routes = new Set();
   rows.forEach((row) => {
-    const occurrences = getOccurrenceCount(row);
-    count += occurrences;
+    count += 1;
     totalValue += Number(row.valor_numerico || 0);
-    if (row.tipo_registro === "PACOTE PERDIDO") packageCount += occurrences;
-    if (row.tipo_registro === "PNR") pnrCount += occurrences;
+    if (row.tipo_registro === "PACOTE PERDIDO") packageCount += 1;
+    if (row.tipo_registro === "PNR") pnrCount += 1;
     const baseIdentity = getBaseIdentity(row);
     if (baseIdentity) bases.add(baseIdentity);
     const driverName = normalizeDriverName(row?.driver || row?.motorista || row?.nomeMotorista || row?.nome_driver || "");
@@ -13564,11 +13592,10 @@ function buildMonthlyComparisonFromDatasets(datasets, options = {}) {
     const bucket = map.get(key);
     bucket.datasetId = dataset.id;
     scopedRows.forEach((row) => {
-      const occurrences = getOccurrenceCount(row);
-      bucket.count += occurrences;
+      bucket.count += 1;
       bucket.totalValue += Number(row.valor_numerico || 0);
-      if (row.tipo_registro === "PNR") bucket.pnrCount += occurrences;
-      if (row.tipo_registro === "PACOTE PERDIDO") bucket.packageCount += occurrences;
+      if (row.tipo_registro === "PNR") bucket.pnrCount += 1;
+      if (row.tipo_registro === "PACOTE PERDIDO") bucket.packageCount += 1;
     });
   }
 
@@ -19638,7 +19665,7 @@ function replaceDashboardData(rows, context = {}) {
   const fileCategory = context.fileCategory || getCurrentFileCategory();
   const consolidatedRows = fileCategory === PACKAGE_MANAGEMENT_FILE_CATEGORY
     ? rows.map(normalizePackageManagementStoredRow).filter(Boolean)
-    : consolidateLinkedOccurrences(rows);
+    : rows.map(normalizeStoredRow).filter(Boolean);
   const scopeDataset = {
     id: "__filtered_scope",
     fileName: label,
@@ -21023,12 +21050,46 @@ function parseDateValue(value) {
   return { iso: raw, ts: null };
 }
 
+function parseMoneyText(value) {
+  if (value === null || value === undefined || value === "") return 0;
+  let raw = String(value)
+    .replace("R$", "")
+    .replace(/\s/g, "")
+    .replace(/[^\d,.-]/g, "")
+    .trim();
+  if (!raw) return 0;
+
+  const negative = raw.includes("-");
+  raw = raw.replace(/-/g, "");
+  const hasComma = raw.includes(",");
+  const hasDot = raw.includes(".");
+  let normalized = raw;
+
+  if (hasComma && hasDot) {
+    const lastComma = raw.lastIndexOf(",");
+    const lastDot = raw.lastIndexOf(".");
+    normalized = lastDot > lastComma
+      ? raw.replace(/,/g, "")
+      : raw.replace(/\./g, "").replace(",", ".");
+  } else if (hasComma) {
+    normalized = raw.replace(/\./g, "").replace(",", ".");
+  } else if (hasDot) {
+    const parts = raw.split(".");
+    const fraction = parts.at(-1) || "";
+    normalized = fraction.length > 0 && fraction.length <= 2
+      ? `${parts.slice(0, -1).join("") || "0"}.${fraction}`
+      : raw.replace(/\./g, "");
+  }
+
+  const numero = Number(normalized);
+  if (!Number.isFinite(numero)) return 0;
+  return Number((negative ? -numero : numero).toFixed(2));
+}
+
 function parseMoney(value) {
   if (value == null || value === "") return 0;
   if (typeof value === "number" && Number.isFinite(value)) return value;
-  const raw = String(value).replace(/[^\d,.-]/g, "").replace(/\./g, "").replace(",", ".");
-  const parsed = Number(raw);
-  return Number.isFinite(parsed) ? parsed : 0;
+  return parseMoneyText(value);
 }
 
 function normalizarValorGestao(value) {
@@ -21036,16 +21097,7 @@ function normalizarValorGestao(value) {
   if (typeof value === "number" && Number.isFinite(value)) {
     return Math.abs(Number(value.toFixed(2)));
   }
-  const texto = String(value)
-    .replace("R$", "")
-    .replace(/\s/g, "")
-    .replace(/\./g, "")
-    .replace(",", ".")
-    .replace(/[^\d.-]/g, "")
-    .trim();
-  const numero = Number(texto);
-  if (!Number.isFinite(numero)) return 0;
-  return Math.abs(Number(numero.toFixed(2)));
+  return Math.abs(parseMoneyText(value));
 }
 
 function splitBase(base) {
@@ -21287,7 +21339,7 @@ function normalizeDatasetRecord(dataset) {
     ? dataset.rows.map(normalizePnrStoredRow).filter(Boolean)
     : fileCategory === PACKAGE_MANAGEMENT_FILE_CATEGORY
       ? dataset.rows.map(normalizePackageManagementStoredRow).filter(Boolean)
-      : consolidateLinkedOccurrences(dataset.rows);
+      : dataset.rows.map(normalizeStoredRow).filter(Boolean);
   return {
     id: String(dataset.id || makeDatasetId(dataset.fileName || "arquivo")),
     fileName: String(dataset.fileName || "arquivo.xlsx"),

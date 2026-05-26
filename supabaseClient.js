@@ -22,7 +22,20 @@
     cache: "no-store",
   });
 
-  window.supabaseClient = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
+  const baseSupabaseClient = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
     global: { fetch: supabaseFetch },
   });
+
+  const railwayStagingApiUrl = window.APP_CONFIG.RAILWAY_STAGING_API_URL;
+  if (railwayStagingApiUrl && window.createRailwayStagingClient) {
+    window.supabaseAuthClient = baseSupabaseClient;
+    window.supabaseClient = window.createRailwayStagingClient({
+      apiUrl: railwayStagingApiUrl,
+      authClient: baseSupabaseClient,
+    });
+    console.info("[Railway Staging] Cliente do painel usando Railway para dados e Supabase Auth para login.");
+    return;
+  }
+
+  window.supabaseClient = baseSupabaseClient;
 })();

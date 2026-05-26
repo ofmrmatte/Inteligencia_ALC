@@ -276,8 +276,9 @@ async function validatePnrs(sql) {
   let failures = 0;
   const table = 'desvios_pnr_records';
   const moduleKey = 'desvios_pnr';
+  const expectedTotal = await tableTotal(sql, table, moduleKey);
 
-  failures = await runCheck('PNRs: total de registros', failures, async () => (await tableTotal(sql, table, moduleKey)) >= 0);
+  failures = await runCheck('PNRs: total de registros', failures, async () => expectedTotal >= 0);
   failures = await runCheck('PNRs: dedupe sem duplicidade', failures, async () => (await duplicateDedupeCount(sql, 'public', table)) === 0);
   failures = await runCheck('PNRs: summary', failures, async () => {
     const rows = await sql`
@@ -288,6 +289,16 @@ async function validatePnrs(sql) {
       where module_key = 'desvios_pnr'
     `;
     return rows.length === 1;
+  });
+  failures = await runCheck('PNRs: RPC summary coerente', failures, async () => {
+    const rows = await sql`select public.desvios_pnr_summary() as payload`;
+    const payload = rows[0]?.payload || {};
+    return Number(payload.total || payload.summary?.count || 0) === expectedTotal;
+  });
+  failures = await runCheck('PNRs: RPC tabela coerente', failures, async () => {
+    const rows = await sql`select public.desvios_pnr_table(p_page := 1, p_page_size := 5) as payload`;
+    const payload = rows[0]?.payload || {};
+    return Number(payload.total || 0) === expectedTotal && Array.isArray(payload.rows);
   });
   failures = await runCheck('PNRs: filtro status', failures, () =>
     validateFilterQuery(sql, table, moduleKey, 'status_normalizado'),

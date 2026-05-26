@@ -46,6 +46,12 @@ const batchSize = args.int('batch-size', 1000);
 const exportsDir = resolveExportsDir(args);
 const manifestFile = manifestPath(exportsDir);
 const truncateRailway = args.has('truncate-railway');
+const MIGRATIONS_DIR = path.resolve(process.cwd(), 'supabase', 'migrations');
+const POST_IMPORT_MIGRATIONS = [
+  '20260522_finalize_processed_only_before_railway.sql',
+  '20260525130000_audit_processed_only_hardening.sql',
+  '20260525143000_document_row_count_reconciliation.sql',
+];
 
 scriptHeader('Railway import', [
   `Modo: ${apply ? 'APPLY' : 'DRY-RUN'}`,
@@ -207,6 +213,54 @@ async function validatePostImport(sql) {
   return failures;
 }
 
+async function refreshDerivedData(sql) {
+  const functions = await sql`
+    select count(*)::int as total
+    from pg_proc p
+    join pg_namespace n on n.oid = p.pronamespace
+    where n.nspname = 'public'
+      and p.proname = 'refresh_desvios_pnr_metrics_summary'
+  `;
+
+  if (Number(functions[0]?.total ?? 0) === 0) {
+    printWarn('Metricas derivadas de PNR', 'RPC refresh_desvios_pnr_metrics_summary ausente; nada recalculado');
+    return;
+  }
+
+  const before = await sql`
+    select count(*)::int as total,
+           coalesce(sum(row_count), 0)::int as rows
+    from public.desvios_pnr_metrics_summary
+  `;
+  const refreshed = await sql`select public.refresh_desvios_pnr_metrics_summary() as affected`;
+  const after = await sql`
+    select count(*)::int as total,
+           coalesce(sum(row_count), 0)::int as rows
+    from public.desvios_pnr_metrics_summary
+  `;
+  await sql`analyze public.desvios_pnr_metrics_summary`;
+
+  printCheck(
+    'Metricas derivadas de PNR recalculadas',
+    true,
+    `antes=${before[0].total}/${before[0].rows} depois=${after[0].total}/${after[0].rows} affected=${refreshed[0].affected}`,
+  );
+}
+
+async function runPostImportHardening(sql) {
+  for (const fileName of POST_IMPORT_MIGRATIONS) {
+    const fullPath = path.join(MIGRATIONS_DIR, fileName);
+    if (!fs.existsSync(fullPath)) {
+      printWarn('Hardening pos-import', `migration ausente: ${fileName}`);
+      continue;
+    }
+
+    const migrationSql = fs.readFileSync(fullPath, 'utf8');
+    await sql.unsafe(migrationSql);
+    printCheck('Hardening pos-import aplicado', true, fileName);
+  }
+}
+
 let sql;
 
 try {
@@ -252,6 +306,8 @@ try {
     importedRows += result.imported;
   }
 
+  await runPostImportHardening(sql);
+  await refreshDerivedData(sql);
   const failures = await validatePostImport(sql);
   console.log(`Linhas importadas: ${formatCount(importedRows)}`);
 
