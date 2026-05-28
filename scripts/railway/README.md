@@ -105,6 +105,36 @@ http://127.0.0.1:8091/index.html
 
 Esse modo serve um `config.js` dinamico somente local. O login continua usando Supabase Auth real, enquanto `.from()` e `.rpc()` do painel usam a API local com `RAILWAY_DATABASE_URL`. A string do banco nunca vai para o navegador.
 
+O mesmo servidor tambem expoe a primeira camada hibrida por modulo:
+
+```txt
+/api/pre-fatura/summary
+/api/pre-fatura/table
+/api/pre-fatura/filters
+/api/pre-fatura/export
+/api/pre-fatura/report
+/api/pre-fatura/files
+/api/pre-fatura/delete
+/api/pre-fatura/existing-keys
+/api/pacotes-faltantes/table
+/api/pacotes-faltantes/summary
+/api/pacotes-faltantes/update-status
+/api/pacotes-faltantes/delete
+/api/pacotes-faltantes/export
+/api/pacotes-faltantes/report
+/api/gestao-pacotes/summary
+/api/gestao-pacotes/table
+/api/gestao-pacotes/filters
+/api/gestao-pacotes/export
+/api/gestao-pacotes/report
+/api/gestao-pacotes/files
+/api/gestao-pacotes/delete
+/api/gestao-pacotes/existing-keys
+/api/files/list
+```
+
+Esses endpoints validam o token do Supabase Auth no backend e executam dados operacionais no Railway. O front usa essa camada para `Pacotes Faltantes`, `Gestao de Pacotes` e `Pre-Fatura` quando `DATA_SOURCE` e diferente de `supabase`.
+
 ## Scripts
 
 - `01-check-railway-connection.mjs`: testa conexao Supabase e Railway, versao do Postgres, encoding, timezone, extensoes e permissao de tabela temporaria no Railway.

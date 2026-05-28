@@ -4090,6 +4090,17 @@ function getMissingPackageDeadlineStatus(row = {}) {
   return "Dentro do prazo";
 }
 
+function getRailwayApiClientForModule(moduleKey) {
+  const supportedModules = [
+    DASHBOARD_MODULE_KEYS.preFatura,
+    DASHBOARD_MODULE_KEYS.pacotesFaltantes,
+    DASHBOARD_MODULE_KEYS.pacotes,
+  ];
+  if (!supportedModules.includes(moduleKey)) return null;
+  const client = window.railwayApiClient;
+  return client?.isEnabled?.() ? client : null;
+}
+
 async function loadMissingPackagesFromSupabase(options = {}) {
   if (!window.supabaseClient) return [];
   const sessionUser = currentUser || await ensureCurrentUserFromSupabaseSession();
@@ -4101,16 +4112,24 @@ async function loadMissingPackagesFromSupabase(options = {}) {
   isLoadingMissingPackages = true;
   if (options.render) renderAll();
   try {
-    const { data, error } = await withTimeout(
-      window.supabaseClient
-        .from("gestao_desvios_pacotes_faltantes")
-        .select("*")
-        .order("imported_at", { ascending: false }),
-      SUPABASE_QUERY_TIMEOUT_MS,
-      "Tempo limite excedido ao carregar Pacotes Faltantes.",
-    );
+    const railwayApi = getRailwayApiClientForModule(DASHBOARD_MODULE_KEYS.pacotesFaltantes);
+    const { data, error } = railwayApi
+      ? await withTimeout(
+        railwayApi.missingPackages.table(),
+        SUPABASE_QUERY_TIMEOUT_MS,
+        "Tempo limite excedido ao carregar Pacotes Faltantes.",
+      )
+      : await withTimeout(
+        window.supabaseClient
+          .from("gestao_desvios_pacotes_faltantes")
+          .select("*")
+          .order("imported_at", { ascending: false }),
+        SUPABASE_QUERY_TIMEOUT_MS,
+        "Tempo limite excedido ao carregar Pacotes Faltantes.",
+      );
     if (error) throw error;
-    missingPackagesRows = (Array.isArray(data) ? data : []).map(normalizeMissingPackageRow);
+    const rows = railwayApi ? data?.rows : data;
+    missingPackagesRows = (Array.isArray(rows) ? rows : []).map(normalizeMissingPackageRow);
     return missingPackagesRows;
   } catch (error) {
     console.error("[Pacotes Faltantes] Falha ao carregar registros.", error);
@@ -4128,6 +4147,13 @@ async function loadMissingPackagesFromSupabase(options = {}) {
 async function fetchExistingMissingPackageKeys(keys = []) {
   const existing = new Set();
   const uniqueKeys = [...new Set(keys.filter(Boolean))];
+  const railwayApi = getRailwayApiClientForModule(DASHBOARD_MODULE_KEYS.pacotesFaltantes);
+  if (railwayApi) {
+    const { data, error } = await railwayApi.missingPackages.existingKeys(uniqueKeys);
+    if (error) throw error;
+    (Array.isArray(data?.keys) ? data.keys : []).forEach((key) => existing.add(key));
+    return existing;
+  }
   for (let index = 0; index < uniqueKeys.length; index += 80) {
     const batch = uniqueKeys.slice(index, index + 80);
     const { data, error } = await window.supabaseClient
@@ -4282,19 +4308,28 @@ async function applyMissingPackageStatusOption(button) {
     ? { status_contato_meli: value, situacao_prazo: situacaoPrazo, contato_updated_at: new Date().toISOString(), updated_at: new Date().toISOString() }
     : { status_caso: value, situacao_prazo: situacaoPrazo, status_updated_at: new Date().toISOString(), updated_at: new Date().toISOString() };
   try {
-    const { data, error } = await window.supabaseClient
-      .from("gestao_desvios_pacotes_faltantes")
-      .update(payload)
-      .eq("id", recordId)
-      .select("*")
-      .maybeSingle();
+    const railwayApi = getRailwayApiClientForModule(DASHBOARD_MODULE_KEYS.pacotesFaltantes);
+    const { data, error } = railwayApi
+      ? await railwayApi.missingPackages.updateStatus({
+        id: recordId,
+        type,
+        value,
+        situacao_prazo: situacaoPrazo,
+      })
+      : await window.supabaseClient
+        .from("gestao_desvios_pacotes_faltantes")
+        .update(payload)
+        .eq("id", recordId)
+        .select("*")
+        .maybeSingle();
     if (error) throw error;
-    if (!data) throw new Error("Nenhum registro foi atualizado. Verifique a permissão de edição no Supabase.");
+    const savedRow = railwayApi ? data?.row : data;
+    if (!savedRow) throw new Error("Nenhum registro foi atualizado. Verifique a permissão de edição.");
     const confirmedRow = normalizeMissingPackageRow({
       ...currentRow,
-      ...data,
-      status_caso: type === "case" ? value : (data.status_caso || currentRow.statusCaso),
-      status_contato_meli: type === "meli" ? value : (data.status_contato_meli || currentRow.statusContatoMeli),
+      ...savedRow,
+      status_caso: type === "case" ? value : (savedRow.status_caso || currentRow.statusCaso),
+      status_contato_meli: type === "meli" ? value : (savedRow.status_contato_meli || currentRow.statusContatoMeli),
       situacao_prazo: situacaoPrazo,
     });
     missingPackagesRows = missingPackagesRows.map((row) => sameRecord(row) ? confirmedRow : row);
@@ -4321,10 +4356,13 @@ async function deleteSelectedMissingPackages() {
   isDeletingMissingPackages = true;
   renderAll();
   try {
-    const { error } = await window.supabaseClient
-      .from("gestao_desvios_pacotes_faltantes")
-      .delete()
-      .in("id", ids);
+    const railwayApi = getRailwayApiClientForModule(DASHBOARD_MODULE_KEYS.pacotesFaltantes);
+    const { error } = railwayApi
+      ? await railwayApi.missingPackages.delete(ids)
+      : await window.supabaseClient
+        .from("gestao_desvios_pacotes_faltantes")
+        .delete()
+        .in("id", ids);
     if (error) throw error;
     const deleted = new Set(ids);
     missingPackagesRows = missingPackagesRows.filter((row) => !deleted.has(String(row.id)));
@@ -8152,6 +8190,9 @@ function buildPackageManagementKpiCards(rows = filterPackageManagementRowsByPeri
 }
 
 function getPackageOperationalType(row) {
+  const explicitType = normalizeText(row?.tipo_operacional || row?.tipo || row?.tipo_divisao || "");
+  if (MAIN_TYPE_OPTIONS.includes(explicitType)) return explicitType;
+
   const match = row?.prefatura_match || {};
   const matchedType = match.matched_tipo;
   if (isReliablePrefaturaTypeMatch(match)) return matchedType;
@@ -8608,7 +8649,9 @@ function renderPackageDriverErrorsCard(rows) {
 }
 
 function renderPackageManagementView(pagedRows, allPackageRows) {
-  const prefaturaRows = filterPrefaturaRowsByTypes(allRows, state.packageTipo);
+  const prefaturaRows = getRailwayApiClientForModule(DASHBOARD_MODULE_KEYS.pacotes)
+    ? []
+    : filterPrefaturaRowsByTypes(allRows, state.packageTipo);
   const cards = buildPackageManagementKpiCards(allPackageRows, prefaturaRows);
   el.kpiGrid.innerHTML = `
     ${renderDashboardUpdatingBadge(DASHBOARD_MODULE_KEYS.pacotes)}
@@ -12460,7 +12503,53 @@ function getPackageTypeBadgeClass(type) {
   return "badge--sheet";
 }
 
-function getPackageManagementExportRows() {
+function getPackageManagementApiFilters() {
+  const monthOptions = getAvailablePackageMonthOptions();
+  const selectedMonths = getPackageMonthSelectionValues();
+  const allMonthsSelected = !monthOptions.length || selectedMonths.length === monthOptions.length;
+  const selectedTypes = getPackageTypeSelectionValues(state.packageTipo);
+  const allTypesSelected = selectedTypes.length === MAIN_TYPE_OPTIONS.length;
+  return {
+    months: allMonthsSelected ? [] : selectedMonths,
+    period: normalizePeriodMode(state.packagePeriod || "month"),
+    types: allTypesSelected ? [] : selectedTypes,
+    query: normalize(state.query),
+    sortKey: state.sortKey || "",
+    sortDir: state.sortDir || "asc",
+  };
+}
+
+function getPreFaturaApiFilters() {
+  const monthOptions = getAvailableMonthOptions(PRE_FATURA_FILE_CATEGORY);
+  const selectedMonths = getPrefaturaMonthSelectionValues();
+  const allMonthsSelected = !monthOptions.length || selectedMonths.length === monthOptions.length;
+  const selectedTypes = getPrefaturaTypeSelectionValues(state.prefaturaTipo);
+  const allTypesSelected = selectedTypes.length === MAIN_TYPE_OPTIONS.length;
+  return {
+    months: allMonthsSelected ? [] : selectedMonths,
+    period: normalizePeriodMode(state.prefaturaPeriod || state.period || "month"),
+    types: allTypesSelected ? [] : selectedTypes,
+    query: normalize(state.query),
+    sortKey: state.sortKey || "",
+    sortDir: state.sortDir || "asc",
+  };
+}
+
+async function getPackageManagementExportRows() {
+  const railwayApi = getRailwayApiClientForModule(DASHBOARD_MODULE_KEYS.pacotes);
+  if (railwayApi?.gestaoPacotes?.export) {
+    const { data, error } = await withTimeout(
+      railwayApi.gestaoPacotes.export(getPackageManagementApiFilters()),
+      SUPABASE_QUERY_TIMEOUT_MS,
+      "Tempo limite excedido ao exportar Gestão de Pacotes pelo Railway.",
+    );
+    if (error) throw error;
+    const rows = (Array.isArray(data?.rows) ? data.rows : [])
+      .map(normalizePackageManagementStoredRow)
+      .filter(Boolean)
+      .map((row) => ({ ...row, tipo_operacional: getPackageOperationalType(row) }));
+    return sortRows(rows).filter(isPackageManagementDetailRow);
+  }
   return sortRows(getPackageManagementRowsForView()).filter(isPackageManagementDetailRow);
 }
 
@@ -12566,7 +12655,61 @@ function buildPreFaturaHistoricalDatasetsFromRows(rows) {
     });
 }
 
+function normalizeRailwayPreFaturaFileRecord(record = {}) {
+  const metadata = record.metadata || {};
+  const moduleKey = DASHBOARD_MODULE_KEYS.preFatura;
+  return {
+    ...record,
+    module_key: moduleKey,
+    file_type: PRE_FATURA_FILE_CATEGORY,
+    metadata: {
+      ...metadata,
+      module_key: moduleKey,
+      dashboard_module_key: moduleKey,
+      file_category: PRE_FATURA_FILE_CATEGORY,
+      semantic_file_type: PRE_FATURA_FILE_CATEGORY,
+      file_type: PRE_FATURA_FILE_CATEGORY,
+      raw_file_deleted: metadata.raw_file_deleted !== false,
+    },
+  };
+}
+
+function mapRailwayPreFaturaRecordToRow(record = {}) {
+  const raw = record.raw_data || {};
+  const fileRecord = normalizeRailwayPreFaturaFileRecord({
+    id: record.file_id || raw.file_id || "railway-pre-fatura",
+    file_name: raw.arquivo_origem || record.arquivo_origem || "Pré-Fatura",
+    reference_month: record.reference_month || raw.reference_month || "",
+    reference_year: record.reference_year || raw.reference_year || "",
+    period_type: record.period_type || raw.period_type || "",
+    period_label: record.period_label || raw.period_label || record.quinzena || "",
+    metadata: {
+      competencia: record.competencia || raw.competencia || "",
+      quinzena: record.quinzena || raw.quinzena || "",
+      reference_month: record.reference_month || raw.reference_month || "",
+      reference_year: record.reference_year || raw.reference_year || "",
+      period_type: record.period_type || raw.period_type || "",
+      period_label: record.period_label || raw.period_label || record.quinzena || "",
+    },
+  });
+  const row = mapProcessedPreFaturaRecord(record, fileRecord);
+  return row ? { ...row, module_key: DASHBOARD_MODULE_KEYS.preFatura } : null;
+}
+
 async function fetchPreFaturaExportRows() {
+  const railwayApi = getRailwayApiClientForModule(DASHBOARD_MODULE_KEYS.preFatura);
+  if (railwayApi?.preFatura?.export) {
+    const { data, error } = await withTimeout(
+      railwayApi.preFatura.export(getPreFaturaApiFilters()),
+      SUPABASE_QUERY_TIMEOUT_MS,
+      "Tempo limite excedido ao exportar Pré-Fatura pelo Railway.",
+    );
+    if (error) throw error;
+    const rows = (Array.isArray(data?.rows) ? data.rows : [])
+      .map((record) => mapRailwayPreFaturaRecordToRow(record))
+      .filter(Boolean);
+    return sortRows(filterPreFaturaRowsForExport(rows));
+  }
   if (window.supabaseClient && currentUser && moduleHasConfirmedBase(DASHBOARD_MODULE_KEYS.preFatura)) {
     try {
       const processedRows = await fetchAllProcessedRowsFromTable("pre_fatura_records");
@@ -13327,7 +13470,7 @@ async function exportPreFaturaExcel(button) {
 
 async function exportPackageManagementExcel(button) {
   if (isExportingPackageExcel) return;
-  const rows = getPackageManagementExportRows();
+  const rows = await getPackageManagementExportRows();
   if (!rows.length) {
     showToast("Nenhum registro para exportar.", "warn", 4200);
     syncPackageExportButtonState(0);
@@ -13463,7 +13606,8 @@ function updateTopbar(summary = null) {
     el.sourceLine.hidden = true;
   }
   if (el.syncStatus) {
-    const label = window.supabaseClient ? "Supabase" : "Offline";
+    const isRailwayStaging = Boolean(window.supabaseClient?.railwayStaging?.enabled || window.APP_CONFIG?.RAILWAY_STAGING_MODE);
+    const label = window.supabaseClient ? (isRailwayStaging ? "Railway staging" : "Supabase") : "Offline";
     const textNode = el.syncStatus.querySelector(".connection-indicator__label");
     if (textNode) textNode.textContent = label;
     el.syncStatus.setAttribute("title", `Status da conexão: ${label}`);
@@ -13614,6 +13758,12 @@ function getMonthlyComparisonRows(rows, sheet = state.sheet) {
 }
 
 async function buildReportHistoricalComparisonRows(scope, typeSelection = state.prefaturaTipo) {
+  if (getRailwayApiClientForModule(DASHBOARD_MODULE_KEYS.preFatura)?.preFatura?.report) {
+    return buildMonthlyComparisonFromDatasets(library.datasets, {
+      types: typeSelection,
+      viewMode: getPrefaturaComparisonViewMode(scope?.periodMode),
+    });
+  }
   const files = await getReportAvailableFileRecords();
   const viewMode = getPrefaturaComparisonViewMode(scope?.periodMode);
   if (!files.length) return buildMonthlyComparisonFromDatasets(library.datasets, { types: typeSelection, viewMode });
@@ -17779,6 +17929,42 @@ async function validateDashboardFileRecords(records) {
 }
 
 async function loadPackageManagementRowsForCards(records, cachedDatasets = new Map()) {
+  const railwayApi = getRailwayApiClientForModule(DASHBOARD_MODULE_KEYS.pacotes);
+  if (railwayApi?.gestaoPacotes?.table) {
+    try {
+      const { data, error } = await withTimeout(
+        railwayApi.gestaoPacotes.table({ page: 1, pageSize: 10000 }),
+        SUPABASE_QUERY_TIMEOUT_MS,
+        "Tempo limite excedido ao carregar Gestão de Pacotes pelo Railway.",
+      );
+      if (error) throw error;
+      const rows = (Array.isArray(data?.rows) ? data.rows : [])
+        .map(normalizePackageManagementStoredRow)
+        .filter(Boolean);
+      console.info("[GestaoPacotes API] Dados carregados via API Railway server-side.", {
+        total: Number(data?.total || rows.length),
+        retornados: rows.length,
+        module_key: DASHBOARD_MODULE_KEYS.pacotes,
+      });
+      packageManagementRows = rows;
+      packageManagementRowsLoadedKey = `railway:${Number(data?.total || rows.length)}:${data?.generated_at || ""}`;
+      resetDerivedDataCache();
+      return [{
+        id: "railway:gestao_pacotes",
+        source: "railway_api",
+        fileCategory: PACKAGE_MANAGEMENT_FILE_CATEGORY,
+        rows,
+      }];
+    } catch (error) {
+      console.error("[Gestão de Pacotes] Falha ao carregar via API Railway.", error);
+      packageManagementRows = [];
+      packageManagementRowsLoadedKey = "__railway_error";
+      resetDerivedDataCache();
+      showToast("Não foi possível carregar Gestão de Pacotes no Railway staging.", "error", 6200);
+      return [];
+    }
+  }
+
   const scopedRecords = filterDashboardRecordsByModule(records, DASHBOARD_MODULE_KEYS.pacotes);
   console.info("[GestaoPacotes Files]", {
     received: Array.isArray(records) ? records.length : 0,
@@ -18463,6 +18649,46 @@ function applyDashboardScopeFromLoadedDatasets() {
   return true;
 }
 
+async function loadPreFaturaFilesFromRailwayApi() {
+  const railwayApi = getRailwayApiClientForModule(DASHBOARD_MODULE_KEYS.preFatura);
+  if (!railwayApi?.preFatura?.files) return null;
+  const { data, error } = await withTimeout(
+    railwayApi.preFatura.files(),
+    SUPABASE_QUERY_TIMEOUT_MS,
+    "Tempo limite excedido ao carregar arquivos de Pré-Fatura pelo Railway.",
+  );
+  if (error) throw error;
+  return (Array.isArray(data?.dashboard_files) ? data.dashboard_files : Array.isArray(data?.rows) ? data.rows : [])
+    .map(normalizeRailwayPreFaturaFileRecord)
+    .filter(isUsableDashboardFileRecord)
+    .filter(isDashboardFileActive);
+}
+
+async function loadPreFaturaRowsFromRailwayApi() {
+  const railwayApi = getRailwayApiClientForModule(DASHBOARD_MODULE_KEYS.preFatura);
+  if (!railwayApi?.preFatura?.table) return null;
+  const { data, error } = await withTimeout(
+    railwayApi.preFatura.table({ page: 1, pageSize: 10000 }),
+    SUPABASE_QUERY_TIMEOUT_MS,
+    "Tempo limite excedido ao carregar Pré-Fatura pelo Railway.",
+  );
+  if (error) throw error;
+  const rows = (Array.isArray(data?.rows) ? data.rows : [])
+    .map(mapRailwayPreFaturaRecordToRow)
+    .filter(Boolean);
+  console.info("[PreFatura API] Dados carregados via API Railway server-side.", {
+    total: Number(data?.total || rows.length),
+    retornados: rows.length,
+    module_key: DASHBOARD_MODULE_KEYS.preFatura,
+  });
+  return {
+    id: "railway:pre_fatura",
+    source: "railway_api",
+    fileCategory: PRE_FATURA_FILE_CATEGORY,
+    rows,
+  };
+}
+
 async function loadDashboardDataByFilters(options = {}) {
   if (!currentUser || !window.supabaseClient) {
     clearDashboardData({ render: options.render !== false, preserveRecords: false });
@@ -18490,25 +18716,79 @@ async function loadDashboardDataByFilters(options = {}) {
   });
   updateDatasetMeta();
   try {
+    const railwayPreFaturaApi = getRailwayApiClientForModule(DASHBOARD_MODULE_KEYS.preFatura);
     const files = Array.isArray(options.files)
       ? filterDashboardRecordsByModule(options.files, DASHBOARD_MODULE_KEYS.preFatura)
-      : filterDashboardRecordsByModule(await loadDashboardFilesFromSupabase({
-        loadActive: false,
-        render: false,
-        validateStorage: false,
-        showLoading: false,
-        moduleKey: DASHBOARD_MODULE_KEYS.preFatura,
-      }), DASHBOARD_MODULE_KEYS.preFatura);
+      : filterDashboardRecordsByModule(
+        railwayPreFaturaApi?.preFatura?.files
+          ? await loadPreFaturaFilesFromRailwayApi()
+          : await loadDashboardFilesFromSupabase({
+            loadActive: false,
+            render: false,
+            validateStorage: false,
+            showLoading: false,
+            moduleKey: DASHBOARD_MODULE_KEYS.preFatura,
+          }),
+        DASHBOARD_MODULE_KEYS.preFatura,
+      );
     if (requestId !== preFaturaLoadRequestId) {
       console.info("[PreFatura Load]", "resposta antiga ignorada após arquivos", { requestId, latest: preFaturaLoadRequestId });
       return;
     }
-    await hydrateDashboardFileMetadata(files);
+    if (!railwayPreFaturaApi?.preFatura?.files) await hydrateDashboardFileMetadata(files);
     dashboardFileRecords = Array.from(new Map([
       ...filterDashboardRecordsByModule(dashboardFileRecords, DASHBOARD_MODULE_KEYS.pacotes),
       ...filterDashboardRecordsByModule(dashboardFileRecords, DASHBOARD_MODULE_KEYS.desviosPnr),
       ...files.filter(isUsableDashboardFileRecord).filter(isDashboardFileActive),
     ].map((record) => [record.id || `${getDashboardRecordModuleKey(record)}:${record.file_name}`, record])).values());
+    if (railwayPreFaturaApi?.preFatura?.table) {
+      const railwayDataset = await loadPreFaturaRowsFromRailwayApi();
+      if (requestId !== preFaturaLoadRequestId) {
+        console.info("[PreFatura Load]", "resposta antiga ignorada após API Railway", { requestId, latest: preFaturaLoadRequestId });
+        return;
+      }
+      if (railwayDataset?.rows?.length) {
+        const historicalDatasets = buildPreFaturaHistoricalDatasetsFromRows(railwayDataset.rows);
+        const monthOptions = getPreFaturaMonthOptionsFromRows(railwayDataset.rows);
+        state.prefaturaMonths = normalizeMonthSelection(
+          Array.isArray(state.prefaturaMonths) && state.prefaturaMonths.length ? state.prefaturaMonths : state.monthFilter || "all",
+          monthOptions,
+        );
+        state.monthFilter = state.prefaturaMonths.length === monthOptions.length ? "all" : state.prefaturaMonths[0] || "all";
+        state.prefaturaPeriod = normalizePeriodMode(state.prefaturaPeriod || state.period);
+        state.period = state.prefaturaPeriod;
+        const selectedDatasets = historicalDatasets.length ? historicalDatasets : [railwayDataset];
+        const scopedRows = filterPreFaturaRowsForActiveState(railwayDataset.rows, monthOptions);
+        replaceDashboardData(scopedRows, {
+          selectedFiles: dashboardFileRecords.filter((record) => getDashboardRecordModuleKey(record) === DASHBOARD_MODULE_KEYS.preFatura),
+          selectedDatasets,
+          allHistoricalDatasets: selectedDatasets,
+          selectedMonth: state.prefaturaMonths.length === 1 ? state.prefaturaMonths[0] : "all",
+          selectedPeriod: state.prefaturaPeriod || state.period,
+          fileCategory: PRE_FATURA_FILE_CATEGORY,
+        });
+        setDashboardVisualState(scopedRows.length ? "" : "no-filter-results", { render: false });
+        if (shouldRender) {
+          hydrateControls();
+          renderAll();
+        } else {
+          syncActiveDataset();
+          updateDatasetMeta();
+        }
+        console.info("[PreFatura Load]", "fim via API Railway", {
+          requestId,
+          rows: railwayDataset.rows.length,
+          scopedRows: scopedRows.length,
+          historicalDatasets: historicalDatasets.length,
+          ms: Math.round(performance.now() - startedAt),
+        });
+        return;
+      }
+      dashboardFilesLoading = false;
+      setDashboardVisualState("", { render: false });
+      clearDashboardData({ render: shouldRender, preserveRecords: false });
+      return;
+    }
     const persistedPreFaturaState = await checkModulePersistedData(DASHBOARD_MODULE_KEYS.preFatura, { reason: "prefatura-load" });
     if (requestId !== preFaturaLoadRequestId) {
       console.info("[PreFatura Load]", "resposta antiga ignorada após base-check", { requestId, latest: preFaturaLoadRequestId });
@@ -20089,6 +20369,14 @@ async function refreshAfterFileDeletion(records = [], mode = FILE_DELETE_MODES.w
     await loadMissingPackagesFromSupabase({ render: false });
   }
 
+  if (affectedModules.has(DASHBOARD_MODULE_KEYS.preFatura) && getRailwayApiClientForModule(DASHBOARD_MODULE_KEYS.preFatura)?.preFatura?.table) {
+    await loadDashboardDataByFilters({ force: true, render: false, showLoading: false, silent: true });
+    hydrateControls();
+    renderAll();
+    renderSettingsFileManagement();
+    return dashboardFileRecords;
+  }
+
   const files = await loadDashboardFilesFromSupabase({ loadActive: true, render: false, validateStorage: false, showLoading: false });
   await Promise.allSettled([...affectedModules].map((moduleKey) => checkModulePersistedData(moduleKey, { reason: `file-delete-${mode}` })));
 
@@ -20156,6 +20444,60 @@ async function deleteDashboardFiles(fileRecords = [], options = {}) {
   });
 
   try {
+    const railwayPreFaturaApi = getRailwayApiClientForModule(DASHBOARD_MODULE_KEYS.preFatura);
+    const isPreFaturaOnlyDeletion = moduleKeys.length === 1 && moduleKeys[0] === DASHBOARD_MODULE_KEYS.preFatura;
+    if (railwayPreFaturaApi?.preFatura?.delete && isPreFaturaOnlyDeletion) {
+      const { data, error } = await railwayPreFaturaApi.preFatura.delete({
+        ids: records.map((record) => record.id).filter(Boolean),
+        mode,
+      });
+      if (error) throw error;
+      console.info("[Module File Delete] Pré-Fatura via API Railway", {
+        action: mode,
+        moduleKeys,
+        removedRows: data?.removedRows || 0,
+        removedProcessedMetadata: data?.removedProcessedMetadata || 0,
+        changedDashboardMetadata: data?.changedDashboardMetadata || 0,
+        status: "ok",
+      });
+      await refreshAfterFileDeletion(records, mode);
+      showToast(
+        mode === FILE_DELETE_MODES.listOnly
+          ? (records.length === 1 ? "Arquivo removido da lista. Os dados importados foram mantidos." : "Arquivos removidos da lista. Os dados importados foram mantidos.")
+          : (records.length === 1 ? "Arquivo e dados importados excluídos com sucesso." : "Arquivos e dados importados excluídos com sucesso."),
+        "good",
+        5200,
+      );
+      return;
+    }
+
+    const railwayPackageApi = getRailwayApiClientForModule(DASHBOARD_MODULE_KEYS.pacotes);
+    const isPackageOnlyDeletion = moduleKeys.length === 1 && moduleKeys[0] === DASHBOARD_MODULE_KEYS.pacotes;
+    if (railwayPackageApi?.gestaoPacotes?.delete && isPackageOnlyDeletion) {
+      const { data, error } = await railwayPackageApi.gestaoPacotes.delete({
+        ids: records.map((record) => record.id).filter(Boolean),
+        mode,
+      });
+      if (error) throw error;
+      console.info("[Module File Delete] Gestão de Pacotes via API Railway", {
+        action: mode,
+        moduleKeys,
+        removedRows: data?.removedRows || 0,
+        removedProcessedMetadata: data?.removedProcessedMetadata || 0,
+        changedDashboardMetadata: data?.changedDashboardMetadata || 0,
+        status: "ok",
+      });
+      await refreshAfterFileDeletion(records, mode);
+      showToast(
+        mode === FILE_DELETE_MODES.listOnly
+          ? (records.length === 1 ? "Arquivo removido da lista. Os dados importados foram mantidos." : "Arquivos removidos da lista. Os dados importados foram mantidos.")
+          : (records.length === 1 ? "Arquivo e dados importados excluídos com sucesso." : "Arquivos e dados importados excluídos com sucesso."),
+        "good",
+        5200,
+      );
+      return;
+    }
+
     const removedStorageFiles = await removeStorageFilesIfPresent(records);
     let removedRows = 0;
     let removedProcessedMetadata = 0;

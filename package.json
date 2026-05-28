@@ -19,6 +19,7 @@
     "railway:compare": "node scripts/railway/05-compare-supabase-railway.mjs",
     "railway:validate": "node scripts/railway/06-validate-railway-dashboard.mjs",
     "railway:serve-dashboard": "node scripts/railway/07-serve-railway-dashboard.mjs",
+    "hybrid:serve": "node scripts/railway/07-serve-railway-dashboard.mjs",
     "railway:dry-run": "npm run railway:schema -- --dry-run && npm run railway:export -- --dry-run && npm run railway:import -- --dry-run && npm run railway:compare -- --dry-run && npm run railway:validate -- --dry-run",
     "db:migrate:processed-records": "node scripts/apply-processed-records-migration.mjs",
     "db:migrate:missing-packages": "node scripts/apply-missing-packages-migration.mjs",
@@ -30,5 +31,19 @@
     "dotenv": "^17.2.3",
     "exceljs": "^4.4.0",
     "postgres": "^3.4.9"
-  }
+  },
+  "main": "app.js",
+  "devDependencies": {},
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/ofmrmatte/dashboardfatura.git"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "bugs": {
+    "url": "https://github.com/ofmrmatte/dashboardfatura/issues"
+  },
+  "homepage": "https://github.com/ofmrmatte/dashboardfatura#readme"
 }

@@ -21,6 +21,7 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const PROJECT_ROOT = path.resolve(__dirname, '..', '..');
 const API_PREFIX = '/api/railway';
+const MODULE_API_PREFIX = '/api';
 const DEFAULT_PORT = 8091;
 
 const args = parseArgs();
@@ -490,12 +491,1034 @@ async function verifyAuthUser(request, publicConfig) {
   return user?.id ? user : null;
 }
 
+async function loadProfile(sql, authUser) {
+  if (!authUser?.id) return null;
+  const rows = await sql`
+    select id, email, name, role, is_admin, cargo, setor
+    from public.profiles
+    where id = ${authUser.id}
+    limit 1
+  `;
+  return rows[0] || null;
+}
+
+function canMutate(profile) {
+  return profile?.is_admin === true || String(profile?.role || '').toLowerCase() === 'admin';
+}
+
+function normalizeText(value = '') {
+  return String(value || '')
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .trim()
+    .toUpperCase();
+}
+
+function normalizeMissingPackageCaseStatus(value = '') {
+  const normalized = normalizeText(value);
+  if (normalized.includes('ROTA')) return 'Em rota';
+  if (normalized === 'RESOLVIDO' || normalized === 'CONCLUIDO') return 'Concluído';
+  return 'Pendente';
+}
+
+function normalizeMissingPackageMeliStatus(value = '') {
+  const normalized = normalizeText(value);
+  if (normalized === 'CONCLUIDO') return 'Concluído';
+  if (normalized.includes('AGUARDANDO')) return 'Aguardando MELI';
+  return 'E-mail Enviado';
+}
+
+function normalizeIdList(values = []) {
+  return Array.from(new Set((Array.isArray(values) ? values : [])
+    .map((value) => String(value || '').trim())
+    .filter(Boolean)));
+}
+
+const PRE_FATURA_MODULE_KEY = 'pre_fatura';
+const PRE_FATURA_FILE_TYPE = 'PRE_FATURA';
+const GESTAO_PACOTES_MODULE_KEY = 'gestao_pacotes';
+const GESTAO_PACOTES_FILE_TYPE = 'GESTAO_PACOTES';
+const PACKAGE_CATEGORY_LABELS = {
+  ALC: 'ALC',
+  DRIVER: 'Driver',
+  DISPATCHER: 'Dispatcher',
+  MERCADO_LIVRE: 'Mercado Livre',
+  INDEFINIDO: 'Indefinido',
+};
+const PACKAGE_MONTHS = new Map([
+  ['JAN', '01'], ['JANEIRO', '01'],
+  ['FEV', '02'], ['FEVEREIRO', '02'],
+  ['MAR', '03'], ['MARCO', '03'], ['MARÇO', '03'],
+  ['ABR', '04'], ['ABRIL', '04'],
+  ['MAI', '05'], ['MAIO', '05'],
+  ['JUN', '06'], ['JUNHO', '06'],
+  ['JUL', '07'], ['JULHO', '07'],
+  ['AGO', '08'], ['AGOSTO', '08'],
+  ['SET', '09'], ['SETEMBRO', '09'],
+  ['OUT', '10'], ['OUTUBRO', '10'],
+  ['NOV', '11'], ['NOVEMBRO', '11'],
+  ['DEZ', '12'], ['DEZEMBRO', '12'],
+]);
+
+function packageCategoryLabel(category = '') {
+  return PACKAGE_CATEGORY_LABELS[String(category || '').toUpperCase()] || 'Indefinido';
+}
+
+function normalizePackagePeriod(value = '') {
+  const normalized = normalizeText(value);
+  if (normalized === 'Q1' || normalized.includes('1') || normalized.includes('PRIMEIRA')) return 'q1';
+  if (normalized === 'Q2' || normalized.includes('2') || normalized.includes('SEGUNDA')) return 'q2';
+  return 'month';
+}
+
+function parsePackageMonthKey(row = {}) {
+  const directMonth = String(row.reference_month || row.raw_data?.reference_month || '').trim().padStart(2, '0');
+  const directYear = String(row.reference_year || row.raw_data?.reference_year || '').trim();
+  if (/^\d{2}$/.test(directMonth) && /^\d{4}$/.test(directYear)) {
+    return `${directYear}-${directMonth}`;
+  }
+
+  const competencia = String(row.competencia || '').trim();
+  const parts = competencia.split('/');
+  if (parts.length >= 2) {
+    const monthText = normalizeText(parts[0]).replace(/[^A-Z]/g, '');
+    const month = PACKAGE_MONTHS.get(monthText);
+    const rawYear = String(parts[1] || '').replace(/\D/g, '');
+    const year = rawYear.length === 2 ? `20${rawYear}` : rawYear;
+    if (month && /^\d{4}$/.test(year)) return `${year}-${month}`;
+  }
+
+  const date = row.data ? new Date(row.data) : null;
+  if (date && !Number.isNaN(date.getTime())) {
+    return `${date.getUTCFullYear()}-${String(date.getUTCMonth() + 1).padStart(2, '0')}`;
+  }
+
+  return '';
+}
+
+function normalizePrefaturaType(value = '') {
+  const normalized = normalizeText(value);
+  if (normalized.includes('PNR')) return 'PNR';
+  if (normalized.includes('SVC')) return 'SVC';
+  if (normalized.includes('XPT')) return 'XPT';
+  return normalized;
+}
+
+function normalizePreFaturaFilters(payload = {}) {
+  const filters = payload.filters && typeof payload.filters === 'object' ? payload.filters : payload;
+  const rawPageSize = Number(payload.pageSize || filters.pageSize || 25);
+  const rawPage = Number(payload.page || filters.page || 1);
+  return {
+    months: new Set(normalizeIdList(filters.months || filters.monthKeys || [])),
+    period: normalizePackagePeriod(filters.period || filters.period_type || 'month'),
+    types: new Set(normalizeIdList(filters.types || filters.tipos || []).map(normalizePrefaturaType)),
+    bases: new Set(normalizeIdList(filters.bases || filters.base || []).map((base) => normalizeText(base))),
+    drivers: new Set(normalizeIdList(filters.drivers || filters.motoristas || []).map((driver) => normalizeText(driver))),
+    query: normalizeText(filters.query || filters.search || ''),
+    page: Number.isFinite(rawPage) && rawPage > 0 ? Math.trunc(rawPage) : 1,
+    pageSize: Number.isFinite(rawPageSize) && rawPageSize > 0 ? Math.min(Math.trunc(rawPageSize), 10000) : 25,
+    sortKey: String(filters.sortKey || payload.sortKey || '').trim(),
+    sortDir: String(filters.sortDir || payload.sortDir || 'asc').toLowerCase() === 'desc' ? 'desc' : 'asc',
+  };
+}
+
+function getPreFaturaRowType(row = {}) {
+  return normalizePrefaturaType(row.tipo || row.aba_origem || row.tipo_registro || row.raw_data?.tipo_registro || row.raw_data?.tipo_desconto);
+}
+
+function buildPreFaturaSearchText(row = {}) {
+  return normalizeText([
+    row.competencia,
+    row.quinzena,
+    row.tipo,
+    row.aba_origem,
+    row.base,
+    row.codigo_base,
+    row.driver,
+    row.driver_normalizado,
+    row.placa,
+    row.id_envio,
+    row.id_pacote,
+    row.rota,
+    row.arquivo_origem,
+    row.raw_data?.descricao,
+  ].filter(Boolean).join(' '));
+}
+
+function filterPreFaturaRows(rows = [], filters = normalizePreFaturaFilters()) {
+  return (Array.isArray(rows) ? rows : []).filter((row) => {
+    if (String(row.module_key || '') !== PRE_FATURA_MODULE_KEY) return false;
+    if (filters.months.size && !filters.months.has(parsePackageMonthKey(row))) return false;
+    if (filters.period !== 'month' && normalizePackagePeriod(row.period_type || row.quinzena) !== filters.period) return false;
+    if (filters.types.size && !filters.types.has(getPreFaturaRowType(row))) return false;
+    if (filters.bases.size && !filters.bases.has(normalizeText(row.codigo_base || row.base))) return false;
+    if (filters.drivers.size && !filters.drivers.has(normalizeText(row.driver_normalizado || row.driver))) return false;
+    if (filters.query && !buildPreFaturaSearchText(row).includes(filters.query)) return false;
+    return true;
+  });
+}
+
+function sortPreFaturaRows(rows = [], filters = normalizePreFaturaFilters()) {
+  const getters = {
+    competencia: (row) => parsePackageMonthKey(row),
+    quinzena: (row) => normalizePackagePeriod(row.period_type || row.quinzena),
+    tipo: (row) => getPreFaturaRowType(row),
+    tipo_desconto: (row) => row.raw_data?.tipo_desconto || row.tipo || row.aba_origem || '',
+    aba_origem: (row) => row.aba_origem || '',
+    base: (row) => row.base || row.codigo_base || '',
+    motorista: (row) => row.driver || row.driver_normalizado || '',
+    driver: (row) => row.driver || row.driver_normalizado || '',
+    placa: (row) => row.placa || '',
+    data: (row) => row.data || '',
+    data_sort: (row) => row.data || '',
+    id_envio: (row) => row.id_envio || row.id_pacote || '',
+    id_pacote: (row) => row.id_pacote || row.id_envio || '',
+    rota: (row) => row.rota || '',
+    n_rota: (row) => row.rota || '',
+    valor: (row) => Number(row.valor_numerico || row.valor || 0),
+    valor_numerico: (row) => Number(row.valor_numerico || row.valor || 0),
+    created_at: (row) => row.created_at || '',
+  };
+  const getter = getters[filters.sortKey];
+  if (!getter) return rows;
+  const direction = filters.sortDir === 'desc' ? -1 : 1;
+  return [...rows].sort((a, b) => {
+    const left = getter(a);
+    const right = getter(b);
+    if (typeof left === 'number' || typeof right === 'number') return (Number(left || 0) - Number(right || 0)) * direction;
+    return String(left || '').localeCompare(String(right || ''), 'pt-BR', { numeric: true, sensitivity: 'base' }) * direction;
+  });
+}
+
+function paginatePreFaturaRows(rows = [], filters = normalizePreFaturaFilters()) {
+  const total = rows.length;
+  const pageCount = Math.max(1, Math.ceil(total / filters.pageSize));
+  const page = Math.min(filters.page, pageCount);
+  const start = (page - 1) * filters.pageSize;
+  return {
+    rows: rows.slice(start, start + filters.pageSize),
+    page,
+    pageSize: filters.pageSize,
+    total,
+    pageCount,
+  };
+}
+
+function buildPreFaturaSummary(rows = []) {
+  const totals = (Array.isArray(rows) ? rows : []).reduce((acc, row) => {
+    acc.count += 1;
+    acc.totalValue += Number(row.valor_numerico || row.valor || 0);
+    if (getPreFaturaRowType(row) === 'PNR') acc.pnrCount += 1;
+    else acc.packageCount += 1;
+    const base = normalizeText(row.codigo_base || row.base);
+    const driver = normalizeText(row.driver_normalizado || row.driver);
+    const route = String(row.rota || '').trim();
+    if (base) acc.bases.add(base);
+    if (driver) acc.drivers.add(driver);
+    if (route) acc.routes.add(route);
+    return acc;
+  }, {
+    count: 0,
+    totalValue: 0,
+    packageCount: 0,
+    pnrCount: 0,
+    bases: new Set(),
+    drivers: new Set(),
+    routes: new Set(),
+  });
+  return {
+    count: totals.count,
+    totalValue: Number(totals.totalValue.toFixed(2)),
+    packageCount: totals.packageCount,
+    pnrCount: totals.pnrCount,
+    baseCount: totals.bases.size,
+    driverCount: totals.drivers.size,
+    routeCount: totals.routes.size,
+    packageShare: totals.count ? Number(((totals.packageCount / totals.count) * 100).toFixed(1)) : 0,
+    pnrShare: totals.count ? Number(((totals.pnrCount / totals.count) * 100).toFixed(1)) : 0,
+  };
+}
+
+async function fetchPreFaturaRows(sql) {
+  return sql`
+    select
+      r.*,
+      r.valor as valor_numerico,
+      coalesce(r.raw_data->>'arquivo_origem', df.file_name, '') as arquivo_origem,
+      coalesce(r.raw_data->>'cidade_base', '') as cidade_base,
+      coalesce(r.raw_data->>'sigla_base', r.codigo_base, '') as sigla_base,
+      coalesce(nullif(r.id_envio, ''), r.raw_data->>'id_pacote') as id_pacote,
+      coalesce(r.raw_data->>'tipo_desconto', r.tipo, r.aba_origem, '') as tipo_desconto,
+      coalesce(r.raw_data->>'canal', '') as canal,
+      coalesce(r.raw_data->>'reference_month', df.reference_month, '') as reference_month,
+      coalesce(r.raw_data->>'reference_year', df.reference_year, '') as reference_year,
+      coalesce(
+        r.raw_data->>'period_type',
+        df.period_type,
+        case
+          when r.quinzena ilike '1%' then 'q1'
+          when r.quinzena ilike '2%' then 'q2'
+          else 'month'
+        end
+      ) as period_type,
+      coalesce(r.raw_data->>'period_label', df.period_label, r.quinzena, '') as period_label,
+      case
+        when coalesce(r.tipo, r.aba_origem, r.raw_data->>'tipo_registro', r.raw_data->>'tipo_desconto') ilike '%PNR%' then 'PNR'
+        else 'PACOTE PERDIDO'
+      end as tipo_registro
+    from public.pre_fatura_records r
+    left join public.dashboard_files df
+      on df.id = r.file_id
+     and (
+       df.file_type = ${PRE_FATURA_FILE_TYPE}
+       or coalesce(df.metadata->>'module_key', df.metadata->>'dashboard_module_key') = ${PRE_FATURA_MODULE_KEY}
+     )
+    where r.module_key = ${PRE_FATURA_MODULE_KEY}
+    order by r.created_at desc nulls last, r.data desc nulls last, r.id desc
+  `;
+}
+
+function buildPreFaturaFilterOptions(rows = []) {
+  const months = new Map();
+  const values = {
+    periods: new Set(),
+    types: new Set(),
+    bases: new Set(),
+    drivers: new Set(),
+  };
+  for (const row of rows) {
+    const monthKey = parsePackageMonthKey(row);
+    if (monthKey && !months.has(monthKey)) months.set(monthKey, { key: monthKey, label: row.competencia || monthKey });
+    const period = normalizePackagePeriod(row.period_type || row.quinzena);
+    if (period !== 'month') values.periods.add(period);
+    const type = getPreFaturaRowType(row);
+    if (type) values.types.add(type);
+    if (row.base || row.codigo_base) values.bases.add(row.base || row.codigo_base);
+    if (row.driver || row.driver_normalizado) values.drivers.add(row.driver || row.driver_normalizado);
+  }
+  const toOptions = (set) => Array.from(set).filter(Boolean).sort((a, b) => String(a).localeCompare(String(b), 'pt-BR'));
+  return {
+    months: Array.from(months.values()).sort((a, b) => a.key.localeCompare(b.key)),
+    periods: toOptions(values.periods),
+    types: toOptions(values.types),
+    bases: toOptions(values.bases),
+    drivers: toOptions(values.drivers),
+  };
+}
+
+async function fetchPreFaturaFiles(sql) {
+  const [dashboardRows, processedRows] = await Promise.all([
+    sql`
+      select *
+      from public.dashboard_files
+      where file_type = ${PRE_FATURA_FILE_TYPE}
+         or coalesce(metadata->>'module_key', metadata->>'dashboard_module_key') = ${PRE_FATURA_MODULE_KEY}
+      order by created_at desc nulls last, id desc
+    `,
+    sql`
+      select *
+      from public.processed_dashboard_files
+      where module_key = ${PRE_FATURA_MODULE_KEY}
+      order by processed_at desc nulls last, created_at desc nulls last, id desc
+    `,
+  ]);
+  return { dashboardRows, processedRows };
+}
+
+async function handlePreFaturaDelete(sql, payload, profile) {
+  if (!canMutate(profile)) throw new Error('Apenas administradores podem excluir Pré-Fatura.');
+  const ids = normalizeIdList(payload.ids);
+  if (!ids.length) {
+    return {
+      data: { removedRows: 0, removedProcessedMetadata: 0, changedDashboardMetadata: 0, ids: [] },
+      error: null,
+    };
+  }
+  const isListOnly = payload.mode === 'listOnly' || payload.mode === 'list-only';
+  const mode = isListOnly ? 'list-only' : 'with-data';
+  const now = new Date().toISOString();
+  return sql.begin(async (transaction) => {
+    const dashboardRows = await transaction`
+      select id, file_name, storage_path, metadata
+      from public.dashboard_files
+      where id in ${transaction(ids)}
+        and (
+          file_type = ${PRE_FATURA_FILE_TYPE}
+          or coalesce(metadata->>'module_key', metadata->>'dashboard_module_key') = ${PRE_FATURA_MODULE_KEY}
+        )
+    `;
+    const fileNames = normalizeIdList(dashboardRows.map((row) => row.file_name || row.metadata?.original_name));
+    const fileHashes = normalizeIdList(dashboardRows.map((row) => row.metadata?.file_hash));
+    const storagePaths = normalizeIdList(dashboardRows.map((row) => row.storage_path || row.metadata?.storage_path));
+    let removedRows = 0;
+    let removedProcessedMetadata = 0;
+    let changedDashboardMetadata = 0;
+
+    if (!isListOnly) {
+      const deletedRows = await transaction`
+        delete from public.pre_fatura_records
+        where module_key = ${PRE_FATURA_MODULE_KEY}
+          and file_id in ${transaction(ids)}
+        returning id
+      `;
+      removedRows = deletedRows.length;
+
+      const deletedProcessed = (fileNames.length || fileHashes.length || storagePaths.length)
+        ? await transaction`
+          delete from public.processed_dashboard_files
+          where module_key = ${PRE_FATURA_MODULE_KEY}
+            and (
+              (${fileNames.length > 0} and file_name in ${transaction(fileNames.length ? fileNames : ['__none__'])})
+              or (${fileHashes.length > 0} and file_hash in ${transaction(fileHashes.length ? fileHashes : ['__none__'])})
+              or (${storagePaths.length > 0} and storage_path in ${transaction(storagePaths.length ? storagePaths : ['__none__'])})
+            )
+          returning id
+        `
+        : [];
+      removedProcessedMetadata = deletedProcessed.length;
+
+      const deletedDashboard = await transaction`
+        delete from public.dashboard_files
+        where id in ${transaction(ids)}
+          and (
+            file_type = ${PRE_FATURA_FILE_TYPE}
+            or coalesce(metadata->>'module_key', metadata->>'dashboard_module_key') = ${PRE_FATURA_MODULE_KEY}
+          )
+        returning id
+      `;
+      changedDashboardMetadata = deletedDashboard.length;
+    } else {
+      const updatedDashboard = await transaction`
+        update public.dashboard_files
+        set is_active = false,
+            status = 'removed_from_history',
+            metadata = coalesce(metadata, '{}'::jsonb) || jsonb_build_object(
+              'hidden_from_history', true,
+              'removed_from_history', true,
+              'removed_from_history_at', ${now},
+              'removal_mode', ${mode}
+            ),
+            updated_at = ${now}
+        where id in ${transaction(ids)}
+          and (
+            file_type = ${PRE_FATURA_FILE_TYPE}
+            or coalesce(metadata->>'module_key', metadata->>'dashboard_module_key') = ${PRE_FATURA_MODULE_KEY}
+          )
+        returning id
+      `;
+      changedDashboardMetadata = updatedDashboard.length;
+
+      if (fileNames.length || fileHashes.length || storagePaths.length) {
+        const updatedProcessed = await transaction`
+          update public.processed_dashboard_files
+          set status = 'removed_from_history',
+              metadata = coalesce(metadata, '{}'::jsonb) || jsonb_build_object(
+                'hidden_from_history', true,
+                'removed_from_history', true,
+                'removed_from_history_at', ${now},
+                'removal_mode', ${mode}
+              )
+          where module_key = ${PRE_FATURA_MODULE_KEY}
+            and (
+              (${fileNames.length > 0} and file_name in ${transaction(fileNames.length ? fileNames : ['__none__'])})
+              or (${fileHashes.length > 0} and file_hash in ${transaction(fileHashes.length ? fileHashes : ['__none__'])})
+              or (${storagePaths.length > 0} and storage_path in ${transaction(storagePaths.length ? storagePaths : ['__none__'])})
+            )
+          returning id
+        `;
+        removedProcessedMetadata = updatedProcessed.length;
+      }
+    }
+
+    return {
+      data: {
+        removedRows,
+        removedProcessedMetadata,
+        changedDashboardMetadata,
+        ids: dashboardRows.map((row) => row.id),
+      },
+      error: null,
+    };
+  });
+}
+
+async function handlePreFaturaApi(sql, pathname, payload, authUser, profile) {
+  const filters = normalizePreFaturaFilters(payload);
+
+  if (pathname === '/api/pre-fatura/table') {
+    const rows = sortPreFaturaRows(filterPreFaturaRows(await fetchPreFaturaRows(sql), filters), filters);
+    const page = paginatePreFaturaRows(rows, filters);
+    return { data: { ...page, filtered: rows.length, generated_at: new Date().toISOString() }, error: null };
+  }
+
+  if (pathname === '/api/pre-fatura/summary') {
+    const rows = filterPreFaturaRows(await fetchPreFaturaRows(sql), filters);
+    return { data: { ...buildPreFaturaSummary(rows), totalFiltered: rows.length }, error: null };
+  }
+
+  if (pathname === '/api/pre-fatura/filters') {
+    const rows = filterPreFaturaRows(await fetchPreFaturaRows(sql), filters);
+    return { data: buildPreFaturaFilterOptions(rows), error: null };
+  }
+
+  if (pathname === '/api/pre-fatura/export' || pathname === '/api/pre-fatura/report') {
+    const rows = sortPreFaturaRows(filterPreFaturaRows(await fetchPreFaturaRows(sql), filters), filters);
+    return {
+      data: {
+        rows,
+        total: rows.length,
+        summary: buildPreFaturaSummary(rows),
+        generated_at: new Date().toISOString(),
+      },
+      error: null,
+    };
+  }
+
+  if (pathname === '/api/pre-fatura/files') {
+    const { dashboardRows, processedRows } = await fetchPreFaturaFiles(sql);
+    return { data: { rows: dashboardRows, dashboard_files: dashboardRows, processed_dashboard_files: processedRows }, error: null };
+  }
+
+  if (pathname === '/api/pre-fatura/existing-keys') {
+    const keys = normalizeIdList(payload.keys);
+    if (!keys.length) return { data: { keys: [] }, error: null };
+    const rows = await sql`
+      select dedupe_key
+      from public.pre_fatura_records
+      where module_key = ${PRE_FATURA_MODULE_KEY}
+        and dedupe_key in ${sql(keys)}
+    `;
+    return { data: { keys: rows.map((row) => row.dedupe_key).filter(Boolean) }, error: null };
+  }
+
+  if (pathname === '/api/pre-fatura/delete') {
+    return handlePreFaturaDelete(sql, payload, profile);
+  }
+
+  return null;
+}
+
+function normalizePackageFilters(payload = {}) {
+  const filters = payload.filters && typeof payload.filters === 'object' ? payload.filters : payload;
+  const rawPageSize = Number(payload.pageSize || filters.pageSize || 25);
+  const rawPage = Number(payload.page || filters.page || 1);
+  return {
+    months: new Set(normalizeIdList(filters.months || filters.monthKeys || [])),
+    period: normalizePackagePeriod(filters.period || filters.period_type || 'month'),
+    types: new Set(normalizeIdList(filters.types || filters.tipos || []).map((type) => normalizeText(type))),
+    statuses: new Set(normalizeIdList(filters.statuses || filters.status || []).map((status) => normalizeText(status))),
+    categories: new Set(normalizeIdList(filters.categories || filters.categorias || []).map((category) => normalizeText(category))),
+    bases: new Set(normalizeIdList(filters.bases || filters.base || []).map((base) => normalizeText(base))),
+    drivers: new Set(normalizeIdList(filters.drivers || filters.motoristas || []).map((driver) => normalizeText(driver))),
+    query: normalizeText(filters.query || filters.search || ''),
+    page: Number.isFinite(rawPage) && rawPage > 0 ? Math.trunc(rawPage) : 1,
+    pageSize: Number.isFinite(rawPageSize) && rawPageSize > 0 ? Math.min(Math.trunc(rawPageSize), 10000) : 25,
+    sortKey: String(filters.sortKey || payload.sortKey || '').trim(),
+    sortDir: String(filters.sortDir || payload.sortDir || 'asc').toLowerCase() === 'desc' ? 'desc' : 'asc',
+  };
+}
+
+function buildPackageSearchText(row = {}) {
+  return normalizeText([
+    row.competencia,
+    row.quinzena,
+    row.tipo,
+    row.desconto,
+    row.base,
+    row.codigo_base,
+    row.driver,
+    row.driver_normalizado,
+    row.id_envio,
+    row.id_pacote,
+    row.rota,
+    row.decisao_adm,
+    row.observacao,
+    row.aba_origem,
+    row.arquivo_origem,
+  ].filter(Boolean).join(' '));
+}
+
+function filterGestaoPacotesRows(rows = [], filters = normalizePackageFilters()) {
+  return (Array.isArray(rows) ? rows : []).filter((row) => {
+    if (String(row.module_key || '') !== GESTAO_PACOTES_MODULE_KEY) return false;
+    if (filters.months.size && !filters.months.has(parsePackageMonthKey(row))) return false;
+    if (filters.period !== 'month' && normalizePackagePeriod(row.period_type || row.quinzena) !== filters.period) return false;
+    if (filters.types.size && !filters.types.has(normalizeText(row.tipo_operacional || row.tipo))) return false;
+    if (filters.categories.size && !filters.categories.has(normalizeText(row.categoria_final || row.desconto))) return false;
+    if (filters.statuses.size && !filters.statuses.has(normalizeText(row.desconto || row.categoria_final))) return false;
+    if (filters.bases.size && !filters.bases.has(normalizeText(row.codigo_base || row.base))) return false;
+    if (filters.drivers.size && !filters.drivers.has(normalizeText(row.driver_normalizado || row.driver))) return false;
+    if (filters.query && !buildPackageSearchText(row).includes(filters.query)) return false;
+    return true;
+  });
+}
+
+function sortGestaoPacotesRows(rows = [], filters = normalizePackageFilters()) {
+  const getters = {
+    competencia: (row) => parsePackageMonthKey(row),
+    quinzena: (row) => normalizePackagePeriod(row.period_type || row.quinzena),
+    tipo: (row) => row.tipo_operacional || row.tipo || '',
+    desconto: (row) => row.desconto || row.categoria_final || '',
+    categoria_final: (row) => row.categoria_final || row.desconto || '',
+    base: (row) => row.base || row.codigo_base || '',
+    driver: (row) => row.driver || row.driver_normalizado || '',
+    data: (row) => row.data || '',
+    id_envio: (row) => row.id_envio || row.id_pacote || '',
+    id_pacote: (row) => row.id_pacote || row.id_envio || '',
+    rota: (row) => row.rota || '',
+    valor: (row) => Number(row.valor_numerico || row.valor || 0),
+    valor_numerico: (row) => Number(row.valor_numerico || row.valor || 0),
+    decisao_adm: (row) => row.decisao_adm || '',
+    created_at: (row) => row.created_at || '',
+  };
+  const getter = getters[filters.sortKey];
+  if (!getter) return rows;
+  const direction = filters.sortDir === 'desc' ? -1 : 1;
+  return [...rows].sort((a, b) => {
+    const left = getter(a);
+    const right = getter(b);
+    if (typeof left === 'number' || typeof right === 'number') return (Number(left || 0) - Number(right || 0)) * direction;
+    return String(left || '').localeCompare(String(right || ''), 'pt-BR', { numeric: true, sensitivity: 'base' }) * direction;
+  });
+}
+
+function paginatePackageRows(rows = [], filters = normalizePackageFilters()) {
+  const total = rows.length;
+  const pageCount = Math.max(1, Math.ceil(total / filters.pageSize));
+  const page = Math.min(filters.page, pageCount);
+  const start = (page - 1) * filters.pageSize;
+  return {
+    rows: rows.slice(start, start + filters.pageSize),
+    page,
+    pageSize: filters.pageSize,
+    total,
+    pageCount,
+  };
+}
+
+function buildGestaoPacotesSummary(rows = []) {
+  const summary = (Array.isArray(rows) ? rows : []).reduce((acc, row) => {
+    acc.count += 1;
+    const category = String(row.categoria_final || row.desconto || 'INDEFINIDO').toUpperCase();
+    const value = Math.abs(Number(row.valor_numerico || row.valor || 0));
+    if (category === 'ALC') acc.alcValue += value;
+    else if (category === 'DRIVER') {
+      acc.driverValue += value;
+      acc.driverErrors += 1;
+    } else if (category === 'DISPATCHER') {
+      acc.dispatcherValue += value;
+      acc.dispatcherErrors += 1;
+    } else if (category === 'MERCADO_LIVRE') acc.mercadoLivreErrors += 1;
+    else acc.pendingCount += 1;
+    return acc;
+  }, {
+    count: 0,
+    alcValue: 0,
+    driverValue: 0,
+    dispatcherValue: 0,
+    driverErrors: 0,
+    dispatcherErrors: 0,
+    mercadoLivreErrors: 0,
+    pendingCount: 0,
+  });
+  summary.alcValue = Number(summary.alcValue.toFixed(2));
+  summary.driverValue = Number(summary.driverValue.toFixed(2));
+  summary.dispatcherValue = Number(summary.dispatcherValue.toFixed(2));
+  return summary;
+}
+
+async function fetchGestaoPacotesRows(sql) {
+  return sql`
+    select
+      r.*,
+      r.valor as valor_numerico,
+      coalesce(nullif(r.id_envio, ''), r.raw_data->>'id_pacote', r.raw_data->>'id_caso') as id_pacote,
+      coalesce(nullif(r.desconto, ''), 'INDEFINIDO') as categoria_final,
+      case coalesce(nullif(r.desconto, ''), 'INDEFINIDO')
+        when 'ALC' then 'ALC'
+        when 'DRIVER' then 'Driver'
+        when 'DISPATCHER' then 'Dispatcher'
+        when 'MERCADO_LIVRE' then 'Mercado Livre'
+        else 'Indefinido'
+      end as categoria_label,
+      case coalesce(nullif(r.desconto, ''), 'INDEFINIDO')
+        when 'ALC' then 'ALC'
+        when 'DRIVER' then 'Driver'
+        when 'DISPATCHER' then 'Dispatcher'
+        when 'MERCADO_LIVRE' then 'Mercado Livre'
+        else 'Indefinido'
+      end as tipo_desconto,
+      coalesce(r.raw_data->>'arquivo_origem', df.file_name, '') as arquivo_origem,
+      coalesce(r.raw_data->>'canal', '') as canal,
+      coalesce(r.raw_data->>'evidencia_1', r.observacao, '') as evidencia_1,
+      coalesce(r.raw_data->>'evidencia_2', '') as evidencia_2,
+      coalesce(r.raw_data->>'aba_gestao', r.aba_origem, '') as aba_gestao,
+      coalesce(r.raw_data->>'aba_gestao_label', r.aba_origem, '') as aba_gestao_label,
+      coalesce(r.raw_data->>'reference_month', df.reference_month, '') as reference_month,
+      coalesce(r.raw_data->>'reference_year', df.reference_year, '') as reference_year,
+      coalesce(
+        r.raw_data->>'period_type',
+        df.period_type,
+        case
+          when r.quinzena ilike '1%' then 'q1'
+          when r.quinzena ilike '2%' then 'q2'
+          else 'month'
+        end
+      ) as period_type,
+      coalesce(r.raw_data->>'period_label', df.period_label, r.quinzena, '') as period_label,
+      r.tipo as tipo_operacional
+    from public.gestao_pacotes_records r
+    left join public.dashboard_files df
+      on df.id = r.file_id
+     and (
+       df.file_type = ${GESTAO_PACOTES_FILE_TYPE}
+       or coalesce(df.metadata->>'module_key', df.metadata->>'dashboard_module_key') = ${GESTAO_PACOTES_MODULE_KEY}
+     )
+    where r.module_key = ${GESTAO_PACOTES_MODULE_KEY}
+    order by r.created_at desc nulls last, r.data desc nulls last, r.id desc
+  `;
+}
+
+function buildGestaoPacotesFilterOptions(rows = []) {
+  const months = new Map();
+  const values = {
+    periods: new Set(),
+    types: new Set(),
+    categories: new Set(),
+    bases: new Set(),
+    drivers: new Set(),
+    statuses: new Set(),
+  };
+  for (const row of rows) {
+    const monthKey = parsePackageMonthKey(row);
+    if (monthKey && !months.has(monthKey)) months.set(monthKey, { key: monthKey, label: row.competencia || monthKey });
+    const period = normalizePackagePeriod(row.period_type || row.quinzena);
+    if (period !== 'month') values.periods.add(period);
+    if (row.tipo_operacional || row.tipo) values.types.add(row.tipo_operacional || row.tipo);
+    if (row.categoria_final || row.desconto) {
+      const category = row.categoria_final || row.desconto;
+      values.categories.add(category);
+      values.statuses.add(category);
+    }
+    if (row.base || row.codigo_base) values.bases.add(row.base || row.codigo_base);
+    if (row.driver || row.driver_normalizado) values.drivers.add(row.driver || row.driver_normalizado);
+  }
+  const toOptions = (set) => Array.from(set).filter(Boolean).sort((a, b) => String(a).localeCompare(String(b), 'pt-BR'));
+  return {
+    months: Array.from(months.values()).sort((a, b) => a.key.localeCompare(b.key)),
+    periods: toOptions(values.periods),
+    types: toOptions(values.types),
+    categories: toOptions(values.categories).map((value) => ({ value, label: packageCategoryLabel(value) })),
+    statuses: toOptions(values.statuses).map((value) => ({ value, label: packageCategoryLabel(value) })),
+    bases: toOptions(values.bases),
+    drivers: toOptions(values.drivers),
+  };
+}
+
+async function fetchGestaoPacotesFiles(sql) {
+  const [dashboardRows, processedRows] = await Promise.all([
+    sql`
+      select *
+      from public.dashboard_files
+      where file_type = ${GESTAO_PACOTES_FILE_TYPE}
+         or coalesce(metadata->>'module_key', metadata->>'dashboard_module_key') = ${GESTAO_PACOTES_MODULE_KEY}
+      order by created_at desc nulls last, id desc
+    `,
+    sql`
+      select *
+      from public.processed_dashboard_files
+      where module_key = ${GESTAO_PACOTES_MODULE_KEY}
+      order by processed_at desc nulls last, created_at desc nulls last, id desc
+    `,
+  ]);
+  return { dashboardRows, processedRows };
+}
+
+async function handleGestaoPacotesDelete(sql, payload, profile) {
+  if (!canMutate(profile)) throw new Error('Apenas administradores podem excluir Gestão de Pacotes.');
+  const ids = normalizeIdList(payload.ids);
+  if (!ids.length) {
+    return {
+      data: { removedRows: 0, removedProcessedMetadata: 0, changedDashboardMetadata: 0, ids: [] },
+      error: null,
+    };
+  }
+  const isListOnly = payload.mode === 'listOnly' || payload.mode === 'list-only';
+  const mode = isListOnly ? 'list-only' : 'with-data';
+  const now = new Date().toISOString();
+  return sql.begin(async (transaction) => {
+    const dashboardRows = await transaction`
+      select id, file_name, storage_path, metadata
+      from public.dashboard_files
+      where id in ${transaction(ids)}
+        and (
+          file_type = ${GESTAO_PACOTES_FILE_TYPE}
+          or coalesce(metadata->>'module_key', metadata->>'dashboard_module_key') = ${GESTAO_PACOTES_MODULE_KEY}
+        )
+    `;
+    const fileNames = normalizeIdList(dashboardRows.map((row) => row.file_name || row.metadata?.original_name));
+    const fileHashes = normalizeIdList(dashboardRows.map((row) => row.metadata?.file_hash));
+    const storagePaths = normalizeIdList(dashboardRows.map((row) => row.storage_path || row.metadata?.storage_path));
+    let removedRows = 0;
+    let removedProcessedMetadata = 0;
+    let changedDashboardMetadata = 0;
+
+    if (!isListOnly) {
+      const deletedRows = await transaction`
+        delete from public.gestao_pacotes_records
+        where module_key = ${GESTAO_PACOTES_MODULE_KEY}
+          and file_id in ${transaction(ids)}
+        returning id
+      `;
+      removedRows = deletedRows.length;
+
+      const deletedProcessed = (fileNames.length || fileHashes.length || storagePaths.length)
+        ? await transaction`
+          delete from public.processed_dashboard_files
+          where module_key = ${GESTAO_PACOTES_MODULE_KEY}
+            and (
+              (${fileNames.length > 0} and file_name in ${transaction(fileNames.length ? fileNames : ['__none__'])})
+              or (${fileHashes.length > 0} and file_hash in ${transaction(fileHashes.length ? fileHashes : ['__none__'])})
+              or (${storagePaths.length > 0} and storage_path in ${transaction(storagePaths.length ? storagePaths : ['__none__'])})
+            )
+          returning id
+        `
+        : [];
+      removedProcessedMetadata = deletedProcessed.length;
+
+      const deletedDashboard = await transaction`
+        delete from public.dashboard_files
+        where id in ${transaction(ids)}
+          and (
+            file_type = ${GESTAO_PACOTES_FILE_TYPE}
+            or coalesce(metadata->>'module_key', metadata->>'dashboard_module_key') = ${GESTAO_PACOTES_MODULE_KEY}
+          )
+        returning id
+      `;
+      changedDashboardMetadata = deletedDashboard.length;
+    } else {
+      const updatedDashboard = await transaction`
+        update public.dashboard_files
+        set is_active = false,
+            status = 'removed_from_history',
+            metadata = coalesce(metadata, '{}'::jsonb) || jsonb_build_object(
+              'hidden_from_history', true,
+              'removed_from_history', true,
+              'removed_from_history_at', ${now},
+              'removal_mode', ${mode}
+            ),
+            updated_at = ${now}
+        where id in ${transaction(ids)}
+          and (
+            file_type = ${GESTAO_PACOTES_FILE_TYPE}
+            or coalesce(metadata->>'module_key', metadata->>'dashboard_module_key') = ${GESTAO_PACOTES_MODULE_KEY}
+          )
+        returning id
+      `;
+      changedDashboardMetadata = updatedDashboard.length;
+
+      if (fileNames.length || fileHashes.length || storagePaths.length) {
+        const updatedProcessed = await transaction`
+          update public.processed_dashboard_files
+          set status = 'removed_from_history',
+              metadata = coalesce(metadata, '{}'::jsonb) || jsonb_build_object(
+                'hidden_from_history', true,
+                'removed_from_history', true,
+                'removed_from_history_at', ${now},
+                'removal_mode', ${mode}
+              )
+          where module_key = ${GESTAO_PACOTES_MODULE_KEY}
+            and (
+              (${fileNames.length > 0} and file_name in ${transaction(fileNames.length ? fileNames : ['__none__'])})
+              or (${fileHashes.length > 0} and file_hash in ${transaction(fileHashes.length ? fileHashes : ['__none__'])})
+              or (${storagePaths.length > 0} and storage_path in ${transaction(storagePaths.length ? storagePaths : ['__none__'])})
+            )
+          returning id
+        `;
+        removedProcessedMetadata = updatedProcessed.length;
+      }
+    }
+
+    return {
+      data: {
+        removedRows,
+        removedProcessedMetadata,
+        changedDashboardMetadata,
+        ids: dashboardRows.map((row) => row.id),
+      },
+      error: null,
+    };
+  });
+}
+
+async function handleGestaoPacotesApi(sql, pathname, payload, authUser, profile) {
+  const filters = normalizePackageFilters(payload);
+
+  if (pathname === '/api/gestao-pacotes/table') {
+    const rows = sortGestaoPacotesRows(filterGestaoPacotesRows(await fetchGestaoPacotesRows(sql), filters), filters);
+    const page = paginatePackageRows(rows, filters);
+    return { data: { ...page, filtered: rows.length, generated_at: new Date().toISOString() }, error: null };
+  }
+
+  if (pathname === '/api/gestao-pacotes/summary') {
+    const rows = filterGestaoPacotesRows(await fetchGestaoPacotesRows(sql), filters);
+    return { data: { ...buildGestaoPacotesSummary(rows), totalFiltered: rows.length }, error: null };
+  }
+
+  if (pathname === '/api/gestao-pacotes/filters') {
+    const rows = filterGestaoPacotesRows(await fetchGestaoPacotesRows(sql), filters);
+    return { data: buildGestaoPacotesFilterOptions(rows), error: null };
+  }
+
+  if (pathname === '/api/gestao-pacotes/export' || pathname === '/api/gestao-pacotes/report') {
+    const rows = sortGestaoPacotesRows(filterGestaoPacotesRows(await fetchGestaoPacotesRows(sql), filters), filters);
+    return {
+      data: {
+        rows,
+        total: rows.length,
+        summary: buildGestaoPacotesSummary(rows),
+        generated_at: new Date().toISOString(),
+      },
+      error: null,
+    };
+  }
+
+  if (pathname === '/api/gestao-pacotes/files') {
+    const { dashboardRows, processedRows } = await fetchGestaoPacotesFiles(sql);
+    return { data: { rows: dashboardRows, dashboard_files: dashboardRows, processed_dashboard_files: processedRows }, error: null };
+  }
+
+  if (pathname === '/api/gestao-pacotes/existing-keys') {
+    const keys = normalizeIdList(payload.keys);
+    if (!keys.length) return { data: { keys: [] }, error: null };
+    const rows = await sql`
+      select dedupe_key
+      from public.gestao_pacotes_records
+      where module_key = ${GESTAO_PACOTES_MODULE_KEY}
+        and dedupe_key in ${sql(keys)}
+    `;
+    return { data: { keys: rows.map((row) => row.dedupe_key).filter(Boolean) }, error: null };
+  }
+
+  if (pathname === '/api/gestao-pacotes/delete') {
+    return handleGestaoPacotesDelete(sql, payload, profile);
+  }
+
+  return null;
+}
+
+async function fetchMissingPackageRows(sql) {
+  return sql`
+    select *
+    from public.gestao_desvios_pacotes_faltantes
+    order by imported_at desc nulls last, updated_at desc nulls last, id desc
+  `;
+}
+
+async function handleMissingPackagesApi(sql, pathname, payload, authUser, profile) {
+  if (pathname === '/api/pacotes-faltantes/table' || pathname === '/api/pacotes-faltantes/export' || pathname === '/api/pacotes-faltantes/report') {
+    const rows = await fetchMissingPackageRows(sql);
+    return { data: { rows }, error: null };
+  }
+
+  if (pathname === '/api/pacotes-faltantes/summary') {
+    const rows = await sql`
+      select
+        count(*)::int as total,
+        count(*) filter (where status_caso = 'Pendente')::int as pendentes,
+        count(*) filter (where status_caso = 'Em rota')::int as em_rota,
+        count(*) filter (where status_caso = 'Concluído' or status_contato_meli = 'Concluído')::int as concluidos,
+        count(*) filter (where status_contato_meli = 'E-mail Enviado')::int as email_enviado,
+        count(*) filter (where status_contato_meli = 'Aguardando MELI')::int as aguardando_meli
+      from public.gestao_desvios_pacotes_faltantes
+    `;
+    return { data: rows[0] || {}, error: null };
+  }
+
+  if (pathname === '/api/pacotes-faltantes/existing-keys') {
+    const keys = normalizeIdList(payload.keys);
+    if (!keys.length) return { data: { keys: [] }, error: null };
+    const rows = await sql`
+      select dedupe_key
+      from public.gestao_desvios_pacotes_faltantes
+      where dedupe_key in ${sql(keys)}
+    `;
+    return { data: { keys: rows.map((row) => row.dedupe_key).filter(Boolean) }, error: null };
+  }
+
+  if (pathname === '/api/pacotes-faltantes/update-status') {
+    const id = String(payload.id || '').trim();
+    const type = payload.type === 'meli' ? 'meli' : 'case';
+    if (!id) throw new Error('ID do pacote faltante ausente.');
+    const now = new Date().toISOString();
+    const value = type === 'meli'
+      ? normalizeMissingPackageMeliStatus(payload.value)
+      : normalizeMissingPackageCaseStatus(payload.value);
+    const rows = type === 'meli'
+      ? await sql`
+        update public.gestao_desvios_pacotes_faltantes
+        set status_contato_meli = ${value},
+            situacao_prazo = coalesce(${payload.situacao_prazo || null}, situacao_prazo),
+            contato_updated_at = ${now},
+            updated_at = ${now}
+        where id = ${id}
+        returning *
+      `
+      : await sql`
+        update public.gestao_desvios_pacotes_faltantes
+        set status_caso = ${value},
+            situacao_prazo = coalesce(${payload.situacao_prazo || null}, situacao_prazo),
+            status_updated_at = ${now},
+            updated_at = ${now}
+        where id = ${id}
+        returning *
+      `;
+    if (rows.length !== 1) throw new Error('Nenhum pacote faltante foi atualizado.');
+    return { data: { row: rows[0], updated_by: authUser.email || authUser.id }, error: null };
+  }
+
+  if (pathname === '/api/pacotes-faltantes/delete') {
+    if (!canMutate(profile)) throw new Error('Apenas administradores podem excluir Pacotes Faltantes.');
+    const ids = normalizeIdList(payload.ids);
+    if (!ids.length) return { data: { deleted: 0, ids: [] }, error: null };
+    const rows = await sql`
+      delete from public.gestao_desvios_pacotes_faltantes
+      where id in ${sql(ids)}
+      returning id
+    `;
+    return { data: { deleted: rows.length, ids: rows.map((row) => row.id) }, error: null };
+  }
+
+  return null;
+}
+
+async function handleFilesApi(sql, pathname, payload) {
+  if (pathname !== '/api/files/list') return null;
+  const moduleKey = String(payload.module_key || '').trim();
+  const rows = moduleKey
+    ? await sql`
+      select *
+      from public.dashboard_files
+      where coalesce(metadata->>'module_key', metadata->>'dashboard_module_key') = ${moduleKey}
+      order by created_at desc nulls last, id desc
+    `
+    : await sql`
+      select *
+      from public.dashboard_files
+      order by created_at desc nulls last, id desc
+    `;
+  return { data: { rows }, error: null };
+}
+
 function createDynamicConfig(publicConfig, port) {
+  const dataSource = process.env.DATA_SOURCE || 'railway_staging';
   return `window.APP_CONFIG = ${JSON.stringify({
     SUPABASE_URL: publicConfig.SUPABASE_URL,
     SUPABASE_ANON_KEY: publicConfig.SUPABASE_ANON_KEY,
     RAILWAY_STAGING_API_URL: `http://127.0.0.1:${port}${API_PREFIX}`,
+    RAILWAY_API_URL: `http://127.0.0.1:${port}${MODULE_API_PREFIX}`,
     RAILWAY_STAGING_MODE: true,
+    DATA_SOURCE: dataSource,
   }, null, 2)};\n`;
 }
 
@@ -559,6 +1582,11 @@ const server = http.createServer(async (request, response) => {
       return;
     }
 
+    if (url.pathname === `${MODULE_API_PREFIX}/health`) {
+      sendJson(response, 200, { ok: true, target, dataSource: process.env.DATA_SOURCE || 'railway_staging' });
+      return;
+    }
+
     if (url.pathname.startsWith(API_PREFIX)) {
       if (request.method !== 'POST') {
         sendJson(response, 405, { data: null, error: { message: 'Method not allowed' } });
@@ -577,6 +1605,44 @@ const server = http.createServer(async (request, response) => {
         : url.pathname === `${API_PREFIX}/rpc`
           ? await handleRpc(sql, payload, authUser)
           : null;
+
+      if (!result) {
+        sendJson(response, 404, { data: null, error: { message: 'Endpoint nao encontrado.' } });
+        return;
+      }
+
+      sendJson(response, 200, result);
+      return;
+    }
+
+    if (
+      url.pathname.startsWith(`${MODULE_API_PREFIX}/pre-fatura`) ||
+      url.pathname.startsWith(`${MODULE_API_PREFIX}/pacotes-faltantes`) ||
+      url.pathname.startsWith(`${MODULE_API_PREFIX}/gestao-pacotes`) ||
+      url.pathname.startsWith(`${MODULE_API_PREFIX}/files`)
+    ) {
+      if (request.method !== 'POST') {
+        sendJson(response, 405, { data: null, error: { message: 'Method not allowed' } });
+        return;
+      }
+
+      const authUser = await verifyAuthUser(request, publicConfig);
+      if (!authUser) {
+        sendJson(response, 401, { data: null, error: { message: 'Sessao Supabase invalida ou ausente.' } });
+        return;
+      }
+
+      const [payload, profile] = await Promise.all([
+        readBody(request),
+        loadProfile(sql, authUser),
+      ]);
+      const result = url.pathname.startsWith(`${MODULE_API_PREFIX}/pre-fatura`)
+        ? await handlePreFaturaApi(sql, url.pathname, payload, authUser, profile)
+        : url.pathname.startsWith(`${MODULE_API_PREFIX}/pacotes-faltantes`)
+          ? await handleMissingPackagesApi(sql, url.pathname, payload, authUser, profile)
+          : url.pathname.startsWith(`${MODULE_API_PREFIX}/gestao-pacotes`)
+            ? await handleGestaoPacotesApi(sql, url.pathname, payload, authUser, profile)
+            : await handleFilesApi(sql, url.pathname, payload, authUser, profile);
 
       if (!result) {
         sendJson(response, 404, { data: null, error: { message: 'Endpoint nao encontrado.' } });
