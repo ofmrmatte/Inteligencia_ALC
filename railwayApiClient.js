@@ -125,5 +125,37 @@
         return request("/gestao-pacotes/delete", payload);
       },
     },
+    desviosPnr: {
+      getSummary(params = {}) {
+        return request("/desvios-pnr/summary", params);
+      },
+      getTable(params = {}) {
+        return request("/desvios-pnr/table", params);
+      },
+      getFilters(params = {}) {
+        return request("/desvios-pnr/filters", params);
+      },
+      getTemporalChart(params = {}) {
+        return request("/desvios-pnr/temporal-chart", params);
+      },
+      updateStatus(payload = {}) {
+        return request("/desvios-pnr/update-status", payload);
+      },
+      export(params = {}) {
+        return request("/desvios-pnr/export", params);
+      },
+      report(params = {}) {
+        return request("/desvios-pnr/report", params);
+      },
+      files() {
+        return request("/desvios-pnr/files", {});
+      },
+      delete(payload = {}) {
+        return request("/desvios-pnr/delete", payload);
+      },
+      existingKeys(keys = []) {
+        return request("/desvios-pnr/existing-keys", { keys });
+      },
+    },
   };
 })();

@@ -538,6 +538,9 @@ const PRE_FATURA_MODULE_KEY = 'pre_fatura';
 const PRE_FATURA_FILE_TYPE = 'PRE_FATURA';
 const GESTAO_PACOTES_MODULE_KEY = 'gestao_pacotes';
 const GESTAO_PACOTES_FILE_TYPE = 'GESTAO_PACOTES';
+const DESVIOS_PNR_MODULE_KEY = 'desvios_pnr';
+const DESVIOS_PNR_FILE_TYPE = 'DESVIOS_PNR';
+const PNR_EXPORT_MAX_ROWS = 200000;
 const PACKAGE_CATEGORY_LABELS = {
   ALC: 'ALC',
   DRIVER: 'Driver',
@@ -1407,6 +1410,549 @@ async function handleGestaoPacotesApi(sql, pathname, payload, authUser, profile)
   return null;
 }
 
+function normalizePnrApiPayload(payload = {}) {
+  const filters = payload.filters && typeof payload.filters === 'object' ? payload.filters : payload;
+  const readList = (...keys) => {
+    for (const key of keys) {
+      if (Array.isArray(filters[key])) return normalizeIdList(filters[key]);
+      if (Array.isArray(payload[key])) return normalizeIdList(payload[key]);
+    }
+    return [];
+  };
+  const rawPage = Number(filters.p_page || filters.page || payload.page || 1);
+  const rawPageSize = Number(filters.p_page_size || filters.pageSize || payload.pageSize || 15);
+  return {
+    p_file_ids: readList('p_file_ids', 'fileIds', 'file_ids'),
+    p_month_keys: readList('p_month_keys', 'monthKeys', 'months'),
+    p_quinzenas: readList('p_quinzenas', 'quinzenas', 'periods'),
+    p_statuses: readList('p_statuses', 'statuses', 'status'),
+    p_tipos: readList('p_tipos', 'tipos', 'types'),
+    p_estacoes: readList('p_estacoes', 'estacoes', 'origins', 'bases'),
+    p_status_motoristas: readList('p_status_motoristas', 'statusMotoristas', 'status_motoristas'),
+    p_fontes: readList('p_fontes', 'fontes', 'fontesCruzamento', 'fontes_cruzamento'),
+    p_motoristas: readList('p_motoristas', 'motoristas', 'drivers'),
+    p_rotas: readList('p_rotas', 'rotas', 'routes'),
+    p_search: String(filters.p_search || filters.search || filters.query || payload.search || '').trim(),
+    p_page: Number.isFinite(rawPage) && rawPage > 0 ? Math.trunc(rawPage) : 1,
+    p_page_size: Number.isFinite(rawPageSize) && rawPageSize > 0 ? Math.trunc(rawPageSize) : 15,
+    p_sort_key: String(filters.p_sort_key || filters.sortKey || payload.sortKey || '').trim(),
+    p_sort_dir: String(filters.p_sort_dir || filters.sortDir || payload.sortDir || 'desc').toLowerCase() === 'asc' ? 'asc' : 'desc',
+  };
+}
+
+function getPnrOrderClause(args = {}) {
+  const direction = args.p_sort_dir === 'asc' ? 'asc' : 'desc';
+  const defaultTail = 'r.month_key desc nulls last, r.quinzena_key desc nulls last, r.data_caso desc nulls last, r.id desc';
+  const sortClauses = {
+    valorCompraNumerico: `r.valor_compra ${direction} nulls last, ${defaultTail}`,
+    statusNormalizado: `r.status_normalizado ${direction} nulls last, ${defaultTail}`,
+    estacaoOrigem: `r.estacao_origem ${direction} nulls last, ${defaultTail}`,
+    dataEncerramentoCaso: `r.data_encerramento_caso ${direction} nulls last, ${defaultTail}`,
+    dataEntrega: `r.data_entrega ${direction} nulls last, ${defaultTail}`,
+    idEnvio: `r.id_envio ${direction} nulls last, ${defaultTail}`,
+  };
+  return sortClauses[args.p_sort_key] || defaultTail;
+}
+
+async function callDesviosPnrRpc(sql, name, args, authUser) {
+  return handleRpc(sql, { name, args }, authUser);
+}
+
+function getPnrRecordFilterWhereClause() {
+  return `
+    r.module_key = $1
+    and (coalesce(cardinality($2::uuid[]), 0) = 0 or r.file_id = any($2::uuid[]))
+    and (coalesce(cardinality($3::text[]), 0) = 0 or r.month_key = any($3::text[]))
+    and (coalesce(cardinality($4::text[]), 0) = 0 or r.quinzena_key = any($4::text[]))
+    and (coalesce(cardinality($5::text[]), 0) = 0 or coalesce(nullif(r.status_normalizado, ''), 'Indefinido') = any($5::text[]))
+    and (coalesce(cardinality($6::text[]), 0) = 0 or coalesce(nullif(r.tipo_base, ''), nullif(r.tipo_operacional, ''), 'Não identificada') = any($6::text[]))
+    and (coalesce(cardinality($7::text[]), 0) = 0 or coalesce(nullif(r.estacao_origem, ''), 'Sem estação') = any($7::text[]))
+    and (coalesce(cardinality($8::text[]), 0) = 0 or coalesce(nullif(r.status_motorista, ''), 'Não identificado') = any($8::text[]))
+    and (coalesce(cardinality($9::text[]), 0) = 0 or coalesce(nullif(r.fonte_cruzamento, ''), 'Não identificada') = any($9::text[]))
+    and (coalesce(cardinality($10::text[]), 0) = 0 or coalesce(nullif(r.motorista_display, ''), nullif(r.nome_motorista, ''), nullif(r.id_motorista, ''), 'Sem motorista') = any($10::text[]))
+    and (coalesce(cardinality($11::text[]), 0) = 0 or coalesce(nullif(r.id_rota, ''), 'Sem rota') = any($11::text[]))
+    and (
+      coalesce(btrim($12::text), '') = ''
+      or concat_ws(' ',
+        r.competencia,
+        r.quinzena,
+        r.status_normalizado,
+        r.tipo_base,
+        r.tipo_operacional,
+        r.estacao_origem,
+        r.status_motorista,
+        r.fonte_cruzamento,
+        r.id_envio,
+        r.id_motorista,
+        r.id_rota,
+        r.id_reclamacao,
+        r.id::text,
+        r.comentario_encerramento,
+        r.nome_motorista,
+        r.motorista_display
+      ) ilike '%' || btrim($12::text) || '%'
+    )
+  `;
+}
+
+function getPnrRecordFilterParams(args = {}) {
+  return [
+    DESVIOS_PNR_MODULE_KEY,
+    args.p_file_ids,
+    args.p_month_keys,
+    args.p_quinzenas,
+    args.p_statuses,
+    args.p_tipos,
+    args.p_estacoes,
+    args.p_status_motoristas,
+    args.p_fontes,
+    args.p_motoristas,
+    args.p_rotas,
+    args.p_search,
+  ];
+}
+
+async function fetchDesviosPnrExportRows(sql, args = {}) {
+  const limit = Math.min(Math.max(Number(args.limit || args.pageSize || PNR_EXPORT_MAX_ROWS), 1), PNR_EXPORT_MAX_ROWS);
+  const orderClause = getPnrOrderClause(args);
+  const whereClause = getPnrRecordFilterWhereClause();
+  return sql.unsafe(
+    `
+      select
+        r.id,
+        r.file_id,
+        r.dedupe_key,
+        r.module_key,
+        r.competencia,
+        r.quinzena,
+        r.tipo,
+        r.status_original,
+        r.status_normalizado,
+        r.status_previous,
+        r.status_current,
+        r.status_updated_at,
+        r.status_updated_by,
+        r.manual_status_override,
+        r.periodo_faturamento,
+        r.periodo_faturamento_original,
+        r.mes,
+        r.ano,
+        r.month_key,
+        r.quinzena_key,
+        r.quinzena_ref,
+        r.periodo_label,
+        r.source_file_name,
+        r.source_periodo,
+        r.data_pedido_revisao,
+        r.pedido_revisao,
+        r.data_encerramento_caso,
+        r.rep_assistente,
+        r.comentario_encerramento,
+        r.numero_pre_fatura,
+        r.id_envio,
+        r.produtos,
+        r.valor_compra,
+        r.rep_transportadora,
+        r.id_transportadora,
+        r.transportadora,
+        r.estacao_origem,
+        r.tipo_ocorrencia,
+        r.tipo_base,
+        r.tipo_operacional,
+        r.base_identificada,
+        r.nome_base_operacao,
+        r.id_rota,
+        r.id_motorista,
+        r.nome_motorista,
+        r.motorista_display,
+        r.status_motorista,
+        r.fonte_cruzamento,
+        r.observacao_cruzamento,
+        r.motorista_match_source,
+        r.data_caso,
+        r.data_entrega,
+        r.id_reclamacao,
+        r.data_reclamacao,
+        r.created_at
+      from public.desvios_pnr_records r
+      where ${whereClause}
+      order by ${orderClause}
+      limit $13::integer
+    `,
+    [...getPnrRecordFilterParams(args), limit],
+  );
+}
+
+async function fetchDesviosPnrRecordCount(sql, args = {}) {
+  const rows = await sql.unsafe(
+    `
+      select count(*)::integer as total
+      from public.desvios_pnr_records r
+      where ${getPnrRecordFilterWhereClause()}
+    `,
+    getPnrRecordFilterParams(args),
+  );
+  return Number(rows[0]?.total || 0);
+}
+
+async function fetchDesviosPnrRecordSummary(sql, args = {}) {
+  const rows = await sql.unsafe(
+    `
+      with filtered as not materialized (
+        select
+          r.*,
+          (lower(coalesce(r.status_normalizado, '')) like '%fatur%' or lower(coalesce(r.status_normalizado, '')) like '%cobr%') as is_faturado,
+          (lower(coalesce(r.status_normalizado, '')) like '%anulad%' or lower(coalesce(r.status_normalizado, '')) like '%cancel%') as is_anulado,
+          coalesce(nullif(r.tipo_base, ''), nullif(r.tipo_operacional, ''), 'Não identificada') as tipo_base_label,
+          coalesce(nullif(r.estacao_origem, ''), 'Sem estação') as estacao_label,
+          coalesce(nullif(r.motorista_display, ''), nullif(r.nome_motorista, ''), nullif(r.id_motorista, ''), 'Sem motorista') as motorista_label,
+          case when nullif(r.id_motorista, '') is not null then 'ID: ' || r.id_motorista else '' end as motorista_detail,
+          coalesce(nullif(r.id_rota, ''), 'Sem rota') as rota_label
+        from public.desvios_pnr_records r
+        where ${getPnrRecordFilterWhereClause()}
+      ),
+      totals as (
+        select
+          count(*)::integer as total_count,
+          coalesce(sum(valor_compra), 0)::numeric as total_value,
+          case when count(*) > 0 then coalesce(sum(valor_compra), 0)::numeric / count(*)::numeric else 0 end as avg_value,
+          count(*) filter (where is_anulado)::integer as anulado,
+          coalesce(sum(valor_compra) filter (where is_anulado), 0)::numeric as valor_anulado,
+          count(*) filter (where is_faturado)::integer as faturamento,
+          coalesce(sum(valor_compra) filter (where is_faturado), 0)::numeric as valor_faturado,
+          count(*) filter (where not is_anulado and not is_faturado)::integer as aberto_analise,
+          coalesce(sum(valor_compra) filter (where not is_anulado and not is_faturado), 0)::numeric as valor_aberto_analise
+        from filtered
+      ),
+      status_rows as (
+        select coalesce(nullif(status_normalizado, ''), 'Indefinido') as label, count(*)::integer as count, coalesce(sum(valor_compra), 0)::numeric as total_value
+        from filtered
+        group by coalesce(nullif(status_normalizado, ''), 'Indefinido')
+        order by count(*) desc
+      ),
+      operation_rows as (
+        select tipo_base_label as label, count(*)::integer as count
+        from filtered
+        group by tipo_base_label
+        order by count(*) desc
+      ),
+      station_rows as (
+        select estacao_label as label, count(*)::integer as count, coalesce(sum(valor_compra), 0)::numeric as total_value
+        from filtered
+        group by estacao_label
+        order by count(*) desc, coalesce(sum(valor_compra), 0) desc
+        limit 10
+      ),
+      driver_rows as (
+        select motorista_label as label, min(motorista_detail) as detail, count(*)::integer as count, coalesce(sum(valor_compra), 0)::numeric as total_value
+        from filtered
+        group by motorista_label
+        order by count(*) desc, coalesce(sum(valor_compra), 0) desc
+        limit 10
+      ),
+      evolution_source as (
+        select
+          month_key,
+          coalesce(nullif(quinzena_key, ''), 'month') as quinzena_key,
+          coalesce(min(competencia), month_key) as label,
+          count(*)::integer as count,
+          coalesce(sum(valor_compra), 0)::numeric as total_value,
+          coalesce(sum(valor_compra) filter (where is_anulado), 0)::numeric as valor_anulado,
+          coalesce(sum(valor_compra) filter (where is_faturado), 0)::numeric as valor_faturado
+        from filtered
+        where month_key ~ '^[0-9]{4}-[0-9]{2}$'
+        group by month_key, coalesce(nullif(quinzena_key, ''), 'month')
+        order by month_key, coalesce(nullif(quinzena_key, ''), 'month')
+      )
+      select jsonb_build_object(
+        'total', (select total_count from totals),
+        'summary', jsonb_build_object(
+          'count', (select total_count from totals),
+          'totalValue', (select total_value from totals),
+          'avgValue', (select avg_value from totals),
+          'anulado', (select anulado from totals),
+          'valorAnulado', (select valor_anulado from totals),
+          'faturamento', (select faturamento from totals),
+          'valorFaturado', (select valor_faturado from totals),
+          'aberto', (select aberto_analise from totals),
+          'valorAberto', (select valor_aberto_analise from totals),
+          'ticketMedioGeral', case when (select total_count from totals) > 0 then (select total_value from totals) / (select total_count from totals)::numeric else 0 end,
+          'ticketMedioFaturado', case when (select faturamento from totals) > 0 then (select valor_faturado from totals) / (select faturamento from totals)::numeric else 0 end,
+          'ticketMedioAnulado', case when (select anulado from totals) > 0 then (select valor_anulado from totals) / (select anulado from totals)::numeric else 0 end
+        ),
+        'statusRows', coalesce((select jsonb_agg(jsonb_build_object('label', label, 'count', count, 'totalValue', total_value, 'share', case when (select total_count from totals) > 0 then (count::numeric / (select total_count from totals)::numeric) * 100 else 0 end)) from status_rows), '[]'::jsonb),
+        'operationRows', coalesce((select jsonb_agg(jsonb_build_object('label', label, 'count', count, 'share', case when (select total_count from totals) > 0 then (count::numeric / (select total_count from totals)::numeric) * 100 else 0 end)) from operation_rows), '[]'::jsonb),
+        'stationRows', coalesce((select jsonb_agg(jsonb_build_object('label', label, 'count', count, 'totalValue', total_value, 'share', case when (select total_count from totals) > 0 then (count::numeric / (select total_count from totals)::numeric) * 100 else 0 end)) from station_rows), '[]'::jsonb),
+        'driverRows', coalesce((select jsonb_agg(jsonb_build_object('label', label, 'detail', detail, 'count', count, 'totalValue', total_value, 'share', case when (select total_count from totals) > 0 then (count::numeric / (select total_count from totals)::numeric) * 100 else 0 end)) from driver_rows), '[]'::jsonb),
+        'evolutionRows', coalesce((select jsonb_agg(jsonb_build_object(
+          'key', month_key || '|' || quinzena_key,
+          'label', label || case quinzena_key when 'q1' then ' · 1Q' when 'q2' then ' · 2Q' else '' end,
+          'year', substring(month_key from 1 for 4)::integer,
+          'month', substring(month_key from 6 for 2)::integer,
+          'quinzena', quinzena_key,
+          'count', count,
+          'totalValue', total_value,
+          'valorAnulado', valor_anulado,
+          'valorFaturado', valor_faturado,
+          'saldoValue', valor_anulado - valor_faturado
+        ) order by month_key, quinzena_key) from evolution_source), '[]'::jsonb)
+      ) as data
+    `,
+    getPnrRecordFilterParams(args),
+  );
+  return rows[0]?.data || { total: 0, summary: {}, statusRows: [], operationRows: [], stationRows: [], driverRows: [], evolutionRows: [] };
+}
+
+async function fetchDesviosPnrFiles(sql) {
+  const [dashboardRows, processedRows] = await Promise.all([
+    sql`
+      select *
+      from public.dashboard_files
+      where file_type = ${DESVIOS_PNR_FILE_TYPE}
+         or coalesce(metadata->>'module_key', metadata->>'dashboard_module_key') = ${DESVIOS_PNR_MODULE_KEY}
+      order by created_at desc nulls last, id desc
+    `,
+    sql`
+      select *
+      from public.processed_dashboard_files
+      where module_key = ${DESVIOS_PNR_MODULE_KEY}
+      order by processed_at desc nulls last, created_at desc nulls last, id desc
+    `,
+  ]);
+  return { dashboardRows, processedRows };
+}
+
+async function handleDesviosPnrDelete(sql, payload, profile) {
+  if (!canMutate(profile)) throw new Error('Apenas administradores podem excluir PNRs.');
+  const ids = normalizeIdList(payload.ids);
+  if (!ids.length) {
+    return {
+      data: { removedRows: 0, removedProcessedMetadata: 0, changedDashboardMetadata: 0, ids: [] },
+      error: null,
+    };
+  }
+  const isListOnly = payload.mode === 'listOnly' || payload.mode === 'list-only';
+  const mode = isListOnly ? 'list-only' : 'with-data';
+  const now = new Date().toISOString();
+  return sql.begin(async (transaction) => {
+    const dashboardRows = await transaction`
+      select id, file_name, storage_path, metadata
+      from public.dashboard_files
+      where id in ${transaction(ids)}
+        and (
+          file_type = ${DESVIOS_PNR_FILE_TYPE}
+          or coalesce(metadata->>'module_key', metadata->>'dashboard_module_key') = ${DESVIOS_PNR_MODULE_KEY}
+        )
+    `;
+    const fileNames = normalizeIdList(dashboardRows.map((row) => row.file_name || row.metadata?.original_name));
+    const fileHashes = normalizeIdList(dashboardRows.map((row) => row.metadata?.file_hash));
+    const storagePaths = normalizeIdList(dashboardRows.map((row) => row.storage_path || row.metadata?.storage_path));
+    let removedRows = 0;
+    let removedProcessedMetadata = 0;
+    let changedDashboardMetadata = 0;
+
+    if (!isListOnly) {
+      const deletedRows = await transaction`
+        delete from public.desvios_pnr_records
+        where module_key = ${DESVIOS_PNR_MODULE_KEY}
+          and (file_id in ${transaction(ids)} or upload_batch_id in ${transaction(ids)})
+        returning id
+      `;
+      removedRows = deletedRows.length;
+
+      const deletedProcessed = (fileNames.length || fileHashes.length || storagePaths.length)
+        ? await transaction`
+          delete from public.processed_dashboard_files
+          where module_key = ${DESVIOS_PNR_MODULE_KEY}
+            and (
+              (${fileNames.length > 0} and file_name in ${transaction(fileNames.length ? fileNames : ['__none__'])})
+              or (${fileHashes.length > 0} and file_hash in ${transaction(fileHashes.length ? fileHashes : ['__none__'])})
+              or (${storagePaths.length > 0} and storage_path in ${transaction(storagePaths.length ? storagePaths : ['__none__'])})
+            )
+          returning id
+        `
+        : [];
+      removedProcessedMetadata = deletedProcessed.length;
+
+      const deletedDashboard = await transaction`
+        delete from public.dashboard_files
+        where id in ${transaction(ids)}
+          and (
+            file_type = ${DESVIOS_PNR_FILE_TYPE}
+            or coalesce(metadata->>'module_key', metadata->>'dashboard_module_key') = ${DESVIOS_PNR_MODULE_KEY}
+          )
+        returning id
+      `;
+      changedDashboardMetadata = deletedDashboard.length;
+
+      await transaction.unsafe('select public.refresh_desvios_pnr_metrics_summary($1::uuid[])', [ids]);
+    } else {
+      const updatedDashboard = await transaction`
+        update public.dashboard_files
+        set is_active = false,
+            status = 'removed_from_history',
+            metadata = coalesce(metadata, '{}'::jsonb) || jsonb_build_object(
+              'hidden_from_history', true,
+              'removed_from_history', true,
+              'removed_from_history_at', ${now},
+              'removal_mode', ${mode}
+            ),
+            updated_at = ${now}
+        where id in ${transaction(ids)}
+          and (
+            file_type = ${DESVIOS_PNR_FILE_TYPE}
+            or coalesce(metadata->>'module_key', metadata->>'dashboard_module_key') = ${DESVIOS_PNR_MODULE_KEY}
+          )
+        returning id
+      `;
+      changedDashboardMetadata = updatedDashboard.length;
+
+      if (fileNames.length || fileHashes.length || storagePaths.length) {
+        const updatedProcessed = await transaction`
+          update public.processed_dashboard_files
+          set status = 'removed_from_history',
+              metadata = coalesce(metadata, '{}'::jsonb) || jsonb_build_object(
+                'hidden_from_history', true,
+                'removed_from_history', true,
+                'removed_from_history_at', ${now},
+                'removal_mode', ${mode}
+              )
+          where module_key = ${DESVIOS_PNR_MODULE_KEY}
+            and (
+              (${fileNames.length > 0} and file_name in ${transaction(fileNames.length ? fileNames : ['__none__'])})
+              or (${fileHashes.length > 0} and file_hash in ${transaction(fileHashes.length ? fileHashes : ['__none__'])})
+              or (${storagePaths.length > 0} and storage_path in ${transaction(storagePaths.length ? storagePaths : ['__none__'])})
+            )
+          returning id
+        `;
+        removedProcessedMetadata = updatedProcessed.length;
+      }
+    }
+
+    return {
+      data: {
+        removedRows,
+        removedProcessedMetadata,
+        changedDashboardMetadata,
+        ids: dashboardRows.map((row) => row.id),
+      },
+      error: null,
+    };
+  });
+}
+
+async function handleDesviosPnrApi(sql, pathname, payload, authUser, profile) {
+  const args = normalizePnrApiPayload(payload);
+
+  if (pathname === '/api/desvios-pnr/summary') {
+    const result = await callDesviosPnrRpc(sql, 'desvios_pnr_summary', args, authUser);
+    if (!args.p_search) return result;
+    const exactSummary = await fetchDesviosPnrRecordSummary(sql, args);
+    return {
+      data: {
+        ...(result.data || {}),
+        ...exactSummary,
+        monthOptions: result.data?.monthOptions || [],
+        filterOptions: result.data?.filterOptions || {},
+      },
+      error: result.error || null,
+    };
+  }
+
+  if (pathname === '/api/desvios-pnr/table') {
+    const result = await callDesviosPnrRpc(sql, 'desvios_pnr_table', args, authUser);
+    const exactTotal = args.p_search ? await fetchDesviosPnrRecordCount(sql, args) : Number(result.data?.total || 0);
+    return {
+      data: {
+        ...(result.data || {}),
+        page: args.p_page,
+        pageSize: Math.min(Math.max(args.p_page_size, 10), 100),
+        total: exactTotal,
+        filtered: exactTotal,
+        generated_at: new Date().toISOString(),
+      },
+      error: result.error || null,
+    };
+  }
+
+  if (pathname === '/api/desvios-pnr/filters') {
+    const result = await callDesviosPnrRpc(sql, 'desvios_pnr_summary', args, authUser);
+    return {
+      data: {
+        filterOptions: result.data?.filterOptions || {},
+        monthOptions: result.data?.monthOptions || [],
+      },
+      error: result.error || null,
+    };
+  }
+
+  if (pathname === '/api/desvios-pnr/temporal-chart') {
+    const result = await callDesviosPnrRpc(sql, 'desvios_pnr_summary', args, authUser);
+    const summaryPayload = args.p_search ? await fetchDesviosPnrRecordSummary(sql, args) : result.data;
+    const rows = Array.isArray(summaryPayload?.evolutionRows) ? summaryPayload.evolutionRows : [];
+    const totals = rows.reduce((acc, row) => {
+      acc.valorAnulado += Number(row.valorAnulado || row.valor_anulado || 0);
+      acc.valorFaturado += Number(row.valorFaturado || row.valor_faturado || 0);
+      return acc;
+    }, { valorAnulado: 0, valorFaturado: 0 });
+    totals.saldo = totals.valorAnulado - totals.valorFaturado;
+    return { data: { rows, evolutionRows: rows, totals, generated_at: new Date().toISOString() }, error: result.error || null };
+  }
+
+  if (pathname === '/api/desvios-pnr/export' || pathname === '/api/desvios-pnr/report') {
+    const [rows, summary] = await Promise.all([
+      fetchDesviosPnrExportRows(sql, args),
+      callDesviosPnrRpc(sql, 'desvios_pnr_summary', args, authUser),
+    ]);
+    const summaryPayload = args.p_search ? await fetchDesviosPnrRecordSummary(sql, args) : summary.data;
+    return {
+      data: {
+        rows,
+        total: rows.length,
+        summary: summaryPayload?.summary || {},
+        evolutionRows: summaryPayload?.evolutionRows || [],
+        generated_at: new Date().toISOString(),
+        truncated: rows.length >= PNR_EXPORT_MAX_ROWS,
+      },
+      error: null,
+    };
+  }
+
+  if (pathname === '/api/desvios-pnr/update-status') {
+    const recordId = String(payload.id || payload.recordId || payload.p_record_id || '').trim();
+    const status = String(payload.status || payload.value || payload.p_status || '').trim();
+    if (!recordId || !status) throw new Error('ID e status do PNR sao obrigatorios.');
+    const result = await callDesviosPnrRpc(sql, 'update_desvios_pnr_status', {
+      p_record_id: recordId,
+      p_status: status,
+    }, authUser);
+    return { data: { row: result.data, updated_by: authUser.email || authUser.id }, error: result.error || null };
+  }
+
+  if (pathname === '/api/desvios-pnr/files') {
+    const { dashboardRows, processedRows } = await fetchDesviosPnrFiles(sql);
+    return { data: { rows: dashboardRows, dashboard_files: dashboardRows, processed_dashboard_files: processedRows }, error: null };
+  }
+
+  if (pathname === '/api/desvios-pnr/existing-keys') {
+    const keys = normalizeIdList(payload.keys);
+    if (!keys.length) return { data: { keys: [] }, error: null };
+    const rows = await sql`
+      select dedupe_key
+      from public.desvios_pnr_records
+      where module_key = ${DESVIOS_PNR_MODULE_KEY}
+        and dedupe_key in ${sql(keys)}
+    `;
+    return { data: { keys: rows.map((row) => row.dedupe_key).filter(Boolean) }, error: null };
+  }
+
+  if (pathname === '/api/desvios-pnr/delete') {
+    return handleDesviosPnrDelete(sql, payload, profile);
+  }
+
+  return null;
+}
+
 async function fetchMissingPackageRows(sql) {
   return sql`
     select *
@@ -1619,6 +2165,7 @@ const server = http.createServer(async (request, response) => {
       url.pathname.startsWith(`${MODULE_API_PREFIX}/pre-fatura`) ||
       url.pathname.startsWith(`${MODULE_API_PREFIX}/pacotes-faltantes`) ||
       url.pathname.startsWith(`${MODULE_API_PREFIX}/gestao-pacotes`) ||
+      url.pathname.startsWith(`${MODULE_API_PREFIX}/desvios-pnr`) ||
       url.pathname.startsWith(`${MODULE_API_PREFIX}/files`)
     ) {
       if (request.method !== 'POST') {
@@ -1642,7 +2189,9 @@ const server = http.createServer(async (request, response) => {
           ? await handleMissingPackagesApi(sql, url.pathname, payload, authUser, profile)
           : url.pathname.startsWith(`${MODULE_API_PREFIX}/gestao-pacotes`)
             ? await handleGestaoPacotesApi(sql, url.pathname, payload, authUser, profile)
-            : await handleFilesApi(sql, url.pathname, payload, authUser, profile);
+            : url.pathname.startsWith(`${MODULE_API_PREFIX}/desvios-pnr`)
+              ? await handleDesviosPnrApi(sql, url.pathname, payload, authUser, profile)
+              : await handleFilesApi(sql, url.pathname, payload, authUser, profile);
 
       if (!result) {
         sendJson(response, 404, { data: null, error: { message: 'Endpoint nao encontrado.' } });

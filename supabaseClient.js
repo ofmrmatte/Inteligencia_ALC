@@ -17,6 +17,40 @@
     return;
   }
 
+  const isInvalidRefreshTokenError = (reason) =>
+    /Invalid Refresh Token|Refresh Token Not Found|refresh_token/i.test(`${reason?.message || ""} ${reason?.error_description || ""} ${reason || ""}`);
+
+  const clearExpiredSupabaseAuthStorage = () => {
+    try {
+      const projectRef = new URL(SUPABASE_URL).host.split(".")[0];
+      const keys = [];
+      for (let index = 0; index < window.localStorage.length; index += 1) {
+        const key = window.localStorage.key(index);
+        if (key && key.includes(projectRef) && key.includes("auth-token")) keys.push(key);
+      }
+      keys.forEach((key) => window.localStorage.removeItem(key));
+    } catch (error) {
+      console.warn("[AUTH] Não foi possível limpar token local expirado.", error);
+    }
+  };
+
+  window.addEventListener("unhandledrejection", (event) => {
+    if (!isInvalidRefreshTokenError(event.reason)) return;
+    clearExpiredSupabaseAuthStorage();
+    console.warn("[AUTH] Sessão local expirada; token antigo removido.");
+    event.preventDefault();
+  });
+
+  const nativeConsoleError = console.error.bind(console);
+  console.error = (...args) => {
+    if (args.some(isInvalidRefreshTokenError)) {
+      clearExpiredSupabaseAuthStorage();
+      console.warn("[AUTH] Sessão local expirada; token antigo removido.");
+      return;
+    }
+    nativeConsoleError(...args);
+  };
+
   const supabaseFetch = (input, init = {}) => fetch(input, {
     ...init,
     cache: "no-store",

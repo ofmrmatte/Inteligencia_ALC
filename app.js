@@ -4095,6 +4095,7 @@ function getRailwayApiClientForModule(moduleKey) {
     DASHBOARD_MODULE_KEYS.preFatura,
     DASHBOARD_MODULE_KEYS.pacotesFaltantes,
     DASHBOARD_MODULE_KEYS.pacotes,
+    DASHBOARD_MODULE_KEYS.desviosPnr,
   ];
   if (!supportedModules.includes(moduleKey)) return null;
   const client = window.railwayApiClient;
@@ -5720,6 +5721,34 @@ async function updatePnrRecordStatus(recordId, nextStatus, options = {}) {
   if (currentStatus === normalizedStatus) return null;
   const timestamp = new Date().toISOString();
   const updatedBy = currentUser.email || currentUser.id || "";
+  const railwayPnrApi = getRailwayApiClientForModule(DASHBOARD_MODULE_KEYS.desviosPnr);
+  if (railwayPnrApi?.desviosPnr?.updateStatus) {
+    const result = await withTimeout(
+      railwayPnrApi.desviosPnr.updateStatus({
+        id: recordId,
+        status: normalizedStatus,
+      }),
+      SUPABASE_QUERY_TIMEOUT_MS,
+      "Tempo limite excedido ao salvar status de PNR no Railway.",
+    );
+    if (result.error) throw result.error;
+    const updatedRow = result.data?.row || result.data || null;
+    const fileId = updatedRow?.file_id || options.fileId || "";
+    updatePnrRowsStatusLocally(recordId, normalizedStatus, {
+      status_previous: updatedRow?.status_previous || currentStatus,
+      status_updated_at: updatedRow?.status_updated_at || timestamp,
+      status_updated_by: updatedRow?.status_updated_by || result.data?.updated_by || updatedBy,
+    });
+    console.info("[PNR Status Edit]", {
+      source: "Railway API",
+      recordId,
+      fileId,
+      previousStatus: currentStatus,
+      nextStatus: normalizedStatus,
+      updatedBy: updatedRow?.status_updated_by || result.data?.updated_by || updatedBy,
+    });
+    return updatedRow;
+  }
   let data = null;
   let rpcError = null;
   try {
@@ -5913,6 +5942,23 @@ function normalizePnrExportFilePart(value) {
 }
 
 async function fetchPnrExportRowsFromSupabase() {
+  const railwayPnrApi = getRailwayApiClientForModule(DASHBOARD_MODULE_KEYS.desviosPnr);
+  if (railwayPnrApi?.desviosPnr?.export) {
+    const { data, error } = await withTimeout(
+      railwayPnrApi.desviosPnr.export(buildPnrSummaryPayload()),
+      SUPABASE_QUERY_TIMEOUT_MS,
+      "Tempo limite excedido ao exportar PNRs pelo Railway.",
+    );
+    if (error) throw error;
+    if (data?.truncated) {
+      console.warn("[PNR Export] Resultado limitado pela API Railway.", {
+        totalReturned: Array.isArray(data?.rows) ? data.rows.length : 0,
+      });
+    }
+    return sortPnrRows((Array.isArray(data?.rows) ? data.rows : [])
+      .map((record) => mapProcessedPnrRecord(record, { file_name: record?.source_file_name || "" }))
+      .filter(Boolean));
+  }
   if (!window.supabaseClient) {
     const fallbackRows = getPnrExportRows();
     if (hasPnrRemoteData() && Number(pnrRemoteState.total || 0) > fallbackRows.length) {
@@ -12674,6 +12720,25 @@ function normalizeRailwayPreFaturaFileRecord(record = {}) {
   };
 }
 
+function normalizeRailwayPnrFileRecord(record = {}) {
+  const metadata = record.metadata || {};
+  const moduleKey = DASHBOARD_MODULE_KEYS.desviosPnr;
+  return {
+    ...record,
+    module_key: moduleKey,
+    file_type: DEVIATION_PNR_FILE_CATEGORY,
+    metadata: {
+      ...metadata,
+      module_key: moduleKey,
+      dashboard_module_key: moduleKey,
+      file_category: DEVIATION_PNR_FILE_CATEGORY,
+      semantic_file_type: DEVIATION_PNR_FILE_CATEGORY,
+      file_type: DEVIATION_PNR_FILE_CATEGORY,
+      raw_file_deleted: metadata.raw_file_deleted !== false,
+    },
+  };
+}
+
 function mapRailwayPreFaturaRecordToRow(record = {}) {
   const raw = record.raw_data || {};
   const fileRecord = normalizeRailwayPreFaturaFileRecord({
@@ -17600,31 +17665,47 @@ async function loadDashboardFilesFromSupabase(options = {}) {
       loadActive,
       validateStorage,
     });
-    let dashboardFilesQuery = window.supabaseClient
-      .from("dashboard_files")
-      .select("*");
-    if (fileCategories.length) {
-      dashboardFilesQuery = dashboardFilesQuery.in("file_type", fileCategories);
-    }
-    const { data, error } = await withTimeout(
-      dashboardFilesQuery.order("created_at", { ascending: false }),
-      SUPABASE_QUERY_TIMEOUT_MS,
-      "Tempo limite excedido ao buscar arquivos salvos.",
-    );
-
-    if (error) {
-      console.error("Erro ao buscar arquivos:", error);
-      showToast("Erro ao carregar arquivos salvos.", "warn", 5200);
-      if (didSetLoadingState || !hasLoadedDashboardData()) setDashboardVisualState("supabase-error", { render: false, error });
-      if (!hasLoadedDashboardData()) {
-        clearDashboardData({ render: false, preserveRecords: false });
+    let loadedDashboardFileRecords = null;
+    const railwayPnrFilesApi = getRailwayApiClientForModule(DASHBOARD_MODULE_KEYS.desviosPnr);
+    if (
+      modulesToMerge.length === 1 &&
+      modulesToMerge[0] === DASHBOARD_MODULE_KEYS.desviosPnr &&
+      railwayPnrFilesApi?.desviosPnr?.files
+    ) {
+      loadedDashboardFileRecords = await loadPnrFilesFromRailwayApi();
+      console.info("[Module Files]", "arquivos PNR carregados via API Railway", {
+        requestId,
+        returned: loadedDashboardFileRecords.length,
+        moduleKey: DASHBOARD_MODULE_KEYS.desviosPnr,
+      });
+    } else {
+      let dashboardFilesQuery = window.supabaseClient
+        .from("dashboard_files")
+        .select("*");
+      if (fileCategories.length) {
+        dashboardFilesQuery = dashboardFilesQuery.in("file_type", fileCategories);
       }
-      return dashboardFileRecords;
+      const { data, error } = await withTimeout(
+        dashboardFilesQuery.order("created_at", { ascending: false }),
+        SUPABASE_QUERY_TIMEOUT_MS,
+        "Tempo limite excedido ao buscar arquivos salvos.",
+      );
+
+      if (error) {
+        console.error("Erro ao buscar arquivos:", error);
+        showToast("Erro ao carregar arquivos salvos.", "warn", 5200);
+        if (didSetLoadingState || !hasLoadedDashboardData()) setDashboardVisualState("supabase-error", { render: false, error });
+        if (!hasLoadedDashboardData()) {
+          clearDashboardData({ render: false, preserveRecords: false });
+        }
+        return dashboardFileRecords;
+      }
+
+      loadedDashboardFileRecords = (Array.isArray(data) ? data : [])
+        .filter(isUsableDashboardFileRecord)
+        .filter(isDashboardFileActive);
     }
 
-    const loadedDashboardFileRecords = (Array.isArray(data) ? data : [])
-      .filter(isUsableDashboardFileRecord)
-      .filter(isDashboardFileActive);
     const scopedModuleKeys = new Set(modulesToMerge.map(normalizeDashboardModuleKey).filter(Boolean));
     dashboardFileRecords = scopedModuleKeys.size
       ? loadedDashboardFileRecords.filter((record) => scopedModuleKeys.has(getDashboardRecordModuleKey(record)))
@@ -18388,6 +18469,7 @@ function setPnrRemoteLoading(value) {
 async function refreshPnrRemoteDashboard(options = {}) {
   if (state.appView !== "dashboard" || state.sheet !== DEVIATION_MANAGEMENT_VIEW || state.activeDesvioCategory !== DEVIATION_CATEGORY_PNRS) return;
   const moduleKey = DASHBOARD_MODULE_KEYS.desviosPnr;
+  const railwayPnrApi = getRailwayApiClientForModule(moduleKey);
   if (!window.supabaseClient) {
     resetPnrRemoteState();
     return;
@@ -18433,10 +18515,12 @@ async function refreshPnrRemoteDashboard(options = {}) {
         mode: "replace",
         payload: summaryPayload,
       });
-      window.dashboardCacheService?.log?.(moduleKey, "origem dos dados: Supabase RPC resumo", { rpc: PNR_SUMMARY_RPC, payload: summaryPayload });
+      window.dashboardCacheService?.log?.(moduleKey, railwayPnrApi?.desviosPnr?.getSummary ? "origem dos dados: Railway API resumo" : "origem dos dados: Supabase RPC resumo", { rpc: PNR_SUMMARY_RPC, payload: summaryPayload });
       const start = performance.now();
       const { data, error } = await withTimeout(
-        window.supabaseClient.rpc(PNR_SUMMARY_RPC, summaryPayload),
+        railwayPnrApi?.desviosPnr?.getSummary
+          ? railwayPnrApi.desviosPnr.getSummary(summaryPayload)
+          : window.supabaseClient.rpc(PNR_SUMMARY_RPC, summaryPayload),
         SUPABASE_QUERY_TIMEOUT_MS,
         "Tempo limite excedido ao consultar resumo de PNRs.",
       );
@@ -18469,10 +18553,12 @@ async function refreshPnrRemoteDashboard(options = {}) {
         mode: "replace",
         payload: tablePayload,
       });
-      window.dashboardCacheService?.log?.(moduleKey, "origem dos dados: Supabase RPC tabela", { rpc: PNR_TABLE_RPC, payload: tablePayload });
+      window.dashboardCacheService?.log?.(moduleKey, railwayPnrApi?.desviosPnr?.getTable ? "origem dos dados: Railway API tabela" : "origem dos dados: Supabase RPC tabela", { rpc: PNR_TABLE_RPC, payload: tablePayload });
       const start = performance.now();
       const { data, error } = await withTimeout(
-        window.supabaseClient.rpc(PNR_TABLE_RPC, tablePayload),
+        railwayPnrApi?.desviosPnr?.getTable
+          ? railwayPnrApi.desviosPnr.getTable(tablePayload)
+          : window.supabaseClient.rpc(PNR_TABLE_RPC, tablePayload),
         SUPABASE_QUERY_TIMEOUT_MS,
         "Tempo limite excedido ao consultar tabela de PNRs.",
       );
@@ -18660,6 +18746,21 @@ async function loadPreFaturaFilesFromRailwayApi() {
   if (error) throw error;
   return (Array.isArray(data?.dashboard_files) ? data.dashboard_files : Array.isArray(data?.rows) ? data.rows : [])
     .map(normalizeRailwayPreFaturaFileRecord)
+    .filter(isUsableDashboardFileRecord)
+    .filter(isDashboardFileActive);
+}
+
+async function loadPnrFilesFromRailwayApi() {
+  const railwayApi = getRailwayApiClientForModule(DASHBOARD_MODULE_KEYS.desviosPnr);
+  if (!railwayApi?.desviosPnr?.files) return null;
+  const { data, error } = await withTimeout(
+    railwayApi.desviosPnr.files(),
+    SUPABASE_QUERY_TIMEOUT_MS,
+    "Tempo limite excedido ao carregar arquivos de PNRs pelo Railway.",
+  );
+  if (error) throw error;
+  return (Array.isArray(data?.dashboard_files) ? data.dashboard_files : Array.isArray(data?.rows) ? data.rows : [])
+    .map(normalizeRailwayPnrFileRecord)
     .filter(isUsableDashboardFileRecord)
     .filter(isDashboardFileActive);
 }
@@ -20498,6 +20599,33 @@ async function deleteDashboardFiles(fileRecords = [], options = {}) {
       return;
     }
 
+    const railwayPnrApi = getRailwayApiClientForModule(DASHBOARD_MODULE_KEYS.desviosPnr);
+    const isPnrOnlyDeletion = moduleKeys.length === 1 && moduleKeys[0] === DASHBOARD_MODULE_KEYS.desviosPnr;
+    if (railwayPnrApi?.desviosPnr?.delete && isPnrOnlyDeletion) {
+      const { data, error } = await railwayPnrApi.desviosPnr.delete({
+        ids: records.map((record) => record.id).filter(Boolean),
+        mode,
+      });
+      if (error) throw error;
+      console.info("[Module File Delete] PNR via API Railway", {
+        action: mode,
+        moduleKeys,
+        removedRows: data?.removedRows || 0,
+        removedProcessedMetadata: data?.removedProcessedMetadata || 0,
+        changedDashboardMetadata: data?.changedDashboardMetadata || 0,
+        status: "ok",
+      });
+      await refreshAfterFileDeletion(records, mode);
+      showToast(
+        mode === FILE_DELETE_MODES.listOnly
+          ? (records.length === 1 ? "Arquivo removido da lista. Os dados importados foram mantidos." : "Arquivos removidos da lista. Os dados importados foram mantidos.")
+          : (records.length === 1 ? "Arquivo e dados importados excluídos com sucesso." : "Arquivos e dados importados excluídos com sucesso."),
+        "good",
+        5200,
+      );
+      return;
+    }
+
     const removedStorageFiles = await removeStorageFilesIfPresent(records);
     let removedRows = 0;
     let removedProcessedMetadata = 0;
@@ -20785,6 +20913,18 @@ function bindSupabaseAuthState() {
   });
 }
 
+function isInvalidRefreshTokenError(error) {
+  return /Invalid Refresh Token|Refresh Token Not Found|refresh_token/i.test(`${error?.message || ""} ${error?.code || ""} ${error?.name || ""}`);
+}
+
+async function clearExpiredLocalAuthSession() {
+  try {
+    await window.supabaseClient?.auth?.signOut?.({ scope: "local" });
+  } catch (clearError) {
+    console.warn("[AUTH] Não foi possível limpar a sessão local expirada.", clearError);
+  }
+}
+
 async function loadCurrentSession(options = {}) {
   const shouldShowLoading = options.showLoading === true || (!hasInitialLoadCompleted && !hasLoadedDashboardData());
   if (shouldShowLoading) setDashboardVisualState("loading-session");
@@ -20825,14 +20965,24 @@ async function loadCurrentSession(options = {}) {
 
     return applyAuthenticatedUser(session.user, options);
   } catch (error) {
-    console.error("Erro ao carregar sessão:", error);
+    const expiredLocalSession = isInvalidRefreshTokenError(error);
+    if (expiredLocalSession) {
+      console.warn("[AUTH] Sessão local expirada; login manual necessário.", error?.message || error);
+      await clearExpiredLocalAuthSession();
+    } else {
+      console.error("Erro ao carregar sessão:", error);
+    }
     currentUser = null;
     currentProfile = null;
     knownUsers = [];
     auditLogs = [];
     globalGoalSettings = getDefaultGoalSettings();
     clearDashboardData({ render: false, preserveRecords: false });
-    if (shouldShowLoading || !hasLoadedDashboardData()) setDashboardVisualState("supabase-error", { render: false, error });
+    if (expiredLocalSession) {
+      setDashboardVisualState("", { render: false });
+    } else if (shouldShowLoading || !hasLoadedDashboardData()) {
+      setDashboardVisualState("supabase-error", { render: false, error });
+    }
     updateAccessControls();
     renderAccountPage();
     renderAll();
