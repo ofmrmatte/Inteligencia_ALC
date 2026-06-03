@@ -69,23 +69,17 @@ const DEVIATION_CATEGORIES = [
 const MISSING_PACKAGE_CASE_STATUS_OPTIONS = ["Pendente", "Concluído", "Em rota"];
 const MISSING_PACKAGE_MELI_STATUS_OPTIONS = ["E-mail Enviado", "Aguardando MELI", "Concluído"];
 const MISSING_PACKAGE_TABLE_COLUMNS = [
-  { key: "motivoInsucesso", label: "Motivo de Insucesso", width: 185, format: "textStrong" },
-  { key: "base", label: "SVC", width: 95, format: "text" },
-  { key: "idRota", label: "ID da Rota", width: 130, format: "text" },
-  { key: "transportadora", label: "Transportadora", width: 170, format: "text" },
-  { key: "valorPacote", label: "Valor do Pacote", width: 145, format: "currency" },
-  { key: "diasAtraso", label: "Dias de Atraso", width: 125, format: "number" },
-  { key: "dataTentativa", label: "Data de Tentativa", width: 175, format: "datetime" },
-  { key: "idMotorista", label: "ID do Motorista", width: 145, format: "text" },
-  { key: "descricaoItem", label: "Descrição do Item", width: 320, format: "text" },
-  { key: "idEnvio", label: "ID do Pacote", width: 155, format: "text" },
-  { key: "transportadoraUsuario", label: "Transportadora_Usuario", width: 190, format: "text" },
-  { key: "riskCategory", label: "RiskCategory", width: 130, format: "textStrong" },
+  { key: "dataFechamento", label: "Data do Caso", width: 130, format: "date" },
+  { key: "importedAt", label: "Data de importação", width: 170, format: "datetime" },
+  { key: "base", label: "Base", width: 95, format: "text" },
+  { key: "tipoBase", label: "Tipo de base", width: 110, format: "text" },
+  { key: "driverNome", label: "Driver", width: 260, format: "textStrong" },
+  { key: "idEnvio", label: "ID do Pacote/Envio", width: 175, format: "text" },
+  { key: "caso", label: "Caso", width: 150, format: "text" },
   { key: "statusCaso", label: "Status do Caso", width: 165, format: "missingStatus", statusType: "case" },
   { key: "statusContatoMeli", label: "Contato Méli", width: 180, format: "missingStatus", statusType: "meli" },
   { key: "prazoTratativa", label: "Prazo da tratativa", width: 170, format: "datetime" },
   { key: "situacaoPrazo", label: "Situação do prazo", width: 170, format: "deadline" },
-  { key: "importedAt", label: "Data de importação", width: 170, format: "datetime" },
 ];
 const PREFATURA_CATEGORIES = [
   { key: PREFATURA_VIEW_OVERVIEW, label: "Visão geral", enabled: true },
@@ -4631,23 +4625,17 @@ function renderMissingPackagesPage() {
 
 function buildMissingPackagesExportRows(rows = []) {
   return (Array.isArray(rows) ? rows : []).map((row) => ({
-    "Motivo de Insucesso": row.motivoInsucesso || row.motivoOriginal || "",
-    SVC: row.base || "",
-    "ID da Rota": String(row.idRota || ""),
-    Transportadora: row.transportadora || "",
-    "Valor do Pacote": row.valorPacote == null || row.valorPacote === "" ? "" : Number(row.valorPacote || 0),
-    "Dias de Atraso": row.diasAtraso == null || row.diasAtraso === "" ? "" : Number(row.diasAtraso || 0),
-    "Data de Tentativa": formatDateTime(row.dataTentativa || row.dataFechamento),
-    "ID do Motorista": String(row.idMotorista || ""),
-    "Descrição do Item": row.descricaoItem || "",
-    "ID do Pacote": String(row.idEnvio || ""),
-    Transportadora_Usuario: row.transportadoraUsuario || "",
-    RiskCategory: row.riskCategory || "",
+    "Data do Caso": formatDate(row.dataFechamento),
+    "Data de importação": formatDateTime(row.importedAt),
+    Base: row.base || "",
+    "Tipo de base": row.tipoBase || "XPT",
+    Driver: formatDriverName(row.driverNome, ""),
+    "ID do Pacote/Envio": String(row.idEnvio || ""),
+    Caso: row.caso || "Pacote faltante",
     "Status do Caso": row.statusCaso || "",
     "Contato Méli": row.statusContatoMeli || "",
     "Prazo da tratativa": formatDateTime(row.prazoTratativa),
     "Situação do prazo": getMissingPackageDeadlineStatus(row),
-    "Data de importação": formatDateTime(row.importedAt),
   }));
 }
 
@@ -4655,22 +4643,11 @@ function getMissingPackagesExportScope() {
   return {
     data: state.missingPackagesDate === "Todos" ? "Todas" : formatDate(state.missingPackagesDate),
     base: state.missingPackagesBase === "Todos" ? "Todas" : state.missingPackagesBase,
-    motorista: state.missingPackagesDriver === "Todos" ? "Todos" : formatDriverName(state.missingPackagesDriver, ""),
+    driver: state.missingPackagesDriver === "Todos" ? "Todos" : formatDriverName(state.missingPackagesDriver, ""),
     status: state.missingPackagesCaseStatus === "Todos" ? "Todos" : normalizeMissingPackageCaseStatus(state.missingPackagesCaseStatus),
     contato: state.missingPackagesMeliStatus === "Todos" ? "Todos" : normalizeMissingPackageMeliStatus(state.missingPackagesMeliStatus),
     prazo: state.missingPackagesDeadline === "Todos" ? "Todos" : state.missingPackagesDeadline,
   };
-}
-
-function getExcelColumnLetter(index) {
-  let value = Math.max(1, Number(index || 1));
-  let label = "";
-  while (value > 0) {
-    const remainder = (value - 1) % 26;
-    label = String.fromCharCode(65 + remainder) + label;
-    value = Math.floor((value - 1) / 26);
-  }
-  return label;
 }
 
 function configureMissingPackagesExportHeader(worksheet, exportRows) {
@@ -4681,9 +4658,8 @@ function configureMissingPackagesExportHeader(worksheet, exportRows) {
   const textDark = "1F2A37";
   const borderColor = "D8E3ED";
   const scope = getMissingPackagesExportScope();
-  const lastColumn = getExcelColumnLetter(MISSING_PACKAGE_TABLE_COLUMNS.length);
 
-  styleExcelRange(worksheet, `A1:${lastColumn}5`, {
+  styleExcelRange(worksheet, "A1:H5", {
     fill: { type: "pattern", pattern: "solid", fgColor: { argb: darkBlue } },
     font: { name: "Arial", color: { argb: white } },
     alignment: { vertical: "middle" },
@@ -4707,11 +4683,11 @@ function configureMissingPackagesExportHeader(worksheet, exportRows) {
     worksheet.getCell(address).alignment = { horizontal: "left", vertical: "middle" };
   });
 
-  worksheet.getRow(6).values = ["Resumo do recorte", "Registros exportados", "SVC", "ID do Motorista", "Contato Méli", "Prazo", "", ""];
-  worksheet.getRow(7).values = ["", exportRows.length, scope.base, scope.motorista, scope.contato, scope.prazo, "", ""];
+  worksheet.getRow(6).values = ["Resumo do recorte", "Registros exportados", "Base", "Driver", "Contato Méli", "Prazo", "", ""];
+  worksheet.getRow(7).values = ["", exportRows.length, scope.base, scope.driver, scope.contato, scope.prazo, "", ""];
   worksheet.getRow(6).height = 15.6;
   worksheet.getRow(7).height = 14.4;
-  styleExcelRange(worksheet, `A6:${lastColumn}6`, {
+  styleExcelRange(worksheet, "A6:H6", {
     fill: { type: "pattern", pattern: "solid", fgColor: { argb: aqua } },
     font: { name: "Arial", size: 12, italic: true, color: { argb: white } },
     alignment: { horizontal: "center", vertical: "middle" },
@@ -4722,7 +4698,7 @@ function configureMissingPackagesExportHeader(worksheet, exportRows) {
       right: { style: "thin", color: { argb: borderColor } },
     },
   });
-  styleExcelRange(worksheet, `A7:${lastColumn}7`, {
+  styleExcelRange(worksheet, "A7:H7", {
     fill: { type: "pattern", pattern: "solid", fgColor: { argb: mutedBlue } },
     font: { name: "Arial", size: 11, bold: true, color: { argb: textDark } },
     alignment: { vertical: "middle" },
@@ -4765,9 +4741,8 @@ function addMissingPackagesExportTable(worksheet, exportRows) {
     row.values = headers.map((header) => item[header]);
     row.height = 22.05;
     row.eachCell((cell, colNumber) => {
-      const header = headers[colNumber - 1] || "";
-      cell.font = { name: "Arial", size: 10, bold: ["Motivo de Insucesso", "ID do Pacote", "RiskCategory"].includes(header), color: { argb: "1F2A37" } };
-      cell.alignment = { vertical: "middle", horizontal: header === "Valor do Pacote" || header === "Dias de Atraso" ? "right" : "left", wrapText: header === "Descrição do Item" };
+      cell.font = { name: "Arial", size: 10, bold: colNumber === 6 || colNumber === 7, color: { argb: "1F2A37" } };
+      cell.alignment = { vertical: "middle", horizontal: "left", wrapText: colNumber === 4 };
       cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: index % 2 === 0 ? "FFFFFF" : "F7FAFC" } };
       cell.border = {
         top: { style: "thin", color: { argb: "E0E7EF" } },
@@ -4775,21 +4750,20 @@ function addMissingPackagesExportTable(worksheet, exportRows) {
         bottom: { style: "thin", color: { argb: "E0E7EF" } },
         right: { style: "thin", color: { argb: "E0E7EF" } },
       };
-      if (/^ID /.test(header)) cell.numFmt = "@";
-      if (header === "Valor do Pacote") cell.numFmt = '"R$" #,##0.00';
-      if (header === "Dias de Atraso") cell.numFmt = "0";
+      if (colNumber === 6) cell.numFmt = "@";
     });
+    row.getCell(6).value = String(item["ID do Pacote/Envio"] || "");
   });
   worksheet.views = [{ state: "frozen", ySplit: headerRowNumber, topLeftCell: "A9", zoomScale: 85, zoomScaleNormal: 85, activeCell: "A9" }];
 }
 
 function autoFitMissingPackagesExportColumns(worksheet, exportRows) {
-  MISSING_PACKAGE_TABLE_COLUMNS.forEach((column, index) => {
-    const header = column.label;
+  const headers = MISSING_PACKAGE_TABLE_COLUMNS.map((column) => column.label);
+  const minWidths = [14, 19, 10, 22, 18, 16, 18, 19];
+  const maxWidths = [18, 24, 16, 40, 24, 22, 24, 24];
+  headers.forEach((header, index) => {
     const maxContent = Math.max(header.length, ...exportRows.map((row) => String(row[header] || "").length));
-    const minWidth = Math.max(10, Math.floor((column.width || 120) / 11));
-    const maxWidth = column.key === "descricaoItem" ? 48 : Math.max(minWidth, Math.min(28, Math.ceil((column.width || 120) / 8)));
-    worksheet.getColumn(index + 1).width = Math.min(maxWidth, Math.max(minWidth, Math.ceil(maxContent * 1.08) + 2));
+    worksheet.getColumn(index + 1).width = Math.min(maxWidths[index], Math.max(minWidths[index], Math.ceil(maxContent * 1.08) + 2));
   });
 }
 
@@ -6538,8 +6512,8 @@ function renderMissingPackagesFilterControls() {
     <div class="pnr-filter-bar missing-packages-filter-bar">
       <div class="pnr-filter-row dashboard-filter-bar">
         ${renderMissingPackagesFilterSelect("data", "Data", state.missingPackagesDate, options.datas)}
-        ${renderMissingPackagesFilterSelect("base", "SVC", state.missingPackagesBase, options.bases)}
-        ${renderMissingPackagesFilterSelect("driver", "ID Motorista", state.missingPackagesDriver, options.drivers)}
+        ${renderMissingPackagesFilterSelect("base", "Base", state.missingPackagesBase, options.bases)}
+        ${renderMissingPackagesFilterSelect("driver", "Driver", state.missingPackagesDriver, options.drivers)}
         ${renderMissingPackagesFilterSelect("statusCaso", "Status", caseStatusValue, options.statusCaso)}
         ${renderMissingPackagesFilterSelect("statusMeli", "Contato Méli", meliStatusValue, options.statusMeli)}
         ${renderMissingPackagesFilterSelect("prazo", "Prazo", state.missingPackagesDeadline, options.prazos)}
