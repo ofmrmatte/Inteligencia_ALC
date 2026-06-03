@@ -23,6 +23,7 @@ const PROJECT_ROOT = path.resolve(__dirname, '..', '..');
 const API_PREFIX = '/api/railway';
 const MODULE_API_PREFIX = '/api';
 const DEFAULT_PORT = 8091;
+const OPERATIONAL_FREEZE_MESSAGE = 'Painel em janela de manutenção. Consultas seguem disponíveis, mas alterações estão temporariamente bloqueadas.';
 
 const args = parseArgs();
 
@@ -142,6 +143,48 @@ function sendJson(response, statusCode, payload) {
     'cache-control': 'no-store',
   });
   response.end(JSON.stringify(payload));
+}
+
+class OperationalFreezeError extends Error {
+  constructor(message = OPERATIONAL_FREEZE_MESSAGE) {
+    super(message);
+    this.name = 'OperationalFreezeError';
+    this.statusCode = 423;
+  }
+}
+
+function isTruthyEnv(value) {
+  return value === true || value === 1 || ['1', 'true', 'yes', 'on'].includes(String(value || '').trim().toLowerCase());
+}
+
+function isOperationalFreezeEnabled() {
+  return isTruthyEnv(process.env.OPERATIONAL_FREEZE);
+}
+
+function assertOperationalWriteAllowed() {
+  if (!isOperationalFreezeEnabled()) return;
+  throw new OperationalFreezeError();
+}
+
+function isGenericWritePayload(payload = {}) {
+  return ['insert', 'upsert', 'update', 'delete'].includes(String(payload.action || '').toLowerCase());
+}
+
+function isWriteRpcName(name = '') {
+  return new Set([
+    'refresh_desvios_pnr_metrics_summary',
+    'update_desvios_pnr_status',
+  ]).has(String(name || '').trim());
+}
+
+function isWriteEndpoint(pathname = '') {
+  return [
+    '/delete',
+    '/import',
+    '/reprocess',
+    '/update-status',
+    '/update-contact',
+  ].some((suffix) => pathname.endsWith(suffix));
 }
 
 function sendText(response, statusCode, text, contentType = 'text/plain; charset=utf-8') {
@@ -427,6 +470,7 @@ async function executeDelete(sql, payload, table) {
 
 async function handleQuery(sql, payload) {
   const table = assertAllowedTable(payload.table);
+  if (isGenericWritePayload(payload)) assertOperationalWriteAllowed();
   if (payload.action === 'select') return executeSelect(sql, payload, table);
   if (payload.action === 'insert' || payload.action === 'upsert') return executeInsertLike(sql, payload, table);
   if (payload.action === 'update') return executeUpdate(sql, payload, table);
@@ -436,6 +480,7 @@ async function handleQuery(sql, payload) {
 
 async function handleRpc(sql, payload, authUser) {
   const name = sanitizeIdentifier(payload.name, 'rpc');
+  if (isWriteRpcName(name)) assertOperationalWriteAllowed();
   const definition = RPC_DEFINITIONS[name];
   if (!definition) {
     throw new Error(`RPC nao permitida no staging Railway: ${name}`);
@@ -2065,6 +2110,8 @@ function createDynamicConfig(publicConfig, port) {
     RAILWAY_API_URL: `http://127.0.0.1:${port}${MODULE_API_PREFIX}`,
     RAILWAY_STAGING_MODE: true,
     DATA_SOURCE: dataSource,
+    OPERATIONAL_FREEZE: isOperationalFreezeEnabled(),
+    OPERATIONAL_FREEZE_MESSAGE,
   }, null, 2)};\n`;
 }
 
@@ -2124,12 +2171,12 @@ const server = http.createServer(async (request, response) => {
     const url = new URL(request.url, `http://${request.headers.host}`);
 
     if (url.pathname === `${API_PREFIX}/health`) {
-      sendJson(response, 200, { ok: true, target });
+      sendJson(response, 200, { ok: true, target, operationalFreeze: isOperationalFreezeEnabled() });
       return;
     }
 
     if (url.pathname === `${MODULE_API_PREFIX}/health`) {
-      sendJson(response, 200, { ok: true, target, dataSource: process.env.DATA_SOURCE || 'railway_staging' });
+      sendJson(response, 200, { ok: true, target, dataSource: process.env.DATA_SOURCE || 'railway_staging', operationalFreeze: isOperationalFreezeEnabled() });
       return;
     }
 
@@ -2183,6 +2230,7 @@ const server = http.createServer(async (request, response) => {
         readBody(request),
         loadProfile(sql, authUser),
       ]);
+      if (isWriteEndpoint(url.pathname)) assertOperationalWriteAllowed();
       const result = url.pathname.startsWith(`${MODULE_API_PREFIX}/pre-fatura`)
         ? await handlePreFaturaApi(sql, url.pathname, payload, authUser, profile)
         : url.pathname.startsWith(`${MODULE_API_PREFIX}/pacotes-faltantes`)
@@ -2204,10 +2252,12 @@ const server = http.createServer(async (request, response) => {
 
     serveStatic(request, response, publicConfig, port);
   } catch (error) {
-    sendJson(response, 500, {
+    const statusCode = error.statusCode || 500;
+    sendJson(response, statusCode, {
       data: null,
       error: {
         message: error.message,
+        code: error.name === 'OperationalFreezeError' ? 'OPERATIONAL_FREEZE' : undefined,
       },
     });
   }

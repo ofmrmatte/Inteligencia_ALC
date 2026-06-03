@@ -12,6 +12,7 @@ const PDF_LOGO_IMAGE = {
   base64: "",
 };
 const DEBUG_AUTH_FLOW = false;
+const OPERATIONAL_FREEZE_MESSAGE = "Painel em janela de manutenção. Consultas seguem disponíveis, mas alterações estão temporariamente bloqueadas.";
 const EMPTY_DATASET_ID = "__empty";
 const PRE_FATURA_VIEW = "Pré-Fatura";
 const MONTHLY_BASE_VIEW = "Evolução mensal";
@@ -68,17 +69,23 @@ const DEVIATION_CATEGORIES = [
 const MISSING_PACKAGE_CASE_STATUS_OPTIONS = ["Pendente", "Concluído", "Em rota"];
 const MISSING_PACKAGE_MELI_STATUS_OPTIONS = ["E-mail Enviado", "Aguardando MELI", "Concluído"];
 const MISSING_PACKAGE_TABLE_COLUMNS = [
-  { key: "dataFechamento", label: "Data do Caso", width: 130, format: "date" },
-  { key: "importedAt", label: "Data de importação", width: 170, format: "datetime" },
-  { key: "base", label: "Base", width: 95, format: "text" },
-  { key: "tipoBase", label: "Tipo de base", width: 110, format: "text" },
-  { key: "driverNome", label: "Driver", width: 260, format: "textStrong" },
-  { key: "idEnvio", label: "ID do Pacote/Envio", width: 175, format: "text" },
-  { key: "caso", label: "Caso", width: 150, format: "text" },
+  { key: "motivoInsucesso", label: "Motivo de Insucesso", width: 185, format: "textStrong" },
+  { key: "base", label: "SVC", width: 95, format: "text" },
+  { key: "idRota", label: "ID da Rota", width: 130, format: "text" },
+  { key: "transportadora", label: "Transportadora", width: 170, format: "text" },
+  { key: "valorPacote", label: "Valor do Pacote", width: 145, format: "currency" },
+  { key: "diasAtraso", label: "Dias de Atraso", width: 125, format: "number" },
+  { key: "dataTentativa", label: "Data de Tentativa", width: 175, format: "datetime" },
+  { key: "idMotorista", label: "ID do Motorista", width: 145, format: "text" },
+  { key: "descricaoItem", label: "Descrição do Item", width: 320, format: "text" },
+  { key: "idEnvio", label: "ID do Pacote", width: 155, format: "text" },
+  { key: "transportadoraUsuario", label: "Transportadora_Usuario", width: 190, format: "text" },
+  { key: "riskCategory", label: "RiskCategory", width: 130, format: "textStrong" },
   { key: "statusCaso", label: "Status do Caso", width: 165, format: "missingStatus", statusType: "case" },
   { key: "statusContatoMeli", label: "Contato Méli", width: 180, format: "missingStatus", statusType: "meli" },
   { key: "prazoTratativa", label: "Prazo da tratativa", width: 170, format: "datetime" },
   { key: "situacaoPrazo", label: "Situação do prazo", width: 170, format: "deadline" },
+  { key: "importedAt", label: "Data de importação", width: 170, format: "datetime" },
 ];
 const PREFATURA_CATEGORIES = [
   { key: PREFATURA_VIEW_OVERVIEW, label: "Visão geral", enabled: true },
@@ -565,6 +572,7 @@ const el = {};
 
 async function bootstrapDashboard() {
   cacheDom();
+  hydrateOperationalFreezeNotice();
   startLiveClock();
   bindEvents();
   hydrateThemeControls();
@@ -593,6 +601,7 @@ if (document.readyState === "loading") {
 function cacheDom() {
   el.layout = document.querySelector(".layout");
   el.content = document.querySelector(".content");
+  el.operationalFreezeNotice = document.getElementById("operational-freeze-notice");
   el.uploadButton = document.getElementById("upload-button");
   el.refreshButton = document.getElementById("refresh-button");
   el.themeToggle = document.getElementById("theme-toggle");
@@ -729,6 +738,42 @@ function formatCurrentDateTime(date = new Date()) {
 function updateLiveClock() {
   if (!el.lastUpdate) return;
   el.lastUpdate.textContent = formatCurrentDateTime(new Date());
+}
+
+function isTruthyConfigValue(value) {
+  return value === true || value === 1 || ["1", "true", "yes", "on"].includes(String(value || "").trim().toLowerCase());
+}
+
+function isOperationalFreezeEnabled() {
+  return isTruthyConfigValue(window.APP_CONFIG?.OPERATIONAL_FREEZE);
+}
+
+function getOperationalFreezeMessage() {
+  return window.APP_CONFIG?.OPERATIONAL_FREEZE_MESSAGE || OPERATIONAL_FREEZE_MESSAGE;
+}
+
+function hydrateOperationalFreezeNotice() {
+  if (!el.layout) return;
+  if (!el.operationalFreezeNotice) {
+    const notice = document.createElement("div");
+    notice.id = "operational-freeze-notice";
+    notice.className = "operational-freeze-notice";
+    notice.setAttribute("role", "status");
+    notice.setAttribute("aria-live", "polite");
+    el.layout.parentNode?.insertBefore(notice, el.layout);
+    el.operationalFreezeNotice = notice;
+  }
+  const isFrozen = isOperationalFreezeEnabled();
+  el.operationalFreezeNotice.hidden = !isFrozen;
+  el.operationalFreezeNotice.textContent = isFrozen ? getOperationalFreezeMessage() : "";
+  document.body.classList.toggle("is-operational-freeze", isFrozen);
+}
+
+function ensureOperationalWriteAllowed() {
+  if (!isOperationalFreezeEnabled()) return true;
+  showToast(getOperationalFreezeMessage(), "warn", 7200);
+  hydrateOperationalFreezeNotice();
+  return false;
 }
 
 function bindEvents() {
@@ -3999,17 +4044,34 @@ function normalizeMissingPackageMeliStatus(value = "") {
 }
 
 function normalizeMissingPackageRow(record = {}) {
+  const raw = record.raw_data || record.rawData || {};
   const statusCaso = normalizeMissingPackageCaseStatus(record.status_caso || record.statusCaso || "Pendente");
   const statusContatoMeli = normalizeMissingPackageMeliStatus(record.status_contato_meli || record.statusContatoMeli || "E-mail Enviado");
+  const idMotorista = formatId(record.id_motorista || record.idMotorista || raw.id_motorista || raw.idMotorista || raw["ID do Motorista"] || "");
+  const dataTentativa = record.data_tentativa || record.dataTentativa || raw.data_tentativa || raw.dataTentativa || raw["Data de Tentativa"] || record.data_fechamento || record.dataFechamento || "";
+  const motivoInsucesso = record.motivo_original || record.motivoOriginal || raw.motivo_insucesso || raw.motivoInsucesso || raw["Motivo de Insucesso"] || "Pacote Perdido";
+  const valorPacoteRaw = record.valor_pacote ?? record.valorPacote ?? raw.valor_pacote ?? raw.valorPacote ?? raw.valorPacoteOriginal ?? raw["Valor do Pacote"] ?? "";
+  const hasValorPacote = valorPacoteRaw !== null && valorPacoteRaw !== undefined && String(valorPacoteRaw).trim() !== "";
   const row = {
     id: record.id || "",
     dataFechamento: record.data_fechamento || record.dataFechamento || "",
-    base: record.base || "",
+    dataTentativa,
+    base: record.base || raw.svc || raw.SVC || "",
     tipoBase: record.tipo_base || record.tipoBase || "XPT",
-    driverNome: formatDriverName(record.driver_nome || record.driverNome || "", ""),
+    driverNome: formatDriverName(record.driver_nome || record.driverNome || raw.driverNome || raw.driver_nome || idMotorista || "", ""),
+    idMotorista,
     idEnvio: record.id_envio || record.idEnvio || "",
     caso: record.caso || "Pacote faltante",
-    motivoOriginal: record.motivo_original || record.motivoOriginal || "Faltante",
+    motivoOriginal: motivoInsucesso,
+    motivoInsucesso,
+    idRota: formatId(record.id_rota || record.idRota || raw.id_rota || raw.idRota || raw["ID da Rota"] || ""),
+    transportadora: record.transportadora || raw.transportadora || raw.Transportadora || "",
+    valorPacote: hasValorPacote ? normalizarValorGestao(valorPacoteRaw) : null,
+    valorPacoteOriginal: raw.valor_pacote_original || raw.valorPacoteOriginal || raw["Valor do Pacote"] || valorPacoteRaw || "",
+    diasAtraso: record.dias_atraso || record.diasAtraso || raw.dias_atraso || raw.diasAtraso || raw["Dias de Atraso"] || "",
+    descricaoItem: record.descricao_item || record.descricaoItem || raw.descricao_item || raw.descricaoItem || raw["Descrição do Item"] || raw["Descricao do Item"] || "",
+    transportadoraUsuario: record.transportadora_usuario || record.transportadoraUsuario || raw.transportadora_usuario || raw.transportadoraUsuario || raw.Transportadora_Usuario || "",
+    riskCategory: record.risk_category || record.riskCategory || raw.risk_category || raw.riskCategory || raw.RiskCategory || "",
     statusCaso,
     statusContatoMeli,
     prazoTratativa: record.prazo_tratativa || record.prazoTratativa || "",
@@ -4225,7 +4287,7 @@ function renderMissingPackagesCards(rows) {
   const metrics = getMissingPackagesMetrics(rows);
   const pct = (value) => metrics.total ? `${formatNumberPt((value / metrics.total) * 100, 1)}% do recorte` : "0% do recorte";
   const cards = [
-    { label: "Total de faltantes", value: integer.format(metrics.total), tone: "kpi-card--volume", delta: pct(metrics.total), description: "Casos extraídos como Faltante" },
+    { label: "Total de faltantes", value: integer.format(metrics.total), tone: "kpi-card--volume", delta: pct(metrics.total), description: "Casos extraídos como Pacote Perdido/Faltante" },
     { label: "Pendentes", value: integer.format(metrics.pendentes), tone: "kpi-card--neutral", delta: pct(metrics.pendentes), description: "Status do caso pendente" },
     { label: "Concluídos", value: integer.format(metrics.concluidos), tone: "kpi-card--neutral", delta: pct(metrics.concluidos), description: "Casos encerrados" },
     { label: "Em rota", value: integer.format(metrics.emRota), tone: "kpi-card--neutral", delta: pct(metrics.emRota), description: "Casos em rota" },
@@ -4236,9 +4298,11 @@ function renderMissingPackagesCards(rows) {
 }
 
 function renderMissingStatusCell(row = {}, type = "case") {
-  const options = type === "meli" ? MISSING_PACKAGE_MELI_STATUS_OPTIONS : MISSING_PACKAGE_CASE_STATUS_OPTIONS;
   const value = type === "meli" ? row.statusContatoMeli : row.statusCaso;
   const key = `${row.id}:${type}`;
+  if (isOperationalFreezeEnabled()) {
+    return `<span class="badge" title="${escapeAttribute(getOperationalFreezeMessage())}">${escapeHtml(value || "—")}</span>`;
+  }
   return `
     <span class="pnr-status-edit">
       <button type="button" class="pnr-status-pill" data-missing-status-toggle data-record-id="${escapeAttribute(row.id)}" data-status-type="${escapeAttribute(type)}" data-value="${escapeAttribute(value)}" aria-haspopup="menu" aria-expanded="${activeMissingPackageStatusDropdown === key ? "true" : "false"}">
@@ -4251,6 +4315,7 @@ function renderMissingStatusCell(row = {}, type = "case") {
 
 function openMissingPackageStatusDropdown(button) {
   if (!button) return;
+  if (!ensureOperationalWriteAllowed()) return;
   const recordId = button.dataset.recordId || "";
   const type = button.dataset.statusType || "case";
   const key = `${recordId}:${type}`;
@@ -4288,6 +4353,7 @@ function closeMissingPackageStatusDropdown() {
 }
 
 async function applyMissingPackageStatusOption(button) {
+  if (!ensureOperationalWriteAllowed()) return;
   const recordId = button?.dataset?.recordId || "";
   const type = button?.dataset?.statusType || "case";
   const value = button?.dataset?.value || "";
@@ -4347,6 +4413,7 @@ async function applyMissingPackageStatusOption(button) {
 async function deleteSelectedMissingPackages() {
   const ids = Array.from(selectedMissingPackageIds).filter(Boolean);
   if (!ids.length || isDeletingMissingPackages) return;
+  if (!ensureOperationalWriteAllowed()) return;
   const sessionUser = currentUser || await ensureCurrentUserFromSupabaseSession();
   if (!window.supabaseClient || !sessionUser) {
     showToast("Faça login para excluir casos de Pacotes Faltantes.", "warn", 4200);
@@ -4393,6 +4460,8 @@ function formatMissingPackageCell(row, column) {
   }
   if (column.format === "date") return escapeHtml(formatDate(value));
   if (column.format === "datetime") return escapeHtml(formatDateTime(value));
+  if (column.format === "currency") return value == null || value === "" ? "—" : escapeHtml(currency.format(Number(value || 0)));
+  if (column.format === "number") return value == null || value === "" ? "—" : escapeHtml(integer.format(Number(value || 0)));
   if (column.format === "missingStatus") return renderMissingStatusCell(row, column.statusType);
   if (column.format === "deadline") return `<span class="deadline-pill deadline-pill--${getMissingPackageDeadlineStatus(row).toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/[^a-z0-9]+/g, "-")}">${escapeHtml(getMissingPackageDeadlineStatus(row))}</span>`;
   if (column.format === "textStrong") return `<strong>${escapeHtml(value || "—")}</strong>`;
@@ -4401,6 +4470,11 @@ function formatMissingPackageCell(row, column) {
 
 function renderMissingPackagesTable(rows) {
   syncSelectedMissingPackagesWithRows(rows);
+  const operationalFreeze = isOperationalFreezeEnabled();
+  if (operationalFreeze && isMissingPackagesSelectionMode) {
+    isMissingPackagesSelectionMode = false;
+    selectedMissingPackageIds.clear();
+  }
   const totalRows = rows.length;
   const totalPages = Math.max(1, Math.ceil(totalRows / state.pageSize));
   state.page = Math.min(Math.max(1, state.page), totalPages);
@@ -4420,13 +4494,13 @@ function renderMissingPackagesTable(rows) {
         </div>
         <div class="pnr-table-actions">
           ${renderPnrPageSizeControl()}
-          <button class="secondary-button secondary-button--icon table-export-button pnr-table-export-button${isMissingPackagesSelectionMode ? " is-active" : ""}" type="button" data-missing-packages-selection-toggle title="${isMissingPackagesSelectionMode ? "Cancelar seleção" : "Selecionar casos"}" aria-label="${isMissingPackagesSelectionMode ? "Cancelar seleção de casos" : "Selecionar casos"}">
+          <button class="secondary-button secondary-button--icon table-export-button pnr-table-export-button${isMissingPackagesSelectionMode ? " is-active" : ""}" type="button" data-missing-packages-selection-toggle title="${operationalFreeze ? escapeAttribute(getOperationalFreezeMessage()) : (isMissingPackagesSelectionMode ? "Cancelar seleção" : "Selecionar casos")}" aria-label="${isMissingPackagesSelectionMode ? "Cancelar seleção de casos" : "Selecionar casos"}" ${operationalFreeze ? "disabled" : ""}>
             <svg viewBox="0 0 24 24" aria-hidden="true">
               <path d="M9 11.5 11 13.5 15.5 9" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2"></path>
               <rect x="4" y="5" width="16" height="14" rx="3" fill="none" stroke="currentColor" stroke-width="1.8"></rect>
             </svg>
           </button>
-          <button class="secondary-button secondary-button--icon table-export-button pnr-table-export-button missing-packages-delete-button${selectedCount ? " has-pending" : ""}" type="button" data-missing-packages-delete-selected title="${selectedCount ? `Excluir ${integer.format(selectedCount)} caso${selectedCount === 1 ? "" : "s"} selecionado${selectedCount === 1 ? "" : "s"}` : "Excluir casos selecionados"}" aria-label="Excluir casos selecionados" ${!selectedCount || isDeletingMissingPackages ? "disabled" : ""}>
+          <button class="secondary-button secondary-button--icon table-export-button pnr-table-export-button missing-packages-delete-button${selectedCount ? " has-pending" : ""}" type="button" data-missing-packages-delete-selected title="${operationalFreeze ? escapeAttribute(getOperationalFreezeMessage()) : (selectedCount ? `Excluir ${integer.format(selectedCount)} caso${selectedCount === 1 ? "" : "s"} selecionado${selectedCount === 1 ? "" : "s"}` : "Excluir casos selecionados")}" aria-label="Excluir casos selecionados" ${!selectedCount || isDeletingMissingPackages || operationalFreeze ? "disabled" : ""}>
             <svg viewBox="0 0 24 24" aria-hidden="true">
               <path d="M4 7h16" fill="none" stroke="currentColor" stroke-linecap="round" stroke-width="2"></path>
               <path d="M10 11v6M14 11v6" fill="none" stroke="currentColor" stroke-linecap="round" stroke-width="1.8"></path>
@@ -4501,12 +4575,13 @@ function getMissingPackagesFileHistoryRecords() {
 
 function renderMissingPackagesImportPanel() {
   const moduleFiles = getMissingPackagesFileHistoryRecords();
+  const operationalFreeze = isOperationalFreezeEnabled();
   return `
     <article class="panel missing-packages-import-panel">
       <div class="panel__header">
         <div>
           <h3>Importar arquivo de Pacotes Faltantes</h3>
-          <p>Envie CSV ou XLSX. O sistema extrai somente linhas cujo motivo/caso contenha Faltante.</p>
+          <p>Envie CSV ou XLSX. O sistema extrai linhas cujo motivo/caso indique Faltante ou Pacote Perdido.</p>
         </div>
       </div>
       <div class="missing-packages-upload-dropzone">
@@ -4517,7 +4592,7 @@ function renderMissingPackagesImportPanel() {
           <strong>Selecionar arquivo CSV/XLSX</strong>
           <span>Formato recomendado: CSV. Arquivos XLSX podem ser mais lentos para processar.</span>
         </div>
-        <button type="button" class="secondary-button missing-packages-action missing-packages-action--primary" data-missing-packages-upload>
+        <button type="button" class="secondary-button missing-packages-action missing-packages-action--primary" data-missing-packages-upload ${operationalFreeze ? "disabled" : ""} title="${operationalFreeze ? escapeAttribute(getOperationalFreezeMessage()) : "Selecionar arquivo"}">
           <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 16V4m0 0-4 4m4-4 4 4M5 20h14" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.9"></path></svg>
           <span>Selecionar arquivo</span>
         </button>
@@ -4556,17 +4631,23 @@ function renderMissingPackagesPage() {
 
 function buildMissingPackagesExportRows(rows = []) {
   return (Array.isArray(rows) ? rows : []).map((row) => ({
-    "Data do Caso": formatDate(row.dataFechamento),
-    "Data de importação": formatDateTime(row.importedAt),
-    Base: row.base || "",
-    "Tipo de base": row.tipoBase || "XPT",
-    Driver: formatDriverName(row.driverNome, ""),
-    "ID do Pacote/Envio": String(row.idEnvio || ""),
-    Caso: row.caso || "Pacote faltante",
+    "Motivo de Insucesso": row.motivoInsucesso || row.motivoOriginal || "",
+    SVC: row.base || "",
+    "ID da Rota": String(row.idRota || ""),
+    Transportadora: row.transportadora || "",
+    "Valor do Pacote": row.valorPacote == null || row.valorPacote === "" ? "" : Number(row.valorPacote || 0),
+    "Dias de Atraso": row.diasAtraso == null || row.diasAtraso === "" ? "" : Number(row.diasAtraso || 0),
+    "Data de Tentativa": formatDateTime(row.dataTentativa || row.dataFechamento),
+    "ID do Motorista": String(row.idMotorista || ""),
+    "Descrição do Item": row.descricaoItem || "",
+    "ID do Pacote": String(row.idEnvio || ""),
+    Transportadora_Usuario: row.transportadoraUsuario || "",
+    RiskCategory: row.riskCategory || "",
     "Status do Caso": row.statusCaso || "",
     "Contato Méli": row.statusContatoMeli || "",
     "Prazo da tratativa": formatDateTime(row.prazoTratativa),
     "Situação do prazo": getMissingPackageDeadlineStatus(row),
+    "Data de importação": formatDateTime(row.importedAt),
   }));
 }
 
@@ -4574,11 +4655,22 @@ function getMissingPackagesExportScope() {
   return {
     data: state.missingPackagesDate === "Todos" ? "Todas" : formatDate(state.missingPackagesDate),
     base: state.missingPackagesBase === "Todos" ? "Todas" : state.missingPackagesBase,
-    driver: state.missingPackagesDriver === "Todos" ? "Todos" : formatDriverName(state.missingPackagesDriver, ""),
+    motorista: state.missingPackagesDriver === "Todos" ? "Todos" : formatDriverName(state.missingPackagesDriver, ""),
     status: state.missingPackagesCaseStatus === "Todos" ? "Todos" : normalizeMissingPackageCaseStatus(state.missingPackagesCaseStatus),
     contato: state.missingPackagesMeliStatus === "Todos" ? "Todos" : normalizeMissingPackageMeliStatus(state.missingPackagesMeliStatus),
     prazo: state.missingPackagesDeadline === "Todos" ? "Todos" : state.missingPackagesDeadline,
   };
+}
+
+function getExcelColumnLetter(index) {
+  let value = Math.max(1, Number(index || 1));
+  let label = "";
+  while (value > 0) {
+    const remainder = (value - 1) % 26;
+    label = String.fromCharCode(65 + remainder) + label;
+    value = Math.floor((value - 1) / 26);
+  }
+  return label;
 }
 
 function configureMissingPackagesExportHeader(worksheet, exportRows) {
@@ -4589,8 +4681,9 @@ function configureMissingPackagesExportHeader(worksheet, exportRows) {
   const textDark = "1F2A37";
   const borderColor = "D8E3ED";
   const scope = getMissingPackagesExportScope();
+  const lastColumn = getExcelColumnLetter(MISSING_PACKAGE_TABLE_COLUMNS.length);
 
-  styleExcelRange(worksheet, "A1:H5", {
+  styleExcelRange(worksheet, `A1:${lastColumn}5`, {
     fill: { type: "pattern", pattern: "solid", fgColor: { argb: darkBlue } },
     font: { name: "Arial", color: { argb: white } },
     alignment: { vertical: "middle" },
@@ -4614,11 +4707,11 @@ function configureMissingPackagesExportHeader(worksheet, exportRows) {
     worksheet.getCell(address).alignment = { horizontal: "left", vertical: "middle" };
   });
 
-  worksheet.getRow(6).values = ["Resumo do recorte", "Registros exportados", "Base", "Driver", "Contato Méli", "Prazo", "", ""];
-  worksheet.getRow(7).values = ["", exportRows.length, scope.base, scope.driver, scope.contato, scope.prazo, "", ""];
+  worksheet.getRow(6).values = ["Resumo do recorte", "Registros exportados", "SVC", "ID do Motorista", "Contato Méli", "Prazo", "", ""];
+  worksheet.getRow(7).values = ["", exportRows.length, scope.base, scope.motorista, scope.contato, scope.prazo, "", ""];
   worksheet.getRow(6).height = 15.6;
   worksheet.getRow(7).height = 14.4;
-  styleExcelRange(worksheet, "A6:H6", {
+  styleExcelRange(worksheet, `A6:${lastColumn}6`, {
     fill: { type: "pattern", pattern: "solid", fgColor: { argb: aqua } },
     font: { name: "Arial", size: 12, italic: true, color: { argb: white } },
     alignment: { horizontal: "center", vertical: "middle" },
@@ -4629,7 +4722,7 @@ function configureMissingPackagesExportHeader(worksheet, exportRows) {
       right: { style: "thin", color: { argb: borderColor } },
     },
   });
-  styleExcelRange(worksheet, "A7:H7", {
+  styleExcelRange(worksheet, `A7:${lastColumn}7`, {
     fill: { type: "pattern", pattern: "solid", fgColor: { argb: mutedBlue } },
     font: { name: "Arial", size: 11, bold: true, color: { argb: textDark } },
     alignment: { vertical: "middle" },
@@ -4672,8 +4765,9 @@ function addMissingPackagesExportTable(worksheet, exportRows) {
     row.values = headers.map((header) => item[header]);
     row.height = 22.05;
     row.eachCell((cell, colNumber) => {
-      cell.font = { name: "Arial", size: 10, bold: colNumber === 6 || colNumber === 7, color: { argb: "1F2A37" } };
-      cell.alignment = { vertical: "middle", horizontal: "left", wrapText: colNumber === 4 };
+      const header = headers[colNumber - 1] || "";
+      cell.font = { name: "Arial", size: 10, bold: ["Motivo de Insucesso", "ID do Pacote", "RiskCategory"].includes(header), color: { argb: "1F2A37" } };
+      cell.alignment = { vertical: "middle", horizontal: header === "Valor do Pacote" || header === "Dias de Atraso" ? "right" : "left", wrapText: header === "Descrição do Item" };
       cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: index % 2 === 0 ? "FFFFFF" : "F7FAFC" } };
       cell.border = {
         top: { style: "thin", color: { argb: "E0E7EF" } },
@@ -4681,20 +4775,21 @@ function addMissingPackagesExportTable(worksheet, exportRows) {
         bottom: { style: "thin", color: { argb: "E0E7EF" } },
         right: { style: "thin", color: { argb: "E0E7EF" } },
       };
-      if (colNumber === 6) cell.numFmt = "@";
+      if (/^ID /.test(header)) cell.numFmt = "@";
+      if (header === "Valor do Pacote") cell.numFmt = '"R$" #,##0.00';
+      if (header === "Dias de Atraso") cell.numFmt = "0";
     });
-    row.getCell(6).value = String(item["ID do Pacote/Envio"] || "");
   });
   worksheet.views = [{ state: "frozen", ySplit: headerRowNumber, topLeftCell: "A9", zoomScale: 85, zoomScaleNormal: 85, activeCell: "A9" }];
 }
 
 function autoFitMissingPackagesExportColumns(worksheet, exportRows) {
-  const headers = MISSING_PACKAGE_TABLE_COLUMNS.map((column) => column.label);
-  const minWidths = [14, 19, 10, 22, 18, 16, 18, 19];
-  const maxWidths = [18, 24, 16, 40, 24, 22, 24, 24];
-  headers.forEach((header, index) => {
+  MISSING_PACKAGE_TABLE_COLUMNS.forEach((column, index) => {
+    const header = column.label;
     const maxContent = Math.max(header.length, ...exportRows.map((row) => String(row[header] || "").length));
-    worksheet.getColumn(index + 1).width = Math.min(maxWidths[index], Math.max(minWidths[index], Math.ceil(maxContent * 1.08) + 2));
+    const minWidth = Math.max(10, Math.floor((column.width || 120) / 11));
+    const maxWidth = column.key === "descricaoItem" ? 48 : Math.max(minWidth, Math.min(28, Math.ceil((column.width || 120) / 8)));
+    worksheet.getColumn(index + 1).width = Math.min(maxWidth, Math.max(minWidth, Math.ceil(maxContent * 1.08) + 2));
   });
 }
 
@@ -5610,7 +5705,7 @@ function getPnrStatusUpdateSelectColumns(includeAuditColumns = true) {
 }
 
 function canEditPnrStatus() {
-  return Boolean(currentUser);
+  return Boolean(currentUser) && !isOperationalFreezeEnabled();
 }
 
 function getPendingPnrStatusEdit(recordId) {
@@ -5641,6 +5736,7 @@ function renderPnrStatusCell(row = {}) {
 
 function openPnrStatusDropdown(button) {
   if (!button) return;
+  if (!ensureOperationalWriteAllowed()) return;
   const recordId = button.dataset.recordId || "";
   if (!recordId) return;
   if (activePnrStatusDropdownRecordId === String(recordId) && document.querySelector("[data-pnr-status-dropdown]")) {
@@ -5674,6 +5770,7 @@ function openPnrStatusDropdown(button) {
 }
 
 function applyPnrStatusOption(button) {
+  if (!ensureOperationalWriteAllowed()) return;
   const recordId = button?.dataset?.recordId || "";
   const previousStatus = button?.dataset?.currentStatus || "";
   const nextStatus = button?.dataset?.value || "";
@@ -5714,6 +5811,7 @@ function updatePnrRowsStatusLocally(recordId, nextStatus, payload = {}) {
 }
 
 async function updatePnrRecordStatus(recordId, nextStatus, options = {}) {
+  if (!ensureOperationalWriteAllowed()) throw new Error(getOperationalFreezeMessage());
   const normalizedStatus = getPnrEditableStatusValue(nextStatus);
   if (!recordId || !normalizedStatus) throw new Error("Status inválido para atualização.");
   if (!window.supabaseClient || !currentUser || !canEditPnrStatus()) throw new Error("Usuário sem permissão para editar status.");
@@ -6440,8 +6538,8 @@ function renderMissingPackagesFilterControls() {
     <div class="pnr-filter-bar missing-packages-filter-bar">
       <div class="pnr-filter-row dashboard-filter-bar">
         ${renderMissingPackagesFilterSelect("data", "Data", state.missingPackagesDate, options.datas)}
-        ${renderMissingPackagesFilterSelect("base", "Base", state.missingPackagesBase, options.bases)}
-        ${renderMissingPackagesFilterSelect("driver", "Driver", state.missingPackagesDriver, options.drivers)}
+        ${renderMissingPackagesFilterSelect("base", "SVC", state.missingPackagesBase, options.bases)}
+        ${renderMissingPackagesFilterSelect("driver", "ID Motorista", state.missingPackagesDriver, options.drivers)}
         ${renderMissingPackagesFilterSelect("statusCaso", "Status", caseStatusValue, options.statusCaso)}
         ${renderMissingPackagesFilterSelect("statusMeli", "Contato Méli", meliStatusValue, options.statusMeli)}
         ${renderMissingPackagesFilterSelect("prazo", "Prazo", state.missingPackagesDeadline, options.prazos)}
@@ -15727,10 +15825,15 @@ function findMissingPackageHeaderRow(matrix = []) {
   for (let index = 0; index < Math.min(matrix.length, 12); index += 1) {
     const headers = (matrix[index] || []).map((value) => String(value || "").trim());
     const idIndex = findHeaderIndex(headers, ["ID DO PACOTE/ENVIO", "ID PACOTE/ENVIO", "PACOTE/ENVIO", "ID DO PACOTE", "ID PACOTE", "ID DO ENVIO", "ID ENVIO", "ENVIO", "PACOTE", "ID"]);
-    const motiveIndex = findHeaderIndex(headers, ["MOTIVO", "OCORRENCIA", "OCORRÊNCIA", "DESCRICAO", "DESCRIÇÃO", "CASO", "TIPO"]);
+    const motiveIndex = findHeaderIndex(headers, ["MOTIVO DE INSUCESSO", "MOTIVO", "OCORRENCIA", "OCORRÊNCIA", "DESCRICAO", "DESCRIÇÃO", "CASO", "TIPO"]);
     if (idIndex >= 0 && motiveIndex >= 0) return index;
   }
   return 0;
+}
+
+function isMissingPackageReason(value = "") {
+  const normalized = normalizeText(value);
+  return /\bFALTANTE\b/.test(normalized) || /\bPACOTE\s+PERDID[OA]S?\b/.test(normalized) || /\bPERDID[OA]S?\b/.test(normalized);
 }
 
 function normalizeMissingPackageWorkbook(workbook, fileName = "") {
@@ -15750,11 +15853,19 @@ function normalizeMissingPackageWorkbook(workbook, fileName = "") {
     const headerIndex = findMissingPackageHeaderRow(matrix);
     const headers = (matrix[headerIndex] || []).map((value) => String(value || "").trim());
     const idx = {
-      data: findHeaderIndex(headers, ["DATA", "DATA DO CASO", "DATA DO FECHAMENTO", "COMPETENCIA", "COMPETÊNCIA", "REFERENCIA", "REFERÊNCIA"]),
+      data: findHeaderIndex(headers, ["DATA DE TENTATIVA", "DATA", "DATA DO CASO", "DATA DO FECHAMENTO", "COMPETENCIA", "COMPETÊNCIA", "REFERENCIA", "REFERÊNCIA"]),
       base: findHeaderIndex(headers, ["BASE", "ESTACAO", "ESTAÇÃO", "UNIDADE", "ORIGEM", "SVC", "XPT"]),
-      driver: findHeaderIndex(headers, ["DRIVER", "MOTORISTA", "NOME DO MOTORISTA", "NOME MOTORISTA", "ENTREGADOR"]),
+      driver: findHeaderIndex(headers, ["DRIVER", "MOTORISTA", "NOME DO MOTORISTA", "NOME MOTORISTA", "ENTREGADOR", "ID DO MOTORISTA", "ID MOTORISTA"]),
       id: findHeaderIndex(headers, ["ID DO PACOTE/ENVIO", "ID PACOTE/ENVIO", "PACOTE/ENVIO", "ID DO PACOTE", "ID PACOTE", "ID DO ENVIO", "ID ENVIO", "ENVIO", "PACOTE", "ID"]),
-      motivo: findHeaderIndex(headers, ["MOTIVO", "OCORRENCIA", "OCORRÊNCIA", "DESCRICAO", "DESCRIÇÃO", "CASO", "TIPO"]),
+      motivo: findHeaderIndex(headers, ["MOTIVO DE INSUCESSO", "MOTIVO", "OCORRENCIA", "OCORRÊNCIA", "DESCRICAO", "DESCRIÇÃO", "CASO", "TIPO"]),
+      idRota: findHeaderIndex(headers, ["ID DA ROTA", "ID ROTA", "ROTA"]),
+      transportadora: findHeaderIndex(headers, ["TRANSPORTADORA"]),
+      valorPacote: findHeaderIndex(headers, ["VALOR DO PACOTE", "VALOR PACOTE", "VALOR"]),
+      diasAtraso: findHeaderIndex(headers, ["DIAS DE ATRASO", "DIAS ATRASO", "ATRASO"]),
+      idMotorista: findHeaderIndex(headers, ["ID DO MOTORISTA", "ID MOTORISTA", "MOTORISTA ID"]),
+      descricaoItem: findHeaderIndex(headers, ["DESCRIÇÃO DO ITEM", "DESCRICAO DO ITEM", "DESCRIÇÃO ITEM", "DESCRICAO ITEM", "ITEM", "PRODUTO"]),
+      transportadoraUsuario: findHeaderIndex(headers, ["TRANSPORTADORA_USUARIO", "TRANSPORTADORA USUARIO", "TRANSPORTADORA_USUÁRIO", "TRANSPORTADORA USUÁRIO"]),
+      riskCategory: findHeaderIndex(headers, ["RISKCATEGORY", "RISK CATEGORY", "CATEGORIA DE RISCO", "RISCO"]),
     };
     const rowsRead = Math.max(matrix.length - headerIndex - 1, 0);
     totalRowsRead += rowsRead;
@@ -15769,7 +15880,7 @@ function normalizeMissingPackageWorkbook(workbook, fileName = "") {
       const row = matrix[index];
       if (!row || row.every((cell) => cell == null || String(cell).trim() === "")) continue;
       const motivo = readCell(row, idx.motivo);
-      if (!/\bfaltante\b/i.test(normalizeText(motivo))) {
+      if (!isMissingPackageReason(motivo)) {
         totalRowsSkipped += 1;
         sheetSkipped += 1;
         continue;
@@ -15784,22 +15895,46 @@ function normalizeMissingPackageWorkbook(workbook, fileName = "") {
       const dataValue = readCell(row, idx.data);
       const dataFechamento = parseMissingPackageDate(dataValue) || new Date().toISOString().slice(0, 10);
       const base = readCell(row, idx.base) || "";
-      const driverNome = formatDriverName(readCell(row, idx.driver) || "", "");
+      const idMotorista = formatId(readCell(row, idx.idMotorista));
+      const driverNome = formatDriverName(readCell(row, idx.driver) || idMotorista || "", "");
+      const valorPacoteOriginal = readCell(row, idx.valorPacote);
+      const dataTentativa = dataValue || dataFechamento;
       const normalized = {
         file_category: MISSING_PACKAGES_FILE_CATEGORY,
         tipo_registro: MISSING_PACKAGES_FILE_CATEGORY,
         dataFechamento,
         data_fechamento: dataFechamento,
+        dataTentativa,
+        data_tentativa: dataTentativa,
         base,
-        tipoBase: "XPT",
-        tipo_base: "XPT",
+        tipoBase: idx.base >= 0 && normalizeHeader(headers[idx.base]) === "SVC" ? "SVC" : "XPT",
+        tipo_base: idx.base >= 0 && normalizeHeader(headers[idx.base]) === "SVC" ? "SVC" : "XPT",
         driverNome,
         driver_nome: driverNome,
+        idMotorista,
+        id_motorista: idMotorista,
         idEnvio,
         id_envio: idEnvio,
         caso: "Pacote faltante",
+        motivoInsucesso: motivo || "Pacote Perdido",
+        motivo_insucesso: motivo || "Pacote Perdido",
         motivoOriginal: motivo || "Faltante",
         motivo_original: motivo || "Faltante",
+        idRota: formatId(readCell(row, idx.idRota)),
+        id_rota: formatId(readCell(row, idx.idRota)),
+        transportadora: readCell(row, idx.transportadora),
+        valorPacote: valorPacoteOriginal === "" ? null : normalizarValorGestao(valorPacoteOriginal),
+        valor_pacote: valorPacoteOriginal === "" ? null : normalizarValorGestao(valorPacoteOriginal),
+        valorPacoteOriginal,
+        valor_pacote_original: valorPacoteOriginal,
+        diasAtraso: readCell(row, idx.diasAtraso),
+        dias_atraso: readCell(row, idx.diasAtraso),
+        descricaoItem: readCell(row, idx.descricaoItem),
+        descricao_item: readCell(row, idx.descricaoItem),
+        transportadoraUsuario: readCell(row, idx.transportadoraUsuario),
+        transportadora_usuario: readCell(row, idx.transportadoraUsuario),
+        riskCategory: readCell(row, idx.riskCategory),
+        risk_category: readCell(row, idx.riskCategory),
         statusCaso: "Pendente",
         status_caso: "Pendente",
         statusContatoMeli: "E-mail Enviado",
@@ -19327,18 +19462,24 @@ function mapMissingPackageRowToProcessedRecord(row, fileRecord) {
   const normalized = {
     dataFechamento: row.dataFechamento || row.data_fechamento || "",
     base: row.base || "",
-    driverNome: row.driverNome || row.driver_nome || "",
+    driverNome: row.driverNome || row.driver_nome || row.idMotorista || row.id_motorista || "",
     idEnvio: row.idEnvio || row.id_envio || "",
     caso: row.caso || "Pacote faltante",
   };
+  const valorPacoteRaw = row.valorPacote ?? row.valor_pacote ?? row.valorPacoteOriginal ?? row.valor_pacote_original ?? "";
+  const hasValorPacote = valorPacoteRaw !== null && valorPacoteRaw !== undefined && String(valorPacoteRaw).trim() !== "";
+  const valorPacote = hasValorPacote ? normalizarValorGestao(valorPacoteRaw) : null;
+  const idRota = formatId(row.idRota || row.id_rota || "");
+  const idMotorista = formatId(row.idMotorista || row.id_motorista || "");
+  const dataTentativa = row.dataTentativa || row.data_tentativa || row.dataFechamento || row.data_fechamento || "";
   return {
     data_fechamento: toDatabaseDate(normalized.dataFechamento) || new Date().toISOString().slice(0, 10),
     base: normalized.base || "Não identificada",
-    tipo_base: "XPT",
+    tipo_base: row.tipoBase || row.tipo_base || "SVC",
     driver_nome: formatDriverName(normalized.driverNome || "", "") || "Não identificado",
     id_envio: formatId(normalized.idEnvio || ""),
     caso: "Pacote faltante",
-    motivo_original: row.motivoOriginal || row.motivo_original || "Faltante",
+    motivo_original: row.motivoInsucesso || row.motivo_insucesso || row.motivoOriginal || row.motivo_original || "Pacote Perdido",
     status_caso: normalizeMissingPackageCaseStatus(row.statusCaso || row.status_caso || "Pendente"),
     status_contato_meli: normalizeMissingPackageMeliStatus(row.statusContatoMeli || row.status_contato_meli || "E-mail Enviado"),
     prazo_tratativa: prazo,
@@ -19356,6 +19497,29 @@ function mapMissingPackageRowToProcessedRecord(row, fileRecord) {
     raw_data: {
       file_category: MISSING_PACKAGES_FILE_CATEGORY,
       arquivo_origem: fileRecord?.file_name || row.arquivo_origem || "",
+      motivo_insucesso: row.motivoInsucesso || row.motivo_insucesso || row.motivoOriginal || row.motivo_original || "Pacote Perdido",
+      motivoInsucesso: row.motivoInsucesso || row.motivo_insucesso || row.motivoOriginal || row.motivo_original || "Pacote Perdido",
+      svc: normalized.base || "",
+      SVC: normalized.base || "",
+      id_rota: idRota,
+      idRota,
+      transportadora: row.transportadora || "",
+      valor_pacote: valorPacote,
+      valorPacote,
+      valor_pacote_original: row.valorPacoteOriginal || row.valor_pacote_original || valorPacoteRaw || "",
+      valorPacoteOriginal: row.valorPacoteOriginal || row.valor_pacote_original || valorPacoteRaw || "",
+      dias_atraso: row.diasAtraso || row.dias_atraso || "",
+      diasAtraso: row.diasAtraso || row.dias_atraso || "",
+      data_tentativa: dataTentativa,
+      dataTentativa,
+      id_motorista: idMotorista,
+      idMotorista,
+      descricao_item: row.descricaoItem || row.descricao_item || "",
+      descricaoItem: row.descricaoItem || row.descricao_item || "",
+      transportadora_usuario: row.transportadoraUsuario || row.transportadora_usuario || "",
+      transportadoraUsuario: row.transportadoraUsuario || row.transportadora_usuario || "",
+      risk_category: row.riskCategory || row.risk_category || "",
+      riskCategory: row.riskCategory || row.risk_category || "",
     },
   };
 }
@@ -20508,7 +20672,7 @@ async function removeStorageFilesIfPresent(records = []) {
 async function deleteDashboardFiles(fileRecords = [], options = {}) {
   const permissions = getActionPermissions();
   if (!permissions.canDeleteFile) {
-    showToast(permissions.isLoggedIn ? "Apenas administradores podem realizar esta ação." : "Faça login para acessar esta função.", "warn", 5200);
+    showToast(permissions.operationalFreeze ? getOperationalFreezeMessage() : (permissions.isLoggedIn ? "Apenas administradores podem realizar esta ação." : "Faça login para acessar esta função."), "warn", permissions.operationalFreeze ? 7200 : 5200);
     if (permissions.isLoggedIn) showPermissionDeniedState();
     return;
   }
@@ -20738,12 +20902,14 @@ function canEdit() {
 function getActionPermissions() {
   const isLoggedIn = Boolean(currentUser);
   const isAdmin = canEdit();
+  const operationalFreeze = isOperationalFreezeEnabled();
   return {
     isLoggedIn,
     isAdmin,
+    operationalFreeze,
     canDownloadReport: isLoggedIn,
-    canUploadFile: isLoggedIn && isAdmin,
-    canDeleteFile: isLoggedIn && isAdmin,
+    canUploadFile: isLoggedIn && isAdmin && !operationalFreeze,
+    canDeleteFile: isLoggedIn && isAdmin && !operationalFreeze,
     canOpenSettings: isLoggedIn && isAdmin,
   };
 }
@@ -20761,6 +20927,10 @@ function ensureReportPermission() {
 function ensureUploadPermission() {
   const permissions = getActionPermissions();
   if (permissions.canUploadFile) return true;
+  if (permissions.operationalFreeze) {
+    showToast(getOperationalFreezeMessage(), "warn", 7200);
+    return false;
+  }
   showToast(permissions.isLoggedIn ? "Apenas administradores podem realizar esta ação." : "Faça login para acessar esta função.", "warn", 5200);
   if (permissions.isLoggedIn) showPermissionDeniedState();
   return false;
@@ -20769,6 +20939,10 @@ function ensureUploadPermission() {
 function ensureDeletePermission() {
   const permissions = getActionPermissions();
   if (permissions.canDeleteFile) return true;
+  if (permissions.operationalFreeze) {
+    showToast(getOperationalFreezeMessage(), "warn", 7200);
+    return false;
+  }
   showToast(permissions.isLoggedIn ? "Apenas administradores podem realizar esta ação." : "Faça login para acessar esta função.", "warn", 5200);
   if (permissions.isLoggedIn) showPermissionDeniedState();
   return false;
@@ -20796,6 +20970,7 @@ function renderAvatarMarkup(profile, fallbackText, className = "account-avatar")
 }
 
 function updateAccessControls() {
+  hydrateOperationalFreezeNotice();
   const permissions = getActionPermissions();
   const accountMenuOpen = Boolean(state.accountPanelOpen);
   const showLogin = accountMenuOpen && !currentUser;
@@ -20827,7 +21002,9 @@ function updateAccessControls() {
     permissions.canUploadFile,
     permissions.canUploadFile
       ? "Importar Excel"
-      : permissions.isLoggedIn
+      : permissions.operationalFreeze
+        ? getOperationalFreezeMessage()
+        : permissions.isLoggedIn
         ? "Somente administradores podem usar esta função."
         : "Faça login para usar esta função.",
   );

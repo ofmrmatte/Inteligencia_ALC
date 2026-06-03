@@ -9802,6 +9802,29 @@ body:not([data-theme="light"]) .view-toolbar.is-pnr-view .pnr-toolbar-filters {
   --pnr-filter-action-color: #9aa8ba;
 }
 
+.operational-freeze-notice {
+  margin: 0 auto;
+  width: min(1180px, calc(100% - 32px));
+  border: 1px solid rgba(14, 165, 233, 0.34);
+  border-radius: 8px;
+  background: rgba(14, 165, 233, 0.11);
+  color: #d9f3ff;
+  padding: 10px 14px;
+  font-size: 0.86rem;
+  font-weight: 700;
+  line-height: 1.35;
+}
+
+.operational-freeze-notice[hidden] {
+  display: none !important;
+}
+
+body[data-theme="light"] .operational-freeze-notice {
+  background: rgba(3, 105, 161, 0.09);
+  border-color: rgba(3, 105, 161, 0.26);
+  color: #075985;
+}
+
 /* PNR detailed table controls */
 .pnr-table-panel .panel__header {
   align-items: center;

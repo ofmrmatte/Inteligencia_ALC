@@ -135,6 +135,28 @@ O mesmo servidor tambem expoe a primeira camada hibrida por modulo:
 
 Esses endpoints validam o token do Supabase Auth no backend e executam dados operacionais no Railway. O front usa essa camada para `Pacotes Faltantes`, `Gestao de Pacotes` e `Pre-Fatura` quando `DATA_SOURCE` e diferente de `supabase`.
 
+### Janela de manutencao operacional
+
+Para ensaiar ou executar uma janela de corte com leitura liberada e escrita bloqueada:
+
+```bash
+OPERATIONAL_FREEZE=true npm run railway:serve-dashboard
+```
+
+No PowerShell:
+
+```powershell
+$env:OPERATIONAL_FREEZE = "true"; npm run railway:serve-dashboard
+```
+
+Com `OPERATIONAL_FREEZE=true`, o painel mostra aviso de manutencao e bloqueia upload, importacao, exclusao, edicao de status PNR e edicao de status/contato Meli em Pacotes Faltantes. O backend tambem bloqueia endpoints de escrita e retorna `423 Locked`.
+
+O runbook completo de snapshot final, preview remoto, criterio de corte e rollback esta em:
+
+```txt
+scripts/railway/CUTOVER_RUNBOOK.md
+```
+
 ## Scripts
 
 - `01-check-railway-connection.mjs`: testa conexao Supabase e Railway, versao do Postgres, encoding, timezone, extensoes e permissao de tabela temporaria no Railway.
