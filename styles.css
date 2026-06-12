@@ -10143,3 +10143,637 @@ body:not([data-theme="light"]) .view-toolbar.is-pnr-view .pnr-toolbar-filters {
   --pnr-filter-value-color: #d9e6f5;
   --pnr-filter-action-color: #9aa8ba;
 }
+
+/* DF07 - Topbar cards and tabs only refinement. */
+/* Escopo: topbar, cards reais e abas. Sem seletores globais, sem cápsulas 999px. */
+
+body[data-theme="light"] {
+  --df07-surface-float: rgba(255, 255, 255, 0.72);
+  --df07-surface-card: rgba(255, 255, 255, 0.88);
+  --df07-surface-card-strong: rgba(255, 255, 255, 0.94);
+  --df07-border: rgba(196, 207, 222, 0.62);
+  --df07-border-strong: rgba(142, 160, 183, 0.28);
+  --df07-text: #102033;
+  --df07-muted: #64748b;
+  --df07-accent: #1677c8;
+  --df07-accent-soft: rgba(59, 166, 255, 0.12);
+  --df07-green-soft: rgba(0, 166, 81, 0.08);
+  --df07-shadow-float: 0 16px 42px rgba(15, 23, 42, 0.10);
+  --df07-shadow-card: 0 14px 36px rgba(15, 23, 42, 0.075);
+}
+
+/* Topbar flutuante, transparente e proporcional. */
+body[data-theme="light"] .topbar {
+  position: sticky;
+  top: 0.75rem;
+  z-index: 80;
+  width: calc(100% - 1.5rem);
+  margin: 0.75rem auto 0.85rem;
+  min-height: 72px;
+  padding: 0.72rem 1rem;
+  border: 1px solid var(--df07-border);
+  border-radius: 22px;
+  background:
+    linear-gradient(180deg, rgba(255,255,255,0.78), rgba(248,251,253,0.58)),
+    radial-gradient(circle at 12% 0%, rgba(0,166,81,0.08), transparent 34%);
+  box-shadow: var(--df07-shadow-float);
+  backdrop-filter: blur(22px) saturate(1.15);
+  -webkit-backdrop-filter: blur(22px) saturate(1.15);
+}
+
+body[data-theme="light"] .topbar__left {
+  gap: 0.78rem;
+}
+
+body[data-theme="light"] .topbar__left h1 {
+  color: var(--df07-text);
+  font-size: clamp(1.12rem, 1.15vw, 1.38rem);
+  font-weight: 850;
+  letter-spacing: -0.018em;
+  line-height: 1.05;
+}
+
+body[data-theme="light"] .topbar__left p,
+body[data-theme="light"] .topbar__titles p {
+  color: var(--df07-muted);
+  font-size: 0.8rem;
+  font-weight: 650;
+  margin-top: 0.16rem;
+}
+
+body[data-theme="light"] .topbar__center {
+  color: var(--df07-muted);
+  font-size: 0.82rem;
+  font-weight: 650;
+}
+
+body[data-theme="light"] .topbar__actions {
+  gap: 0.44rem;
+}
+
+/* Ações do topo sem cápsula exagerada. */
+body[data-theme="light"] .topbar__actions .ghost-button,
+body[data-theme="light"] .topbar__actions .danger-button {
+  min-height: 2.3rem;
+  height: 2.3rem;
+  padding: 0 0.82rem;
+  border-radius: 13px;
+  border-color: var(--df07-border);
+  background: rgba(255, 255, 255, 0.62);
+  box-shadow: 0 8px 18px rgba(15, 23, 42, 0.045);
+}
+
+body[data-theme="light"] .topbar__actions .icon-button {
+  width: 2.3rem;
+  height: 2.3rem;
+  border-radius: 13px;
+  border-color: var(--df07-border);
+  background: rgba(255, 255, 255, 0.62);
+  box-shadow: 0 8px 18px rgba(15, 23, 42, 0.045);
+}
+
+body[data-theme="light"] .topbar__actions .ghost-button:hover,
+body[data-theme="light"] .topbar__actions .danger-button:hover,
+body[data-theme="light"] .topbar__actions .icon-button:hover {
+  transform: translateY(-1px);
+  border-color: rgba(59, 166, 255, 0.34);
+  background: rgba(255, 255, 255, 0.84);
+  box-shadow: 0 12px 26px rgba(15, 23, 42, 0.075);
+}
+
+/* Abas: clique mais claro, sem aparência de cápsula solta. */
+body[data-theme="light"] .sheet-tabs {
+  gap: 0.42rem;
+  align-items: center;
+}
+
+body[data-theme="light"] .sheet-tabs .secondary-button,
+body[data-theme="light"] .sheet-tabs .ghost-button,
+body[data-theme="light"] .sheet-tab {
+  min-height: 2.28rem;
+  padding: 0.44rem 0.86rem;
+  border-radius: 12px;
+  border-color: rgba(196, 207, 222, 0.66);
+  background: rgba(255, 255, 255, 0.55);
+  color: var(--df07-muted);
+  box-shadow: none;
+  transition:
+    background 150ms ease,
+    border-color 150ms ease,
+    color 150ms ease,
+    box-shadow 150ms ease,
+    transform 150ms ease;
+}
+
+body[data-theme="light"] .sheet-tabs .secondary-button:hover,
+body[data-theme="light"] .sheet-tabs .ghost-button:hover,
+body[data-theme="light"] .sheet-tab:hover {
+  transform: translateY(-1px);
+  background: rgba(255, 255, 255, 0.88);
+  border-color: rgba(59, 166, 255, 0.34);
+  color: var(--df07-text);
+}
+
+body[data-theme="light"] .sheet-tabs .secondary-button.is-active,
+body[data-theme="light"] .sheet-tabs .ghost-button.is-active,
+body[data-theme="light"] .sheet-tab.is-active,
+body[data-theme="light"] .sheet-tabs [aria-selected="true"] {
+  background:
+    linear-gradient(180deg, rgba(238, 248, 255, 0.96), rgba(230, 244, 255, 0.82));
+  border-color: rgba(59, 166, 255, 0.48);
+  color: #0b5f9c;
+  box-shadow: 0 8px 18px rgba(59, 166, 255, 0.12);
+}
+
+body[data-theme="light"] .sheet-tabs .secondary-button:active,
+body[data-theme="light"] .sheet-tabs .ghost-button:active,
+body[data-theme="light"] .sheet-tab:active {
+  transform: translateY(0);
+}
+
+/* Cards profissionais: só os cards reais. */
+body[data-theme="light"] .kpi-card,
+body[data-theme="light"] .panel,
+body[data-theme="light"] .sidebar-card,
+body[data-theme="light"] .table-panel,
+body[data-theme="light"] .comparison-panel,
+body[data-theme="light"] .pnr-table-panel,
+body[data-theme="light"] .pnr-hero-panel {
+  border-color: var(--df07-border);
+  border-radius: 18px;
+  background:
+    linear-gradient(180deg, var(--df07-surface-card-strong), var(--df07-surface-card)),
+    radial-gradient(circle at top left, var(--df07-green-soft), transparent 40%);
+  box-shadow: var(--df07-shadow-card);
+}
+
+body[data-theme="light"] .kpi-card:hover,
+body[data-theme="light"] .panel:hover,
+body[data-theme="light"] .sidebar-card:hover,
+body[data-theme="light"] .table-panel:hover,
+body[data-theme="light"] .comparison-panel:hover,
+body[data-theme="light"] .pnr-table-panel:hover,
+body[data-theme="light"] .pnr-hero-panel:hover {
+  border-color: var(--df07-border-strong);
+  box-shadow: 0 18px 44px rgba(15, 23, 42, 0.095);
+}
+
+/* Conteúdo dos cards: mais leitura, sem alterar valores/dados. */
+body[data-theme="light"] .kpi-card__label {
+  color: var(--df07-muted);
+  font-weight: 750;
+}
+
+body[data-theme="light"] .kpi-card__value {
+  color: var(--df07-text);
+  letter-spacing: -0.02em;
+}
+
+body[data-theme="light"] .kpi-card__delta {
+  color: var(--df07-muted);
+}
+
+body[data-theme="light"] .panel__header h2,
+body[data-theme="light"] .table-panel__header h2 {
+  color: var(--df07-text);
+  font-weight: 850;
+  letter-spacing: -0.018em;
+}
+
+body[data-theme="light"] .panel__header p,
+body[data-theme="light"] .table-panel__header p {
+  color: var(--df07-muted);
+}
+
+/* Responsivo: topbar não cola nas bordas. */
+@media (max-width: 860px) {
+  body[data-theme="light"] .topbar {
+    top: 0.5rem;
+    width: calc(100% - 1rem);
+    margin-top: 0.5rem;
+    border-radius: 18px;
+  }
+}
+
+/* DF08 - Tab selection card and KPI value colors. */
+/* Escopo: abas principais e cores dos valores dos KPIs. Sem seletor global. */
+
+/* Card flutuante das abas principais. */
+.df08-tab-card {
+  position: fixed;
+  z-index: 5000;
+  min-width: 214px;
+  max-width: min(280px, calc(100vw - 24px));
+  padding: 0.48rem;
+  border: 1px solid rgba(148, 163, 184, 0.28);
+  border-radius: 16px;
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.94), rgba(248, 251, 253, 0.88));
+  box-shadow: 0 18px 48px rgba(15, 23, 42, 0.16);
+  backdrop-filter: blur(20px) saturate(1.14);
+  -webkit-backdrop-filter: blur(20px) saturate(1.14);
+  transform-origin: top center;
+  animation: df08TabCardIn 150ms ease both;
+}
+
+.df08-tab-card::before {
+  content: "";
+  position: absolute;
+  top: -7px;
+  left: var(--df08-caret-left, 32px);
+  width: 12px;
+  height: 12px;
+  border-left: 1px solid rgba(148, 163, 184, 0.24);
+  border-top: 1px solid rgba(148, 163, 184, 0.24);
+  background: rgba(255, 255, 255, 0.94);
+  transform: rotate(45deg);
+}
+
+.df08-tab-card__eyebrow {
+  padding: 0.38rem 0.48rem 0.32rem;
+  color: #64748b;
+  font-size: 0.68rem;
+  font-weight: 850;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.df08-tab-card__title {
+  padding: 0 0.48rem 0.44rem;
+  color: #102033;
+  font-size: 0.9rem;
+  font-weight: 850;
+}
+
+.df08-tab-card__options {
+  display: grid;
+  gap: 0.28rem;
+}
+
+.df08-tab-option {
+  width: 100%;
+  min-height: 38px;
+  padding: 0.52rem 0.66rem;
+  border: 1px solid transparent;
+  border-radius: 12px;
+  background: transparent;
+  color: #26384f;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font: inherit;
+  font-size: 0.82rem;
+  font-weight: 750;
+  text-align: left;
+}
+
+.df08-tab-option:hover {
+  background: rgba(59, 166, 255, 0.08);
+  border-color: rgba(59, 166, 255, 0.18);
+  color: #0b5f9c;
+}
+
+.df08-tab-option.is-selected {
+  background: rgba(232, 247, 239, 0.88);
+  border-color: rgba(0, 166, 81, 0.22);
+  color: #007a36;
+}
+
+.df08-tab-option__check {
+  color: #007a36;
+  font-size: 0.78rem;
+  opacity: 0;
+}
+
+.df08-tab-option.is-selected .df08-tab-option__check {
+  opacity: 1;
+}
+
+@keyframes df08TabCardIn {
+  from {
+    opacity: 0;
+    transform: translateY(-4px) scale(0.98);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+/* A aba principal deve parecer clicável para abrir seleção, não navegação direta. */
+body[data-theme="light"] .sheet-tabs .secondary-button,
+body[data-theme="light"] .sheet-tabs .ghost-button,
+body[data-theme="light"] .sheet-tab {
+  cursor: pointer;
+}
+
+/* Restaurar semântica de cores dos valores numéricos. */
+body[data-theme="light"] .kpi-card--finance .kpi-card__value,
+body[data-theme="light"] .kpi-card--money .kpi-card__value,
+body[data-theme="light"] .kpi-card--warning .kpi-card__value {
+  color: var(--warm, #b45309) !important;
+}
+
+body[data-theme="light"] .kpi-card--volume .kpi-card__value,
+body[data-theme="light"] .kpi-card--info .kpi-card__value {
+  color: var(--accent, #1677c8) !important;
+}
+
+body[data-theme="light"] .kpi-card--neutral .kpi-card__value {
+  color: var(--accent-2, #0f766e) !important;
+}
+
+body[data-theme="light"] .kpi-card--problem .kpi-card__value,
+body[data-theme="light"] .kpi-card--danger .kpi-card__value,
+body[data-theme="light"] .kpi-card--negative .kpi-card__value,
+body[data-theme="light"] .kpi-card.is-negative .kpi-card__value,
+body[data-theme="light"] .kpi-card[data-tone="negative"] .kpi-card__value {
+  color: var(--critical, #c43b3b) !important;
+}
+
+body[data-theme="light"] .kpi-card--positive .kpi-card__value,
+body[data-theme="light"] .kpi-card--success .kpi-card__value,
+body[data-theme="light"] .kpi-card.is-positive .kpi-card__value,
+body[data-theme="light"] .kpi-card[data-tone="positive"] .kpi-card__value {
+  color: var(--good, #008f45) !important;
+}
+
+/* Classes de valor específicas, caso o app use marcação interna. */
+body[data-theme="light"] .kpi-card .value-positive,
+body[data-theme="light"] .kpi-card .positive-value {
+  color: var(--good, #008f45) !important;
+}
+
+body[data-theme="light"] .kpi-card .value-negative,
+body[data-theme="light"] .kpi-card .negative-value {
+  color: var(--critical, #c43b3b) !important;
+}
+
+body:not([data-theme="light"]) .df08-tab-card {
+  border-color: rgba(164, 183, 202, 0.18);
+  background:
+    linear-gradient(180deg, rgba(20, 32, 47, 0.96), rgba(12, 22, 34, 0.96));
+  box-shadow: 0 18px 48px rgba(0, 0, 0, 0.32);
+}
+
+body:not([data-theme="light"]) .df08-tab-card::before {
+  border-color: rgba(164, 183, 202, 0.18);
+  background: rgba(20, 32, 47, 0.96);
+}
+
+body:not([data-theme="light"]) .df08-tab-card__title,
+body:not([data-theme="light"]) .df08-tab-option {
+  color: var(--text, #eef4ff);
+}
+
+body:not([data-theme="light"]) .df08-tab-card__eyebrow {
+  color: var(--muted, #a7b4c8);
+}
+
+body:not([data-theme="light"]) .df08-tab-option:hover {
+  background: rgba(96, 165, 250, 0.14);
+  border-color: rgba(96, 165, 250, 0.22);
+}
+
+/* DF11 - Button refinement only. */
+/* Escopo: botões reais do topo, abas e popup DF08. Não mexe em button global. */
+
+body[data-theme="light"] {
+  --df11-btn-bg: rgba(255, 255, 255, 0.72);
+  --df11-btn-bg-hover: rgba(255, 255, 255, 0.94);
+  --df11-btn-border: rgba(185, 199, 218, 0.68);
+  --df11-btn-border-hover: rgba(64, 139, 205, 0.34);
+  --df11-btn-text: #25364d;
+  --df11-btn-muted: #6b7b90;
+  --df11-btn-active: #0b6fb3;
+  --df11-btn-active-bg: rgba(231, 244, 255, 0.92);
+  --df11-btn-shadow: 0 7px 18px rgba(15, 23, 42, 0.045);
+  --df11-btn-shadow-hover: 0 11px 26px rgba(15, 23, 42, 0.075);
+}
+
+/* Topbar: botões mais limpos, sem aparência antiga pesada. */
+body[data-theme="light"] .topbar__actions .ghost-button,
+body[data-theme="light"] .topbar__actions .danger-button,
+body[data-theme="light"] .topbar__actions .icon-button {
+  border: 1px solid var(--df11-btn-border) !important;
+  border-radius: 14px !important;
+  background:
+    linear-gradient(180deg, rgba(255,255,255,0.84), rgba(246,249,252,0.64)) !important;
+  color: var(--df11-btn-text) !important;
+  box-shadow: var(--df11-btn-shadow) !important;
+  font-weight: 760 !important;
+  letter-spacing: -0.01em !important;
+}
+
+body[data-theme="light"] .topbar__actions .ghost-button,
+body[data-theme="light"] .topbar__actions .danger-button {
+  height: 38px !important;
+  min-height: 38px !important;
+  padding: 0 0.86rem !important;
+}
+
+body[data-theme="light"] .topbar__actions .icon-button {
+  width: 38px !important;
+  height: 38px !important;
+  min-width: 38px !important;
+}
+
+body[data-theme="light"] .topbar__actions .ghost-button:hover,
+body[data-theme="light"] .topbar__actions .danger-button:hover,
+body[data-theme="light"] .topbar__actions .icon-button:hover {
+  transform: translateY(-1px);
+  border-color: var(--df11-btn-border-hover) !important;
+  background: var(--df11-btn-bg-hover) !important;
+  box-shadow: var(--df11-btn-shadow-hover) !important;
+}
+
+body[data-theme="light"] .topbar__actions .ghost-button:active,
+body[data-theme="light"] .topbar__actions .danger-button:active,
+body[data-theme="light"] .topbar__actions .icon-button:active {
+  transform: translateY(0);
+  box-shadow: var(--df11-btn-shadow) !important;
+}
+
+/* Abas principais: refinadas, sem cápsula antiga e com ativo mais nítido. */
+body[data-theme="light"] .sheet-tabs .secondary-button,
+body[data-theme="light"] .sheet-tabs .ghost-button,
+body[data-theme="light"] .sheet-tab {
+  min-height: 38px !important;
+  height: 38px !important;
+  padding: 0 0.88rem !important;
+  border: 1px solid var(--df11-btn-border) !important;
+  border-radius: 14px !important;
+  background:
+    linear-gradient(180deg, rgba(255,255,255,0.78), rgba(246,249,252,0.62)) !important;
+  color: var(--df11-btn-text) !important;
+  box-shadow: 0 5px 14px rgba(15, 23, 42, 0.035) !important;
+  font-size: 0.82rem !important;
+  font-weight: 760 !important;
+  letter-spacing: -0.01em !important;
+  gap: 0.42rem !important;
+}
+
+body[data-theme="light"] .sheet-tabs .secondary-button:hover,
+body[data-theme="light"] .sheet-tabs .ghost-button:hover,
+body[data-theme="light"] .sheet-tab:hover {
+  transform: translateY(-1px);
+  border-color: var(--df11-btn-border-hover) !important;
+  background: var(--df11-btn-bg-hover) !important;
+  color: #12253c !important;
+  box-shadow: var(--df11-btn-shadow-hover) !important;
+}
+
+body[data-theme="light"] .sheet-tabs .secondary-button.is-active,
+body[data-theme="light"] .sheet-tabs .ghost-button.is-active,
+body[data-theme="light"] .sheet-tab.is-active,
+body[data-theme="light"] .sheet-tabs [aria-selected="true"] {
+  border-color: rgba(45, 145, 220, 0.58) !important;
+  background:
+    linear-gradient(180deg, rgba(232,247,255,0.98), rgba(220,241,255,0.86)) !important;
+  color: var(--df11-btn-active) !important;
+  box-shadow:
+    inset 0 0 0 1px rgba(255,255,255,0.58),
+    0 9px 20px rgba(59, 166, 255, 0.13) !important;
+}
+
+/* Subindicador dentro da aba, tipo PNR / visão geral. */
+body[data-theme="light"] .df08-current-page,
+body[data-theme="light"] .sheet-tabs .secondary-button small,
+body[data-theme="light"] .sheet-tabs .ghost-button small,
+body[data-theme="light"] .sheet-tab small {
+  align-items: center;
+  display: inline-flex !important;
+  min-height: 18px;
+  padding: 0 0.42rem;
+  border: 1px solid rgba(45, 145, 220, 0.26);
+  border-radius: 8px;
+  background: rgba(59, 166, 255, 0.075);
+  color: #2a75aa !important;
+  font-size: 0.64rem !important;
+  font-weight: 820 !important;
+  letter-spacing: -0.01em;
+  line-height: 1;
+  margin-left: 0.28rem !important;
+  opacity: 1 !important;
+}
+
+/* Card de seleção: menos antigo, mais compacto e alinhado. */
+.df08-tab-card {
+  padding: 0.52rem !important;
+  border-radius: 16px !important;
+  border: 1px solid rgba(178, 193, 214, 0.58) !important;
+  background:
+    linear-gradient(180deg, rgba(255,255,255,0.96), rgba(247,250,253,0.90)) !important;
+  box-shadow: 0 18px 46px rgba(15, 23, 42, 0.16) !important;
+}
+
+.df08-tab-card__eyebrow {
+  padding: 0.36rem 0.48rem 0.22rem !important;
+  color: #7a8a9f !important;
+  font-size: 0.62rem !important;
+  font-weight: 850 !important;
+  letter-spacing: 0.035em !important;
+}
+
+.df08-tab-card__title {
+  padding: 0 0.48rem 0.44rem !important;
+  color: #102033 !important;
+  font-size: 0.9rem !important;
+  font-weight: 860 !important;
+  letter-spacing: -0.015em !important;
+}
+
+.df08-tab-card__options {
+  gap: 0.3rem !important;
+}
+
+/* Opções do card: com cara de item de menu premium, não botão antigo. */
+.df08-tab-option {
+  min-height: 40px !important;
+  padding: 0.56rem 0.68rem !important;
+  border-radius: 12px !important;
+  border: 1px solid transparent !important;
+  background: rgba(255, 255, 255, 0.38) !important;
+  color: #26384f !important;
+  box-shadow: none !important;
+  font-size: 0.82rem !important;
+  font-weight: 780 !important;
+  letter-spacing: -0.012em !important;
+}
+
+.df08-tab-option:hover {
+  transform: none !important;
+  background: rgba(232, 247, 255, 0.86) !important;
+  border-color: rgba(59, 166, 255, 0.24) !important;
+  color: #0b5f9c !important;
+}
+
+.df08-tab-option.is-selected {
+  background: rgba(232, 247, 239, 0.92) !important;
+  border-color: rgba(0, 166, 81, 0.24) !important;
+  color: #007a36 !important;
+}
+
+.df08-tab-option__check {
+  color: #007a36 !important;
+  font-weight: 900 !important;
+}
+
+/* Botões de limpar e controles de filtro visíveis no topo da área. */
+body[data-theme="light"] .global-period-filters .ghost-button,
+body[data-theme="light"] .global-period-filters .secondary-button,
+body[data-theme="light"] .pnr-filter-bar .ghost-button,
+body[data-theme="light"] .pnr-filter-bar .secondary-button,
+body[data-theme="light"] .top-filter-control,
+body[data-theme="light"] .global-search-filter,
+body[data-theme="light"] .global-period-filter,
+body[data-theme="light"] .type-filter,
+body[data-theme="light"] .custom-filter {
+  border-radius: 14px !important;
+  border-color: var(--df11-btn-border) !important;
+  background:
+    linear-gradient(180deg, rgba(255,255,255,0.76), rgba(246,249,252,0.58)) !important;
+  box-shadow: 0 5px 14px rgba(15, 23, 42, 0.032) !important;
+}
+
+body[data-theme="light"] .global-period-filters .ghost-button:hover,
+body[data-theme="light"] .global-period-filters .secondary-button:hover,
+body[data-theme="light"] .pnr-filter-bar .ghost-button:hover,
+body[data-theme="light"] .pnr-filter-bar .secondary-button:hover,
+body[data-theme="light"] .top-filter-control:hover,
+body[data-theme="light"] .global-search-filter:hover,
+body[data-theme="light"] .global-period-filter:hover,
+body[data-theme="light"] .type-filter:hover,
+body[data-theme="light"] .custom-filter:hover {
+  border-color: var(--df11-btn-border-hover) !important;
+  background: var(--df11-btn-bg-hover) !important;
+}
+
+/* Dark mode correspondente, sem alterar estrutura. */
+body:not([data-theme="light"]) .topbar__actions .ghost-button,
+body:not([data-theme="light"]) .topbar__actions .danger-button,
+body:not([data-theme="light"]) .topbar__actions .icon-button,
+body:not([data-theme="light"]) .sheet-tabs .secondary-button,
+body:not([data-theme="light"]) .sheet-tabs .ghost-button,
+body:not([data-theme="light"]) .sheet-tab {
+  border-color: rgba(164, 183, 202, 0.18) !important;
+  background: rgba(22, 36, 52, 0.78) !important;
+  color: var(--text, #eef4ff) !important;
+}
+
+body:not([data-theme="light"]) .sheet-tabs .secondary-button.is-active,
+body:not([data-theme="light"]) .sheet-tabs .ghost-button.is-active,
+body:not([data-theme="light"]) .sheet-tab.is-active,
+body:not([data-theme="light"]) .sheet-tabs [aria-selected="true"] {
+  border-color: rgba(96, 165, 250, 0.42) !important;
+  background: rgba(36, 80, 124, 0.55) !important;
+  color: #dbeafe !important;
+}
+
+body:not([data-theme="light"]) .df08-current-page {
+  border-color: rgba(96, 165, 250, 0.28);
+  background: rgba(96, 165, 250, 0.12);
+  color: #bfdbfe !important;
+}

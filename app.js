@@ -22264,3 +22264,239 @@ function capitalize(text) {
   if (!value) return "";
   return value.charAt(0).toUpperCase() + value.slice(1);
 }
+
+/* DF08 - tab selection cards, no direct main tab navigation. */
+(() => {
+  const moduleMenus = [
+    {
+      key: "prefatura",
+      label: "Pré-Fatura",
+      aliases: ["pre-fatura", "pré-fatura", "pre fatura", "pré fatura"],
+      options: ["Visão geral", "Evolução mensal"]
+    },
+
+    {
+      key: "desvios",
+      label: "Gestão de Desvios",
+      aliases: ["gestão de desvios", "gestao de desvios"],
+      options: ["Pacotes faltantes", "PNR"]
+    }
+  ];
+
+  const bypassClicks = new WeakSet();
+  let activeCard = null;
+  let activeAnchor = null;
+
+  function normalizeText(value) {
+    return String(value || "")
+      .normalize("NFD")
+      .replace(/[\u0300-\u036f]/g, "")
+      .replace(/\s+/g, " ")
+      .trim()
+      .toLowerCase();
+  }
+
+  function getControlText(control) {
+    return normalizeText(control?.innerText || control?.textContent || control?.getAttribute?.("aria-label") || "");
+  }
+
+  function getModuleForControl(control) {
+    const text = getControlText(control);
+
+    if (!text) return null;
+
+    return moduleMenus.find((item) => {
+      const names = [item.label, ...item.aliases].map(normalizeText);
+      return names.some((name) => text.includes(name));
+    }) || null;
+  }
+
+  function getMainTabControl(target) {
+    const control = target.closest?.(".sheet-tabs button, .sheet-tabs a, .sheet-tabs [role='button'], .view-toolbar .sheet-tabs button, .view-toolbar .sheet-tabs a, .view-toolbar .sheet-tabs [role='button']");
+
+    if (!control || control.closest(".df08-tab-card")) return null;
+
+    return getModuleForControl(control) ? control : null;
+  }
+
+  function closeCard() {
+    if (activeCard) activeCard.remove();
+    activeCard = null;
+    activeAnchor = null;
+  }
+
+  function currentSelectedLabel(module) {
+    const activeControls = Array.from(document.querySelectorAll(".sheet-tabs .is-active, .sheet-tabs [aria-selected='true'], .sheet-tabs .active"));
+
+    for (const control of activeControls) {
+      const text = getControlText(control);
+      const isSameModule = [module.label, ...module.aliases].map(normalizeText).some((name) => text.includes(name));
+
+      if (!isSameModule) continue;
+
+      const option = module.options.find((item) => text.includes(normalizeText(item)));
+
+      if (option) return option;
+    }
+
+    return "";
+  }
+
+  function positionCard(card, anchor) {
+    const rect = anchor.getBoundingClientRect();
+    const gap = 9;
+    const width = Math.min(280, Math.max(214, rect.width + 72));
+    const left = Math.min(Math.max(12, rect.left), window.innerWidth - width - 12);
+    const top = Math.min(rect.bottom + gap, window.innerHeight - 12);
+
+    card.style.width = `${width}px`;
+    card.style.left = `${left}px`;
+    card.style.top = `${top}px`;
+    card.style.setProperty("--df08-caret-left", `${Math.max(22, Math.min(width - 24, rect.left + rect.width / 2 - left - 6))}px`);
+  }
+
+  function openCard(anchor, module) {
+    if (activeCard && activeAnchor === anchor) {
+      closeCard();
+      return;
+    }
+
+    closeCard();
+
+    const selected = currentSelectedLabel(module);
+    const card = document.createElement("div");
+
+    card.className = "df08-tab-card";
+    card.setAttribute("role", "menu");
+    card.setAttribute("aria-label", `Selecionar página de ${module.label}`);
+
+    card.innerHTML = `
+      <div class="df08-tab-card__eyebrow">Selecionar página</div>
+      <div class="df08-tab-card__title">${module.label}</div>
+      <div class="df08-tab-card__options">
+        ${module.options.map((option) => `
+          <button class="df08-tab-option ${selected === option ? "is-selected" : ""}" type="button" data-df08-module="${module.key}" data-df08-option="${option}">
+            <span>${option}</span>
+            <span class="df08-tab-option__check">✓</span>
+          </button>
+        `).join("")}
+      </div>
+    `;
+
+    document.body.appendChild(card);
+    positionCard(card, anchor);
+
+    activeCard = card;
+    activeAnchor = anchor;
+  }
+
+  function allNavigationControls() {
+    return Array.from(document.querySelectorAll("button, a, [role='button'], [data-view], [data-page], [data-tab], [data-action]"))
+      .filter((item) => !item.closest(".df08-tab-card"));
+  }
+
+  function findTargetControl(module, option) {
+    const moduleNames = [module.label, ...module.aliases].map(normalizeText);
+    const optionName = normalizeText(option);
+    const controls = allNavigationControls();
+
+    const candidates = controls.map((control) => {
+      const text = getControlText(control);
+      const data = normalizeText([
+        control.getAttribute("data-view"),
+        control.getAttribute("data-page"),
+        control.getAttribute("data-tab"),
+        control.getAttribute("data-action"),
+        control.getAttribute("href"),
+        control.getAttribute("aria-label")
+      ].filter(Boolean).join(" "));
+
+      const sameModule = moduleNames.some((name) => text.includes(name) || data.includes(name));
+      const sameOption = text.includes(optionName) || data.includes(optionName);
+
+      let score = 0;
+
+      if (sameModule && sameOption) score += 100;
+      if (sameOption) score += 40;
+      if (sameModule && optionName.includes("visao geral")) score += 30;
+      if (control.matches(".is-active, .active, [aria-selected='true']")) score -= 15;
+
+      return { control, score, text, data };
+    })
+    .filter((item) => item.score > 0)
+    .sort((a, b) => b.score - a.score);
+
+    return candidates[0]?.control || null;
+  }
+
+  function updateTabVisual(anchor, option) {
+    const badge = anchor.querySelector(".df08-current-page") || document.createElement("span");
+
+    badge.className = "df08-current-page";
+    badge.textContent = option;
+
+    if (!badge.parentElement) {
+      badge.style.marginLeft = "0.38rem";
+      badge.style.fontSize = "0.68rem";
+      badge.style.fontWeight = "850";
+      badge.style.opacity = "0.72";
+      anchor.appendChild(badge);
+    }
+  }
+
+  function activateOption(moduleKey, option) {
+    const module = moduleMenus.find((item) => item.key === moduleKey);
+
+    if (!module) return;
+
+    const target = findTargetControl(module, option);
+
+    closeCard();
+
+    if (activeAnchor) updateTabVisual(activeAnchor, option);
+
+    if (target) {
+      bypassClicks.add(target);
+      target.click();
+      window.setTimeout(() => bypassClicks.delete(target), 0);
+    }
+  }
+
+  document.addEventListener("click", (event) => {
+    const optionButton = event.target.closest?.(".df08-tab-option");
+
+    if (optionButton) {
+      event.preventDefault();
+      event.stopPropagation();
+      event.stopImmediatePropagation();
+
+      activateOption(optionButton.dataset.df08Module, optionButton.dataset.df08Option);
+      return;
+    }
+
+    const mainTab = getMainTabControl(event.target);
+
+    if (mainTab) {
+      if (bypassClicks.has(mainTab)) return;
+
+      const module = getModuleForControl(mainTab);
+
+      event.preventDefault();
+      event.stopPropagation();
+      event.stopImmediatePropagation();
+
+      openCard(mainTab, module);
+      return;
+    }
+
+    if (activeCard && !event.target.closest?.(".df08-tab-card")) {
+      closeCard();
+    }
+  }, true);
+
+  window.addEventListener("resize", closeCard);
+  window.addEventListener("scroll", closeCard, true);
+  document.addEventListener("keydown", (event) => {
+    if (event.key === "Escape") closeCard();
+  });
+})();
