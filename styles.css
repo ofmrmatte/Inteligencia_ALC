@@ -10777,3 +10777,409 @@ body:not([data-theme="light"]) .df08-current-page {
   background: rgba(96, 165, 250, 0.12);
   color: #bfdbfe !important;
 }
+
+/* DF12 - Dark theme refinement matching light mode. */
+/* Escopo: dark theme para topbar, cards, abas, popup DF08 e botões reais. Sem seletor global. */
+
+body[data-theme="dark"],
+body.dark,
+html[data-theme="dark"] body {
+  --df12-surface-float: rgba(9, 18, 31, 0.74);
+  --df12-surface-card: rgba(13, 25, 42, 0.88);
+  --df12-surface-card-strong: rgba(17, 31, 51, 0.94);
+  --df12-border: rgba(148, 163, 184, 0.22);
+  --df12-border-strong: rgba(96, 165, 250, 0.34);
+  --df12-text: #eef4ff;
+  --df12-muted: #a9b7ca;
+  --df12-accent: #60a5fa;
+  --df12-accent-soft: rgba(96, 165, 250, 0.15);
+  --df12-green: #34d399;
+  --df12-green-soft: rgba(52, 211, 153, 0.12);
+  --df12-red: #fb7185;
+  --df12-red-soft: rgba(251, 113, 133, 0.14);
+  --df12-warm: #fbbf24;
+  --df12-warm-soft: rgba(251, 191, 36, 0.14);
+  --df12-shadow-float: 0 18px 52px rgba(0, 0, 0, 0.34);
+  --df12-shadow-card: 0 16px 44px rgba(0, 0, 0, 0.24);
+}
+
+/* Topbar dark flutuante e transparente. */
+body[data-theme="dark"] .topbar,
+body.dark .topbar,
+html[data-theme="dark"] body .topbar {
+  position: sticky;
+  top: 0.75rem;
+  z-index: 80;
+  width: calc(100% - 1.5rem);
+  margin: 0.75rem auto 0.85rem;
+  min-height: 72px;
+  padding: 0.72rem 1rem;
+  border: 1px solid var(--df12-border);
+  border-radius: 22px;
+  background:
+    linear-gradient(180deg, rgba(13,25,42,0.82), rgba(7,15,27,0.62)),
+    radial-gradient(circle at 12% 0%, rgba(52,211,153,0.09), transparent 34%);
+  box-shadow: var(--df12-shadow-float);
+  backdrop-filter: blur(22px) saturate(1.15);
+  -webkit-backdrop-filter: blur(22px) saturate(1.15);
+}
+
+body[data-theme="dark"] .topbar__left h1,
+body.dark .topbar__left h1,
+html[data-theme="dark"] body .topbar__left h1 {
+  color: var(--df12-text);
+  font-weight: 850;
+  letter-spacing: -0.018em;
+}
+
+body[data-theme="dark"] .topbar__left p,
+body[data-theme="dark"] .topbar__titles p,
+body[data-theme="dark"] .topbar__center,
+body.dark .topbar__left p,
+body.dark .topbar__titles p,
+body.dark .topbar__center,
+html[data-theme="dark"] body .topbar__left p,
+html[data-theme="dark"] body .topbar__titles p,
+html[data-theme="dark"] body .topbar__center {
+  color: var(--df12-muted);
+}
+
+/* Botões da topbar no dark. */
+body[data-theme="dark"] .topbar__actions .ghost-button,
+body[data-theme="dark"] .topbar__actions .danger-button,
+body[data-theme="dark"] .topbar__actions .icon-button,
+body.dark .topbar__actions .ghost-button,
+body.dark .topbar__actions .danger-button,
+body.dark .topbar__actions .icon-button,
+html[data-theme="dark"] body .topbar__actions .ghost-button,
+html[data-theme="dark"] body .topbar__actions .danger-button,
+html[data-theme="dark"] body .topbar__actions .icon-button {
+  border: 1px solid var(--df12-border) !important;
+  border-radius: 14px !important;
+  background:
+    linear-gradient(180deg, rgba(17,31,51,0.86), rgba(8,18,32,0.68)) !important;
+  color: var(--df12-text) !important;
+  box-shadow: 0 8px 22px rgba(0, 0, 0, 0.22) !important;
+}
+
+body[data-theme="dark"] .topbar__actions .ghost-button,
+body[data-theme="dark"] .topbar__actions .danger-button,
+body.dark .topbar__actions .ghost-button,
+body.dark .topbar__actions .danger-button,
+html[data-theme="dark"] body .topbar__actions .ghost-button,
+html[data-theme="dark"] body .topbar__actions .danger-button {
+  height: 38px !important;
+  min-height: 38px !important;
+  padding: 0 0.86rem !important;
+}
+
+body[data-theme="dark"] .topbar__actions .icon-button,
+body.dark .topbar__actions .icon-button,
+html[data-theme="dark"] body .topbar__actions .icon-button {
+  width: 38px !important;
+  height: 38px !important;
+  min-width: 38px !important;
+}
+
+body[data-theme="dark"] .topbar__actions .ghost-button:hover,
+body[data-theme="dark"] .topbar__actions .danger-button:hover,
+body[data-theme="dark"] .topbar__actions .icon-button:hover,
+body.dark .topbar__actions .ghost-button:hover,
+body.dark .topbar__actions .danger-button:hover,
+body.dark .topbar__actions .icon-button:hover,
+html[data-theme="dark"] body .topbar__actions .ghost-button:hover,
+html[data-theme="dark"] body .topbar__actions .danger-button:hover,
+html[data-theme="dark"] body .topbar__actions .icon-button:hover {
+  transform: translateY(-1px);
+  border-color: var(--df12-border-strong) !important;
+  background:
+    linear-gradient(180deg, rgba(24,42,68,0.94), rgba(11,25,43,0.84)) !important;
+  box-shadow: 0 12px 30px rgba(0, 0, 0, 0.30) !important;
+}
+
+/* Abas dark refinadas. */
+body[data-theme="dark"] .sheet-tabs .secondary-button,
+body[data-theme="dark"] .sheet-tabs .ghost-button,
+body[data-theme="dark"] .sheet-tab,
+body.dark .sheet-tabs .secondary-button,
+body.dark .sheet-tabs .ghost-button,
+body.dark .sheet-tab,
+html[data-theme="dark"] body .sheet-tabs .secondary-button,
+html[data-theme="dark"] body .sheet-tabs .ghost-button,
+html[data-theme="dark"] body .sheet-tab {
+  min-height: 38px !important;
+  height: 38px !important;
+  padding: 0 0.88rem !important;
+  border: 1px solid var(--df12-border) !important;
+  border-radius: 14px !important;
+  background:
+    linear-gradient(180deg, rgba(17,31,51,0.78), rgba(8,18,32,0.58)) !important;
+  color: var(--df12-muted) !important;
+  box-shadow: 0 5px 16px rgba(0, 0, 0, 0.18) !important;
+  font-size: 0.82rem !important;
+  font-weight: 760 !important;
+  letter-spacing: -0.01em !important;
+}
+
+body[data-theme="dark"] .sheet-tabs .secondary-button:hover,
+body[data-theme="dark"] .sheet-tabs .ghost-button:hover,
+body[data-theme="dark"] .sheet-tab:hover,
+body.dark .sheet-tabs .secondary-button:hover,
+body.dark .sheet-tabs .ghost-button:hover,
+body.dark .sheet-tab:hover,
+html[data-theme="dark"] body .sheet-tabs .secondary-button:hover,
+html[data-theme="dark"] body .sheet-tabs .ghost-button:hover,
+html[data-theme="dark"] body .sheet-tab:hover {
+  transform: translateY(-1px);
+  border-color: var(--df12-border-strong) !important;
+  background: rgba(24, 42, 68, 0.88) !important;
+  color: var(--df12-text) !important;
+  box-shadow: 0 12px 28px rgba(0, 0, 0, 0.28) !important;
+}
+
+body[data-theme="dark"] .sheet-tabs .secondary-button.is-active,
+body[data-theme="dark"] .sheet-tabs .ghost-button.is-active,
+body[data-theme="dark"] .sheet-tab.is-active,
+body[data-theme="dark"] .sheet-tabs [aria-selected="true"],
+body.dark .sheet-tabs .secondary-button.is-active,
+body.dark .sheet-tabs .ghost-button.is-active,
+body.dark .sheet-tab.is-active,
+body.dark .sheet-tabs [aria-selected="true"],
+html[data-theme="dark"] body .sheet-tabs .secondary-button.is-active,
+html[data-theme="dark"] body .sheet-tabs .ghost-button.is-active,
+html[data-theme="dark"] body .sheet-tab.is-active,
+html[data-theme="dark"] body .sheet-tabs [aria-selected="true"] {
+  border-color: rgba(96, 165, 250, 0.48) !important;
+  background:
+    linear-gradient(180deg, rgba(37, 72, 112, 0.88), rgba(18, 43, 72, 0.78)) !important;
+  color: #dbeafe !important;
+  box-shadow:
+    inset 0 0 0 1px rgba(255,255,255,0.06),
+    0 10px 26px rgba(37, 99, 235, 0.20) !important;
+}
+
+/* Indicador interno da aba no dark. */
+body[data-theme="dark"] .df08-current-page,
+body.dark .df08-current-page,
+html[data-theme="dark"] body .df08-current-page {
+  border-color: rgba(96, 165, 250, 0.32) !important;
+  background: rgba(96, 165, 250, 0.14) !important;
+  color: #bfdbfe !important;
+}
+
+/* Cards e painéis dark. */
+body[data-theme="dark"] .kpi-card,
+body[data-theme="dark"] .panel,
+body[data-theme="dark"] .sidebar-card,
+body[data-theme="dark"] .table-panel,
+body[data-theme="dark"] .comparison-panel,
+body[data-theme="dark"] .pnr-table-panel,
+body[data-theme="dark"] .pnr-hero-panel,
+body.dark .kpi-card,
+body.dark .panel,
+body.dark .sidebar-card,
+body.dark .table-panel,
+body.dark .comparison-panel,
+body.dark .pnr-table-panel,
+body.dark .pnr-hero-panel,
+html[data-theme="dark"] body .kpi-card,
+html[data-theme="dark"] body .panel,
+html[data-theme="dark"] body .sidebar-card,
+html[data-theme="dark"] body .table-panel,
+html[data-theme="dark"] body .comparison-panel,
+html[data-theme="dark"] body .pnr-table-panel,
+html[data-theme="dark"] body .pnr-hero-panel {
+  border-color: var(--df12-border) !important;
+  border-radius: 18px !important;
+  background:
+    linear-gradient(180deg, var(--df12-surface-card-strong), var(--df12-surface-card)),
+    radial-gradient(circle at top left, var(--df12-green-soft), transparent 40%) !important;
+  box-shadow: var(--df12-shadow-card) !important;
+}
+
+body[data-theme="dark"] .kpi-card:hover,
+body[data-theme="dark"] .panel:hover,
+body[data-theme="dark"] .sidebar-card:hover,
+body[data-theme="dark"] .table-panel:hover,
+body[data-theme="dark"] .comparison-panel:hover,
+body[data-theme="dark"] .pnr-table-panel:hover,
+body[data-theme="dark"] .pnr-hero-panel:hover,
+body.dark .kpi-card:hover,
+body.dark .panel:hover,
+body.dark .sidebar-card:hover,
+body.dark .table-panel:hover,
+body.dark .comparison-panel:hover,
+body.dark .pnr-table-panel:hover,
+body.dark .pnr-hero-panel:hover,
+html[data-theme="dark"] body .kpi-card:hover,
+html[data-theme="dark"] body .panel:hover,
+html[data-theme="dark"] body .sidebar-card:hover,
+html[data-theme="dark"] body .table-panel:hover,
+html[data-theme="dark"] body .comparison-panel:hover,
+html[data-theme="dark"] body .pnr-table-panel:hover,
+html[data-theme="dark"] body .pnr-hero-panel:hover {
+  border-color: var(--df12-border-strong) !important;
+  box-shadow: 0 20px 52px rgba(0, 0, 0, 0.32) !important;
+}
+
+body[data-theme="dark"] .kpi-card__label,
+body[data-theme="dark"] .kpi-card__delta,
+body.dark .kpi-card__label,
+body.dark .kpi-card__delta,
+html[data-theme="dark"] body .kpi-card__label,
+html[data-theme="dark"] body .kpi-card__delta {
+  color: var(--df12-muted) !important;
+}
+
+body[data-theme="dark"] .panel__header h2,
+body[data-theme="dark"] .table-panel__header h2,
+body.dark .panel__header h2,
+body.dark .table-panel__header h2,
+html[data-theme="dark"] body .panel__header h2,
+html[data-theme="dark"] body .table-panel__header h2 {
+  color: var(--df12-text) !important;
+}
+
+body[data-theme="dark"] .panel__header p,
+body[data-theme="dark"] .table-panel__header p,
+body.dark .panel__header p,
+body.dark .table-panel__header p,
+html[data-theme="dark"] body .panel__header p,
+html[data-theme="dark"] body .table-panel__header p {
+  color: var(--df12-muted) !important;
+}
+
+/* Cores semânticas dos valores no dark. */
+body[data-theme="dark"] .kpi-card--finance .kpi-card__value,
+body[data-theme="dark"] .kpi-card--money .kpi-card__value,
+body[data-theme="dark"] .kpi-card--warning .kpi-card__value,
+body.dark .kpi-card--finance .kpi-card__value,
+body.dark .kpi-card--money .kpi-card__value,
+body.dark .kpi-card--warning .kpi-card__value {
+  color: var(--df12-warm) !important;
+}
+
+body[data-theme="dark"] .kpi-card--volume .kpi-card__value,
+body[data-theme="dark"] .kpi-card--info .kpi-card__value,
+body.dark .kpi-card--volume .kpi-card__value,
+body.dark .kpi-card--info .kpi-card__value {
+  color: var(--df12-accent) !important;
+}
+
+body[data-theme="dark"] .kpi-card--neutral .kpi-card__value,
+body.dark .kpi-card--neutral .kpi-card__value {
+  color: var(--df12-green) !important;
+}
+
+body[data-theme="dark"] .kpi-card--problem .kpi-card__value,
+body[data-theme="dark"] .kpi-card--danger .kpi-card__value,
+body[data-theme="dark"] .kpi-card--negative .kpi-card__value,
+body[data-theme="dark"] .kpi-card.is-negative .kpi-card__value,
+body[data-theme="dark"] .kpi-card[data-tone="negative"] .kpi-card__value,
+body.dark .kpi-card--problem .kpi-card__value,
+body.dark .kpi-card--danger .kpi-card__value,
+body.dark .kpi-card--negative .kpi-card__value,
+body.dark .kpi-card.is-negative .kpi-card__value,
+body.dark .kpi-card[data-tone="negative"] .kpi-card__value {
+  color: var(--df12-red) !important;
+}
+
+body[data-theme="dark"] .kpi-card--positive .kpi-card__value,
+body[data-theme="dark"] .kpi-card--success .kpi-card__value,
+body[data-theme="dark"] .kpi-card.is-positive .kpi-card__value,
+body[data-theme="dark"] .kpi-card[data-tone="positive"] .kpi-card__value,
+body.dark .kpi-card--positive .kpi-card__value,
+body.dark .kpi-card--success .kpi-card__value,
+body.dark .kpi-card.is-positive .kpi-card__value,
+body.dark .kpi-card[data-tone="positive"] .kpi-card__value {
+  color: var(--df12-green) !important;
+}
+
+/* Popup DF08 no dark. */
+body[data-theme="dark"] .df08-tab-card,
+body.dark .df08-tab-card,
+html[data-theme="dark"] body .df08-tab-card {
+  border-color: var(--df12-border) !important;
+  background:
+    linear-gradient(180deg, rgba(17,31,51,0.98), rgba(8,18,32,0.94)) !important;
+  box-shadow: 0 22px 56px rgba(0, 0, 0, 0.42) !important;
+}
+
+body[data-theme="dark"] .df08-tab-card::before,
+body.dark .df08-tab-card::before,
+html[data-theme="dark"] body .df08-tab-card::before {
+  border-color: var(--df12-border) !important;
+  background: rgba(17,31,51,0.98) !important;
+}
+
+body[data-theme="dark"] .df08-tab-card__eyebrow,
+body.dark .df08-tab-card__eyebrow,
+html[data-theme="dark"] body .df08-tab-card__eyebrow {
+  color: var(--df12-muted) !important;
+}
+
+body[data-theme="dark"] .df08-tab-card__title,
+body.dark .df08-tab-card__title,
+html[data-theme="dark"] body .df08-tab-card__title {
+  color: var(--df12-text) !important;
+}
+
+body[data-theme="dark"] .df08-tab-option,
+body.dark .df08-tab-option,
+html[data-theme="dark"] body .df08-tab-option {
+  background: rgba(255, 255, 255, 0.03) !important;
+  color: var(--df12-text) !important;
+}
+
+body[data-theme="dark"] .df08-tab-option:hover,
+body.dark .df08-tab-option:hover,
+html[data-theme="dark"] body .df08-tab-option:hover {
+  background: rgba(96, 165, 250, 0.13) !important;
+  border-color: rgba(96, 165, 250, 0.24) !important;
+  color: #dbeafe !important;
+}
+
+body[data-theme="dark"] .df08-tab-option.is-selected,
+body.dark .df08-tab-option.is-selected,
+html[data-theme="dark"] body .df08-tab-option.is-selected {
+  background: rgba(52, 211, 153, 0.13) !important;
+  border-color: rgba(52, 211, 153, 0.25) !important;
+  color: #a7f3d0 !important;
+}
+
+/* Filtros principais no dark, sem tocar em input/select global. */
+body[data-theme="dark"] .global-period-filters .ghost-button,
+body[data-theme="dark"] .global-period-filters .secondary-button,
+body[data-theme="dark"] .pnr-filter-bar .ghost-button,
+body[data-theme="dark"] .pnr-filter-bar .secondary-button,
+body[data-theme="dark"] .top-filter-control,
+body[data-theme="dark"] .global-search-filter,
+body[data-theme="dark"] .global-period-filter,
+body[data-theme="dark"] .type-filter,
+body[data-theme="dark"] .custom-filter,
+body.dark .global-period-filters .ghost-button,
+body.dark .global-period-filters .secondary-button,
+body.dark .pnr-filter-bar .ghost-button,
+body.dark .pnr-filter-bar .secondary-button,
+body.dark .top-filter-control,
+body.dark .global-search-filter,
+body.dark .global-period-filter,
+body.dark .type-filter,
+body.dark .custom-filter {
+  border-color: var(--df12-border) !important;
+  background:
+    linear-gradient(180deg, rgba(17,31,51,0.76), rgba(8,18,32,0.58)) !important;
+  color: var(--df12-text) !important;
+  box-shadow: 0 5px 16px rgba(0, 0, 0, 0.18) !important;
+}
+
+@media (max-width: 860px) {
+  body[data-theme="dark"] .topbar,
+  body.dark .topbar,
+  html[data-theme="dark"] body .topbar {
+    top: 0.5rem;
+    width: calc(100% - 1rem);
+    margin-top: 0.5rem;
+    border-radius: 18px;
+  }
+}
