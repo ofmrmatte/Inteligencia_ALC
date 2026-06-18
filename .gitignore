@@ -7,3 +7,14 @@ scripts/railway/exports/
 scripts/railway/logs/
 .DS_Store
 Thumbs.db
+
+# Segurança / ambiente local
+.env.*
+!.env.example
+
+# Logs e diagnósticos gerados
+scripts/logs/
+*.log
+
+# Exports grandes Railway/Supabase
+*.jsonl
