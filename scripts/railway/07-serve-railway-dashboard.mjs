@@ -2145,7 +2145,9 @@ function serveStatic(request, response, publicConfig, port) {
 }
 
 const envInfo = loadRailwayEnv(args);
-const port = args.int('port', DEFAULT_PORT);
+const resolvedPort = Number(process.env.PORT || args.int('port', DEFAULT_PORT));
+const port = Number.isFinite(resolvedPort) && resolvedPort > 0 ? resolvedPort : DEFAULT_PORT;
+const host = process.env.HOST || (process.env.RAILWAY_ENV || process.env.RAILWAY_SERVICE_NAME ? '0.0.0.0' : '127.0.0.1');
 const publicConfig = readPublicConfig();
 
 scriptHeader('Railway staging dashboard server', [
@@ -2166,8 +2168,57 @@ const sql = createSql(railwayUrl, {
   max: 5,
 });
 
+
+function getAllowedCorsOrigins() {
+  const raw = process.env.CORS_ORIGINS || process.env.ALLOWED_ORIGINS || "";
+  return raw
+    .split(",")
+    .map((origin) => origin.trim())
+    .filter(Boolean);
+}
+
+function isCorsOriginAllowed(origin) {
+  const allowed = getAllowedCorsOrigins();
+
+  if (!origin) return true;
+  if (!allowed.length) return true;
+  if (allowed.includes("*")) return true;
+  if (allowed.includes(origin)) return true;
+
+  try {
+    const host = new URL(origin).hostname;
+    return allowed.some((item) => {
+      if (!item.startsWith("*.")) return false;
+      return host.endsWith(item.slice(1));
+    });
+  } catch {
+    return false;
+  }
+}
+
+function applyCorsHeaders(request, response) {
+  const origin = request.headers.origin || "";
+
+  if (isCorsOriginAllowed(origin)) {
+    response.setHeader("Access-Control-Allow-Origin", origin || "*");
+  }
+
+  response.setHeader("Vary", "Origin");
+  response.setHeader("Access-Control-Allow-Methods", "GET,POST,OPTIONS");
+  response.setHeader("Access-Control-Allow-Headers", "authorization,content-type,apikey,x-client-info");
+  response.setHeader("Access-Control-Max-Age", "86400");
+}
+
 const server = http.createServer(async (request, response) => {
   try {
+    applyCorsHeaders(request, response);
+
+    if (request.method === 'OPTIONS') {
+      response.writeHead(204);
+      response.end();
+      return;
+    }
+
     const url = new URL(request.url, `http://${request.headers.host}`);
 
     if (url.pathname === `${API_PREFIX}/health`) {
@@ -2263,8 +2314,9 @@ const server = http.createServer(async (request, response) => {
   }
 });
 
-server.listen(port, '127.0.0.1', () => {
-  printCheck('Servidor local Railway staging', true, `http://127.0.0.1:${port}/index.html`);
+server.listen(port, host, () => {
+  const displayHost = host === '0.0.0.0' ? '0.0.0.0' : host;
+  printCheck('Servidor Railway API', true, `http://${displayHost}:${port}/api/health`);
 });
 
 async function shutdown() {
