@@ -1,4 +1,4 @@
-#!/usr/bin/env node
+﻿#!/usr/bin/env node
 import fs from 'fs';
 import http from 'http';
 import path from 'path';
@@ -2160,7 +2160,7 @@ if (!publicConfig.SUPABASE_URL || !publicConfig.SUPABASE_ANON_KEY) {
   throw new Error('SUPABASE_URL/SUPABASE_ANON_KEY publicos ausentes para Auth no staging.');
 }
 
-const railwayUrl = requireEnv('RAILWAY_DATABASE_URL');
+const railwayUrl = process.env.RAILWAY_DATABASE_URL || process.env.DATABASE_URL || requireEnv('RAILWAY_DATABASE_URL');
 const target = assertRailwayWriteTarget(railwayUrl, args);
 console.log(`Railway target: ${target.host}/${target.database}`);
 
@@ -2333,3 +2333,4 @@ process.on('SIGTERM', async () => {
   await shutdown();
   process.exit(0);
 });
+
