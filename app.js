@@ -3083,8 +3083,10 @@ function ordenarArquivosPorCompetencia(files) {
 function getSettingsFilesForActiveTab() {
   const files = dashboardFileRecords
     .filter(isUsableDashboardFileRecord)
-    .filter(isDashboardFileActive)
+    .filter((file) => file?.metadata?.hidden_from_history !== true)
+    .filter((file) => file?.metadata?.removed_from_history !== true)
     .filter((file) => getFileRecordCategory(file) === settingsFilesTab);
+
   return ordenarArquivosPorCompetencia(files);
 }
 
@@ -3221,7 +3223,7 @@ function renderSettingsFileManagement() {
     permissions.canDeleteFile ? "Excluir selecionados" : getAdminActionDeniedMessage("Somente administradores podem usar esta função."),
   );
 
-  if (dashboardFilesLoading) {
+  if (dashboardFilesLoading && !files.length) {
     el.settingsFilesList.innerHTML = `<div class="settings-files-empty">Carregando arquivos...</div>`;
     return;
   }
@@ -17748,7 +17750,123 @@ function rebuildPnrRowsFromLibrary() {
   resetPnrRemoteState();
 }
 
+async function loadDashboardFilesFromSupabaseCore(options = {}
+
+// DF80_LOADING_ARQUIVOS_CONFIG_START
+const DF80_FILES_CACHE_TTL_MS = 15000;
+const df80FilesLoadInFlight = new Map();
+let df80FilesCacheAt = 0;
+
+function df80GetFilesLoadKey(options = {}) {
+  let moduleKey = options.moduleKey || "";
+
+  try {
+    moduleKey =
+      normalizeDashboardModuleKey(
+        moduleKey || getDashboardModuleKeyForSheet()
+      ) || "__default";
+  } catch {
+    moduleKey = moduleKey || "__default";
+  }
+
+  return [
+    moduleKey,
+    options.loadActive === false ? "list-only" : "load-active",
+    options.validateStorage === true ? "validate-storage" : "normal"
+  ].join("|");
+}
+
+function df80RenderCachedFilesIfNeeded(options = {}) {
+  if (options.render !== true) {
+    try {
+      updateDatasetMeta();
+    } catch {}
+    return;
+  }
+
+  const settingsView = document.getElementById("settings-view");
+  const settingsVisible =
+    settingsView &&
+    !settingsView.hidden &&
+    window.getComputedStyle(settingsView).display !== "none";
+
+  try {
+    if (settingsVisible) {
+      renderSettingsFileManagement();
+      return;
+    }
+
+    hydrateControls();
+    renderAll();
+  } catch (error) {
+    console.warn("[DF80] Não foi possível renderizar dados em cache.", error);
+  }
+}
+
 async function loadDashboardFilesFromSupabase(options = {}) {
+  const normalizedOptions =
+    options && typeof options === "object" ? options : {};
+
+  const requestKey = df80GetFilesLoadKey(normalizedOptions);
+
+  const canUseWarmCache =
+    normalizedOptions.force !== true &&
+    normalizedOptions.loadActive === false &&
+    normalizedOptions.validateStorage !== true &&
+    Array.isArray(dashboardFileRecords) &&
+    dashboardFileRecords.length > 0 &&
+    Date.now() - df80FilesCacheAt < DF80_FILES_CACHE_TTL_MS;
+
+  if (canUseWarmCache) {
+    console.info("[DF80] Lista de arquivos reutilizada do cache.", {
+      requestKey,
+      total: dashboardFileRecords.length
+    });
+
+    df80RenderCachedFilesIfNeeded(normalizedOptions);
+    return dashboardFileRecords;
+  }
+
+  const existingRequest = df80FilesLoadInFlight.get(requestKey);
+
+  if (existingRequest) {
+    console.info("[DF80] Requisição de arquivos já está em andamento.", {
+      requestKey
+    });
+
+    const records = await existingRequest;
+    df80RenderCachedFilesIfNeeded(normalizedOptions);
+    return records;
+  }
+
+  const coreOptions = { ...normalizedOptions };
+  delete coreOptions.force;
+
+  const requestPromise = Promise.resolve(
+    loadDashboardFilesFromSupabaseCore(coreOptions)
+  )
+    .then((records) => {
+      if (Array.isArray(records)) {
+        df80FilesCacheAt = Date.now();
+      }
+
+      return records;
+    })
+    .finally(() => {
+      df80FilesLoadInFlight.delete(requestKey);
+    });
+
+  df80FilesLoadInFlight.set(requestKey, requestPromise);
+
+  return requestPromise;
+}
+
+window.df80InvalidateFilesCache = function () {
+  df80FilesCacheAt = 0;
+  df80FilesLoadInFlight.clear();
+};
+// DF80_LOADING_ARQUIVOS_CONFIG_END
+) {
   const { loadActive = true, render = true, validateStorage = false, showLoading = null } = options;
   const requestId = ++dashboardFilesLoadRequestId;
   const activeModuleKey = normalizeDashboardModuleKey(options.moduleKey || getDashboardModuleKeyForSheet());
