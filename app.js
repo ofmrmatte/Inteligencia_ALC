@@ -2295,18 +2295,42 @@ function activateSheetTab(button) {
     return;
   }
   if (getCurrentFileCategory() !== previousCategory) {
-    if (getCurrentFileCategory() === PACKAGE_MANAGEMENT_FILE_CATEGORY) {
-      void ensurePackageManagementRowsLoaded(dashboardFileRecords).finally(() => {
+    if (
+      getCurrentFileCategory() ===
+      PACKAGE_MANAGEMENT_FILE_CATEGORY
+    ) {
+      const hasPackageRowsInMemory =
+        Array.isArray(packageManagementRows) &&
+        packageManagementRows.length > 0;
+
+      if (hasPackageRowsInMemory) {
+        moduleLoadingState[
+          DASHBOARD_MODULE_KEYS.gestaoPacotes
+        ] = false;
+
+        hydrateControls();
+        renderAll();
+        return;
+      }
+
+      void ensurePackageManagementRowsLoaded(
+        dashboardFileRecords
+      ).finally(() => {
         hydrateControls();
         renderAll();
       });
+
       return;
     }
     if (applyDashboardScopeFromLoadedDatasets()) {
       hydrateControls();
       renderAll();
     } else if (getCurrentFileCategory() === PRE_FATURA_FILE_CATEGORY) {
-      void loadDashboardDataByFilters({ force: true, silent: true, showLoading: true }).finally(() => {
+      void loadDashboardDataByFilters({
+        force: false,
+        silent: true,
+        showLoading: !hasLoadedDashboardData()
+      }).finally(() => {
         hydrateControls();
         renderAll();
       });
@@ -4158,7 +4182,64 @@ function getRailwayApiClientForModule(moduleKey) {
   return client?.isEnabled?.() ? client : null;
 }
 
+async function loadMissingPackagesFromSupabaseCore(options = {}
+
+// DF85_DATA_LOADING_OPTIMIZATION_MISSING_START
+const DF85_MISSING_PACKAGES_CACHE_MS = 30000;
+let df85MissingPackagesPromise = null;
+let df85MissingPackagesLoadedAt = 0;
+
 async function loadMissingPackagesFromSupabase(options = {}) {
+  const force = options.force === true;
+
+  if (df85MissingPackagesPromise) {
+    const records = await df85MissingPackagesPromise;
+
+    if (options.render) {
+      hydrateControls();
+      renderAll();
+    }
+
+    console.info(
+      "[DF85] Consulta simultânea de Pacotes Faltantes reaproveitada."
+    );
+
+    return records;
+  }
+
+  const cacheIsValid =
+    !force &&
+    df85MissingPackagesLoadedAt > 0 &&
+    Date.now() - df85MissingPackagesLoadedAt <
+      DF85_MISSING_PACKAGES_CACHE_MS;
+
+  if (cacheIsValid) {
+    if (options.render) {
+      hydrateControls();
+      renderAll();
+    }
+
+    console.info(
+      "[DF85] Pacotes Faltantes reutilizado do cache."
+    );
+
+    return missingPackagesRows;
+  }
+
+  df85MissingPackagesPromise = Promise.resolve(
+    loadMissingPackagesFromSupabaseCore(options)
+  )
+    .then((records) => {
+      df85MissingPackagesLoadedAt = Date.now();
+      return records;
+    })
+    .finally(() => {
+      df85MissingPackagesPromise = null;
+    });
+
+  return df85MissingPackagesPromise;
+}
+// DF85_DATA_LOADING_OPTIMIZATION_MISSING_END) {
   if (!window.supabaseClient) return [];
   const sessionUser = currentUser || await ensureCurrentUserFromSupabaseSession();
   if (!sessionUser) {
@@ -9992,7 +10073,7 @@ async function downloadMissingPackagesReport() {
   }
   try {
     if (!missingPackagesRows.length) {
-      await loadMissingPackagesFromSupabase({ render: false });
+      await loadMissingPackagesFromSupabase({ render: false, force: true });
     }
     const rows = getFilteredMissingPackagesRows();
     if (!rows.length) {
@@ -18575,7 +18656,132 @@ function setPnrRemoteLoading(value) {
   pnrRemoteState.processingStatus = value ? "Processando dados de PNRs em segundo plano..." : "";
 }
 
+async function refreshPnrRemoteDashboardCore(options = {}
+
+// DF85_DATA_LOADING_OPTIMIZATION_PNR_START
+const DF85_PNR_CACHE_MS = 30000;
+const df85PnrRequestsInFlight = new Map();
+const df85PnrLoadedAt = new Map();
+
+function df85GetPnrRequestKey() {
+  try {
+    return JSON.stringify({
+      summary: buildPnrSummaryPayload(),
+      table: buildPnrTablePayload()
+    });
+  } catch {
+    return JSON.stringify({
+      sheet: state?.sheet || "",
+      category: state?.activeDesvioCategory || "",
+      months: state?.pnrMonths || [],
+      quinzena: state?.pnrQuinzena || [],
+      status: state?.pnrStatus || [],
+      search: state?.pnrQuery || "",
+      page: state?.page || 1
+    });
+  }
+}
+
+function df85HasPnrData() {
+  try {
+    if (
+      typeof hasPnrRemoteData === "function" &&
+      hasPnrRemoteData()
+    ) {
+      return true;
+    }
+  } catch {}
+
+  return Boolean(
+    Number(pnrRemoteState?.total || 0) > 0 ||
+    (Array.isArray(pnrRemoteState?.rows) &&
+      pnrRemoteState.rows.length > 0)
+  );
+}
+
+function df85IsCriticalPnrRefresh(options = {}) {
+  const reason = String(options.reason || "").toLowerCase();
+
+  return [
+    "import",
+    "upload",
+    "delete",
+    "remove",
+    "status",
+    "manual",
+    "retry",
+    "reload",
+    "file-"
+  ].some((term) => reason.includes(term));
+}
+
 async function refreshPnrRemoteDashboard(options = {}) {
+  if (
+    state.appView !== "dashboard" ||
+    state.sheet !== DEVIATION_MANAGEMENT_VIEW ||
+    state.activeDesvioCategory !== DEVIATION_CATEGORY_PNRS
+  ) {
+    return;
+  }
+
+  const requestKey = df85GetPnrRequestKey();
+  const existingRequest =
+    df85PnrRequestsInFlight.get(requestKey);
+
+  if (existingRequest) {
+    console.info(
+      "[DF85] Consulta PNR idêntica reaproveitada.",
+      { reason: options.reason || "" }
+    );
+
+    return existingRequest;
+  }
+
+  const lastLoadedAt =
+    df85PnrLoadedAt.get(requestKey) || 0;
+
+  const recentlyLoaded =
+    lastLoadedAt > 0 &&
+    Date.now() - lastLoadedAt < DF85_PNR_CACHE_MS;
+
+  const criticalRefresh =
+    df85IsCriticalPnrRefresh(options);
+
+  if (
+    recentlyLoaded &&
+    df85HasPnrData() &&
+    !criticalRefresh
+  ) {
+    moduleLoadingState[
+      DASHBOARD_MODULE_KEYS.desviosPnr
+    ] = false;
+
+    setPnrRemoteLoading(false);
+
+    console.info(
+      "[DF85] PNR reutilizado do cache de navegação.",
+      { reason: options.reason || "" }
+    );
+
+    return pnrRemoteState;
+  }
+
+  const request = Promise.resolve(
+    refreshPnrRemoteDashboardCore(options)
+  )
+    .then((result) => {
+      df85PnrLoadedAt.set(requestKey, Date.now());
+      return result;
+    })
+    .finally(() => {
+      df85PnrRequestsInFlight.delete(requestKey);
+    });
+
+  df85PnrRequestsInFlight.set(requestKey, request);
+
+  return request;
+}
+// DF85_DATA_LOADING_OPTIMIZATION_PNR_END) {
   if (state.appView !== "dashboard" || state.sheet !== DEVIATION_MANAGEMENT_VIEW || state.activeDesvioCategory !== DEVIATION_CATEGORY_PNRS) return;
   const moduleKey = DASHBOARD_MODULE_KEYS.desviosPnr;
   const railwayPnrApi = getRailwayApiClientForModule(moduleKey);
@@ -22500,3 +22706,15 @@ function capitalize(text) {
     if (event.key === "Escape") closeCard();
   });
 })();
+
+
+// DF85_DATA_LOADING_OPTIMIZATION_UTILITIES_START
+window.df85InvalidateDataCaches = function () {
+  df85PnrRequestsInFlight.clear();
+  df85PnrLoadedAt.clear();
+  df85MissingPackagesPromise = null;
+  df85MissingPackagesLoadedAt = 0;
+
+  console.info("[DF85] Caches de navegação invalidados.");
+};
+// DF85_DATA_LOADING_OPTIMIZATION_UTILITIES_END
