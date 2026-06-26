@@ -10896,21 +10896,50 @@ function df91BuildPnrStandardAnalysisFromAggregate() {
   analysis.stationAnalysis = buildPnrStationAnalysisText(analysis);
   analysis.driverAnalysis = `${buildPnrDriverAnalysisText(analysis)} ${driverRows.some((row) => row.identifierOnly) ? "Parte do ranking está identificada apenas por ID; esses registros representam rastreabilidade parcial e não confirmação nominal do motorista." : "Os identificadores apresentados permitem acompanhamento do grupo recorrente."}`;
   analysis.qualityAnalysis = "Este relatório utiliza indicadores agregados para manter desempenho e evitar o carregamento da base completa no navegador. A completude cadastral não foi medida neste PDF. Valor por origem não está disponível no resumo, e parte dos motoristas pode aparecer apenas por ID. A conferência individual permanece na exportação Excel.";
-  analysis.attentionPoints = Array.from(new Set([
-    ...buildPnrAttentionPoints(analysis),
+  /* DF94_PNR_DEDUP_START */
+  const pnrTopDriver = driverRows[0] || null;
+
+  analysis.attentionPoints = [
+    topStation
+      ? `${topStation.label} concentra ${integer.format(topStation.count)} PNRs e ${currency.format(topStation.totalValue)}, com ${formatNumberPt(topStation.valueShare || topStation.share, 1)}% do indicador disponÃ­vel.`
+      : "",
+    pnrTopDriver
+      ? `${pnrTopDriver.label} lidera a recorrÃªncia por motorista, com ${integer.format(pnrTopDriver.count)} casos e ${currency.format(pnrTopDriver.totalValue)} em valor associado.`
+      : "",
+    summary.valorFaturado
+      ? `O valor faturado soma -${currency.format(summary.valorFaturado)} e deve ser acompanhado separadamente dos anulados.`
+      : "",
+    summary.aberto
+      ? `${integer.format(summary.aberto)} casos permanecem em aberto/anÃ¡lise e ainda podem alterar o saldo do recorte.`
+      : "",
+    `O saldo lÃ­quido do recorte Ã© ${currency.format(saldo)}.`,
     `Criticidade do recorte: ${severity.label}.`,
-    summary.aberto ? `${integer.format(summary.aberto)} casos permanecem em aberto/análise.` : "Não há casos em aberto no recorte.",
-    "O valor por origem não é fornecido pelo resumo agregado e não deve ser interpretado como zero.",
-  ])).slice(0, 7);
-  analysis.recommendations = Array.from(new Set([
-    ...(summary.aberto ? ["Acompanhar os casos em aberto até a definição final, priorizando os de maior valor e maior tempo sem desfecho."] : []),
-    ...(summary.valorFaturado ? ["Monitorar o valor faturado separadamente do valor anulado e investigar picos mensais antes do fechamento."] : []),
-    ...(topStation ? [`Priorizar a estação ${topStation.label}, que concentra ${formatNumberPt(topStation.valueShare || topStation.share, 1)}% do indicador mais relevante disponível.`] : []),
-    ...buildPnrRecommendations(analysis),
-    ...(Array.isArray(aggregate.recommendations) ? aggregate.recommendations : []),
-    "Usar a exportação Excel para auditoria cadastral e identificação nominal quando o resumo apresentar apenas IDs.",
-  ])).slice(0, 8);
-  analysis.conclusion = `${buildPnrConclusionText(analysis)} A leitura de origem é volumétrica, não financeira, e a qualidade cadastral detalhada não foi mensurada no resumo agregado. Os indicadores de acompanhamento são faturados, abertos, concentração por estação e evolução mensal.`;
+  ].filter(Boolean).slice(0, 6);
+
+  analysis.recommendations = [
+    summary.aberto
+      ? `Concluir a tratativa dos ${integer.format(summary.aberto)} casos em aberto, priorizando maior valor e maior tempo sem desfecho.`
+      : "",
+    summary.valorFaturado
+      ? `Monitorar o valor faturado mensalmente e investigar picos antes do fechamento.`
+      : "",
+    topStation
+      ? `Atuar primeiro na estaÃ§Ã£o ${topStation.label}, que concentra ${formatNumberPt(topStation.valueShare || topStation.share, 1)}% do indicador disponÃ­vel.`
+      : "",
+    pnrTopDriver
+      ? `Acompanhar ${pnrTopDriver.label} e os demais grupos recorrentes; quando houver apenas ID, validar a identificaÃ§Ã£o nominal no Excel antes de atribuir responsabilidade individual.`
+      : "",
+    "Usar a exportaÃ§Ã£o Excel para auditoria cadastral, validaÃ§Ã£o nominal e conferÃªncia dos registros detalhados.",
+  ].filter(Boolean).slice(0, 5);
+
+  const pnrPriorityParts = [
+    summary.aberto ? `${integer.format(summary.aberto)} casos em aberto` : "",
+    summary.valorFaturado ? `${currency.format(summary.valorFaturado)} faturados` : "",
+    topStation ? `concentraÃ§Ã£o na estaÃ§Ã£o ${topStation.label}` : "",
+  ].filter(Boolean);
+
+  analysis.conclusion = `O recorte reÃºne ${integer.format(summary.count)} PNRs, com saldo lÃ­quido ${saldo >= 0 ? "positivo" : "negativo"} de ${currency.format(saldo)}. A prioridade Ã© ${pnrPriorityParts.length ? pnrPriorityParts.join(", ") : "manter o acompanhamento periÃ³dico dos indicadores"}. O resultado deve ser monitorado por valor faturado, casos em aberto, concentraÃ§Ã£o por estaÃ§Ã£o e evoluÃ§Ã£o mensal. A leitura por origem Ã© volumÃ©trica e a qualidade cadastral detalhada permanece disponÃ­vel no Excel.`;
+  /* DF94_PNR_DEDUP_END */
 
   return analysis;
 }
