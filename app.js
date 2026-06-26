@@ -10246,7 +10246,7 @@ async function downloadMissingPackagesReport() {
   }
 }
 
-async function downloadPnrReport() {
+async function downloadPnrReportLegacy() {
   if (!ensureReportPermission()) return;
   const button = el.reportButton;
   const previousText = button?.textContent || "Relatório";
@@ -10285,6 +10285,450 @@ async function downloadPnrReport() {
     }
   }
 }
+
+/* DF89_PNR_EXECUTIVE_REPORT_START */
+function df89PnrNumber(value) {
+  const direct = Number(value);
+  if (Number.isFinite(direct)) return direct;
+
+  const normalized = String(value ?? "")
+    .trim()
+    .replace(/\s/g, "")
+    .replace(/\.(?=\d{3}(?:\D|$))/g, "")
+    .replace(",", ".")
+    .replace(/[^0-9.-]/g, "");
+
+  const parsed = Number(normalized);
+  return Number.isFinite(parsed) ? parsed : 0;
+}
+
+function df89PnrPickNumber(source, keys = []) {
+  for (const key of keys) {
+    if (source?.[key] == null || source?.[key] === "") continue;
+    const value = df89PnrNumber(source[key]);
+    if (Number.isFinite(value)) return value;
+  }
+  return 0;
+}
+
+function df89PnrPickText(source, keys = []) {
+  for (const key of keys) {
+    const value = String(source?.[key] ?? "").trim();
+    if (value && value !== "—" && value.toLowerCase() !== "null") return value;
+  }
+  return "";
+}
+
+function df89PnrFormatInteger(value) {
+  try {
+    return integer.format(df89PnrNumber(value));
+  } catch {
+    return new Intl.NumberFormat("pt-BR", { maximumFractionDigits: 0 }).format(df89PnrNumber(value));
+  }
+}
+
+function df89PnrFormatCurrency(value) {
+  try {
+    return currency.format(df89PnrNumber(value));
+  } catch {
+    return new Intl.NumberFormat("pt-BR", { style: "currency", currency: "BRL" }).format(df89PnrNumber(value));
+  }
+}
+
+function df89NormalizePnrAggregateRows(rows, limit = 10) {
+  return (Array.isArray(rows) ? rows : [])
+    .map((row, index) => ({
+      label:
+        df89PnrPickText(row, [
+          "label",
+          "name",
+          "nome",
+          "status",
+          "tipo",
+          "tipoOperacional",
+          "tipo_operacional",
+          "origin",
+          "origem",
+          "station",
+          "estacao",
+          "estacaoOrigem",
+          "estacao_origem",
+          "driver",
+          "motorista",
+          "motoristaDisplay",
+          "motorista_display",
+          "nomeMotorista",
+          "nome_motorista",
+          "competencia",
+          "monthLabel",
+          "month_label",
+          "periodLabel",
+          "period_label",
+          "monthKey",
+          "month_key",
+        ]) || `Item ${index + 1}`,
+      count: df89PnrPickNumber(row, [
+        "count",
+        "total",
+        "quantity",
+        "quantidade",
+        "records",
+        "recordCount",
+        "record_count",
+        "pnrs",
+      ]),
+      totalValue: df89PnrPickNumber(row, [
+        "totalValue",
+        "total_value",
+        "value",
+        "valor",
+        "valorTotal",
+        "valor_total",
+        "amount",
+        "impact",
+        "valorCompra",
+        "valor_compra",
+      ]),
+      valorAnulado: df89PnrPickNumber(row, ["valorAnulado", "valor_anulado"]),
+      valorFaturado: df89PnrPickNumber(row, ["valorFaturado", "valor_faturado"]),
+      raw: row,
+    }))
+    .filter((row) => row.label || row.count || row.totalValue || row.valorAnulado || row.valorFaturado)
+    .slice(0, limit);
+}
+
+function df89BuildPnrExecutiveAnalysis() {
+  const remote = typeof pnrRemoteState === "object" && pnrRemoteState ? pnrRemoteState : {};
+  const summary = remote.summary || {};
+  const total = Math.max(
+    0,
+    df89PnrPickNumber(summary, ["count", "total"]),
+    df89PnrNumber(remote.total),
+  );
+  const totalValue = df89PnrPickNumber(summary, ["totalValue", "total_value", "valueTotal", "value_total"]);
+  const aberto = df89PnrPickNumber(summary, ["aberto", "open", "pending"]);
+  const anulado = df89PnrPickNumber(summary, ["anulado", "cancelled", "canceled"]);
+  const faturado = df89PnrPickNumber(summary, ["faturamento", "faturado", "billed"]);
+  const valorAberto = df89PnrPickNumber(summary, ["valorAberto", "valor_aberto"]);
+  const valorAnulado = df89PnrPickNumber(summary, ["valorAnulado", "valor_anulado"]);
+  const valorFaturado = df89PnrPickNumber(summary, ["valorFaturado", "valor_faturado"]);
+  const saldo = valorAnulado - valorFaturado;
+  const ticketMedio = df89PnrPickNumber(summary, ["ticketMedioGeral", "ticket_medio_geral", "avgValue", "avg_value"]);
+  const statusRows = df89NormalizePnrAggregateRows(remote.statusRows, 10);
+  const operationRows = df89NormalizePnrAggregateRows(remote.operationRows, 10);
+  const stationRows = df89NormalizePnrAggregateRows(remote.stationRows, 10);
+  const driverRows = df89NormalizePnrAggregateRows(remote.driverRows, 10);
+  const evolutionRows = df89NormalizePnrAggregateRows(remote.evolutionRows, 24).slice(-12);
+  const filters = typeof getPnrExportFilterLabelList === "function" ? getPnrExportFilterLabelList() : {};
+  const filterState = typeof getPnrExportFilterState === "function" ? getPnrExportFilterState() : {};
+  const topStation = stationRows[0] || null;
+  const topDriver = driverRows[0] || null;
+  const billedShare = totalValue > 0 ? (valorFaturado / totalValue) * 100 : 0;
+  const openShare = total > 0 ? (aberto / total) * 100 : 0;
+  const stationShare = total > 0 && topStation ? (topStation.count / total) * 100 : 0;
+  const recommendations = [];
+
+  if (aberto > 0) {
+    recommendations.push(
+      `Priorizar os ${df89PnrFormatInteger(aberto)} PNRs em aberto, que representam ${openShare.toFixed(1).replace(".", ",")}% do recorte.`,
+    );
+  }
+  if (valorFaturado > 0 && billedShare >= 25) {
+    recommendations.push(
+      `Auditar os PNRs faturados, pois concentram ${billedShare.toFixed(1).replace(".", ",")}% do valor financeiro analisado.`,
+    );
+  }
+  if (topStation && stationShare >= 15) {
+    recommendations.push(
+      `Criar plano de ação para ${topStation.label}, responsável por ${stationShare.toFixed(1).replace(".", ",")}% do volume do recorte.`,
+    );
+  }
+  if (topDriver) {
+    recommendations.push(
+      `Revisar a recorrência de ${topDriver.label}, que aparece como principal concentração entre os motoristas.`,
+    );
+  }
+  if (!stationRows.length || !driverRows.length) {
+    recommendations.push("Revisar a qualidade cadastral de bases e motoristas antes do próximo fechamento.");
+  }
+  recommendations.push("Comparar o próximo fechamento com este recorte para confirmar se as ações reduziram volume e impacto financeiro.");
+
+  const fileName =
+    typeof getPnrReportFileName === "function"
+      ? getPnrReportFileName(filterState)
+      : `Relatorio_Executivo_Gestao_Desvios_PNRs_${new Date().toISOString().slice(0, 10)}.pdf`;
+
+  return {
+    moduleKey: DASHBOARD_MODULE_KEYS.desviosPnr,
+    sourceTable: "desvios_pnr_summary",
+    generatedAt: new Date(),
+    filters,
+    filterState,
+    total,
+    totalValue,
+    aberto,
+    anulado,
+    faturado,
+    valorAberto,
+    valorAnulado,
+    valorFaturado,
+    saldo,
+    ticketMedio,
+    statusRows,
+    operationRows,
+    stationRows,
+    driverRows,
+    evolutionRows,
+    recommendations: recommendations.slice(0, 6),
+    fileName,
+  };
+}
+
+function df89BuildPnrExecutivePdfBlob(analysis) {
+  const pages = [];
+  let commands = [];
+  let y = 790;
+  const page = { width: 595, height: 842, margin: 34, bottom: 42 };
+  const contentWidth = page.width - page.margin * 2;
+  const colors = {
+    ink: "0.06 0.13 0.22",
+    muted: "0.36 0.44 0.55",
+    line: "0.82 0.87 0.93",
+    navy: "0.04 0.18 0.31",
+    teal: "0.05 0.55 0.48",
+    green: "0.08 0.52 0.28",
+    orange: "0.74 0.35 0",
+    red: "0.76 0.16 0.18",
+  };
+
+  const addText = (text, x, yy, size = 10, color = colors.ink, font = "F1") => {
+    const value = String(text ?? "");
+    commands.push(
+      `${color} rg BT /${font} ${size} Tf ${Number(x).toFixed(1)} ${Number(yy).toFixed(1)} Td <${pdfTextHex(value)}> Tj ET`,
+    );
+  };
+
+  const addLine = (x1, y1, x2, y2, color = colors.line, width = 0.7) => {
+    commands.push(
+      `${color} RG ${width} w ${Number(x1).toFixed(1)} ${Number(y1).toFixed(1)} m ${Number(x2).toFixed(1)} ${Number(y2).toFixed(1)} l S`,
+    );
+  };
+
+  const wrap = (text, maxChars = 92) => {
+    const words = String(text ?? "").replace(/\s+/g, " ").trim().split(" ").filter(Boolean);
+    const result = [];
+    let line = "";
+
+    words.forEach((word) => {
+      const candidate = line ? `${line} ${word}` : word;
+      if (candidate.length > maxChars && line) {
+        result.push(line);
+        line = word;
+      } else {
+        line = candidate;
+      }
+    });
+
+    if (line) result.push(line);
+    return result.length ? result : [""];
+  };
+
+  const flushPage = () => {
+    if (commands.length) pages.push(commands.join("\n"));
+    commands = [];
+  };
+
+  const startPage = (subtitle = "") => {
+    commands = [];
+    addText("RELATÓRIO EXECUTIVO · GESTÃO DE DESVIOS PNR", page.margin, 806, 15, colors.navy, "F2");
+    addText(subtitle || "Resumo agregado do recorte selecionado", page.margin, 787, 9, colors.muted, "F1");
+    addLine(page.margin, 775, page.width - page.margin, 775, colors.teal, 1.2);
+    y = 752;
+  };
+
+  const ensureSpace = (height = 24, subtitle = "Continuação") => {
+    if (y - height >= page.bottom) return;
+    flushPage();
+    startPage(subtitle);
+  };
+
+  const section = (title, subtitle = "") => {
+    ensureSpace(subtitle ? 42 : 30, title);
+    addText(title, page.margin, y, 12, colors.navy, "F2");
+    y -= 16;
+    if (subtitle) {
+      addText(subtitle, page.margin, y, 8.5, colors.muted, "F1");
+      y -= 14;
+    }
+    addLine(page.margin, y + 5, page.width - page.margin, y + 5, colors.line, 0.6);
+    y -= 10;
+  };
+
+  const paragraph = (text, color = colors.ink) => {
+    const lines = wrap(text, 92);
+    ensureSpace(lines.length * 14 + 8);
+    lines.forEach((line) => {
+      addText(line, page.margin, y, 9.3, color, "F1");
+      y -= 13;
+    });
+    y -= 5;
+  };
+
+  const metric = (label, value, tone = colors.ink) => {
+    ensureSpace(17);
+    addText(label, page.margin, y, 9, colors.muted, "F1");
+    addText(value, page.margin + 215, y, 10, tone, "F2");
+    y -= 17;
+  };
+
+  const ranking = (title, rows, options = {}) => {
+    section(title, options.subtitle || "");
+    if (!rows.length) {
+      paragraph("Não há dados agregados disponíveis para este ranking.", colors.muted);
+      return;
+    }
+
+    rows.slice(0, options.limit || 10).forEach((row, index) => {
+      ensureSpace(18, title);
+      const countText = row.count ? `${df89PnrFormatInteger(row.count)} PNRs` : "sem contagem";
+      const value = options.evolution
+        ? `Anulado ${df89PnrFormatCurrency(row.valorAnulado)} · Faturado ${df89PnrFormatCurrency(row.valorFaturado)}`
+        : row.totalValue
+          ? `${countText} · ${df89PnrFormatCurrency(row.totalValue)}`
+          : countText;
+      addText(`${index + 1}. ${row.label}`, page.margin, y, 9.2, colors.ink, "F2");
+      addText(value, page.margin + 280, y, 8.7, colors.muted, "F1");
+      y -= 17;
+    });
+    y -= 4;
+  };
+
+  startPage();
+
+  const filterEntries = Object.entries(analysis.filters || {})
+    .map(([key, value]) => [key, Array.isArray(value) ? value.join(", ") : String(value ?? "")])
+    .filter(([, value]) => value && !/^(todos|todas|sem filtro)$/i.test(value));
+  const filterText = filterEntries.length
+    ? filterEntries.map(([key, value]) => `${key}: ${value}`).join(" · ")
+    : "Sem filtros adicionais; resumo do recorte atualmente selecionado no painel.";
+
+  addText(`Gerado em ${analysis.generatedAt.toLocaleString("pt-BR")}`, page.margin, y, 8.5, colors.muted, "F1");
+  y -= 16;
+  paragraph(`Filtros: ${filterText}`, colors.muted);
+
+  section("Indicadores principais", "Dados obtidos do resumo agregado, sem carregar a base completa no navegador");
+  metric("Total de PNRs", df89PnrFormatInteger(analysis.total), colors.navy);
+  metric("Valor total associado", df89PnrFormatCurrency(analysis.totalValue), colors.navy);
+  metric("Anulados", `${df89PnrFormatInteger(analysis.anulado)} · ${df89PnrFormatCurrency(analysis.valorAnulado)}`, colors.green);
+  metric("Faturados", `${df89PnrFormatInteger(analysis.faturado)} · ${df89PnrFormatCurrency(analysis.valorFaturado)}`, colors.red);
+  metric("Em aberto", `${df89PnrFormatInteger(analysis.aberto)} · ${df89PnrFormatCurrency(analysis.valorAberto)}`, colors.orange);
+  metric("Saldo líquido", df89PnrFormatCurrency(analysis.saldo), analysis.saldo >= 0 ? colors.green : colors.red);
+  metric("Ticket médio", df89PnrFormatCurrency(analysis.ticketMedio), colors.ink);
+
+  const topStation = analysis.stationRows[0];
+  const topDriver = analysis.driverRows[0];
+  const executiveSummary = [
+    `O recorte reúne ${df89PnrFormatInteger(analysis.total)} PNRs e ${df89PnrFormatCurrency(analysis.totalValue)} em valor associado.`,
+    `O saldo líquido entre anulados e faturados é ${df89PnrFormatCurrency(analysis.saldo)}.`,
+    topStation ? `A maior concentração por base/estação está em ${topStation.label}.` : "Não há base/estação dominante identificada.",
+    topDriver ? `O motorista com maior recorrência é ${topDriver.label}.` : "Não há motorista dominante identificado.",
+  ].join(" ");
+
+  section("Leitura executiva");
+  paragraph(executiveSummary);
+
+  ranking("Distribuição por status", analysis.statusRows, { limit: 10 });
+  ranking("Bases e estações com maior concentração", analysis.stationRows, { limit: 10 });
+  ranking("Motoristas com maior recorrência", analysis.driverRows, { limit: 10 });
+  ranking("Origem e tipo operacional", analysis.operationRows, { limit: 10 });
+  ranking("Evolução dos últimos períodos disponíveis", analysis.evolutionRows, {
+    limit: 12,
+    evolution: true,
+    subtitle: "Valores anulados e faturados consolidados por período",
+  });
+
+  section("Recomendações condicionais", "Ações sugeridas conforme os indicadores do recorte");
+  analysis.recommendations.forEach((item, index) => {
+    paragraph(`${index + 1}. ${item}`);
+  });
+
+  section("Observação metodológica");
+  paragraph(
+    "Este PDF utiliza exclusivamente indicadores e rankings agregados do endpoint de resumo de PNR. A base completa permanece disponível na exportação Excel e não é carregada para gerar este relatório executivo.",
+    colors.muted,
+  );
+
+  flushPage();
+  return createPdfBlob(pages);
+}
+
+async function downloadPnrReport() {
+  if (!ensureReportPermission()) return;
+
+  const button = el.reportButton;
+  const previousText = button?.textContent || "Relatório";
+
+  if (button) {
+    button.disabled = true;
+    button.textContent = "Gerando resumo...";
+    button.setAttribute("aria-busy", "true");
+  }
+
+  try {
+    showToast("Preparando relatório executivo de PNRs...", "info", 3200);
+
+    const currentTotal = Math.max(
+      df89PnrNumber(pnrRemoteState?.summary?.count),
+      df89PnrNumber(pnrRemoteState?.total),
+    );
+
+    if (!currentTotal && typeof refreshPnrRemoteDashboard === "function") {
+      await refreshPnrRemoteDashboard({
+        force: false,
+        reason: "pnr-executive-report",
+      });
+    }
+
+    const analysis = df89BuildPnrExecutiveAnalysis();
+
+    if (!analysis.total) {
+      showToast("Não há dados agregados disponíveis para gerar o relatório deste recorte.", "warn", 5200);
+      return;
+    }
+
+    assertReportModuleIsolation(analysis, DASHBOARD_MODULE_KEYS.desviosPnr);
+    const pdf = df89BuildPnrExecutivePdfBlob(analysis);
+    downloadBlob(pdf, analysis.fileName);
+
+    try {
+      await logAudit("generate_report", "report", null, {
+        report_tab: DEVIATION_MANAGEMENT_VIEW,
+        report_category: DEVIATION_CATEGORY_PNRS,
+        report_mode: "aggregate-summary",
+        records_count: analysis.total,
+        selected_months: state.pnrMonths,
+        selected_quinzena: state.pnrQuinzena,
+        selected_status: state.pnrStatus,
+      });
+    } catch (auditError) {
+      console.warn("[DF89 PNR Report] Falha ao registrar auditoria.", auditError);
+    }
+
+    showToast("Relatório executivo de PNRs gerado.", "good", 4200);
+  } catch (error) {
+    console.error("[DF89 PNR Report] Falha ao gerar relatório executivo.", error);
+    showToast(`Não foi possível gerar o relatório de PNRs: ${error.message || error}`, "error", 6200);
+  } finally {
+    if (button) {
+      button.disabled = false;
+      button.textContent = previousText;
+      button.removeAttribute("aria-busy");
+    }
+  }
+}
+/* DF89_PNR_EXECUTIVE_REPORT_END */
+
+
 
 function assertReportModuleIsolation(analysis, expectedModuleKey) {
   const moduleKey = normalizeDashboardModuleKey(analysis?.moduleKey || "");
