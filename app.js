@@ -1,4 +1,4 @@
-/* global XLSX */
+﻿/* global XLSX */
 
 const STORAGE_KEY = "alc-pre-fatura-dashboard-state-v1";
 const THEME_STORAGE_KEY = "alc-pre-fatura-dashboard-theme-v1";
@@ -10246,7 +10246,7 @@ async function downloadMissingPackagesReport() {
   }
 }
 
-async function downloadPnrReportLegacy() {
+async function downloadPnrReport() {
   if (!ensureReportPermission()) return;
   const button = el.reportButton;
   const previousText = button?.textContent || "Relatório";
@@ -10662,7 +10662,7 @@ function df89BuildPnrExecutivePdfBlob(analysis) {
   return createPdfBlob(pages);
 }
 
-async function downloadPnrReport() {
+async function downloadPnrReportExecutive() {
   if (!ensureReportPermission()) return;
 
   const button = el.reportButton;
@@ -23174,3 +23174,4 @@ function capitalize(text) {
     if (event.key === "Escape") closeCard();
   });
 })();
+
