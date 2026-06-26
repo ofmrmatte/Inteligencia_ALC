@@ -366,6 +366,14 @@ let evolutionPeriodView = loadEvolutionPeriodView();
 let comparisonPeriodView = loadComparisonPeriodView();
 let settingsFilesTab = PRE_FATURA_FILE_CATEGORY;
 const selectedSettingsFileIds = new Set();
+
+/* DF87_SETTINGS_FILES_STORE_START */
+let settingsDashboardFileRecords = [];
+let settingsDashboardFilesLoading = false;
+let settingsDashboardFilesPromise = null;
+let settingsDashboardFilesLoadedAt = 0;
+const SETTINGS_DASHBOARD_FILES_CACHE_MS = 15000;
+/* DF87_SETTINGS_FILES_STORE_END */
 let totalDiscountComparisonRequest = 0;
 let globalGoalSettings = getDefaultGoalSettings();
 let packageManagementRowsLoadedKey = "";
@@ -3080,13 +3088,224 @@ function ordenarArquivosPorCompetencia(files) {
   });
 }
 
+/* DF87_SETTINGS_FILES_LOADER_START */
+async function loadSettingsDashboardFiles(options = {}) {
+  const { force = false, render = true } = options;
+
+  if (!window.supabaseClient || !currentUser) {
+    settingsDashboardFileRecords = [];
+    settingsDashboardFilesLoadedAt = 0;
+    return [];
+  }
+
+  const cacheIsFresh =
+    settingsDashboardFileRecords.length > 0 &&
+    Date.now() - settingsDashboardFilesLoadedAt <
+      SETTINGS_DASHBOARD_FILES_CACHE_MS;
+
+  if (!force && cacheIsFresh) {
+    if (render && state.appView === "settings") {
+      renderSettingsFileManagement();
+    }
+
+    return settingsDashboardFileRecords;
+  }
+
+  if (settingsDashboardFilesPromise) {
+    const records = await settingsDashboardFilesPromise;
+
+    if (render && state.appView === "settings") {
+      renderSettingsFileManagement();
+    }
+
+    return records;
+  }
+
+  settingsDashboardFilesLoading = true;
+
+  if (render && state.appView === "settings") {
+    renderSettingsFileManagement();
+  }
+
+  settingsDashboardFilesPromise = (async () => {
+    const missingPackageAliases =
+      typeof getProcessedDashboardModuleKeyAliases === "function"
+        ? getProcessedDashboardModuleKeyAliases(
+            DASHBOARD_MODULE_KEYS.pacotesFaltantes
+          )
+        : [];
+
+    const dashboardFilesPromise = withTimeout(
+      window.supabaseClient
+        .from("dashboard_files")
+        .select("*")
+        .order("created_at", { ascending: false }),
+      SUPABASE_QUERY_TIMEOUT_MS,
+      "Tempo limite excedido ao carregar a lista de arquivos."
+    ).catch((error) => ({ data: null, error }));
+
+    const missingPackagesPromise = missingPackageAliases.length
+      ? withTimeout(
+          window.supabaseClient
+            .from("processed_dashboard_files")
+            .select("*")
+            .in("module_key", missingPackageAliases)
+            .eq("status", "processed")
+            .gt("row_count", 0)
+            .order("processed_at", { ascending: false }),
+          SUPABASE_QUERY_TIMEOUT_MS,
+          "Tempo limite excedido ao carregar Pacotes Faltantes."
+        ).catch((error) => ({ data: [], error }))
+      : Promise.resolve({ data: [], error: null });
+
+    const [dashboardResult, missingPackagesResult] =
+      await Promise.all([
+        dashboardFilesPromise,
+        missingPackagesPromise
+      ]);
+
+    if (dashboardResult?.error) {
+      throw dashboardResult.error;
+    }
+
+    const dashboardRecords = Array.isArray(dashboardResult?.data)
+      ? dashboardResult.data
+      : [];
+
+    const recordsById = new Map();
+    const dashboardIds = new Set();
+
+    dashboardRecords.forEach((record) => {
+      if (!record) return;
+
+      const id = String(record.id || "");
+
+      if (id) {
+        dashboardIds.add(id);
+        recordsById.set(id, record);
+      }
+    });
+
+    if (missingPackagesResult?.error) {
+      console.warn(
+        "[DF87 Config Files] Pacotes Faltantes não puderam ser consultados.",
+        missingPackagesResult.error
+      );
+    } else {
+      const processedRecords = Array.isArray(
+        missingPackagesResult?.data
+      )
+        ? missingPackagesResult.data
+        : [];
+
+      processedRecords
+        .filter(
+          (record) =>
+            record?.metadata?.hidden_from_history !== true &&
+            record?.metadata?.removed_from_history !== true
+        )
+        .forEach((record) => {
+          const mapped =
+            typeof mapProcessedDashboardFileToDashboardRecord ===
+            "function"
+              ? mapProcessedDashboardFileToDashboardRecord(
+                  record,
+                  record.module_key || ""
+                )
+              : null;
+
+          if (!mapped) return;
+
+          const sourceId = String(
+            mapped.metadata?.dashboard_file_id ||
+              mapped.metadata?.file_id ||
+              record.metadata?.dashboard_file_id ||
+              record.metadata?.file_id ||
+              ""
+          );
+
+          if (sourceId && dashboardIds.has(sourceId)) return;
+
+          const key = String(
+            sourceId ||
+              mapped.id ||
+              record.id ||
+              mapped.file_name ||
+              record.file_name
+          );
+
+          if (key && !recordsById.has(key)) {
+            recordsById.set(key, mapped);
+          }
+        });
+    }
+
+    settingsDashboardFileRecords = Array.from(
+      recordsById.values()
+    ).filter(
+      (record) =>
+        record?.metadata?.hidden_from_history !== true &&
+        record?.metadata?.removed_from_history !== true
+    );
+
+    settingsDashboardFilesLoadedAt = Date.now();
+
+    console.info("[DF87 Config Files]", {
+      total: settingsDashboardFileRecords.length,
+      porCategoria: settingsDashboardFileRecords.reduce(
+        (result, record) => {
+          const category =
+            getFileRecordCategory(record) || "SEM_CATEGORIA";
+
+          result[category] = (result[category] || 0) + 1;
+          return result;
+        },
+        {}
+      )
+    });
+
+    return settingsDashboardFileRecords;
+  })();
+
+  try {
+    return await settingsDashboardFilesPromise;
+  } catch (error) {
+    console.error(
+      "[DF87 Config Files] Não foi possível carregar os arquivos.",
+      error
+    );
+
+    return settingsDashboardFileRecords;
+  } finally {
+    settingsDashboardFilesLoading = false;
+    settingsDashboardFilesPromise = null;
+
+    if (render && state.appView === "settings") {
+      renderSettingsFileManagement();
+    }
+  }
+}
+
 function getSettingsFilesForActiveTab() {
-  const files = dashboardFileRecords
+  const sourceRecords = settingsDashboardFileRecords.length
+    ? settingsDashboardFileRecords
+    : dashboardFileRecords;
+
+  const files = sourceRecords
     .filter(isUsableDashboardFileRecord)
-    .filter(isDashboardFileActive)
-    .filter((file) => getFileRecordCategory(file) === settingsFilesTab);
+    .filter(
+      (file) =>
+        file?.metadata?.hidden_from_history !== true &&
+        file?.metadata?.removed_from_history !== true
+    )
+    .filter(
+      (file) =>
+        getFileRecordCategory(file) === settingsFilesTab
+    );
+
   return ordenarArquivosPorCompetencia(files);
 }
+/* DF87_SETTINGS_FILES_LOADER_END */
 
 function getSettingsFileCategoryLabel(category) {
   if (category === DEVIATION_PNR_FILE_CATEGORY) return "Gestão de Desvios";
@@ -3221,7 +3440,7 @@ function renderSettingsFileManagement() {
     permissions.canDeleteFile ? "Excluir selecionados" : getAdminActionDeniedMessage("Somente administradores podem usar esta função."),
   );
 
-  if (dashboardFilesLoading) {
+  if (settingsDashboardFilesLoading && !files.length) {
     el.settingsFilesList.innerHTML = `<div class="settings-files-empty">Carregando arquivos...</div>`;
     return;
   }
@@ -3485,6 +3704,10 @@ function openAccountPage(page) {
   state.accountPanelOpen = false;
   if (state.appView === "settings" && canEdit()) {
     void loadAuditLogs();
+    void loadSettingsDashboardFiles({
+      force: false,
+      render: true
+    });
   }
   persistState();
   renderAll();
@@ -20591,6 +20814,13 @@ async function refreshAfterFileDeletion(records = [], mode = FILE_DELETE_MODES.w
   selectedSettingsFileIds.clear();
   const deletedIds = new Set(records.flatMap(getDashboardFileIdsForRecord));
   dashboardFileRecords = dashboardFileRecords.filter((record) => !deletedIds.has(record.id));
+  settingsDashboardFileRecords = settingsDashboardFileRecords.filter(
+    (record) =>
+      !deletedIds.has(record.id) &&
+      !deletedIds.has(record.metadata?.dashboard_file_id) &&
+      !deletedIds.has(record.metadata?.file_id)
+  );
+  settingsDashboardFilesLoadedAt = 0;
   library.datasets = (Array.isArray(library.datasets) ? library.datasets : []).filter((dataset) => !deletedIds.has(dataset.id));
   packageManagementRowsLoadedKey = "";
   pnrRowsLoadedKey = "";
