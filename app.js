@@ -1913,13 +1913,6 @@ function closeDropdownPortal(kind = activeDropdownPortalKind, options = {}) {
   if (options.focus) config?.focusTarget?.focus?.();
 }
 
-function closeAllFloatingDropdowns(options = {}) {
-  ["type", "month", "period", "prefatura", "deviation"].forEach((kind) => closeDropdownPortal(kind, options));
-  closePnrFilterMenus();
-  isPreFaturaCategoryMenuOpen = false;
-  isDeviationCategoryMenuOpen = false;
-}
-
 function removeDetachedDeviationMenus() {
   document.querySelectorAll("body > .prefatura-category-menu").forEach((menu) => menu.remove());
   document.querySelectorAll("body > .deviation-category-menu").forEach((menu) => menu.remove());
@@ -1941,10 +1934,6 @@ function getCurrentFileCategory(sheet = state.sheet) {
   return sheet === PACKAGE_MANAGEMENT_VIEW ? PACKAGE_MANAGEMENT_FILE_CATEGORY : PRE_FATURA_FILE_CATEGORY;
 }
 
-function normalizeMainTypeFilter(value) {
-  return MAIN_TYPE_OPTIONS.includes(value) ? value : "Todos";
-}
-
 function normalizePackageTypeSelection(value) {
   const source = Array.isArray(value)
     ? value
@@ -1964,14 +1953,6 @@ function normalizeTypeSelection(value) {
   return normalizePackageTypeSelection(value);
 }
 
-function getPackageTypeSelection(value = state.packageTipo) {
-  return normalizeTypeSelection(value);
-}
-
-function getPrefaturaTypeSelection(value = state.prefaturaTipo) {
-  return normalizeTypeSelection(value);
-}
-
 function getTypeSelectionValues(value) {
   return normalizeTypeSelection(value);
 }
@@ -1984,30 +1965,14 @@ function getPrefaturaTypeSelectionValues(value = state.prefaturaTipo) {
   return getTypeSelectionValues(value);
 }
 
-function isPackageTypeSelectionAll(value = state.packageTipo) {
-  return normalizeTypeSelection(value).length === MAIN_TYPE_OPTIONS.length;
-}
-
 function getTypeFilterLabel(value) {
   const selection = normalizeTypeSelection(value);
   if (selection.length === MAIN_TYPE_OPTIONS.length) return "Todos";
   return selection.join(" + ");
 }
 
-function getPackageTypeFilterLabel(value = state.packageTipo) {
-  return getTypeFilterLabel(value);
-}
-
 function getActiveTypeFilter() {
   return state.sheet === PACKAGE_MANAGEMENT_VIEW ? getTypeFilterLabel(state.packageTipo) : getTypeFilterLabel(state.prefaturaTipo);
-}
-
-function setActiveTypeFilter(value) {
-  if (state.sheet === PACKAGE_MANAGEMENT_VIEW) {
-    state.packageTipo = normalizeTypeSelection(value);
-  } else {
-    state.prefaturaTipo = normalizeTypeSelection(value);
-  }
 }
 
 function syncPackageTypeFilterControl() {
@@ -2341,11 +2306,6 @@ function applyPackageTypeOptionChange(changedInput) {
   renderAll();
 }
 
-function getPrefaturaDivisionForType(type = state.prefaturaTipo) {
-  const selection = getPrefaturaTypeSelectionValues(type);
-  return selection.length === 1 ? PREFATURA_TYPE_TO_DIVISION[selection[0]] || "" : "";
-}
-
 function getPrefaturaDivisionsForTypes(selection = state.prefaturaTipo) {
   return getPrefaturaTypeSelectionValues(selection)
     .map((type) => PREFATURA_TYPE_TO_DIVISION[type])
@@ -2354,11 +2314,6 @@ function getPrefaturaDivisionsForTypes(selection = state.prefaturaTipo) {
 
 function getPrefaturaTypeForDivision(division) {
   return PREFATURA_DIVISION_TO_TYPE[normalizeSheetLabel(division)] || "Todos";
-}
-
-function getPrefaturaComparisonSheet() {
-  const selected = getPrefaturaTypeSelectionValues(state.prefaturaTipo);
-  return selected.length === 1 ? getPrefaturaDivisionForType(selected[0]) || "Todos" : "Todos";
 }
 
 function isDashboardFileCategory(value) {
@@ -2444,11 +2399,6 @@ function getFileRecordCategory(fileRecord) {
   if (storagePath.startsWith("pre-fatura/")) return PRE_FATURA_FILE_CATEGORY;
 
   return nameCategory;
-}
-
-function getFileRecordMimeType(fileRecord, fallback = "") {
-  const legacyType = fileRecord?.file_type;
-  return fileRecord?.metadata?.mime_type || (isDashboardFileCategory(legacyType) ? "" : legacyType) || fallback || "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
 }
 
 function inferRowsFileCategory(rows) {
@@ -7588,20 +7538,6 @@ async function checkModulePersistedData(moduleKey = getDashboardModuleKeyForShee
   }
 }
 
-async function checkAllModulePersistedBases(options = {}) {
-  const keys = getAllPersistedModuleKeys();
-  const loadPrefix = options.reason === "initial-load" ? "[Initial Load]" : "[Reload Load]";
-  console.info(loadPrefix, "início da validação de bases persistidas", { reason: options.reason || "reload" });
-  console.info("[Dashboard Reload State] início da validação de bases persistidas", { reason: options.reason || "reload" });
-  const results = await Promise.allSettled(keys.map((key) => checkModulePersistedData(key, { reason: options.reason || "reload" })));
-  results.forEach((result, index) => {
-    if (result.status === "rejected") {
-      console.error("[Dashboard Reload State] Falha inesperada na validação", { module: keys[index], error: result.reason });
-    }
-  });
-  return moduleBaseState;
-}
-
 async function checkActiveModulePersistedBase(options = {}) {
   const activeModuleKey = options.moduleKey || getDashboardModuleKeyForSheet();
   const reason = options.reason || "active-module-load";
@@ -10336,46 +10272,6 @@ async function downloadMissingPackagesReport() {
   }
 }
 
-async function downloadPnrReportLegacy() {
-  if (!ensureReportPermission()) return;
-  const button = el.reportButton;
-  const previousText = button?.textContent || "Relatório";
-  if (button) {
-    button.disabled = true;
-    button.textContent = "Gerando relatório...";
-    button.setAttribute("aria-busy", "true");
-  }
-  try {
-    showToast("Gerando relatório de PNRs...", "info", 3200);
-    const rows = await fetchPnrExportRowsFromSupabase();
-    if (!rows.length) {
-      showToast("Não há dados disponíveis para gerar o relatório deste recorte.", "warn", 5200);
-      return;
-    }
-    await ensurePdfLogoImage();
-    const analysis = buildPnrReportAnalysis(rows);
-    assertReportModuleIsolation(analysis, DASHBOARD_MODULE_KEYS.desviosPnr);
-    const pdf = buildPnrReportPdfBlob(analysis);
-    downloadBlob(pdf, analysis.fileName);
-    await logAudit("generate_report", "report", null, {
-      report_tab: DEVIATION_MANAGEMENT_VIEW,
-      report_category: DEVIATION_CATEGORY_PNRS,
-      records_count: rows.length,
-      filters: getPnrExportFilterLabelList(),
-    });
-    showToast("Relatório de Gestão de Desvios / PNRs baixado.", "good", 4200);
-  } catch (error) {
-    console.error("[PNR Report] Falha ao gerar relatório:", error);
-    showToast("Não foi possível gerar o relatório agora. Tente novamente.", "error", 6200);
-  } finally {
-    if (button) {
-      button.disabled = false;
-      button.textContent = previousText;
-      button.setAttribute("aria-busy", "false");
-    }
-  }
-}
-
 /* DF89_PNR_EXECUTIVE_REPORT_START */
 function df89PnrNumber(value) {
   const direct = Number(value);
@@ -10414,14 +10310,6 @@ function df89PnrFormatInteger(value) {
     return integer.format(df89PnrNumber(value));
   } catch {
     return new Intl.NumberFormat("pt-BR", { maximumFractionDigits: 0 }).format(df89PnrNumber(value));
-  }
-}
-
-function df89PnrFormatCurrency(value) {
-  try {
-    return currency.format(df89PnrNumber(value));
-  } catch {
-    return new Intl.NumberFormat("pt-BR", { style: "currency", currency: "BRL" }).format(df89PnrNumber(value));
   }
 }
 
@@ -10572,184 +10460,6 @@ function df89BuildPnrExecutiveAnalysis() {
     recommendations: recommendations.slice(0, 6),
     fileName,
   };
-}
-
-function df89BuildPnrExecutivePdfBlob(analysis) {
-  const pages = [];
-  let commands = [];
-  let y = 790;
-  const page = { width: 595, height: 842, margin: 34, bottom: 42 };
-  const contentWidth = page.width - page.margin * 2;
-  const colors = {
-    ink: "0.06 0.13 0.22",
-    muted: "0.36 0.44 0.55",
-    line: "0.82 0.87 0.93",
-    navy: "0.04 0.18 0.31",
-    teal: "0.05 0.55 0.48",
-    green: "0.08 0.52 0.28",
-    orange: "0.74 0.35 0",
-    red: "0.76 0.16 0.18",
-  };
-
-  const addText = (text, x, yy, size = 10, color = colors.ink, font = "F1") => {
-    const value = String(text ?? "");
-    commands.push(
-      `${color} rg BT /${font} ${size} Tf ${Number(x).toFixed(1)} ${Number(yy).toFixed(1)} Td <${pdfTextHex(value)}> Tj ET`,
-    );
-  };
-
-  const addLine = (x1, y1, x2, y2, color = colors.line, width = 0.7) => {
-    commands.push(
-      `${color} RG ${width} w ${Number(x1).toFixed(1)} ${Number(y1).toFixed(1)} m ${Number(x2).toFixed(1)} ${Number(y2).toFixed(1)} l S`,
-    );
-  };
-
-  const wrap = (text, maxChars = 92) => {
-    const words = String(text ?? "").replace(/\s+/g, " ").trim().split(" ").filter(Boolean);
-    const result = [];
-    let line = "";
-
-    words.forEach((word) => {
-      const candidate = line ? `${line} ${word}` : word;
-      if (candidate.length > maxChars && line) {
-        result.push(line);
-        line = word;
-      } else {
-        line = candidate;
-      }
-    });
-
-    if (line) result.push(line);
-    return result.length ? result : [""];
-  };
-
-  const flushPage = () => {
-    if (commands.length) pages.push(commands.join("\n"));
-    commands = [];
-  };
-
-  const startPage = (subtitle = "") => {
-    commands = [];
-    addText("RELATÓRIO EXECUTIVO · GESTÃO DE DESVIOS PNR", page.margin, 806, 15, colors.navy, "F2");
-    addText(subtitle || "Resumo agregado do recorte selecionado", page.margin, 787, 9, colors.muted, "F1");
-    addLine(page.margin, 775, page.width - page.margin, 775, colors.teal, 1.2);
-    y = 752;
-  };
-
-  const ensureSpace = (height = 24, subtitle = "Continuação") => {
-    if (y - height >= page.bottom) return;
-    flushPage();
-    startPage(subtitle);
-  };
-
-  const section = (title, subtitle = "") => {
-    ensureSpace(subtitle ? 42 : 30, title);
-    addText(title, page.margin, y, 12, colors.navy, "F2");
-    y -= 16;
-    if (subtitle) {
-      addText(subtitle, page.margin, y, 8.5, colors.muted, "F1");
-      y -= 14;
-    }
-    addLine(page.margin, y + 5, page.width - page.margin, y + 5, colors.line, 0.6);
-    y -= 10;
-  };
-
-  const paragraph = (text, color = colors.ink) => {
-    const lines = wrap(text, 92);
-    ensureSpace(lines.length * 14 + 8);
-    lines.forEach((line) => {
-      addText(line, page.margin, y, 9.3, color, "F1");
-      y -= 13;
-    });
-    y -= 5;
-  };
-
-  const metric = (label, value, tone = colors.ink) => {
-    ensureSpace(17);
-    addText(label, page.margin, y, 9, colors.muted, "F1");
-    addText(value, page.margin + 215, y, 10, tone, "F2");
-    y -= 17;
-  };
-
-  const ranking = (title, rows, options = {}) => {
-    section(title, options.subtitle || "");
-    if (!rows.length) {
-      paragraph("Não há dados agregados disponíveis para este ranking.", colors.muted);
-      return;
-    }
-
-    rows.slice(0, options.limit || 10).forEach((row, index) => {
-      ensureSpace(18, title);
-      const countText = row.count ? `${df89PnrFormatInteger(row.count)} PNRs` : "sem contagem";
-      const value = options.evolution
-        ? `Anulado ${df89PnrFormatCurrency(row.valorAnulado)} · Faturado ${df89PnrFormatCurrency(row.valorFaturado)}`
-        : row.totalValue
-          ? `${countText} · ${df89PnrFormatCurrency(row.totalValue)}`
-          : countText;
-      addText(`${index + 1}. ${row.label}`, page.margin, y, 9.2, colors.ink, "F2");
-      addText(value, page.margin + 280, y, 8.7, colors.muted, "F1");
-      y -= 17;
-    });
-    y -= 4;
-  };
-
-  startPage();
-
-  const filterEntries = Object.entries(analysis.filters || {})
-    .map(([key, value]) => [key, Array.isArray(value) ? value.join(", ") : String(value ?? "")])
-    .filter(([, value]) => value && !/^(todos|todas|sem filtro)$/i.test(value));
-  const filterText = filterEntries.length
-    ? filterEntries.map(([key, value]) => `${key}: ${value}`).join(" · ")
-    : "Sem filtros adicionais; resumo do recorte atualmente selecionado no painel.";
-
-  addText(`Gerado em ${analysis.generatedAt.toLocaleString("pt-BR")}`, page.margin, y, 8.5, colors.muted, "F1");
-  y -= 16;
-  paragraph(`Filtros: ${filterText}`, colors.muted);
-
-  section("Indicadores principais", "Dados obtidos do resumo agregado, sem carregar a base completa no navegador");
-  metric("Total de PNRs", df89PnrFormatInteger(analysis.total), colors.navy);
-  metric("Valor total associado", df89PnrFormatCurrency(analysis.totalValue), colors.navy);
-  metric("Anulados", `${df89PnrFormatInteger(analysis.anulado)} · ${df89PnrFormatCurrency(analysis.valorAnulado)}`, colors.green);
-  metric("Faturados", `${df89PnrFormatInteger(analysis.faturado)} · ${df89PnrFormatCurrency(analysis.valorFaturado)}`, colors.red);
-  metric("Em aberto", `${df89PnrFormatInteger(analysis.aberto)} · ${df89PnrFormatCurrency(analysis.valorAberto)}`, colors.orange);
-  metric("Saldo líquido", df89PnrFormatCurrency(analysis.saldo), analysis.saldo >= 0 ? colors.green : colors.red);
-  metric("Ticket médio", df89PnrFormatCurrency(analysis.ticketMedio), colors.ink);
-
-  const topStation = analysis.stationRows[0];
-  const topDriver = analysis.driverRows[0];
-  const executiveSummary = [
-    `O recorte reúne ${df89PnrFormatInteger(analysis.total)} PNRs e ${df89PnrFormatCurrency(analysis.totalValue)} em valor associado.`,
-    `O saldo líquido entre anulados e faturados é ${df89PnrFormatCurrency(analysis.saldo)}.`,
-    topStation ? `A maior concentração por base/estação está em ${topStation.label}.` : "Não há base/estação dominante identificada.",
-    topDriver ? `O motorista com maior recorrência é ${topDriver.label}.` : "Não há motorista dominante identificado.",
-  ].join(" ");
-
-  section("Leitura executiva");
-  paragraph(executiveSummary);
-
-  ranking("Distribuição por status", analysis.statusRows, { limit: 10 });
-  ranking("Bases e estações com maior concentração", analysis.stationRows, { limit: 10 });
-  ranking("Motoristas com maior recorrência", analysis.driverRows, { limit: 10 });
-  ranking("Origem e tipo operacional", analysis.operationRows, { limit: 10 });
-  ranking("Evolução dos últimos períodos disponíveis", analysis.evolutionRows, {
-    limit: 12,
-    evolution: true,
-    subtitle: "Valores anulados e faturados consolidados por período",
-  });
-
-  section("Recomendações condicionais", "Ações sugeridas conforme os indicadores do recorte");
-  analysis.recommendations.forEach((item, index) => {
-    paragraph(`${index + 1}. ${item}`);
-  });
-
-  section("Observação metodológica");
-  paragraph(
-    "Este PDF utiliza exclusivamente indicadores e rankings agregados do endpoint de resumo de PNR. A base completa permanece disponível na exportação Excel e não é carregada para gerar este relatório executivo.",
-    colors.muted,
-  );
-
-  flushPage();
-  return createPdfBlob(pages);
 }
 
 /* DF91_PNR_STANDARD_LAYOUT_START */
@@ -11748,174 +11458,6 @@ async function ensurePackageManagementRowsForReport() {
   return packageManagementRows;
 }
 
-function getPnrReportDriverLabel(row) {
-  const id = formatPnrId(row?.idMotorista || "");
-  const candidateName = getPnrDriverNameFromSourceRow({ motorista: row?.nomeMotorista || row?.motoristaDisplay || "" });
-  const name = candidateName && normalizePnrLookupId(candidateName) !== normalizePnrLookupId(id) ? candidateName : "";
-  return name || (id ? `Motorista ${id}` : "Não identificado");
-}
-
-function buildPnrReportAnalysis(rows) {
-  const safeRows = Array.isArray(rows) ? rows : [];
-  const filters = getPnrExportFilterLabelList();
-  const filterState = getPnrExportFilterState();
-  const statusMap = new Map();
-  const originMap = new Map();
-  const stationMap = new Map();
-  const driverMap = new Map();
-  const evolutionMap = new Map();
-  const summary = createPnrSummary(safeRows.length);
-  const firstMeaningfulLabel = (...values) => values.find((value) => hasReportLabel(value)) || "";
-
-  safeRows.forEach((row) => {
-    const value = Number(row.valorCompraNumerico || 0);
-    const status = row.statusNormalizado || "Indefinido";
-    const statusType = getPnrStatusMetricType(status);
-    const origin = firstMeaningfulLabel(row.tipoBase, row.tipoOperacional, row.baseIdentificada) || "Não identificada";
-    const station = firstMeaningfulLabel(row.estacaoOrigem, row.nomeBaseOperacao) || "Não identificada";
-    const driver = getPnrReportDriverLabel(row);
-    const period = getPnrPeriodFromBillingPeriod(row.sourcePeriodo || row.periodoFaturamentoOriginal || row.periodoFaturamento) || getPnrPeriodFromDate(row.dataCaso || row.periodoFaturamento);
-    const monthKey = row.monthKey || period.monthKey || "sem-periodo";
-    const monthLabel = row.competencia || getPnrMonthFullLabel(period) || "Sem período";
-
-    summary.totalValue += value;
-    addPnrSummaryStatus(summary, status, value, 1);
-
-    const statusEntry = statusMap.get(status) || { label: status, count: 0, totalValue: 0 };
-    statusEntry.count += 1;
-    statusEntry.totalValue += value;
-    statusMap.set(status, statusEntry);
-
-    const originEntry = originMap.get(origin) || { label: origin, count: 0, totalValue: 0 };
-    originEntry.count += 1;
-    originEntry.totalValue += value;
-    originMap.set(origin, originEntry);
-
-    const stationKey = `${station}|${origin}`;
-    const stationEntry = stationMap.get(stationKey) || { label: station, origin, count: 0, totalValue: 0 };
-    stationEntry.count += 1;
-    stationEntry.totalValue += value;
-    stationMap.set(stationKey, stationEntry);
-
-    const driverEntry = driverMap.get(driver) || { label: driver, statuses: new Map(), count: 0, totalValue: 0 };
-    driverEntry.count += 1;
-    driverEntry.totalValue += value;
-    driverEntry.statuses.set(status, (driverEntry.statuses.get(status) || 0) + 1);
-    driverMap.set(driver, driverEntry);
-
-    const evolutionEntry = evolutionMap.get(monthKey) || {
-      key: monthKey,
-      label: monthLabel,
-      year: Number(row.ano || period.ano || String(monthKey).slice(0, 4) || 0),
-      month: Number(row.mesNumero || period.mes || String(monthKey).slice(5, 7) || 0),
-      count: 0,
-      totalValue: 0,
-      valorAnulado: 0,
-      valorFaturado: 0,
-    };
-    evolutionEntry.count += 1;
-    evolutionEntry.totalValue += value;
-    if (statusType === "anulado") evolutionEntry.valorAnulado += value;
-    if (statusType === "faturado") evolutionEntry.valorFaturado += value;
-    evolutionMap.set(monthKey, evolutionEntry);
-  });
-
-  completePnrSummary(summary);
-  const total = Math.max(summary.count, 1);
-  const statusRows = Array.from(statusMap.values())
-    .map((item) => ({ ...item, share: (item.count / total) * 100 }))
-    .sort((a, b) => b.count - a.count || b.totalValue - a.totalValue);
-  const originRows = Array.from(originMap.values())
-    .map((item) => ({ ...item, share: (item.count / total) * 100 }))
-    .sort((a, b) => b.count - a.count || b.totalValue - a.totalValue);
-  const stationRows = Array.from(stationMap.values())
-    .map((item) => ({ ...item, share: (item.count / total) * 100 }))
-    .sort((a, b) => b.count - a.count || b.totalValue - a.totalValue)
-    .slice(0, 10)
-    .map((item, index) => ({
-      ...item,
-      criticality: index < 5 || item.share >= 10 ? "Alto impacto" : item.share >= 4 ? "Médio impacto" : "Baixo impacto",
-    }));
-  const driverRows = Array.from(driverMap.values())
-    .map((item) => {
-      const topStatuses = Array.from(item.statuses.entries())
-        .sort((a, b) => b[1] - a[1])
-        .slice(0, 2)
-        .map(([label]) => label)
-        .join(", ");
-      return { ...item, topStatuses: topStatuses || "—", share: (item.count / total) * 100 };
-    })
-    .sort((a, b) => b.count - a.count || b.totalValue - a.totalValue)
-    .slice(0, 10)
-    .map((item, index) => ({
-      ...item,
-      criticality: index < 5 || item.share >= 8 ? "Acompanhamento prioritário" : "Monitorar recorrência",
-    }));
-  const evolutionRows = Array.from(evolutionMap.values())
-    .sort((a, b) => (a.year - b.year) || (a.month - b.month) || String(a.key).localeCompare(String(b.key), "pt-BR"));
-  const saldo = Number(summary.valorAnulado || 0) - Number(summary.valorFaturado || 0);
-  const maxAnulado = evolutionRows.reduce((best, item) => Number(item.valorAnulado || 0) > Number(best.valorAnulado || 0) ? item : best, evolutionRows[0] || { label: "—", valorAnulado: 0 });
-  const maxFaturado = evolutionRows.reduce((best, item) => Number(item.valorFaturado || 0) > Number(best.valorFaturado || 0) ? item : best, evolutionRows[0] || { label: "—", valorFaturado: 0 });
-  const fileName = getPnrReportFileName(filterState);
-  const missingOriginCount = safeRows.filter((row) => !firstMeaningfulLabel(row.tipoBase, row.tipoOperacional, row.baseIdentificada, row.estacaoOrigem)).length;
-  const missingStationCount = safeRows.filter((row) => !firstMeaningfulLabel(row.estacaoOrigem, row.nomeBaseOperacao)).length;
-  const missingDriverCount = safeRows.filter((row) => !hasReportLabel(row.idMotorista || row.nomeMotorista || row.motoristaDisplay)).length;
-  const missingStatusCount = safeRows.filter((row) => !hasReportLabel(row.statusNormalizado || row.statusOriginal)).length;
-  const missingDateCount = safeRows.filter((row) => ![row.dataEntrega, row.dataEncerramentoCaso, row.dataCaso].some((value) => hasReportLabel(value) && parseDateValue(value).ts !== null)).length;
-  const qualityRows = [
-    { label: "Sem origem/base identificada", count: missingOriginCount, risk: missingOriginCount ? "Reduz rastreabilidade operacional" : "Sem ocorrência relevante" },
-    { label: "Sem estação de origem", count: missingStationCount, risk: missingStationCount ? "Dificulta priorização por base" : "Sem ocorrência relevante" },
-    { label: "Sem motorista", count: missingDriverCount, risk: missingDriverCount ? "Dificulta ação individual" : "Sem ocorrência relevante" },
-    { label: "Sem data operacional", count: missingDateCount, risk: missingDateCount ? "Limita leitura temporal" : "Sem ocorrência relevante" },
-    { label: "Sem status", count: missingStatusCount, risk: missingStatusCount ? "Impede tratativa por etapa" : "Sem ocorrência relevante" },
-  ].map((item) => ({ ...item, share: (item.count / total) * 100 }));
-
-  const analysis = {
-    moduleKey: DASHBOARD_MODULE_KEYS.desviosPnr,
-    sourceTable: "desvios_pnr_records",
-    rows: safeRows,
-    summary,
-    filters,
-    filterState,
-    statusRows,
-    originRows,
-    stationRows,
-    driverRows,
-    evolutionRows,
-    saldo,
-    maxAnulado,
-    maxFaturado,
-    generatedAt: `Gerado em: ${formatCurrentDateTime()}`,
-    scopeLabel: filterState.hasFilters ? "Recorte filtrado" : "Base completa",
-    periodLabel: filterState.selectedMonths.length ? filterState.selectedMonths.join(", ") : "Base completa",
-    fileName,
-    executiveSummary: "",
-    financialDiagnosis: "",
-    operationalDiagnosis: "",
-    temporalAnalysis: "",
-    originAnalysis: "",
-    stationAnalysis: "",
-    driverAnalysis: "",
-    qualityAnalysis: "",
-    conclusion: "",
-    attentionPoints: [],
-    recommendations: [],
-    qualityRows,
-  };
-  analysis.executiveSummary = buildPnrExecutiveSummaryText(analysis);
-  analysis.financialDiagnosis = buildPnrFinancialDiagnosisText(analysis);
-  analysis.operationalDiagnosis = buildPnrOperationalDiagnosisText(analysis);
-  analysis.temporalAnalysis = buildPnrTemporalAnalysisText(analysis);
-  analysis.originAnalysis = buildPnrOriginAnalysisText(analysis);
-  analysis.stationAnalysis = buildPnrStationAnalysisText(analysis);
-  analysis.driverAnalysis = buildPnrDriverAnalysisText(analysis);
-  analysis.qualityAnalysis = buildPnrQualityAnalysisText(analysis);
-  analysis.attentionPoints = buildPnrAttentionPoints(analysis);
-  analysis.recommendations = buildPnrRecommendations(analysis);
-  analysis.conclusion = buildPnrConclusionText(analysis);
-  return analysis;
-}
-
 function getPnrReportFileName(filterState = getPnrExportFilterState()) {
   const dateLabel = formatPnrExportDateForFile();
   if (filterState.selectedMonths?.length === 1) {
@@ -11967,15 +11509,6 @@ function buildPnrTemporalAnalysisText(analysis) {
   return `A evolução temporal mostra ${trend}. O maior valor anulado ocorreu em ${analysis.maxAnulado?.label || "—"}, com ${currency.format(analysis.maxAnulado?.valorAnulado || 0)}, enquanto o maior impacto faturado ocorreu em ${analysis.maxFaturado?.label || "—"}, com -${currency.format(analysis.maxFaturado?.valorFaturado || 0)}. O saldo líquido geral permanece ${saldoTone}, em ${currency.format(analysis.saldo)}, considerando anulado como positivo e faturado como negativo.${variationText} A leitura temporal deve ser usada para identificar meses de pico, sazonalidade e períodos que exigem reforço de auditoria antes do fechamento.`;
 }
 
-function buildPnrOriginAnalysisText(analysis) {
-  const originLeader = analysis.originRows[0] || { label: "sem origem dominante", count: 0, share: 0, totalValue: 0 };
-  const unidentified = analysis.originRows.find((item) => !hasReportLabel(item.label));
-  const qualityNote = unidentified && unidentified.count
-    ? ` Há ${integer.format(unidentified.count)} registros com origem não identificada, o que reduz a rastreabilidade operacional e deve ser tratado como ponto de qualidade da base.`
-    : " A rastreabilidade por origem não apresenta concentração relevante de registros sem identificação.";
-  return `A análise por origem/base mostra maior participação de ${originLeader.label}, com ${integer.format(originLeader.count)} PNRs (${formatNumberPt(originLeader.share, 1)}%) e ${currency.format(originLeader.totalValue)} em valor associado. Bases com volume alto e valor alto devem ser priorizadas porque combinam recorrência operacional e impacto financeiro.${qualityNote}`;
-}
-
 function buildPnrStationAnalysisText(analysis) {
   const top = analysis.stationRows[0] || { label: "sem estação dominante", count: 0, totalValue: 0, share: 0 };
   return `As estações listadas concentram os maiores volumes do recorte. A principal concentração está em ${top.label}, com ${integer.format(top.count)} PNRs, ${currency.format(top.totalValue)} em valor e ${formatNumberPt(top.share, 1)}% de participação. A coluna de criticidade combina posição no ranking, quantidade e participação para indicar onde a gestão deve iniciar a tratativa operacional.`;
@@ -11984,54 +11517,6 @@ function buildPnrStationAnalysisText(analysis) {
 function buildPnrDriverAnalysisText(analysis) {
   const top = analysis.driverRows[0] || { label: "sem motorista dominante", count: 0, totalValue: 0, topStatuses: "—" };
   return `Os motoristas listados concentram maior recorrência de casos PNR e devem ser priorizados em ações de acompanhamento, orientação ou auditoria operacional. O maior volume está em ${top.label}, com ${integer.format(top.count)} PNRs e ${currency.format(top.totalValue)} em valor associado. O status predominante nesse grupo é ${top.topStatuses}, informação útil para separar reincidência operacional de pendências ainda em análise.`;
-}
-
-function buildPnrQualityAnalysisText(analysis) {
-  const totalIssues = analysis.qualityRows.reduce((acc, item) => acc + Number(item.count || 0), 0);
-  const worst = analysis.qualityRows.reduce((best, item) => Number(item.count || 0) > Number(best.count || 0) ? item : best, analysis.qualityRows[0] || { label: "Sem inconsistências", count: 0 });
-  if (!totalIssues) {
-    return "A base do recorte não apresenta ausência relevante nos campos críticos avaliados para origem, estação, motorista, datas e status. A rastreabilidade é suficiente para leitura executiva e acompanhamento operacional.";
-  }
-  return `A qualidade dos dados exige atenção em ${integer.format(totalIssues)} ocorrências de campos críticos ausentes ou não identificados. O principal ponto é ${worst.label}, com ${integer.format(worst.count)} registros. Essas lacunas afetam rastreabilidade, priorização por base, leitura temporal e confiabilidade da análise executiva do recorte PNR.`;
-}
-
-function buildPnrAttentionPoints(analysis) {
-  const summary = analysis.summary;
-  const points = [];
-  const topStation = analysis.stationRows[0];
-  const topDriver = analysis.driverRows[0];
-  const missingOrigin = analysis.qualityRows.find((item) => item.label === "Sem origem/base identificada");
-  const missingDriver = analysis.qualityRows.find((item) => item.label === "Sem motorista");
-  if (topStation) points.push(`${topStation.label} concentra ${integer.format(topStation.count)} PNRs e ${currency.format(topStation.totalValue)}, classificada como ${topStation.criticality.toLowerCase()}.`);
-  if (topDriver) points.push(`${topDriver.label} aparece como maior recorrência por motorista, com ${integer.format(topDriver.count)} casos e status predominante: ${topDriver.topStatuses}.`);
-  if (Number(summary.valorFaturado || 0) > 0) points.push(`O valor faturado soma -${currency.format(summary.valorFaturado)} e representa impacto financeiro negativo a acompanhar antes do fechamento.`);
-  if (Number(summary.aberto || 0) > 0) points.push(`${integer.format(summary.aberto)} casos ainda estão em aberto/análise e podem alterar o saldo final do recorte.`);
-  if (missingOrigin?.count) points.push(`${integer.format(missingOrigin.count)} registros sem origem/base reduzem rastreabilidade e dificultam priorização operacional.`);
-  if (missingDriver?.count) points.push(`${integer.format(missingDriver.count)} registros sem motorista limitam ações individuais de orientação ou auditoria.`);
-  points.push(`A diferença entre anulado e faturado gera saldo líquido de ${currency.format(analysis.saldo)}, que deve ser acompanhado junto da evolução temporal.`);
-  return points.slice(0, 7);
-}
-
-function buildPnrRecommendations(analysis) {
-  const topStation = analysis.stationRows[0]?.label || "as bases com maior volume";
-  const topDriver = analysis.driverRows[0]?.label || "os motoristas recorrentes";
-  const hasOpen = Number(analysis.summary.aberto || 0) > 0;
-  const hasQualityIssue = analysis.qualityRows.some((item) => Number(item.count || 0) > 0);
-  return [
-    `Priorizar a análise operacional de ${topStation} e das demais estações classificadas como alto impacto.`,
-    `Acompanhar ${topDriver} e os demais motoristas com maior recorrência para orientação, auditoria ou validação de processo.`,
-    hasOpen ? "Monitorar diariamente os casos em aberto/análise até a definição final, evitando alteração tardia do saldo financeiro." : "Manter rotina de monitoramento dos status para detectar novas pendências assim que surgirem.",
-    "Comparar mensalmente valores faturados e anulados para identificar picos, sazonalidade e mudança de tendência.",
-    hasQualityIssue ? "Corrigir registros sem origem, motorista ou data antes do fechamento para aumentar rastreabilidade e confiabilidade do relatório." : "Manter a validação de campos críticos antes do fechamento para preservar a qualidade atual da base.",
-    "Usar a base mestre como referência histórica e os arquivos quinzenais/mensais como atualização incremental consolidada.",
-  ];
-}
-
-function buildPnrConclusionText(analysis) {
-  const summary = analysis.summary;
-  const saldoTone = analysis.saldo >= 0 ? "positivo" : "negativo";
-  const topStation = analysis.stationRows[0]?.label || "sem base dominante";
-  return `O recorte analisado apresenta ${integer.format(summary.count)} PNRs e saldo líquido ${saldoTone} de ${currency.format(analysis.saldo)}, resultado da diferença entre ${currency.format(summary.valorAnulado)} anulados e -${currency.format(summary.valorFaturado)} faturados. A situação operacional exige foco nas concentrações por base, especialmente ${topStation}, e nos motoristas com maior recorrência. Os principais riscos estão nos valores faturados, nos casos ainda em aberto/análise e nas lacunas de rastreabilidade. O próximo passo recomendado é manter acompanhamento periódico de faturados x anulados, corrigir dados incompletos e priorizar as bases de alto impacto antes do fechamento operacional.`;
 }
 
 function buildPnrReportPdfBlob(analysis) {
@@ -13085,76 +12570,6 @@ function getPackageReportScope() {
   };
 }
 
-function filterReportFilesByMonthSelection(files, monthSelection, periodMode) {
-  const selectedMonths = Array.isArray(monthSelection) ? monthSelection.filter(Boolean) : [];
-  const allMonthsSelected = !selectedMonths.length;
-  const normalizedPeriod = normalizePeriodMode(periodMode);
-  return (Array.isArray(files) ? files : [])
-    .filter(isUsableDashboardFileRecord)
-    .filter((file) => {
-      const period = getFileRecordPeriod(file);
-      if (!allMonthsSelected && !selectedMonths.includes(period.key)) return false;
-      if (normalizedPeriod === "month") return true;
-      return period.periodType === normalizedPeriod;
-    });
-}
-
-async function loadPrefaturaRowsForReportScope(scope, options = {}) {
-  const typeSelection = options.typeSelection || state.prefaturaTipo;
-  const files = await getReportAvailableFileRecords();
-  const monthSelection = options.monthSelection || (scope.mode === "annual" ? [] : [scope.key]);
-  const selectedFiles = filterReportFilesByMonthSelection(files, monthSelection, options.periodMode || scope.periodMode);
-  const datasetById = new Map(
-    (Array.isArray(library.datasets) ? library.datasets : [])
-      .filter((dataset) => dataset?.source !== "filtered" && Array.isArray(dataset.rows) && dataset.rows.length)
-      .map((dataset) => [dataset.id, dataset]),
-  );
-  const datasets = [];
-  for (const file of uniqueDashboardFileRecords(selectedFiles)) {
-    const cached = datasetById.get(file.id);
-    if (cached?.rows?.length) {
-      datasets.push(cached);
-      continue;
-    }
-    try {
-      const dataset = await loadPersistedRowsForFile(file);
-      if (dataset?.rows?.length) {
-        datasets.push(dataset);
-        datasetById.set(file.id, dataset);
-        if (!library.datasets.some((entry) => entry.id === dataset.id)) {
-          library.datasets.push(dataset);
-        }
-      }
-    } catch (error) {
-      console.error("[REPORT] Falha ao carregar Pré-Fatura para comparação:", file?.file_name, error);
-    }
-  }
-  return filterPrefaturaRowsByTypes(datasets.flatMap((dataset) => dataset.rows), typeSelection);
-}
-
-function buildPackageReportSummary(comparison, packageRows = []) {
-  const summary = comparison?.summary || buildPackageManagementSummary(packageRows);
-  const baseRows = (Array.isArray(packageRows) ? packageRows : []).filter(isPackageManagementDetailRow);
-  const totalValue = Number(summary.alcValue || 0) + Number(summary.driverValue || 0) + Number(summary.dispatcherValue || 0);
-  const driverCount = uniqueCount(baseRows, "motorista");
-  const baseCount = uniqueCount(baseRows, "base");
-  return {
-    count: Number(summary.count || baseRows.length || 0),
-    totalValue,
-    baseCount,
-    driverCount,
-    routeCount: uniqueCount(baseRows, "rota"),
-    packageCount: Number(summary.dispatcherErrors || 0),
-    pnrCount: Number(summary.mercadoLivreErrors || 0),
-    topBase: topBy(baseRows, "base", "valor_numerico", 1)[0] || null,
-    topDriver: topBy(baseRows, "motorista", "valor_numerico", 1)[0] || null,
-    packageShare: summary.count ? ((Number(summary.dispatcherErrors || 0) / summary.count) * 100).toFixed(1) : "0.0",
-    pnrShare: summary.count ? ((Number(summary.mercadoLivreErrors || 0) / summary.count) * 100).toFixed(1) : "0.0",
-    fileName: "Gestão de Pacotes",
-    lastUpdate: baseRows.length ? formatDate(maxDate(baseRows)) : "--",
-  };
-}
-
 function buildPackageReportIntelligentSummary({ scope, comparison }) {
   if (!comparison?.hasPackageRows) {
     return `No recorte ${scope.label}, não há registros válidos de Gestão de Pacotes para análise executiva.`;
@@ -13420,21 +12835,6 @@ function formatRankingName(value) {
     .trim();
 }
 
-function getReportCategoryColor(label) {
-  if (label === "PNR") return "0.08 0.47 0.78";
-  if (label === "SVC PERDIDOS") return "1 0.62 0.26";
-  if (label === "XPT PERDIDOS") return "0.32 0.78 0.50";
-  return "0.36 0.44 0.55";
-}
-
-function getReportOffenseColor(value, max) {
-  const ratio = max ? Number(value || 0) / max : 0;
-  if (ratio >= 0.72) return "0.76 0.16 0.18";
-  if (ratio >= 0.45) return "0.95 0.51 0.10";
-  if (ratio >= 0.22) return "0.08 0.47 0.78";
-  return "0.08 0.52 0.28";
-}
-
 function formatSignedPct(value) {
   const number = Number(value || 0);
   return `${number > 0 ? "+" : ""}${formatNumberPt(number, 1)}%`;
@@ -13502,19 +12902,6 @@ function clipPdfText(text, width, size = 8) {
   const maxChars = Math.max(8, Math.floor(width / (size * 0.52)));
   if (value.length <= maxChars) return value;
   return `${value.slice(0, Math.max(1, maxChars - 3)).trimEnd()}...`;
-}
-
-function pdfEscape(value) {
-  return String(value ?? "")
-    .normalize("NFD")
-    .replace(/[\u0300-\u036f]/g, "")
-    .replace(/[–—]/g, "-")
-    .replace(/[“”]/g, '"')
-    .replace(/[‘’]/g, "'")
-    .replace(/[^\x20-\x7E]/g, " ")
-    .replace(/\\/g, "\\\\")
-    .replace(/\(/g, "\\(")
-    .replace(/\)/g, "\\)");
 }
 
 function pdfTextHex(value) {
@@ -13609,20 +12996,6 @@ function downloadBlob(blob, fileName) {
   link.click();
   link.remove();
   setTimeout(() => URL.revokeObjectURL(url), 1000);
-}
-
-function slugify(value) {
-  return normalize(value).replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "") || "relatorio";
-}
-
-function getActiveMonthlyStatus() {
-  const rows = buildMonthlyComparison();
-  const activeKey = getDatasetPeriod(getActiveDataset()).key;
-  const active = rows.find((row) => row.key === activeKey) || rows[rows.length - 1] || null;
-  if (!active) return "Sem histórico mensal";
-  if (!active.previous) return "Sem mês anterior carregado";
-  const prefix = active.deltaValue > 0 ? "+" : "";
-  return `${prefix}${active.deltaPct.toFixed(1)}% vs. mês anterior`;
 }
 
 function getTotalDiscountComparisonInitialText() {
@@ -15334,12 +14707,6 @@ function getFilteredRows() {
   return rows;
 }
 
-function filterPrefaturaRowsByType(rows, type) {
-  const selectedDivision = getPrefaturaDivisionForType(type);
-  const baseRows = (Array.isArray(rows) ? rows : []).filter((row) => (row.file_category || PRE_FATURA_FILE_CATEGORY) !== PACKAGE_MANAGEMENT_FILE_CATEGORY);
-  return selectedDivision ? baseRows.filter((row) => getRowDivision(row) === selectedDivision) : baseRows;
-}
-
 function filterPrefaturaRowsByTypes(rows, selection = state.packageTipo) {
   const baseRows = (Array.isArray(rows) ? rows : []).filter((row) => (row.file_category || PRE_FATURA_FILE_CATEGORY) !== PACKAGE_MANAGEMENT_FILE_CATEGORY);
   const selectedTypes = getTypeSelectionValues(selection);
@@ -15372,22 +14739,6 @@ function sortRows(rows) {
 function paginateRows(rows) {
   const start = (state.page - 1) * state.pageSize;
   return rows.slice(start, start + state.pageSize);
-}
-
-function countBySheet(rows) {
-  return calcularContadoresAbas(rows);
-}
-
-function calcularContadoresAbas(dados) {
-  const base = Array.isArray(dados) ? dados : [];
-  const preRows = base.filter((item) => (item.file_category || PRE_FATURA_FILE_CATEGORY) !== PACKAGE_MANAGEMENT_FILE_CATEGORY);
-  return SHEET_TABS.reduce((acc, sheet) => {
-    if (sheet === PRE_FATURA_VIEW) acc[sheet] = preRows.length;
-    else if (sheet === MONTHLY_BASE_VIEW) acc[sheet] = 0;
-    else if (sheet === PACKAGE_MANAGEMENT_VIEW) acc[sheet] = packageManagementRows.length;
-    else acc[sheet] = preRows.filter((item) => getRowDivision(item) === sheet).length;
-    return acc;
-  }, {});
 }
 
 function getRowDivision(item) {
@@ -15533,19 +14884,6 @@ function getGroupLabel(row, key) {
   return value == null || value === "" ? "Sem valor" : String(value);
 }
 
-function uniqueCount(rows, key) {
-  return new Set(rows.map((row) => row[key]).filter(Boolean)).size;
-}
-
-function uniqueBaseCount(rows) {
-  const bases = new Set();
-  rows.forEach((row) => {
-    const base = getBaseIdentity(row);
-    if (base) bases.add(base);
-  });
-  return bases.size;
-}
-
 function normalizeDriverName(value) {
   return String(value || "")
     .trim()
@@ -15580,16 +14918,6 @@ function formatDriverName(value, fallback = "Não identificado") {
 
 function normalizeDriver(value) {
   return normalizeDriverName(value);
-}
-
-function calcularTotalDriversUnicos(rows) {
-  const drivers = new Set();
-  rows.forEach((row) => {
-    const name = row?.driver || row?.motorista || row?.nomeMotorista || row?.nome_driver || "";
-    const normalizedName = normalizeDriverName(name);
-    if (normalizedName && !isUnidentifiedDriverName(name)) drivers.add(normalizedName);
-  });
-  return drivers.size;
 }
 
 function maxDate(rows) {
@@ -16140,13 +15468,6 @@ function formatPnrId(value) {
     .trim();
 }
 
-function cleanPnrDedupePart(value) {
-  return formatPnrId(value)
-    .replace(/[\u200B-\u200D\uFEFF]/g, "")
-    .replace(/\s+/g, "")
-    .trim();
-}
-
 function normalizePnrIdentifierDedupePart(value) {
   if (value == null || value === "") return "";
   const raw = repairPnrText(value).replace(/[\u200B-\u200D\uFEFF]/g, "").trim();
@@ -16295,10 +15616,6 @@ function dedupePnrRecords(rows) {
     if (previousIndex >= 0) deduped[previousIndex] = merged.row;
   });
   return { rows: deduped, duplicateRowsUpdated, duplicateRowsSkipped };
-}
-
-function getPnrOperationalType(estacao) {
-  return identificarTipoBasePnr(estacao);
 }
 
 function getPnrPeriodFromDate(dateValue) {
@@ -16648,15 +15965,6 @@ async function withPnrBatchTimeout(promise, label, details = {}) {
     console.error("[PNR Batch Insert]", { label, ...details, error });
     throw error;
   }
-}
-
-function getPnrCalculatedHeaderSet() {
-  return new Set(PNR_CALCULATED_HEADERS.map(normalizePnrHeader));
-}
-
-function getPnrSourceHeaders() {
-  const calculatedHeaders = getPnrCalculatedHeaderSet();
-  return PNR_STANDARD_HEADERS.filter((header) => !calculatedHeaders.has(normalizePnrHeader(header)));
 }
 
 function hasPnrCalculatedHeaders(headers = []) {
@@ -17905,11 +17213,6 @@ async function validateDashboardImportPersistence(fileRecord, processedSaveResul
     throw new Error(`A importação não encontrou registros persistidos em ${tableName}. O arquivo não será marcado como processado.`);
   }
   return { fileRows: isPnr ? Math.max(fileRows, batchRows, affectedRows) : fileRows, batchRows, totalRows };
-}
-
-async function validatePnrImportPersistence(fileRecord, processedSaveResult, expectedRows = 0, metadata = {}) {
-  if (getFileRecordCategory(fileRecord) !== DEVIATION_PNR_FILE_CATEGORY) return null;
-  return validateDashboardImportPersistence(fileRecord, processedSaveResult, expectedRows, metadata);
 }
 
 async function persistDashboardFileRowCountMetadata(fileRecord, metadata = {}, validation = {}) {
@@ -19767,11 +19070,6 @@ function applyPnrRemoteSummary(payload) {
   pnrRemoteState.cacheMeta = readPnrLightCache();
 }
 
-function applyPnrRemoteDashboard(payload) {
-  applyPnrRemoteSummary(payload);
-  applyPnrRemoteTable(payload);
-}
-
 function setPnrRemoteLoading(value) {
   pnrRemoteState.loadingSummary = value;
   pnrRemoteState.loadingCharts = value;
@@ -21082,10 +20380,6 @@ async function refreshPnrMetricsSummaryForFiles(fileIds = []) {
     groups: Number(data || 0),
     ms: Math.round(performance.now() - start),
   });
-}
-
-async function refreshPnrMetricsSummaryForFile(fileId) {
-  return refreshPnrMetricsSummaryForFiles([fileId]);
 }
 
 function getPnrSourceFileTypeForFileRecord(fileRecord = {}) {
@@ -23198,14 +22492,6 @@ function loadLibrary() {
   };
 }
 
-function persistLibrary() {
-  try {
-    window.localStorage.removeItem("alc-pre-fatura-dashboard-library-v1");
-  } catch {
-    // no-op
-  }
-}
-
 function normalizeDatasetRecord(dataset) {
   if (!dataset || !Array.isArray(dataset.rows)) return null;
   if (dataset.id === EMPTY_DATASET_ID || dataset.source === "empty") return buildEmptyDataset();
@@ -23386,18 +22672,6 @@ function humanizeWorkbookName(fileName) {
   return capitalize(raw.replace(/\b1\s*q\b/gi, "1ª quinzena").replace(/\b1q\b/gi, "1ª quinzena"));
 }
 
-function getDatasetPeriodLabel(dataset) {
-  if (!dataset) return "Quinzena";
-  const evolutionLabel = formatEvolutionPeriodLabel(dataset);
-  if (evolutionLabel !== "Período") return evolutionLabel;
-  const label = String(dataset.label || humanizeWorkbookName(dataset.fileName || ""));
-  const period = detectQuinzena(label) || detectQuinzena(dataset.fileName || "");
-  const month = detectMonth(label) || detectMonthFromRows(dataset.rows);
-  const year = detectYear(label) || detectYearFromRows(dataset.rows);
-  if (month && period) return `${compactQuinzena(period)} ${capitalize(month)}${year ? ` ${year}` : ""}`;
-  return isInvalidEvolutionPeriodLabel(label) ? "Período" : label;
-}
-
 function formatEvolutionPeriodLabel(datasetOrFile, viewMode = "biweekly") {
   const file = datasetOrFile?.remoteRecord || datasetOrFile || {};
   const period = getDatasetPeriod(datasetOrFile);
@@ -23441,12 +22715,6 @@ function isInvalidEvolutionPeriodLabel(label) {
   if (/^(?:19|20)?\d{2,4}$/.test(text)) return true;
   if (/^\d{1,2}$/.test(text)) return true;
   return false;
-}
-
-function compactQuinzena(period) {
-  return String(period || "")
-    .replace("1ª quinzena", "1ªQ")
-    .replace("2ª quinzena", "2ªQ");
 }
 
 function detectQuinzena(text) {
