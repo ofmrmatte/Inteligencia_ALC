@@ -10152,13 +10152,6 @@ const REPORT_MODULE_REGISTRY = Object.freeze({
     sourcePolicy: "filtered-module-data",
     download: downloadPreFaturaReport,
   }),
-  [DASHBOARD_MODULE_KEYS.evolucao]: Object.freeze({
-    moduleKey: DASHBOARD_MODULE_KEYS.evolucao,
-    label: "Evolução Mensal",
-    reportKind: "temporal-evolution",
-    sourcePolicy: "historical-module-data",
-    download: downloadEvolutionReport,
-  }),
   [DASHBOARD_MODULE_KEYS.pacotes]: Object.freeze({
     moduleKey: DASHBOARD_MODULE_KEYS.pacotes,
     label: "Gestão de Pacotes",
@@ -10212,27 +10205,7 @@ async function downloadMonthlyReport() {
   await definition.download();
 }
 
-function buildEvolutionReportScope() {
-  const scope = getReportScope();
-  const monthIndex = scope.mode === "monthly" ? Number(String(scope.key || "").slice(5, 7)) || 1 : 0;
-  const monthName = monthIndex ? MONTHS[monthIndex - 1] || "período" : "";
 
-  return {
-    ...scope,
-    title:
-      scope.mode === "annual"
-        ? `Relatório Executivo de Evolução — Anual ${scope.year}`
-        : `Relatório Executivo de Evolução — ${scope.label}`,
-    fileName: buildReportDownloadFileName({
-      typeLabel: "Evolução",
-      mode: scope.mode,
-      year: scope.year,
-      monthName,
-      periodMode: scope.periodMode,
-      recorteLabel: scope.label,
-    }),
-  };
-}
 
 async function downloadPrefaturaFamilyReport({
   moduleKey,
@@ -10270,6 +10243,7 @@ async function downloadPrefaturaFamilyReport({
     report_module: moduleKey,
     report_mode: reportMode,
     report_source: analysis.sourceTable,
+    report_severity: analysis.severity?.level || "informative",
     selected_month: state.monthFilter || "all",
     selected_period: state.period,
     records_count: filteredRows.length,
@@ -10287,14 +10261,8 @@ async function downloadPreFaturaReport() {
   });
 }
 
-async function downloadEvolutionReport() {
-  await downloadPrefaturaFamilyReport({
-    moduleKey: DASHBOARD_MODULE_KEYS.evolucao,
-    reportMode: "evolution",
-    scope: buildEvolutionReportScope(),
-    successMessage: "Relatório de Evolução baixado.",
-  });
-}
+
+
 async function downloadPackageManagementReport() {
   const reportScope = getPackageReportScope();
   await ensurePackageManagementRowsForReport();
@@ -10309,6 +10277,10 @@ async function downloadPackageManagementReport() {
   const pdf = buildModuleExecutiveReportPdfBlob(analysis);
   downloadBlob(pdf, analysis.fileName);
   await logAudit("generate_report", "report", null, {
+    report_module: analysis.moduleKey,
+    report_mode: analysis.reportMode,
+    report_source: analysis.sourceTable,
+    report_severity: analysis.severity?.level || "informative",
     selected_months: getPackageMonthSelectionValues(),
     selected_period: state.packagePeriod || "month",
     selected_types: getPackageTypeSelectionValues(state.packageTipo),
@@ -10342,6 +10314,10 @@ async function downloadMissingPackagesReport() {
     const pdf = buildModuleExecutiveReportPdfBlob(analysis);
     downloadBlob(pdf, analysis.fileName);
     await logAudit("generate_report", "report", null, {
+      report_module: analysis.moduleKey,
+      report_mode: analysis.reportMode,
+      report_source: analysis.sourceTable,
+      report_severity: analysis.severity?.level || "informative",
       report_tab: DEVIATION_MANAGEMENT_VIEW,
       report_category: DEVIATION_CATEGORY_MISSING_PACKAGES,
       records_count: rows.length,
@@ -10801,41 +10777,23 @@ function df91BuildPnrStandardAnalysisFromAggregate() {
   const originRows = addShare(aggregate.operationRows).map((row) => ({
     ...row,
     label: row.label || "Não identificada",
+    valueMeasured: false,
   }));
   const fallbackOrigin = originRows[0]?.label || "Não identificada";
-  const stationRows = addShare(aggregate.stationRows).map((row, index) => ({
-    ...row,
-    origin:
-      df89PnrPickText(row.raw, [
-        "origin",
-        "origem",
-        "tipo",
-        "tipoOperacional",
-        "tipo_operacional",
-        "baseType",
-        "base_type",
-      ]) || fallbackOrigin,
-    criticality:
-      index < 5 || row.share >= 10
-        ? "Alto impacto"
-        : row.share >= 4
-          ? "Médio impacto"
-          : "Baixo impacto",
-  }));
+  const stationRows = addShare(aggregate.stationRows).map((row, index) => {
+    const valueShare = summary.totalValue ? (df89PnrNumber(row.totalValue) / summary.totalValue) * 100 : 0;
+    return {
+      ...row,
+      valueShare,
+      origin: df89PnrPickText(row.raw, ["origin", "origem", "tipo", "tipoOperacional", "tipo_operacional", "baseType", "base_type"]) || fallbackOrigin,
+      criticality: index < 5 || valueShare >= 10 || row.share >= 10 ? "Alto impacto" : valueShare >= 4 || row.share >= 4 ? "Médio impacto" : "Baixo impacto",
+    };
+  });
   const driverRows = addShare(aggregate.driverRows).map((row, index) => ({
     ...row,
-    topStatuses:
-      df89PnrPickText(row.raw, [
-        "topStatuses",
-        "top_statuses",
-        "status",
-        "statusDominante",
-        "status_dominante",
-      ]) || "Consolidado agregado",
-    criticality:
-      index < 5 || row.share >= 8
-        ? "Acompanhamento prioritário"
-        : "Monitorar recorrência",
+    identifierOnly: reportIsIdentifierOnly(row.label),
+    topStatuses: df89PnrPickText(row.raw, ["topStatuses", "top_statuses", "status", "statusDominante", "status_dominante"]) || "Consolidado agregado",
+    criticality: index < 5 || row.share >= 8 ? "Acompanhamento prioritário" : "Monitorar recorrência",
   }));
   const evolutionRows = aggregate.evolutionRows.map((row, index) => {
     const raw = row.raw || {};
@@ -10857,30 +10815,38 @@ function df91BuildPnrStandardAnalysisFromAggregate() {
     };
   });
   const saldo = summary.valorAnulado - summary.valorFaturado;
-  const maxAnulado = evolutionRows.reduce(
-    (best, item) => df89PnrNumber(item.valorAnulado) > df89PnrNumber(best.valorAnulado) ? item : best,
-    evolutionRows[0] || { label: "—", valorAnulado: 0 },
-  );
-  const maxFaturado = evolutionRows.reduce(
-    (best, item) => df89PnrNumber(item.valorFaturado) > df89PnrNumber(best.valorFaturado) ? item : best,
-    evolutionRows[0] || { label: "—", valorFaturado: 0 },
-  );
+  const maxAnulado = evolutionRows.reduce((best, item) => df89PnrNumber(item.valorAnulado) > df89PnrNumber(best.valorAnulado) ? item : best, evolutionRows[0] || { label: "—", valorAnulado: 0 });
+  const maxFaturado = evolutionRows.reduce((best, item) => df89PnrNumber(item.valorFaturado) > df89PnrNumber(best.valorFaturado) ? item : best, evolutionRows[0] || { label: "—", valorFaturado: 0 });
   const filterState = aggregate.filterState || {};
   const selectedMonths = Array.isArray(filterState.selectedMonths) ? filterState.selectedMonths : [];
   const scopeLabel = filterState.hasFilters ? "Recorte filtrado" : "Base completa";
   const periodLabel = selectedMonths.length ? selectedMonths.join(", ") : "Base completa";
+  const openShare = total ? (summary.aberto / total) * 100 : 0;
+  const billedValueShare = summary.totalValue ? (summary.valorFaturado / summary.totalValue) * 100 : 0;
+  const topStation = stationRows[0] || null;
+  let riskScore = 0;
+  if (billedValueShare >= 20) riskScore += 4;
+  else if (billedValueShare >= 10) riskScore += 2;
+  else if (summary.valorFaturado > 0) riskScore += 1;
+  if (openShare >= 5) riskScore += 3;
+  else if (summary.aberto > 0) riskScore += 1;
+  if (Number(topStation?.valueShare || 0) >= 20) riskScore += 2;
+  else if (Number(topStation?.valueShare || 0) >= 10) riskScore += 1;
+  const severity = deriveReportSeverity(riskScore);
+  const quality = buildReportDataQuality({
+    notMeasured: true,
+    note: "A completude de campos não é mensurada no resumo agregado; a auditoria individual permanece no Excel.",
+  });
   const qualityRows = [
-    {
-      label: "Auditoria cadastral detalhada",
-      count: 0,
-      share: 0,
-      risk: "Disponível na exportação Excel",
-    },
+    { label: "Auditoria cadastral detalhada", countLabel: "Não mensurado", shareLabel: "—", risk: "Disponível na exportação Excel" },
+    { label: "Valor financeiro por origem", countLabel: "Não fornecido", shareLabel: "—", risk: "Analisar apenas quantidade e participação" },
+    { label: "Identificação nominal de motorista", countLabel: "Parcial", shareLabel: "—", risk: "O resumo pode agrupar por ID" },
   ];
 
   const analysis = {
     moduleKey: DASHBOARD_MODULE_KEYS.desviosPnr,
     sourceTable: "desvios_pnr_summary",
+    reportMode: "aggregate-summary",
     rows: [],
     summary,
     filters: aggregate.filters || {},
@@ -10897,6 +10863,14 @@ function df91BuildPnrStandardAnalysisFromAggregate() {
     scopeLabel,
     periodLabel,
     fileName: aggregate.fileName,
+    severity,
+    dataQuality: quality,
+    monitoringIndicators: [
+      "Valor faturado em relação ao valor total de PNR.",
+      "Quantidade de casos em aberto/análise.",
+      topStation ? `Participação financeira da estação ${topStation.label}.` : "Participação financeira das principais estações.",
+      "Evolução mensal de faturados versus anulados.",
+    ],
     executiveSummary: "",
     financialDiagnosis: "",
     operationalDiagnosis: "",
@@ -10911,24 +10885,36 @@ function df91BuildPnrStandardAnalysisFromAggregate() {
     qualityRows,
   };
 
-  analysis.executiveSummary = buildPnrExecutiveSummaryText(analysis);
+  analysis.executiveSummary = `${buildPnrExecutiveSummaryText(analysis)} A criticidade do recorte foi classificada como ${severity.label.toLowerCase()}, considerando valor faturado, casos em aberto e concentração por estação.`;
   analysis.financialDiagnosis = buildPnrFinancialDiagnosisText(analysis);
   analysis.operationalDiagnosis = buildPnrOperationalDiagnosisText(analysis);
   analysis.temporalAnalysis = buildPnrTemporalAnalysisText(analysis);
-  analysis.originAnalysis = buildPnrOriginAnalysisText(analysis);
+  const topOrigin = originRows[0] || null;
+  analysis.originAnalysis = topOrigin
+    ? `A origem ${topOrigin.label} concentra ${integer.format(topOrigin.count)} PNRs (${formatNumberPt(topOrigin.share, 1)}% do recorte). O resumo agregado não fornece valor financeiro por origem; por isso, esta seção apresenta somente quantidade e participação, sem interpretar R$ 0,00 como ausência de impacto.`
+    : "O resumo agregado não retornou distribuição por origem. Não foi estimado valor financeiro sem fonte disponível.";
   analysis.stationAnalysis = buildPnrStationAnalysisText(analysis);
-  analysis.driverAnalysis = buildPnrDriverAnalysisText(analysis);
-  analysis.qualityAnalysis =
-    "Este relatório utiliza indicadores agregados para evitar o carregamento da base completa no navegador. A conferência individual de campos ausentes, datas, origem e motorista permanece disponível na exportação Excel.";
-  analysis.attentionPoints = buildPnrAttentionPoints(analysis);
+  analysis.driverAnalysis = `${buildPnrDriverAnalysisText(analysis)} ${driverRows.some((row) => row.identifierOnly) ? "Parte do ranking está identificada apenas por ID; esses registros representam rastreabilidade parcial e não confirmação nominal do motorista." : "Os identificadores apresentados permitem acompanhamento do grupo recorrente."}`;
+  analysis.qualityAnalysis = "Este relatório utiliza indicadores agregados para manter desempenho e evitar o carregamento da base completa no navegador. A completude cadastral não foi medida neste PDF. Valor por origem não está disponível no resumo, e parte dos motoristas pode aparecer apenas por ID. A conferência individual permanece na exportação Excel.";
+  analysis.attentionPoints = Array.from(new Set([
+    ...buildPnrAttentionPoints(analysis),
+    `Criticidade do recorte: ${severity.label}.`,
+    summary.aberto ? `${integer.format(summary.aberto)} casos permanecem em aberto/análise.` : "Não há casos em aberto no recorte.",
+    "O valor por origem não é fornecido pelo resumo agregado e não deve ser interpretado como zero.",
+  ])).slice(0, 7);
   analysis.recommendations = Array.from(new Set([
+    ...(summary.aberto ? ["Acompanhar os casos em aberto até a definição final, priorizando os de maior valor e maior tempo sem desfecho."] : []),
+    ...(summary.valorFaturado ? ["Monitorar o valor faturado separadamente do valor anulado e investigar picos mensais antes do fechamento."] : []),
+    ...(topStation ? [`Priorizar a estação ${topStation.label}, que concentra ${formatNumberPt(topStation.valueShare || topStation.share, 1)}% do indicador mais relevante disponível.`] : []),
     ...buildPnrRecommendations(analysis),
     ...(Array.isArray(aggregate.recommendations) ? aggregate.recommendations : []),
-  ])).slice(0, 7);
-  analysis.conclusion = buildPnrConclusionText(analysis);
+    "Usar a exportação Excel para auditoria cadastral e identificação nominal quando o resumo apresentar apenas IDs.",
+  ])).slice(0, 8);
+  analysis.conclusion = `${buildPnrConclusionText(analysis)} A leitura de origem é volumétrica, não financeira, e a qualidade cadastral detalhada não foi mensurada no resumo agregado. Os indicadores de acompanhamento são faturados, abertos, concentração por estação e evolução mensal.`;
 
   return analysis;
 }
+
 /* DF91_PNR_STANDARD_LAYOUT_END */
 
 async function downloadPnrReport() {
@@ -10972,9 +10958,12 @@ async function downloadPnrReport() {
 
     try {
       await logAudit("generate_report", "report", null, {
+        report_module: analysis.moduleKey,
+        report_source: analysis.sourceTable,
+        report_severity: analysis.severity?.level || "informative",
         report_tab: DEVIATION_MANAGEMENT_VIEW,
         report_category: DEVIATION_CATEGORY_PNRS,
-        report_mode: "aggregate-summary",
+        report_mode: analysis.reportMode,
         records_count: analysis.summary.count,
         selected_months: state.pnrMonths,
         selected_quinzena: state.pnrQuinzena,
@@ -11054,56 +11043,223 @@ function buildReportTopRows(rows = [], key, valueGetter = () => 1, limit = 8) {
     .slice(0, limit);
 }
 
+/* DF93_INTELLIGENT_REPORTS_START */
+function getReportSeverityDefinition(level = "informative") {
+  const definitions = {
+    informative: { level: "informative", label: "Informativo", rank: 0 },
+    attention: { level: "attention", label: "Atenção", rank: 1 },
+    high: { level: "high", label: "Alto", rank: 2 },
+    critical: { level: "critical", label: "Crítico", rank: 3 },
+  };
+  return definitions[level] || definitions.informative;
+}
+
+function deriveReportSeverity(score = 0) {
+  const value = Number(score || 0);
+  if (value >= 6) return getReportSeverityDefinition("critical");
+  if (value >= 4) return getReportSeverityDefinition("high");
+  if (value >= 2) return getReportSeverityDefinition("attention");
+  return getReportSeverityDefinition("informative");
+}
+
+function buildReportDataQuality({ total = 0, fields = [], notMeasured = false, note = "" } = {}) {
+  if (notMeasured) {
+    return {
+      score: null,
+      label: "Não mensurada",
+      level: "attention",
+      summary: note || "O resumo disponível não permite medir a completude cadastral.",
+      issues: [],
+    };
+  }
+  const safeTotal = Math.max(0, Number(total || 0));
+  const normalizedFields = (Array.isArray(fields) ? fields : [])
+    .map((field) => ({
+      label: String(field?.label || "Campo crítico"),
+      missing: Math.max(0, Number(field?.missing || 0)),
+    }))
+    .filter((field) => field.label);
+  const possible = safeTotal * Math.max(normalizedFields.length, 1);
+  const missing = normalizedFields.reduce((acc, field) => acc + field.missing, 0);
+  const score = possible ? Math.max(0, Math.min(100, ((possible - missing) / possible) * 100)) : 100;
+  const label = score >= 98 ? "Excelente" : score >= 95 ? "Boa" : score >= 90 ? "Atenção" : "Crítica";
+  const level = score >= 98 ? "informative" : score >= 95 ? "attention" : score >= 90 ? "high" : "critical";
+  const issues = normalizedFields.map((field) => ({
+    ...field,
+    share: safeTotal ? (field.missing / safeTotal) * 100 : 0,
+  }));
+  return {
+    score,
+    label,
+    level,
+    summary: `Completude média dos campos críticos: ${formatNumberPt(score, 1)}%.`,
+    issues,
+  };
+}
+
+function getIdentifiedReportRows(rows = [], key) {
+  return (Array.isArray(rows) ? rows : []).filter((row) => {
+    const raw = typeof key === "function" ? key(row) : row?.[key];
+    return hasReportLabel(raw);
+  });
+}
+
+function reportIsIdentifierOnly(value) {
+  const text = String(value || "").trim();
+  return /^ID\s*\d+$/i.test(text) || /^\d{4,}$/.test(text);
+}
+
+function formatReportQualityScore(quality) {
+  return Number.isFinite(quality?.score) ? `${formatNumberPt(quality.score, 1)}% — ${quality.label}` : quality?.label || "Não mensurada";
+}
+
+function buildReportAlert({ severity = "attention", title = "Ponto de atenção", text = "" } = {}) {
+  const definition = getReportSeverityDefinition(severity);
+  return { ...definition, severity: definition.level, severityLabel: definition.label, title, text };
+}
+/* DF93_INTELLIGENT_REPORTS_END */
+
 function buildPackageOnlyReportAnalysis({ rows = [], scope = getPackageReportScope() } = {}) {
   const validRows = (Array.isArray(rows) ? rows : []).filter(isPackageManagementDetailRow);
   const summary = buildPackageManagementSummary(validRows);
-  const totalValue = Number(summary.alcValue || 0) + Number(summary.driverValue || 0) + Number(summary.dispatcherValue || 0);
-  const distribution = buildPackageTypeDistribution(validRows);
+  const financialImpact = Number(summary.alcValue || 0) + Number(summary.driverValue || 0) + Number(summary.dispatcherValue || 0);
+  const monitoredValue = validRows.reduce((acc, row) => acc + Math.abs(Number(row.valor_numerico || 0)), 0);
   const categoryRows = ["ALC", "DRIVER", "DISPATCHER", "MERCADO_LIVRE", "INDEFINIDO"].map((category) => {
-    const categoryRows = validRows.filter((row) => row.categoria_final === category);
-    const value = categoryRows.reduce((acc, row) => acc + Math.abs(Number(row.valor_numerico || 0)), 0);
+    const rowsByCategory = validRows.filter((row) => row.categoria_final === category);
+    const total = rowsByCategory.reduce((acc, row) => acc + Math.abs(Number(row.valor_numerico || 0)), 0);
     return {
+      key: category,
       label: PACKAGE_CATEGORY_LABELS[category] || category,
-      count: categoryRows.length,
-      total: value,
-      share: validRows.length ? (categoryRows.length / validRows.length) * 100 : 0,
+      count: rowsByCategory.length,
+      total,
+      share: validRows.length ? (rowsByCategory.length / validRows.length) * 100 : 0,
+      valueShare: monitoredValue ? (total / monitoredValue) * 100 : 0,
     };
   })
     .filter((item) => item.count || item.total)
     .sort((a, b) => b.total - a.total || b.count - a.count || String(a.label).localeCompare(String(b.label), "pt-BR"));
-  const topBases = buildReportTopRows(validRows, (row) => getBaseIdentity(row) || row.base || row.base_normalizada, (row) => Math.abs(Number(row.valor_numerico || 0)), 8);
-  const topDrivers = buildReportTopRows(validRows, (row) => row.motorista || row.driver, (row) => Math.abs(Number(row.valor_numerico || 0)), 8);
+
+  const baseKey = (row) => getBaseIdentity(row) || row.base || row.base_normalizada;
+  const driverKey = (row) => row.motorista || row.driver;
+  const identifiedBaseRows = getIdentifiedReportRows(validRows, baseKey);
+  const identifiedDriverRows = getIdentifiedReportRows(validRows, driverKey);
+  const topBases = buildReportTopRows(identifiedBaseRows, baseKey, (row) => Math.abs(Number(row.valor_numerico || 0)), 8)
+    .map((item) => ({ ...item, share: monitoredValue ? (item.total / monitoredValue) * 100 : 0 }));
+  const topDrivers = buildReportTopRows(identifiedDriverRows, driverKey, (row) => Math.abs(Number(row.valor_numerico || 0)), 8)
+    .map((item) => ({ ...item, share: monitoredValue ? (item.total / monitoredValue) * 100 : 0 }));
+  const missingBaseCount = validRows.length - identifiedBaseRows.length;
+  const missingDriverCount = validRows.length - identifiedDriverRows.length;
+  const undefinedCategoryCount = validRows.filter((row) => !row.categoria_final || row.categoria_final === "INDEFINIDO").length;
+  const missingDriverValue = validRows
+    .filter((row) => !hasReportLabel(driverKey(row)))
+    .reduce((acc, row) => acc + Math.abs(Number(row.valor_numerico || 0)), 0);
+  const mercadoLivreRow = categoryRows.find((item) => item.key === "MERCADO_LIVRE") || { count: 0, total: 0 };
+  const undefinedRow = categoryRows.find((item) => item.key === "INDEFINIDO") || { count: 0, total: 0 };
   const evolutionRows = buildPackageMonthlyEvolutionRows(validRows);
   const peakValue = evolutionRows.reduce((best, row) => {
     const value = Number(row.alcValue || 0) + Number(row.driverValue || 0) + Number(row.dispatcherValue || 0);
-    const bestValue = Number(best.alcValue || 0) + Number(best.driverValue || 0) + Number(best.dispatcherValue || 0);
+    const bestValue = Number(best?.alcValue || 0) + Number(best?.driverValue || 0) + Number(best?.dispatcherValue || 0);
     return value > bestValue ? row : best;
   }, evolutionRows[0] || null);
   const previous = evolutionRows.length > 1 ? evolutionRows[evolutionRows.length - 2] : null;
   const current = evolutionRows.length ? evolutionRows[evolutionRows.length - 1] : null;
   const currentValue = current ? Number(current.alcValue || 0) + Number(current.driverValue || 0) + Number(current.dispatcherValue || 0) : 0;
   const previousValue = previous ? Number(previous.alcValue || 0) + Number(previous.driverValue || 0) + Number(previous.dispatcherValue || 0) : 0;
-  const trendText = previous && previousValue
-    ? `O último período (${current.label}) ficou ${formatSignedPct(((currentValue - previousValue) / previousValue) * 100)} em relação a ${previous.label}.`
+  const trendPct = previous && previousValue ? ((currentValue - previousValue) / previousValue) * 100 : null;
+  const trendText = Number.isFinite(trendPct)
+    ? `O último período (${current.label}) ficou ${formatSignedPct(trendPct)} em relação a ${previous.label}.`
     : "Não há período anterior suficiente para comparação segura.";
-  const dominantCategory = categoryRows[0] || { label: "Sem categoria dominante", count: 0, total: 0, share: 0 };
-  const topBase = topBases[0] || { label: "Não identificada", count: 0, total: 0, share: 0 };
-  const topDriver = topDrivers[0] || { label: "Não identificado", count: 0, total: 0, share: 0 };
-  const recommendations = [
-    `Priorizar a base ${topBase.label}, que concentra ${integer.format(topBase.count)} ocorrência(s) e ${currency.format(topBase.total)} no recorte.`,
-    `Revisar o driver ${topDriver.label} e os demais nomes recorrentes para separar falha de execução, orientação necessária e reincidência operacional.`,
-    "Separar tratativas de Driver, Dispatcher, Mercado Livre e ALC antes de fechar o desconto financeiro.",
-    "Monitorar mensalmente os valores absorvidos pela ALC e os descontos mantidos com Driver para reduzir perda recorrente.",
+  const dominantCategory = categoryRows[0] || { key: "", label: "Sem categoria dominante", count: 0, total: 0, share: 0, valueShare: 0 };
+  const topBase = topBases[0] || null;
+  const topDriver = topDrivers[0] || null;
+  const quality = buildReportDataQuality({
+    total: validRows.length,
+    fields: [
+      { label: "Base", missing: missingBaseCount },
+      { label: "Motorista", missing: missingDriverCount },
+      { label: "Responsabilidade", missing: undefinedCategoryCount },
+    ],
+  });
+
+  let riskScore = 0;
+  const missingDriverRate = validRows.length ? (missingDriverCount / validRows.length) * 100 : 0;
+  const topBaseShare = Number(topBase?.share || 0);
+  if (missingDriverRate >= 20) riskScore += 3;
+  else if (missingDriverRate >= 10) riskScore += 2;
+  else if (missingDriverRate > 0) riskScore += 1;
+  if (topBaseShare >= 30) riskScore += 2;
+  else if (topBaseShare >= 20) riskScore += 1;
+  if (Number.isFinite(trendPct) && trendPct >= 20) riskScore += 2;
+  else if (Number.isFinite(trendPct) && trendPct > 0) riskScore += 1;
+  if (dominantCategory.valueShare >= 60) riskScore += 1;
+  if (undefinedCategoryCount) riskScore += 1;
+  const severity = deriveReportSeverity(riskScore);
+
+  const alerts = [];
+  if (missingDriverCount) alerts.push(buildReportAlert({
+    severity: missingDriverRate >= 20 ? "critical" : missingDriverRate >= 10 ? "high" : "attention",
+    title: "Motorista não identificado",
+    text: `${integer.format(missingDriverCount)} registro(s), equivalentes a ${formatNumberPt(missingDriverRate, 1)}% do recorte e ${currency.format(missingDriverValue)}, não possuem motorista identificado.`,
+  }));
+  if (topBase) alerts.push(buildReportAlert({
+    severity: topBase.share >= 30 ? "high" : "attention",
+    title: "Concentração por base",
+    text: `${topBase.label} concentra ${formatNumberPt(topBase.share, 1)}% do valor monitorado e ${integer.format(topBase.count)} ocorrência(s).`,
+  }));
+  if (Number.isFinite(trendPct) && trendPct > 0) alerts.push(buildReportAlert({
+    severity: trendPct >= 20 ? "high" : "attention",
+    title: "Tendência de alta",
+    text: `O impacto dos grupos ALC, Driver e Dispatcher aumentou ${formatNumberPt(trendPct, 1)}% no último período comparável.`,
+  }));
+  if (undefinedCategoryCount) alerts.push(buildReportAlert({
+    severity: "high",
+    title: "Responsabilidade indefinida",
+    text: `${integer.format(undefinedCategoryCount)} ocorrência(s) ainda não possuem responsabilidade final definida.`,
+  }));
+  if (!alerts.length) alerts.push(buildReportAlert({ severity: "informative", title: "Sem desvio crítico", text: "Não foram identificados alertas críticos no recorte atual." }));
+  alerts.sort((a, b) => b.rank - a.rank);
+
+  const recommendations = [];
+  if (missingDriverCount) recommendations.push("Corrigir os registros sem motorista antes do fechamento e impedir que 'Não identificado' seja tratado como reincidência individual.");
+  if (topBase) recommendations.push(`Priorizar a base ${topBase.label}, que concentra ${formatNumberPt(topBase.share, 1)}% do valor monitorado.`);
+  if (topDriver) recommendations.push(`Acompanhar ${topDriver.label}, principal motorista identificado no recorte, com análise de causa e reincidência.`);
+  if (dominantCategory.key === "ALC") recommendations.push("Auditar as causas dos valores absorvidos pela ALC e validar oportunidades de contestação ou prevenção.");
+  if (dominantCategory.key === "DRIVER") recommendations.push("Aplicar orientação direcionada aos drivers reincidentes e acompanhar a redução no próximo fechamento.");
+  if (dominantCategory.key === "DISPATCHER") recommendations.push("Revisar o fluxo de despacho e os pontos de controle associados às ocorrências do Dispatcher.");
+  if (dominantCategory.key === "MERCADO_LIVRE") recommendations.push("Separar evidências e tratar as ocorrências atribuídas ao Mercado Livre por contestação formal.");
+  if (undefinedCategoryCount) recommendations.push("Classificar as ocorrências indefinidas antes de consolidar o impacto financeiro por responsabilidade.");
+  recommendations.push("Comparar mensalmente ALC, Driver, Dispatcher e Mercado Livre, mantendo cada responsabilidade em trilha própria.");
+
+  const monitoringIndicators = [
+    "Valor absorvido pela ALC no próximo fechamento.",
+    "Valor e quantidade mantidos com Driver.",
+    "Percentual de registros com motorista, base e responsabilidade preenchidos.",
+    topBase ? `Participação financeira da base ${topBase.label}.` : "Participação financeira das principais bases.",
   ];
+  const actionRows = [
+    missingDriverCount ? ["Sanear registros sem motorista", "% de registros com motorista identificado"] : null,
+    topBase ? [`Atuar na base ${topBase.label}`, `Participação financeira de ${topBase.label}`] : null,
+    topDriver ? [`Acompanhar ${topDriver.label}`, "Reincidência e valor no próximo fechamento"] : null,
+    ["Separar responsabilidades antes do fechamento", "Qtd. e valor por ALC, Driver, Dispatcher e Mercado Livre"],
+  ].filter(Boolean);
+
+  const priorityText = [topBase ? `base ${topBase.label}` : "bases identificadas", topDriver ? `motorista ${topDriver.label}` : "qualidade cadastral"].join(" e ");
   return {
     moduleKey: DASHBOARD_MODULE_KEYS.pacotes,
     sourceTable: "gestao_pacotes_records",
+    reportMode: "module-detail",
     reportSubtitle: "Gestão de Pacotes",
     title: "Relatório Executivo — Gestão de Pacotes",
     fileName: `Relatorio_Executivo_Gestao_Pacotes_${getReportDateLabel()}.pdf`,
     generatedAt: `Gerado em: ${formatCurrentDateTime(new Date())}`,
     periodLabel: scope?.label || getReportPeriodLabelFromRows(validRows),
     scopeLabel: scope?.label || "Recorte atual",
+    severity,
+    dataQuality: quality,
+    alerts,
+    decisions: recommendations.slice(0, 4),
+    actionPlan: actionRows,
+    monitoringIndicators,
     filterItems: buildReportFilterItems([
       { label: "Mês", value: getMonthSelectionLabel(getPackageMonthSelectionValues(), getAvailablePackageMonthOptions()) },
       { label: "Período", value: getPeriodModeLabel(state.packagePeriod || "month") },
@@ -11119,40 +11275,62 @@ function buildPackageOnlyReportAnalysis({ rows = [], scope = getPackageReportSco
     sections: [
       {
         title: "Sumário executivo",
-        text: `No recorte ${scope?.label || "analisado"}, a Gestão de Pacotes reúne ${integer.format(summary.count)} ocorrência(s) e ${currency.format(totalValue)} distribuídos entre valores absorvidos pela ALC, descontos mantidos com Driver e direcionamentos ao Dispatcher. A maior concentração financeira está em ${topBase.label}, enquanto ${topDriver.label} aparece como principal recorrência por motorista/driver.`,
+        text: `No recorte ${scope?.label || "analisado"}, a Gestão de Pacotes reúne ${integer.format(summary.count)} ocorrência(s). O impacto financeiro dos grupos ALC, Driver e Dispatcher soma ${currency.format(financialImpact)}. Valores atribuídos ao Mercado Livre (${currency.format(mercadoLivreRow.total)}) e registros indefinidos (${currency.format(undefinedRow.total)}) permanecem separados para não distorcer a leitura financeira interna.`,
+      },
+      {
+        title: `Criticidade ${severity.label}`,
+        text: `A classificação do recorte é ${severity.label.toLowerCase()}. A prioridade operacional está em ${priorityText}. ${alerts.slice(0, 3).map((alert) => `${alert.severityLabel}: ${alert.text}`).join(" ")}`,
       },
       {
         title: "Diagnóstico financeiro",
-        text: `O valor absorvido pela ALC soma ${currency.format(summary.alcValue)}, enquanto os descontos mantidos com Driver somam ${currency.format(summary.driverValue)} e os direcionamentos ao Dispatcher somam ${currency.format(summary.dispatcherValue)}. A categoria com maior concentração no recorte é ${dominantCategory.label}, com ${integer.format(dominantCategory.count)} ocorrência(s), o que indica onde a tratativa financeira deve começar.`,
+        text: `A ALC absorveu ${currency.format(summary.alcValue)}, os descontos mantidos com Driver somam ${currency.format(summary.driverValue)} e os direcionamentos ao Dispatcher somam ${currency.format(summary.dispatcherValue)}. A maior concentração por responsabilidade é ${dominantCategory.label}, com ${integer.format(dominantCategory.count)} ocorrência(s) e ${currency.format(dominantCategory.total)}.`,
       },
       {
         title: "Diagnóstico operacional",
-        text: `Foram identificados ${integer.format(summary.driverErrors)} erro(s) associados a Driver, ${integer.format(summary.dispatcherErrors)} erro(s) associados a Dispatcher e ${integer.format(summary.mercadoLivreErrors)} ocorrência(s) atribuídas ao Mercado Livre. Essa separação ajuda a direcionar a ação correta: orientação operacional, revisão de fluxo de despacho ou contestação com o marketplace.`,
+        text: `Foram identificados ${integer.format(summary.driverErrors)} erro(s) de Driver, ${integer.format(summary.dispatcherErrors)} de Dispatcher e ${integer.format(summary.mercadoLivreErrors)} atribuídos ao Mercado Livre. Registros sem motorista ou responsabilidade definida são tratados como falha de qualidade cadastral, e não como reincidência de uma pessoa.`,
       },
       {
         title: "Tendência do período",
-        text: `${trendText} ${peakValue ? `O maior impacto mensal ocorreu em ${peakValue.label}, combinando ${currency.format(Number(peakValue.alcValue || 0) + Number(peakValue.driverValue || 0) + Number(peakValue.dispatcherValue || 0))} nos grupos financeiros principais.` : "Ainda não há série temporal suficiente para identificar pico mensal."}`,
+        text: `${trendText} ${peakValue ? `O maior impacto mensal ocorreu em ${peakValue.label}, com ${currency.format(Number(peakValue.alcValue || 0) + Number(peakValue.driverValue || 0) + Number(peakValue.dispatcherValue || 0))} nos grupos financeiros principais.` : "Ainda não há série temporal suficiente para identificar pico mensal."}`,
+      },
+      {
+        title: "Qualidade dos dados",
+        text: `${quality.summary} Há ${integer.format(missingBaseCount)} registro(s) sem base, ${integer.format(missingDriverCount)} sem motorista e ${integer.format(undefinedCategoryCount)} sem responsabilidade final.`,
+      },
+      {
+        title: "Decisão recomendada",
+        text: recommendations.slice(0, 4).join(" "),
       },
       {
         title: "Conclusão executiva",
-        text: `A prioridade do recorte é reduzir a concentração em ${topBase.label}, acompanhar ${topDriver.label} e separar rapidamente responsabilidades entre ALC, Driver, Dispatcher e Mercado Livre. O relatório usa exclusivamente dados de Gestão de Pacotes e não compara este resultado com outros módulos.`,
+        text: `A decisão inicial deve reduzir a concentração em ${topBase?.label || "bases prioritárias"}, corrigir falhas cadastrais e manter responsabilidades financeiras separadas. O resultado será acompanhado por valor, reincidência e completude dos campos no próximo fechamento.`,
       },
     ],
     tables: [
       {
         title: "Distribuição por responsabilidade",
-        headers: ["Responsabilidade", "Qtd.", "%", "Valor"],
+        headers: ["Responsabilidade", "Qtd.", "% qtd.", "Valor"],
         rows: categoryRows.map((item) => [item.label, integer.format(item.count), `${formatNumberPt(item.share, 1)}%`, formatCurrencyShort(item.total)]),
       },
       {
-        title: "Bases com maior impacto",
-        headers: ["Base", "Qtd.", "%", "Valor"],
+        title: "Bases com maior impacto financeiro",
+        headers: ["Base", "Qtd.", "% valor", "Valor"],
         rows: topBases.map((item) => [item.label, integer.format(item.count), `${formatNumberPt(item.share, 1)}%`, formatCurrencyShort(item.total)]),
       },
       {
-        title: "Drivers com maior recorrência",
-        headers: ["Driver", "Qtd.", "%", "Valor"],
+        title: "Drivers identificados com maior impacto",
+        headers: ["Driver", "Qtd.", "% valor", "Valor"],
         rows: topDrivers.map((item) => [item.label, integer.format(item.count), `${formatNumberPt(item.share, 1)}%`, formatCurrencyShort(item.total)]),
+      },
+      {
+        title: "Qualidade dos campos críticos",
+        headers: ["Campo", "Ausências", "% do recorte"],
+        rows: quality.issues.map((item) => [item.label, integer.format(item.missing), `${formatNumberPt(item.share, 1)}%`]),
+      },
+      {
+        title: "Plano de ação e acompanhamento",
+        headers: ["Ação", "Indicador"],
+        rows: actionRows,
       },
     ],
     recommendations,
@@ -11162,8 +11340,16 @@ function buildPackageOnlyReportAnalysis({ rows = [], scope = getPackageReportSco
 function buildMissingPackagesReportAnalysis(rows = []) {
   const validRows = (Array.isArray(rows) ? rows : []).map(normalizeMissingPackageRow);
   const metrics = getMissingPackagesMetrics(validRows);
-  const topBases = buildReportTopRows(validRows, "base", () => 1, 8);
-  const topDrivers = buildReportTopRows(validRows, "driverNome", () => 1, 8);
+  const baseRows = getIdentifiedReportRows(validRows, "base");
+  const driverRows = getIdentifiedReportRows(validRows, "driverNome");
+  const topBases = buildReportTopRows(baseRows, "base", () => 1, 8);
+  const topDrivers = buildReportTopRows(driverRows, "driverNome", () => 1, 8);
+  const reportDeadlineStatus = (row) => {
+    if (row.statusCaso === "Concluído" || row.statusContatoMeli === "Concluído") return "Concluído";
+    const deadline = row.prazoTratativa ? new Date(row.prazoTratativa) : null;
+    if (!deadline || Number.isNaN(deadline.getTime())) return "Prazo não informado";
+    return getMissingPackageDeadlineStatus(row);
+  };
   const statusRows = ["Pendente", "Em rota", "Concluído"].map((status) => {
     const count = validRows.filter((row) => row.statusCaso === status).length;
     return { label: status, count, share: validRows.length ? (count / validRows.length) * 100 : 0 };
@@ -11172,23 +11358,87 @@ function buildMissingPackagesReportAnalysis(rows = []) {
     const count = validRows.filter((row) => row.statusContatoMeli === status).length;
     return { label: status, count, share: validRows.length ? (count / validRows.length) * 100 : 0 };
   }).filter((item) => item.count);
-  const prazoRows = ["Dentro do prazo", "Próximo do vencimento", "Vencido", "Concluído"].map((status) => {
-    const count = validRows.filter((row) => getMissingPackageDeadlineStatus(row) === status).length;
+  const prazoRows = ["Vencido", "Próximo do vencimento", "Dentro do prazo", "Prazo não informado", "Concluído"].map((status) => {
+    const count = validRows.filter((row) => reportDeadlineStatus(row) === status).length;
     return { label: status, count, share: validRows.length ? (count / validRows.length) * 100 : 0 };
   }).filter((item) => item.count);
-  const topBase = topBases[0] || { label: "Não identificada", count: 0, share: 0 };
-  const topDriver = topDrivers[0] || { label: "Não identificado", count: 0, share: 0 };
-  const criticalCount = metrics.prazoCritico || 0;
-  const pendingCount = metrics.pendentes || 0;
+  const overdueCount = validRows.filter((row) => reportDeadlineStatus(row) === "Vencido").length;
+  const nearDueCount = validRows.filter((row) => reportDeadlineStatus(row) === "Próximo do vencimento").length;
+  const missingDeadlineCount = validRows.filter((row) => reportDeadlineStatus(row) === "Prazo não informado").length;
+  const openRows = validRows.filter((row) => row.statusCaso !== "Concluído");
+  const awaitingMeliCount = openRows.filter((row) => row.statusContatoMeli === "Aguardando MELI").length;
+  const emailSentOpenCount = openRows.filter((row) => row.statusContatoMeli === "E-mail Enviado").length;
+  const missingBaseCount = validRows.length - baseRows.length;
+  const missingDriverCount = validRows.length - driverRows.length;
+  const topBase = topBases[0] || null;
+  const topDriver = topDrivers[0] || null;
+  const quality = buildReportDataQuality({
+    total: validRows.length,
+    fields: [
+      { label: "Base", missing: missingBaseCount },
+      { label: "Motorista", missing: missingDriverCount },
+      { label: "Prazo de tratativa", missing: missingDeadlineCount },
+    ],
+  });
+  const overdueRate = validRows.length ? (overdueCount / validRows.length) * 100 : 0;
+  const nearRate = validRows.length ? (nearDueCount / validRows.length) * 100 : 0;
+  let riskScore = 0;
+  if (overdueRate >= 10) riskScore += 4;
+  else if (overdueCount) riskScore += 3;
+  if (nearRate >= 10) riskScore += 2;
+  else if (nearDueCount) riskScore += 1;
+  if (awaitingMeliCount) riskScore += 1;
+  if (quality.level === "critical") riskScore += 2;
+  else if (quality.level === "high") riskScore += 1;
+  const severity = deriveReportSeverity(riskScore);
+  const alerts = [];
+  if (overdueCount) alerts.push(buildReportAlert({ severity: "critical", title: "Casos vencidos", text: `${integer.format(overdueCount)} caso(s) ultrapassaram o prazo de 48 horas úteis.` }));
+  if (nearDueCount) alerts.push(buildReportAlert({ severity: "high", title: "Próximos do vencimento", text: `${integer.format(nearDueCount)} caso(s) precisam de ação antes de vencer.` }));
+  if (awaitingMeliCount) alerts.push(buildReportAlert({ severity: "attention", title: "Aguardando MELI", text: `${integer.format(awaitingMeliCount)} caso(s) abertos aguardam retorno do marketplace.` }));
+  if (missingDeadlineCount) alerts.push(buildReportAlert({ severity: "high", title: "Prazo não informado", text: `${integer.format(missingDeadlineCount)} caso(s) abertos não podem ser classificados com segurança por prazo.` }));
+  if (missingBaseCount || missingDriverCount) alerts.push(buildReportAlert({ severity: quality.level, title: "Qualidade cadastral", text: `${integer.format(missingBaseCount)} sem base e ${integer.format(missingDriverCount)} sem motorista identificado.` }));
+  if (!alerts.length) alerts.push(buildReportAlert({ severity: "informative", title: "Fila controlada", text: "O recorte não possui casos vencidos ou próximos do vencimento." }));
+  alerts.sort((a, b) => b.rank - a.rank);
+
+  const recommendations = [];
+  if (overdueCount) recommendations.push("Tratar primeiro os casos vencidos e registrar responsável e andamento até zerar a fila crítica.");
+  if (nearDueCount) recommendations.push("Atuar nos casos próximos do vencimento antes dos demais registros dentro do prazo.");
+  if (awaitingMeliCount) recommendations.push("Executar follow-up dos casos aguardando MELI e registrar o retorno no mesmo fluxo de acompanhamento.");
+  if (emailSentOpenCount) recommendations.push("Revisar diariamente os casos abertos com e-mail enviado para confirmar recebimento e próximo passo.");
+  if (missingDeadlineCount || missingBaseCount || missingDriverCount) recommendations.push("Corrigir prazo, base e motorista ausentes antes de usar o registro em rankings ou decisões individuais.");
+  if (topBase) recommendations.push(`Investigar a concentração na base ${topBase.label}, com ${integer.format(topBase.count)} caso(s).`);
+  if (topDriver) recommendations.push(`Acompanhar ${topDriver.label}, principal motorista identificado no recorte.`);
+  recommendations.push("Medir taxa de conclusão dentro do prazo e tamanho da fila vencida em cada revisão diária.");
+
+  const actionRows = [
+    overdueCount ? ["Tratar casos vencidos", "Quantidade de vencidos em aberto"] : null,
+    nearDueCount ? ["Antecipar casos próximos do vencimento", "% concluído antes do prazo"] : null,
+    awaitingMeliCount ? ["Cobrar retorno do MELI", "Casos aguardando retorno"] : null,
+    ["Sanear campos críticos", "% com base, motorista e prazo preenchidos"],
+  ].filter(Boolean);
+  const monitoringIndicators = [
+    "Quantidade de casos vencidos em aberto.",
+    "Taxa de conclusão dentro das 48 horas úteis.",
+    "Quantidade de casos aguardando retorno do MELI.",
+    "Completude de base, motorista e prazo de tratativa.",
+  ];
+
   return {
     moduleKey: DASHBOARD_MODULE_KEYS.pacotesFaltantes,
     sourceTable: "gestao_desvios_pacotes_faltantes",
+    reportMode: "module-detail",
     reportSubtitle: "Gestão de Desvios / Pacotes Faltantes",
     title: "Relatório Executivo — Pacotes Faltantes",
     fileName: `Relatorio_Executivo_Pacotes_Faltantes_${getReportDateLabel()}.pdf`,
     generatedAt: `Gerado em: ${formatCurrentDateTime(new Date())}`,
     periodLabel: getReportPeriodLabelFromRows(validRows, (row) => row.dataFechamento || row.importedAt),
     scopeLabel: "Recorte atual",
+    severity,
+    dataQuality: quality,
+    alerts,
+    decisions: recommendations.slice(0, 4),
+    actionPlan: actionRows,
+    monitoringIndicators,
     filterItems: buildReportFilterItems([
       { label: "Data", value: state.missingPackagesDate === "Todos" ? "Todas" : formatDate(state.missingPackagesDate) },
       { label: "Base", value: state.missingPackagesBase },
@@ -11199,26 +11449,38 @@ function buildMissingPackagesReportAnalysis(rows = []) {
     ]),
     metrics: [
       { label: "Total de faltantes", value: integer.format(metrics.total), note: "casos no recorte" },
-      { label: "Pendentes", value: integer.format(metrics.pendentes), note: `${formatNumberPt(metrics.total ? (metrics.pendentes / metrics.total) * 100 : 0, 1)}% do recorte` },
-      { label: "Aguardando MELI", value: integer.format(metrics.aguardandoMeli), note: "contato pendente" },
-      { label: "Prazo crítico", value: integer.format(metrics.prazoCritico), note: "vencidos ou próximos" },
+      { label: "Pendentes", value: integer.format(metrics.pendentes), note: `${integer.format(metrics.emRota || 0)} em rota` },
+      { label: "Vencidos", value: integer.format(overdueCount), note: `${formatNumberPt(overdueRate, 1)}% do recorte` },
+      { label: "Próximos do prazo", value: integer.format(nearDueCount), note: `${formatNumberPt(nearRate, 1)}% do recorte` },
     ],
     sections: [
       {
         title: "Sumário executivo",
-        text: `O recorte de Pacotes Faltantes contém ${integer.format(metrics.total)} caso(s), com ${integer.format(pendingCount)} pendente(s) e ${integer.format(criticalCount)} em prazo crítico. A maior concentração por base está em ${topBase.label}, enquanto ${topDriver.label} aparece como principal recorrência por driver.`,
+        text: `O recorte contém ${integer.format(metrics.total)} caso(s), dos quais ${integer.format(openRows.length)} permanecem abertos. Há ${integer.format(overdueCount)} vencido(s), ${integer.format(nearDueCount)} próximo(s) do vencimento e ${integer.format(awaitingMeliCount)} aguardando retorno do MELI.`,
+      },
+      {
+        title: `Criticidade ${severity.label}`,
+        text: `A classificação do recorte é ${severity.label.toLowerCase()}. ${alerts.slice(0, 4).map((alert) => `${alert.severityLabel}: ${alert.text}`).join(" ")}`,
+      },
+      {
+        title: "Fila prioritária de atuação",
+        text: `Ordem recomendada: casos vencidos, próximos do vencimento, aguardando MELI e demais casos abertos. Registros sem prazo informado ficam em fila de saneamento, pois não podem ser classificados com segurança como dentro do prazo.`,
       },
       {
         title: "Diagnóstico operacional",
-        text: `A leitura operacional precisa priorizar os casos pendentes e em rota, porque eles ainda dependem de tratativa antes do encerramento. Casos concluídos deixam de pressionar o prazo, enquanto pendentes com contato Méli aberto devem ser acompanhados até retorno formal.`,
+        text: `${integer.format(metrics.pendentes)} caso(s) estão pendentes, ${integer.format(metrics.emRota || 0)} em rota e ${integer.format(awaitingMeliCount)} aguardam o MELI. O cruzamento entre status do caso, contato e prazo evita encerrar ou postergar tratativas sem evidência.`,
       },
       {
-        title: "Prazo de 48 horas",
-        text: `O prazo de tratativa considera 48 horas úteis, sem contar sábado e domingo. Existem ${integer.format(criticalCount)} caso(s) vencido(s) ou próximos do vencimento, que devem entrar como prioridade operacional antes dos demais registros do recorte.`,
+        title: "Qualidade dos dados",
+        text: `${quality.summary} Foram encontrados ${integer.format(missingBaseCount)} registro(s) sem base, ${integer.format(missingDriverCount)} sem motorista e ${integer.format(missingDeadlineCount)} sem prazo válido.`,
+      },
+      {
+        title: "Decisão recomendada",
+        text: recommendations.slice(0, 4).join(" "),
       },
       {
         title: "Conclusão executiva",
-        text: `A rotina deve focar primeiro nos casos críticos por prazo, depois nos drivers com recorrência e nas bases com maior concentração. Este relatório usa exclusivamente a tabela de Pacotes Faltantes e não reaproveita dados externos de outros módulos.`,
+        text: `A gestão deve reduzir primeiro a fila vencida, proteger os casos próximos do prazo e acompanhar retornos do MELI. Rankings de base e motorista consideram apenas registros identificados; ausências cadastrais são tratadas separadamente como risco de qualidade.`,
       },
     ],
     tables: [
@@ -11238,22 +11500,27 @@ function buildMissingPackagesReportAnalysis(rows = []) {
         rows: prazoRows.map((item) => [item.label, integer.format(item.count), `${formatNumberPt(item.share, 1)}%`]),
       },
       {
-        title: "Bases com maior concentração",
+        title: "Bases identificadas com maior concentração",
         headers: ["Base", "Qtd.", "%"],
         rows: topBases.map((item) => [item.label, integer.format(item.count), `${formatNumberPt(item.share, 1)}%`]),
       },
       {
-        title: "Drivers com maior recorrência",
+        title: "Drivers identificados com maior recorrência",
         headers: ["Driver", "Qtd.", "%"],
         rows: topDrivers.map((item) => [item.label, integer.format(item.count), `${formatNumberPt(item.share, 1)}%`]),
       },
+      {
+        title: "Qualidade dos campos críticos",
+        headers: ["Campo", "Ausências", "% do recorte"],
+        rows: quality.issues.map((item) => [item.label, integer.format(item.missing), `${formatNumberPt(item.share, 1)}%`]),
+      },
+      {
+        title: "Plano de ação e acompanhamento",
+        headers: ["Ação", "Indicador"],
+        rows: actionRows,
+      },
     ],
-    recommendations: [
-      "Atuar primeiro nos casos vencidos e próximos do vencimento, mantendo fila diária de tratativa.",
-      "Acionar o Méli nos registros com contato pendente e registrar retorno antes de concluir o caso.",
-      `Revisar a base ${topBase.label} para identificar causa operacional da concentração de faltantes.`,
-      `Acompanhar ${topDriver.label} e demais drivers recorrentes com orientação operacional direcionada.`,
-    ],
+    recommendations,
   };
 }
 
@@ -11996,11 +12263,14 @@ function buildPnrReportPdfBlob(analysis) {
   );
   drawParagraph("Análise temporal dos valores", analysis.temporalAnalysis, colors.blue);
   drawParagraph("Análise por origem e base operacional", analysis.originAnalysis, colors.teal);
+  const hasOriginFinancialValue = analysis.originRows.some((item) => item.valueMeasured === true && Number.isFinite(Number(item.totalValue)));
   drawTable(
     "Participação por origem/base",
-    ["Origem", "Qtd.", "%", "Valor"],
-    analysis.originRows.slice(0, 8).map((item) => [item.label, integer.format(item.count), `${formatNumberPt(item.share, 1)}%`, formatCurrencyShort(item.totalValue)]),
-    [254, 70, 70, 110],
+    hasOriginFinancialValue ? ["Origem", "Qtd.", "%", "Valor"] : ["Origem", "Qtd.", "%"],
+    analysis.originRows.slice(0, 8).map((item) => hasOriginFinancialValue
+      ? [item.label, integer.format(item.count), `${formatNumberPt(item.share, 1)}%`, formatCurrencyShort(item.totalValue)]
+      : [item.label, integer.format(item.count), `${formatNumberPt(item.share, 1)}%`]),
+    hasOriginFinancialValue ? [254, 70, 70, 110] : [344, 80, 80],
     colors.teal,
   );
   drawParagraph("Ranking analítico de estações", analysis.stationAnalysis, colors.orange);
@@ -12025,7 +12295,7 @@ function buildPnrReportPdfBlob(analysis) {
   drawTable(
     "Indicadores de qualidade da base",
     ["Critério", "Registros", "%", "Impacto"],
-    analysis.qualityRows.map((item) => [item.label, integer.format(item.count), `${formatNumberPt(item.share, 1)}%`, item.risk]),
+    analysis.qualityRows.map((item) => [item.label, item.countLabel || integer.format(item.count), item.shareLabel || `${formatNumberPt(item.share, 1)}%`, item.risk]),
     [186, 70, 56, 192],
     colors.red,
     ["left", "right", "right", "left"],
@@ -12314,12 +12584,19 @@ function buildReportPdfBlob({ analysis, summary }) {
   const drawAlertCards = () => {
     ensure(150);
     const visibleAlerts = analysis.alerts.slice(0, 4);
-    sectionTitle("Alertas críticos", `${visibleAlerts.length} alertas`);
+    sectionTitle("Alertas priorizados", `${visibleAlerts.length} alertas`);
     const h = 54;
-    visibleAlerts.forEach((alert, index) => {
+    visibleAlerts.forEach((alert) => {
       ensure(h + 8);
-      card(page.margin, y, contentW, h, index === 0 ? colors.dangerSoft : colors.white, colors.red);
-      addText(alert.title, page.margin + 14, y - 17, 9, colors.red);
+      const tone = alert.severity === "critical"
+        ? { accent: colors.red, fill: colors.dangerSoft }
+        : alert.severity === "high"
+          ? { accent: colors.orange, fill: colors.warm }
+          : alert.severity === "attention"
+            ? { accent: colors.blue, fill: colors.blueSoft }
+            : { accent: colors.green, fill: colors.greenSoft };
+      card(page.margin, y, contentW, h, tone.fill, tone.accent);
+      addText(`${alert.severityLabel || "Atenção"} · ${alert.title}`, page.margin + 14, y - 17, 9, tone.accent);
       addWrappedText(alert.text, page.margin + 14, y - 33, contentW - 28, 8.4, colors.ink, 10.5, 2);
       y -= h + 8;
     });
@@ -12483,6 +12760,9 @@ function buildReportPdfBlob({ analysis, summary }) {
     drawMonthlyTable();
     drawPackageManagementComparison();
     drawNumberedList("Recomendações de ação", "próximos passos", analysis.recommendations);
+    if (Array.isArray(analysis.monitoringIndicators) && analysis.monitoringIndicators.length) {
+      drawNumberedList("Indicadores de acompanhamento", "medição do resultado", analysis.monitoringIndicators, colors.blue);
+    }
     drawConclusion();
   } else {
     drawKpiGrid();
@@ -12492,6 +12772,9 @@ function buildReportPdfBlob({ analysis, summary }) {
     drawAlertCards();
     drawRankings();
     drawNumberedList("Recomendações de ação", "próximos passos", analysis.recommendations);
+    if (Array.isArray(analysis.monitoringIndicators) && analysis.monitoringIndicators.length) {
+      drawNumberedList("Indicadores de acompanhamento", "medição do resultado", analysis.monitoringIndicators, colors.blue);
+    }
     drawConclusion();
 
   }
@@ -12535,121 +12818,87 @@ function buildReportAnalysis({ rows, filteredRows, summary, scope: providedScope
     deltaPct: activeMonth && previousMonth && previousMonth.totalValue ? ((activeMonth.totalValue - previousMonth.totalValue) / previousMonth.totalValue) * 100 : 0,
     periodMode: normalizePeriodMode(scope.periodMode),
   };
-  const timelineRows = (
-    scope.mode === "annual"
-      ? yearRows
-      : activeMonth
-        ? [previousMonth, activeMonth]
-        : [fallbackRow]
-  ).filter(Boolean);
+  const timelineRows = (scope.mode === "annual" ? yearRows : activeMonth ? [previousMonth, activeMonth] : [fallbackRow]).filter(Boolean);
   const comparisonRows = timelineRows.length ? timelineRows : [fallbackRow];
-  const topBases = reportTopBy(filteredRows, "base", "valor_numerico", 8);
-  const topDrivers = reportTopBy(filteredRows, "motorista", "valor_numerico", 8);
-  const topBaseByCount = reportTopBy(filteredRows, "base", null, 5);
+  const identifiedBaseRows = getIdentifiedReportRows(filteredRows, (row) => getBaseIdentity(row) || row.base);
+  const identifiedDriverRows = getIdentifiedReportRows(filteredRows, "motorista");
+  const topBases = reportTopBy(identifiedBaseRows, "base", "valor_numerico", 8);
+  const topDrivers = reportTopBy(identifiedDriverRows, "motorista", "valor_numerico", 8);
+  const topBaseByCount = reportTopBy(identifiedBaseRows, "base", null, 5);
   const selectedReportDivisions = getPrefaturaDivisionsForTypes(typeSelection);
   const reportSheets = selectedReportDivisions.length < MAIN_TYPE_OPTIONS.length ? selectedReportDivisions : DONUT_SHEETS;
   const categoryTotals = reportSheets.map((sheet) => {
     const rowsForSheet = filteredRows.filter((row) => normalizeDonutSheet(row) === sheet);
-    return {
-      label: sheet,
-      total: rowsForSheet.reduce((acc, row) => acc + Number(row.valor_numerico || 0), 0),
-      count: rowsForSheet.length,
-    };
+    return { label: sheet, total: rowsForSheet.reduce((acc, row) => acc + Number(row.valor_numerico || 0), 0), count: rowsForSheet.length };
   });
   const totalCategoryValue = Math.max(categoryTotals.reduce((acc, item) => acc + item.total, 0), 1);
   const categoryShareMap = categoryTotals.reduce((acc, item) => {
     acc[item.label] = formatNumberPt((item.total / totalCategoryValue) * 100, 1);
     return acc;
   }, {});
-  const dominantCategory = categoryTotals.reduce((best, item) => (item.total > best.total ? item : best), categoryTotals[0] || { label: "PNR", total: 0, count: 0 });
+  const dominantCategory = categoryTotals.reduce((best, item) => item.total > best.total ? item : best, categoryTotals[0] || { label: "PNR", total: 0, count: 0 });
   const totalOccurrences = Math.max(summary.count, 1);
   const ticketAverage = summary.count ? summary.totalValue / summary.count : 0;
   const monthlyAverage = comparisonRows.length ? comparisonRows.reduce((acc, row) => acc + Number(row.totalValue || 0), 0) / comparisonRows.length : summary.totalValue;
-  const historicalCriticalMonth = comparisonRows.reduce((best, row) => (Number(row.totalValue || 0) > Number(best.totalValue || 0) ? row : best), comparisonRows[0] || fallbackRow);
+  const historicalCriticalMonth = comparisonRows.reduce((best, row) => Number(row.totalValue || 0) > Number(best.totalValue || 0) ? row : best, comparisonRows[0] || fallbackRow);
   const criticalMonth = pickReportCriticalImpact(scope, summary, historicalCriticalMonth);
-  const volumeMonth = comparisonRows.reduce((best, row) => (Number(row.count || 0) > Number(best.count || 0) ? row : best), comparisonRows[0] || fallbackRow);
-  const topBase = topBases[0] || { label: "Não identificado", total: 0, count: 0 };
-  const topDriver = topDrivers[0] || { label: "Não identificado", total: 0, count: 0 };
+  const volumeMonth = comparisonRows.reduce((best, row) => Number(row.count || 0) > Number(best.count || 0) ? row : best, comparisonRows[0] || fallbackRow);
+  const topBase = topBases[0] || null;
+  const topDriver = topDrivers[0] || null;
   const packagePrefaturaRows = filterPrefaturaRowsByTypes(filteredRows, state.sheet === PACKAGE_MANAGEMENT_VIEW ? typeSelection : state.packageTipo);
   const packageComparisonData = packageComparison || buildPackageManagementComparisonForScope(scope, packagePrefaturaRows, state.packageTipo);
-  const topBaseShareNumber = summary.totalValue ? (topBase.total / summary.totalValue) * 100 : 0;
-  const topDriverShareNumber = summary.totalValue ? (topDriver.total / summary.totalValue) * 100 : 0;
+  const topBaseShareNumber = summary.totalValue && topBase ? (topBase.total / summary.totalValue) * 100 : 0;
+  const topDriverShareNumber = summary.totalValue && topDriver ? (topDriver.total / summary.totalValue) * 100 : 0;
   const topBaseShare = formatNumberPt(topBaseShareNumber, 1);
   const topDriverShare = formatNumberPt(topDriverShareNumber, 1);
   const topBasesWithShare = topBases.map((item) => ({ ...item, share: formatNumberPt(summary.totalValue ? (item.total / summary.totalValue) * 100 : 0, 1) }));
   const topDriversWithShare = topDrivers.map((item) => ({ ...item, share: formatNumberPt(summary.totalValue ? (item.total / summary.totalValue) * 100 : 0, 1) }));
-  const missingBaseCount = filteredRows.filter((row) => !hasReportLabel(row.base)).length;
-  const missingDriverCount = filteredRows.filter((row) => !hasReportLabel(row.motorista)).length;
+  const missingBaseCount = filteredRows.length - identifiedBaseRows.length;
+  const missingDriverCount = filteredRows.length - identifiedDriverRows.length;
+  const dataQuality = buildReportDataQuality({
+    total: filteredRows.length,
+    fields: [
+      { label: "Base", missing: missingBaseCount },
+      { label: "Motorista", missing: missingDriverCount },
+    ],
+  });
   const pnrShare = formatNumberPt((summary.pnrCount / totalOccurrences) * 100, 1);
   const packageShare = formatNumberPt((summary.packageCount / totalOccurrences) * 100, 1);
   const trend = buildReportTrend(scope, activeMonth, previousMonth, comparisonRows);
-  const diagnostics = buildReportDiagnostics({
-    scope,
-    summary,
-    criticalMonth,
-    volumeMonth,
-    dominantCategory,
-    topBase,
-    topDriver,
-    ticketAverage,
-    trend,
-  });
-  const alerts = buildReportAlerts({
-    scope,
-    summary,
-    comparisonRows,
-    monthlyAverage,
-    topBase,
-    topDriver,
-    topBaseShare,
-    topDriverShare,
-    topBaseShareNumber,
-    topDriverShareNumber,
-    topBaseByCount,
-    dominantCategory,
-    categoryShareMap,
-    missingBaseCount,
-    missingDriverCount,
-    trend,
-  });
-  const recommendations = buildReportRecommendations({
-    topBase,
-    topDriver,
-    dominantCategory,
-    missingBaseCount,
-    missingDriverCount,
-    trend,
-  });
-  const conclusion = buildReportConclusionText({
-    scope,
-    summary,
-    topBase,
-    topDriver,
-    dominantCategory,
-    criticalMonth,
-    trend,
-    recommendations,
-  });
+  let riskScore = 0;
+  if (trend.direction === "up") riskScore += 2;
+  if (topBaseShareNumber >= 30) riskScore += 2;
+  else if (topBaseShareNumber >= 20) riskScore += 1;
+  if (topDriverShareNumber >= 20) riskScore += 2;
+  else if (topDriverShareNumber >= 10) riskScore += 1;
+  if (Number(categoryShareMap[dominantCategory.label] || 0) >= 60) riskScore += 1;
+  if (dataQuality.level === "critical") riskScore += 2;
+  else if (dataQuality.level === "high") riskScore += 1;
+  const severity = deriveReportSeverity(riskScore);
+  const diagnostics = buildReportDiagnostics({ scope, summary, criticalMonth, volumeMonth, dominantCategory, topBase, topDriver, ticketAverage, trend, dataQuality, severity });
+  const alerts = buildReportAlerts({ scope, summary, comparisonRows, monthlyAverage, topBase, topDriver, topBaseShare, topDriverShare, topBaseShareNumber, topDriverShareNumber, topBaseByCount, dominantCategory, categoryShareMap, missingBaseCount, missingDriverCount, trend, dataQuality });
+  const recommendations = buildReportRecommendations({ topBase, topDriver, dominantCategory, missingBaseCount, missingDriverCount, trend });
+  const monitoringIndicators = [
+    "Valor total de descontos no próximo fechamento equivalente.",
+    topBase ? `Participação financeira da base ${topBase.label}.` : "Participação financeira das principais bases identificadas.",
+    topDriver ? `Valor e recorrência de ${topDriver.label}.` : "Recorrência dos principais motoristas identificados.",
+    "Percentual de registros com base e motorista preenchidos.",
+  ];
+  const conclusion = buildReportConclusionText({ scope, summary, topBase, topDriver, dominantCategory, criticalMonth, trend, recommendations, dataQuality, severity });
 
   return {
-    moduleKey:
-      reportMode === "package"
-        ? DASHBOARD_MODULE_KEYS.pacotes
-        : reportMode === "evolution"
-          ? DASHBOARD_MODULE_KEYS.evolucao
-          : DASHBOARD_MODULE_KEYS.preFatura,
+    moduleKey: reportMode === "package" ? DASHBOARD_MODULE_KEYS.pacotes : reportMode === "evolution" ? DASHBOARD_MODULE_KEYS.evolucao : DASHBOARD_MODULE_KEYS.preFatura,
     sourceTable: reportMode === "package" ? "gestao_pacotes_records" : "pre_fatura_records",
     title: scope.title,
     fileName: scope.fileName,
     scope,
     reportMode,
-    reportSubtitle:
-      reportMode === "package"
-        ? "Gestão de Pacotes"
-        : reportMode === "evolution"
-          ? "Evolução Mensal"
-          : "Pré-Fatura",    scopeLabel: scope.label,
+    reportSubtitle: reportMode === "package" ? "Gestão de Pacotes" : reportMode === "evolution" ? "Evolução Mensal" : "Pré-Fatura",
+    scopeLabel: scope.label,
     generatedAt: `Gerado em: ${formatCurrentDateTime(new Date())}`,
+    severity,
+    dataQuality,
+    monitoringIndicators,
     timelineRows: comparisonRows,
     ticketAverage,
     monthlyAverage,
@@ -12660,7 +12909,7 @@ function buildReportAnalysis({ rows, filteredRows, summary, scope: providedScope
     volumeMonthLabel: shortMonthYear(volumeMonth.label),
     pnrShare,
     packageShare,
-    dominantCategoryLabel: reportMode === "package" ? reportCategoryLabel(dominantCategory.label) : "Tipo de desconto líder",
+    dominantCategoryLabel: reportCategoryLabel(dominantCategory.label),
     dominantCategoryShare: categoryShareMap[dominantCategory.label] || "0,0",
     categoryTotals,
     categoryShareMap,
@@ -12675,33 +12924,10 @@ function buildReportAnalysis({ rows, filteredRows, summary, scope: providedScope
     alerts,
     recommendations,
     conclusion,
-    conclusionItems: buildReportConclusionItems({
-      scope,
-      summary,
-      topBase,
-      topDriver,
-      dominantCategory,
-      criticalMonth,
-      trend,
-      recommendations,
-    }),
+    conclusionItems: buildReportConclusionItems({ scope, summary, topBase, topDriver, dominantCategory, criticalMonth, trend, recommendations, categoryShareMap, dataQuality, severity, monitoringIndicators }),
     intelligentSummary: reportMode === "package"
       ? buildPackageReportIntelligentSummary({ scope, comparison: packageComparisonData })
-      : buildIntelligentSummary({
-        scope,
-        summary,
-        criticalMonth,
-        volumeMonth,
-        dominantCategory,
-        topBase,
-        topDriver,
-        topBaseShare,
-        topDriverShare,
-        trend,
-        ticketAverage,
-        pnrShare,
-        packageShare,
-      }),
+      : buildIntelligentSummary({ scope, summary, criticalMonth, volumeMonth, dominantCategory, topBase, topDriver, topBaseShare, topDriverShare, trend, ticketAverage, pnrShare, packageShare, dataQuality, severity }),
   };
 }
 
@@ -13027,100 +13253,102 @@ function buildReportImpactContext(scope, summary, criticalImpact) {
   };
 }
 
-function buildIntelligentSummary({ scope, summary, criticalMonth, volumeMonth, dominantCategory, topBase, topDriver, topBaseShare, topDriverShare, trend, ticketAverage, pnrShare, packageShare }) {
+function buildIntelligentSummary({ scope, summary, criticalMonth, volumeMonth, dominantCategory, topBase, topDriver, topBaseShare, topDriverShare, trend, ticketAverage, pnrShare, packageShare, dataQuality, severity }) {
   const period = scope.mode === "annual" ? `No consolidado anual de ${scope.year}` : `Em ${scope.label}`;
   const impactContext = buildReportImpactContext(scope, summary, criticalMonth);
-  const impactSentence =
-    scope.mode === "annual"
-      ? impactContext.peakSentence
-      : `o recorte registra ${currency.format(summary.totalValue)} em descontos e ticket médio de ${currency.format(ticketAverage)} por registro válido.`;
+  const impactSentence = scope.mode === "annual"
+    ? impactContext.peakSentence
+    : `o recorte registra ${currency.format(summary.totalValue)} em descontos e ticket médio de ${currency.format(ticketAverage)} por registro válido.`;
+  const concentrationText = [
+    topBase?.total > 0 ? `A base ${topBase.label} responde por ${topBaseShare}% do impacto financeiro.` : "Não há base identificada suficiente para ranking financeiro.",
+    topDriver?.total > 0 ? `O motorista ${topDriver.label} concentra ${topDriverShare}%.` : "Não há motorista identificado suficiente para ranking individual.",
+  ].join(" ");
   return [
     `${period}, ${impactSentence}`,
-    `O principal tipo de desconto concentra ${currency.format(dominantCategory.total)} e lidera a pressão operacional do recorte.`,
-    `A base ${topBase.label} responde por ${topBaseShare}% do impacto financeiro, enquanto o driver ${topDriver.label} concentra ${topDriverShare}%.`,
-    `A leitura por tipo de desconto indica concentração de ${pnrShare}% no grupo mais recorrente e ${packageShare}% no segundo grupo mais relevante.`,
-    `A tendência indica: ${trend.text}`,
+    `A categoria líder é ${reportCategoryLabel(dominantCategory.label)}, com ${currency.format(dominantCategory.total)} e ${formatNumberPt(summary.totalValue ? (dominantCategory.total / summary.totalValue) * 100 : 0, 1)}% do impacto.`,
+    concentrationText,
+    `A composição do recorte registra ${pnrShare}% em PNR e ${packageShare}% nos demais grupos contabilizados.`,
+    `Criticidade: ${severity.label}. Qualidade dos dados: ${formatReportQualityScore(dataQuality)}.`,
+    `Tendência: ${trend.text}`,
   ].join("\n");
 }
 
-function buildReportDiagnostics({ scope, summary, criticalMonth, volumeMonth, dominantCategory, topBase, topDriver, ticketAverage, trend }) {
+function buildReportDiagnostics({ scope, summary, criticalMonth, volumeMonth, dominantCategory, topBase, topDriver, ticketAverage, trend, dataQuality, severity }) {
   const impactContext = buildReportImpactContext(scope, summary, criticalMonth);
+  const priorityParts = [];
+  if (topBase?.total > 0) priorityParts.push(`base ${topBase.label}`);
+  if (topDriver?.total > 0) priorityParts.push(`motorista ${topDriver.label}`);
+  if (!priorityParts.length) priorityParts.push("saneamento cadastral");
   return [
     {
-      title: scope.mode === "annual" ? impactContext.peakTitle : "Impacto do recorte atual",
-      text:
-        scope.mode === "annual"
-          ? `${impactContext.peakTitle}: ${impactContext.peakText}.`
-          : `${scope.label} concentrou ${currency.format(summary.totalValue)} em descontos, com ticket médio de ${currency.format(ticketAverage)}.`,
-    },
-    {
-      title: "Volume operacional",
-      text: `${formatReportImpactPeriodLabel(volumeMonth, scope)} teve ${integer.format(volumeMonth.count)} registros; o principal tipo de desconto foi o mais relevante no recorte.`,
-    },
-    {
-      title: "Prioridade",
-      text: `Tratar primeiro a base ${topBase.label} e acompanhar o driver ${topDriver.label}.`,
+      title: `${severity.label} — ${scope.mode === "annual" ? impactContext.peakTitle : "Impacto do recorte"}`,
+      text: scope.mode === "annual" ? `${impactContext.peakText}.` : `${scope.label} concentrou ${currency.format(summary.totalValue)}, com ticket médio de ${currency.format(ticketAverage)}.`,
     },
     {
       title: "Tendência",
       text: trend.text,
     },
+    {
+      title: "Prioridade de atuação",
+      text: `Atuar primeiro em ${priorityParts.join(" e ")} e na categoria ${reportCategoryLabel(dominantCategory.label)}.`,
+    },
+    {
+      title: "Qualidade dos dados",
+      text: `${formatReportQualityScore(dataQuality)}. ${dataQuality.summary}`,
+    },
   ];
 }
 
-function buildReportAlerts({ scope, summary, comparisonRows, monthlyAverage, topBase, topDriver, topBaseShare, topDriverShare, topBaseShareNumber, topDriverShareNumber, topBaseByCount, dominantCategory, categoryShareMap, missingBaseCount, missingDriverCount, trend }) {
+function buildReportAlerts({ scope, summary, comparisonRows, monthlyAverage, topBase, topDriver, topBaseShare, topDriverShare, topBaseShareNumber, topDriverShareNumber, topBaseByCount, dominantCategory, categoryShareMap, missingBaseCount, missingDriverCount, trend, dataQuality }) {
   const alerts = [];
-  if (topBase.total > 0) alerts.push({ title: "Base crítica", text: `${topBase.label} concentra ${topBaseShare}% do impacto financeiro do recorte.` });
-  if (topDriver.total > 0) alerts.push({ title: "Driver crítico", text: `${topDriver.label} soma ${currency.format(topDriver.total)} em descontos.` });
-  if (topBaseShareNumber >= 30) alerts.push({ title: "Concentração em bases", text: "Há concentração relevante de prejuízo em poucas bases, exigindo ação direcionada." });
-  if (topDriverShareNumber >= 20) alerts.push({ title: "Concentração em driver", text: "Há concentração financeira em driver específico, exigindo acompanhamento individual." });
-  if (topBaseByCount[0]?.count >= Math.max(3, summary.count * 0.08)) {
-    alerts.push({ title: "Reincidência", text: `${topBaseByCount[0].label} também lidera reincidência, com ${integer.format(topBaseByCount[0].count)} registros.` });
-  }
+  if (trend.direction === "up") alerts.push(buildReportAlert({ severity: "high", title: "Tendência de alta", text: "O impacto financeiro aumentou no período comparável e exige plano de contenção." }));
+  if (topBase?.total > 0) alerts.push(buildReportAlert({ severity: topBaseShareNumber >= 30 ? "high" : "attention", title: "Concentração por base", text: `${topBase.label} concentra ${topBaseShare}% do impacto financeiro.` }));
+  if (topDriver?.total > 0) alerts.push(buildReportAlert({ severity: topDriverShareNumber >= 20 ? "high" : "attention", title: "Concentração por motorista", text: `${topDriver.label} soma ${currency.format(topDriver.total)} e ${topDriverShare}% do impacto.` }));
+  if (topBaseByCount[0]?.count >= Math.max(3, summary.count * 0.08)) alerts.push(buildReportAlert({ severity: "attention", title: "Reincidência por base", text: `${topBaseByCount[0].label} lidera recorrência, com ${integer.format(topBaseByCount[0].count)} registros.` }));
   if (scope.mode === "annual") {
     comparisonRows
       .filter((row) => row.totalValue > monthlyAverage * 1.2)
-      .slice(0, 3)
-      .forEach((row) => alerts.push({ title: "Período acima da média", text: `${formatReportImpactPeriodLabel(row, scope)} ficou acima da média em valor de descontos.` }));
+      .slice(0, 2)
+      .forEach((row) => alerts.push(buildReportAlert({ severity: "attention", title: "Período acima da média", text: `${formatReportImpactPeriodLabel(row, scope)} ficou mais de 20% acima da média do recorte.` })));
   }
-  if (trend.direction === "up") alerts.push({ title: "Tendência de alta", text: "O período apresenta aumento do impacto financeiro e precisa de plano de contenção." });
-  if (missingBaseCount) alerts.push({ title: "Cadastro de base", text: `${integer.format(missingBaseCount)} registro(s) sem base identificada exigem correção cadastral.` });
-  if (missingDriverCount) alerts.push({ title: "Cadastro de driver", text: `${integer.format(missingDriverCount)} registro(s) sem driver identificado exigem correção cadastral.` });
-  if (dominantCategory.total > 0) alerts.push({ title: "Tipo de desconto líder", text: `O principal tipo de desconto representa ${categoryShareMap[dominantCategory.label] || "0,0"}% do impacto financeiro do recorte.` });
-  return alerts.length ? alerts : [{ title: "Sem alerta crítico", text: "Não foram encontrados alertas críticos relevantes no recorte atual." }];
+  if (missingBaseCount || missingDriverCount) alerts.push(buildReportAlert({ severity: dataQuality.level, title: "Qualidade cadastral", text: `${integer.format(missingBaseCount)} registro(s) sem base e ${integer.format(missingDriverCount)} sem motorista identificado.` }));
+  if (dominantCategory.total > 0) alerts.push(buildReportAlert({ severity: Number(categoryShareMap[dominantCategory.label] || 0) >= 60 ? "high" : "attention", title: `Categoria líder: ${reportCategoryLabel(dominantCategory.label)}`, text: `Representa ${categoryShareMap[dominantCategory.label] || "0,0"}% do impacto financeiro.` }));
+  if (!alerts.length) alerts.push(buildReportAlert({ severity: "informative", title: "Sem alerta crítico", text: "Não foram encontrados alertas críticos relevantes no recorte atual." }));
+  return alerts.sort((a, b) => b.rank - a.rank);
 }
 
 function buildReportRecommendations({ topBase, topDriver, dominantCategory, missingBaseCount, missingDriverCount, trend }) {
-  const recommendations = [
-    `Priorizar a tratativa da base ${topBase.label}, que lidera o impacto financeiro.`,
-    `Acompanhar o driver ${topDriver.label} com plano de redução de recorrência.`,
-    "Auditar as divergências de valores e validar se o desconto aplicado está coerente com a ocorrência.",
-    "Investigar o tipo de desconto líder para identificar causa raiz e prevenir repetição no próximo fechamento.",
-    "Medir a evolução no próximo fechamento para confirmar eficiência das ações.",
-  ];
-  if (trend.direction === "up") recommendations.unshift("Criar plano de contenção imediato para reduzir a recorrência de descontos no próximo mês.");
-  if (missingBaseCount || missingDriverCount) recommendations.push("Corrigir cadastros e registros não identificados antes da próxima análise.");
+  const recommendations = [];
+  if (trend.direction === "up") recommendations.push("Criar plano de contenção imediato e comparar o resultado no próximo fechamento equivalente.");
+  if (topBase?.total > 0) recommendations.push(`Priorizar a base ${topBase.label}, que lidera o impacto financeiro.`);
+  if (topDriver?.total > 0) recommendations.push(`Acompanhar ${topDriver.label} com análise de causa, recorrência e valor no próximo fechamento.`);
+  if (dominantCategory?.total > 0) recommendations.push(`Investigar ${reportCategoryLabel(dominantCategory.label)}, categoria líder, e definir ação preventiva específica.`);
+  recommendations.push("Auditar as divergências de valores e validar se o desconto aplicado está coerente com a ocorrência.");
+  if (missingBaseCount || missingDriverCount) recommendations.push("Corrigir registros sem base ou motorista antes de usar rankings para decisão individual.");
+  recommendations.push("Medir valor total, reincidência e concentração no próximo fechamento para confirmar a eficiência das ações.");
   return recommendations;
 }
 
-function buildReportConclusionText({ scope, summary, topBase, topDriver, dominantCategory, criticalMonth, trend, recommendations }) {
+function buildReportConclusionText({ scope, summary, topBase, topDriver, dominantCategory, criticalMonth, trend, recommendations, dataQuality, severity }) {
   const impactContext = buildReportImpactContext(scope, summary, criticalMonth);
-  const periodText = scope.mode === "annual" ? `O período anual ${scope.year}` : `O recorte ${scope.label}`;
-  const periodImpact = `O impacto do recorte atual foi ${currency.format(summary.totalValue)}.`;
-  const criticalText = `${impactContext.peakTitle}: ${impactContext.peakText}.`;
-  return `${periodText} mostra concentração financeira relevante na base ${topBase.label} e prioridade de acompanhamento para o driver ${topDriver.label}. ${periodImpact} ${criticalText} A tendência indica: ${trend.text} A primeira ação recomendada é: ${recommendations[0]}`;
+  const priorities = [topBase?.total > 0 ? `base ${topBase.label}` : "bases identificadas", topDriver?.total > 0 ? `motorista ${topDriver.label}` : "qualidade cadastral"];
+  return `${scope.mode === "annual" ? `O período anual ${scope.year}` : `O recorte ${scope.label}`} foi classificado como ${severity.label.toLowerCase()}, com ${currency.format(summary.totalValue)} em impacto. A categoria líder é ${reportCategoryLabel(dominantCategory.label)}. ${impactContext.peakTitle}: ${impactContext.peakText}. A prioridade está em ${priorities.join(" e ")}. Qualidade dos dados: ${formatReportQualityScore(dataQuality)}. Tendência: ${trend.text} Primeira ação: ${recommendations[0]}`;
 }
 
-function buildReportConclusionItems({ scope, summary, topBase, topDriver, dominantCategory, criticalMonth, trend, recommendations }) {
+function buildReportConclusionItems({ scope, summary, topBase, topDriver, dominantCategory, criticalMonth, trend, recommendations, categoryShareMap, dataQuality, severity, monitoringIndicators }) {
   const impactContext = buildReportImpactContext(scope, summary, criticalMonth);
+  const priorities = [];
+  if (topBase?.total > 0) priorities.push(`base ${topBase.label}`);
+  if (topDriver?.total > 0) priorities.push(`motorista ${topDriver.label}`);
+  if (!priorities.length) priorities.push("saneamento cadastral");
   return [
-    { label: "Principal concentração", text: "Tipo de desconto líder no recorte" },
+    { label: "Criticidade", text: severity.label },
+    { label: "Principal concentração", text: `${reportCategoryLabel(dominantCategory.label)} — ${categoryShareMap[dominantCategory.label] || "0,0"}% do impacto` },
     { label: "Impacto do recorte atual", text: impactContext.currentText },
     { label: "Maior impacto mensal", text: impactContext.monthlyText },
-    { label: "Maior impacto quinzenal", text: impactContext.biweeklyText },
-    { label: "Prioridade operacional", text: `Base ${topBase.label}; driver ${topDriver.label}.` },
-    { label: "Tendência", text: trend.text },
-    { label: "Primeira ação recomendada", text: recommendations[0] },
+    { label: "Prioridade operacional", text: priorities.join("; ") },
+    { label: "Qualidade dos dados", text: formatReportQualityScore(dataQuality) },
+    { label: "Indicador de acompanhamento", text: monitoringIndicators[0] || `Tendência: ${trend.text}` },
   ];
 }
 
@@ -21887,6 +22115,27 @@ function setActionButtonState(button, allowed, title) {
   }
 }
 
+function updateReportButtonState(permissions = getActionPermissions()) {
+  const button = el.reportButton;
+  if (!button) return;
+  const moduleKey = normalizeDashboardModuleKey(getDashboardModuleKeyForSheet());
+  const available = moduleKey !== DASHBOARD_MODULE_KEYS.evolucao;
+  if (!available) {
+    button.hidden = true;
+    button.disabled = true;
+    button.classList.remove("is-action-blocked");
+    button.setAttribute("aria-hidden", "true");
+    button.setAttribute("aria-disabled", "true");
+    button.setAttribute("title", "Esta aba não possui relatório.");
+    button.setAttribute("aria-label", "Esta aba não possui relatório.");
+    return;
+  }
+  const label = DASHBOARD_MODULE_LABELS[moduleKey] || "módulo atual";
+  button.hidden = false;
+  button.removeAttribute("aria-hidden");
+  setActionButtonState(button, permissions.canDownloadReport, permissions.canDownloadReport ? `Baixar relatório de ${label}.` : "Faça login para usar esta função.");
+}
+
 function renderAvatarMarkup(profile, fallbackText, className = "account-avatar") {
   const name = profile?.name || fallbackText || "Usuário";
   const avatarUrl = profile?.avatar_url || "";
@@ -21923,7 +22172,7 @@ function updateAccessControls() {
       ? `${renderAvatarMarkup(currentProfile, accountName)}<div><strong>${escapeHtml(accountName)}</strong><span>${escapeHtml(accountEmail)}</span></div>`
       : "";
   }
-  setActionButtonState(el.reportButton, permissions.canDownloadReport, permissions.canDownloadReport ? "Baixar relatório." : "Faça login para usar esta função.");
+  updateReportButtonState(permissions);
   setActionButtonState(
     el.uploadButton,
     permissions.canUploadFile,
