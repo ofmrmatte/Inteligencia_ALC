@@ -10144,43 +10144,157 @@ function parseCurrencyInput(value) {
   return Number.isFinite(parsed) ? parsed : 0;
 }
 
+const REPORT_MODULE_REGISTRY = Object.freeze({
+  [DASHBOARD_MODULE_KEYS.preFatura]: Object.freeze({
+    moduleKey: DASHBOARD_MODULE_KEYS.preFatura,
+    label: "Pré-Fatura",
+    reportKind: "financial-performance",
+    sourcePolicy: "filtered-module-data",
+    download: downloadPreFaturaReport,
+  }),
+  [DASHBOARD_MODULE_KEYS.evolucao]: Object.freeze({
+    moduleKey: DASHBOARD_MODULE_KEYS.evolucao,
+    label: "Evolução Mensal",
+    reportKind: "temporal-evolution",
+    sourcePolicy: "historical-module-data",
+    download: downloadEvolutionReport,
+  }),
+  [DASHBOARD_MODULE_KEYS.pacotes]: Object.freeze({
+    moduleKey: DASHBOARD_MODULE_KEYS.pacotes,
+    label: "Gestão de Pacotes",
+    reportKind: "operational-responsibility",
+    sourcePolicy: "independent-module-load",
+    download: downloadPackageManagementReport,
+  }),
+  [DASHBOARD_MODULE_KEYS.desviosPnr]: Object.freeze({
+    moduleKey: DASHBOARD_MODULE_KEYS.desviosPnr,
+    label: "Gestão de Desvios / PNRs",
+    reportKind: "loss-and-recurrence",
+    sourcePolicy: "aggregate-summary",
+    download: downloadPnrReport,
+  }),
+  [DASHBOARD_MODULE_KEYS.pacotesFaltantes]: Object.freeze({
+    moduleKey: DASHBOARD_MODULE_KEYS.pacotesFaltantes,
+    label: "Pacotes Faltantes",
+    reportKind: "pending-cases-and-deadlines",
+    sourcePolicy: "independent-module-load",
+    download: downloadMissingPackagesReport,
+  }),
+});
+
+function getActiveReportModuleKey() {
+  return normalizeDashboardModuleKey(getDashboardModuleKeyForSheet());
+}
+
+function getReportModuleDefinition(moduleKey = getActiveReportModuleKey()) {
+  return REPORT_MODULE_REGISTRY[normalizeDashboardModuleKey(moduleKey)] || null;
+}
+
 async function downloadMonthlyReport() {
-  if (!ensureReportPermission()) {
+  if (!ensureReportPermission()) return;
+
+  const moduleKey = getActiveReportModuleKey();
+  const definition = getReportModuleDefinition(moduleKey);
+
+  if (!definition || typeof definition.download !== "function") {
+    console.error("[Report Center] Módulo sem gerador dedicado.", { moduleKey });
+    showToast("Este módulo ainda não possui um relatório dedicado.", "warn", 5200);
     return;
   }
-  if (state.sheet === DEVIATION_MANAGEMENT_VIEW && state.activeDesvioCategory === DEVIATION_CATEGORY_PNRS) {
-    await downloadPnrReport();
-    return;
-  }
-  if (state.sheet === DEVIATION_MANAGEMENT_VIEW && state.activeDesvioCategory === DEVIATION_CATEGORY_MISSING_PACKAGES) {
-    await downloadMissingPackagesReport();
-    return;
-  }
-  if (state.sheet === PACKAGE_MANAGEMENT_VIEW) {
-    await downloadPackageManagementReport();
-    return;
-  }
-  const reportScope = getReportScope();
+
+  console.info("[Report Center] Iniciando relatório isolado.", {
+    moduleKey: definition.moduleKey,
+    label: definition.label,
+    reportKind: definition.reportKind,
+    sourcePolicy: definition.sourcePolicy,
+  });
+
+  await definition.download();
+}
+
+function buildEvolutionReportScope() {
+  const scope = getReportScope();
+  const monthIndex = scope.mode === "monthly" ? Number(String(scope.key || "").slice(5, 7)) || 1 : 0;
+  const monthName = monthIndex ? MONTHS[monthIndex - 1] || "período" : "";
+
+  return {
+    ...scope,
+    title:
+      scope.mode === "annual"
+        ? `Relatório Executivo de Evolução — Anual ${scope.year}`
+        : `Relatório Executivo de Evolução — ${scope.label}`,
+    fileName: buildReportDownloadFileName({
+      typeLabel: "Evolução",
+      mode: scope.mode,
+      year: scope.year,
+      monthName,
+      periodMode: scope.periodMode,
+      recorteLabel: scope.label,
+    }),
+  };
+}
+
+async function downloadPrefaturaFamilyReport({
+  moduleKey,
+  reportMode,
+  scope,
+  successMessage,
+}) {
+  if (!ensureReportPermission()) return;
+
+  const reportScope = scope || getReportScope();
   const allMonthlyRows = await buildReportHistoricalComparisonRows(reportScope, state.prefaturaTipo);
   const filteredRows = getFilteredRows();
   const summary = buildSummary(filteredRows);
+
   if (!filteredRows.length) {
     showToast("Não há dados suficientes para gerar relatório deste módulo no recorte selecionado.", "warn", 5200);
     return;
   }
-  const analysis = buildReportAnalysis({ rows: allMonthlyRows, filteredRows, summary, scope: reportScope, typeSelection: state.prefaturaTipo, reportMode: "prefatura" });
-  assertReportModuleIsolation(analysis, DASHBOARD_MODULE_KEYS.preFatura);
+
+  const analysis = buildReportAnalysis({
+    rows: allMonthlyRows,
+    filteredRows,
+    summary,
+    scope: reportScope,
+    typeSelection: state.prefaturaTipo,
+    reportMode,
+  });
+
+  assertReportModuleIsolation(analysis, moduleKey);
   await ensurePdfLogoImage();
   const pdf = buildReportPdfBlob({ analysis, filteredRows, summary });
   downloadBlob(pdf, analysis.fileName);
+
   await logAudit("generate_report", "report", null, {
+    report_module: moduleKey,
+    report_mode: reportMode,
+    report_source: analysis.sourceTable,
     selected_month: state.monthFilter || "all",
     selected_period: state.period,
-    records_count: filteredRows?.length || 0,
+    records_count: filteredRows.length,
   });
-  showToast("Relatório de performance baixado.", "good", 4200);
+
+  showToast(successMessage, "good", 4200);
 }
 
+async function downloadPreFaturaReport() {
+  await downloadPrefaturaFamilyReport({
+    moduleKey: DASHBOARD_MODULE_KEYS.preFatura,
+    reportMode: "prefatura",
+    scope: getReportScope(),
+    successMessage: "Relatório de Pré-Fatura baixado.",
+  });
+}
+
+async function downloadEvolutionReport() {
+  await downloadPrefaturaFamilyReport({
+    moduleKey: DASHBOARD_MODULE_KEYS.evolucao,
+    reportMode: "evolution",
+    scope: buildEvolutionReportScope(),
+    successMessage: "Relatório de Evolução baixado.",
+  });
+}
 async function downloadPackageManagementReport() {
   const reportScope = getPackageReportScope();
   await ensurePackageManagementRowsForReport();
@@ -12518,14 +12632,23 @@ function buildReportAnalysis({ rows, filteredRows, summary, scope: providedScope
   });
 
   return {
-    moduleKey: reportMode === "package" ? DASHBOARD_MODULE_KEYS.pacotes : DASHBOARD_MODULE_KEYS.preFatura,
+    moduleKey:
+      reportMode === "package"
+        ? DASHBOARD_MODULE_KEYS.pacotes
+        : reportMode === "evolution"
+          ? DASHBOARD_MODULE_KEYS.evolucao
+          : DASHBOARD_MODULE_KEYS.preFatura,
     sourceTable: reportMode === "package" ? "gestao_pacotes_records" : "pre_fatura_records",
     title: scope.title,
     fileName: scope.fileName,
     scope,
     reportMode,
-    reportSubtitle: reportMode === "package" ? "Gestão de Pacotes" : "Pré-Fatura",
-    scopeLabel: scope.label,
+    reportSubtitle:
+      reportMode === "package"
+        ? "Gestão de Pacotes"
+        : reportMode === "evolution"
+          ? "Evolução Mensal"
+          : "Pré-Fatura",    scopeLabel: scope.label,
     generatedAt: `Gerado em: ${formatCurrentDateTime(new Date())}`,
     timelineRows: comparisonRows,
     ticketAverage,
