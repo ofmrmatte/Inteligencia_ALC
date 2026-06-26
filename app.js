@@ -10901,18 +10901,18 @@ function df91BuildPnrStandardAnalysisFromAggregate() {
 
   analysis.attentionPoints = [
     topStation
-      ? `${topStation.label} concentra ${integer.format(topStation.count)} PNRs e ${currency.format(topStation.totalValue)}, com ${formatNumberPt(topStation.valueShare || topStation.share, 1)}% do indicador disponÃ­vel.`
+      ? `${topStation.label} concentra ${integer.format(topStation.count)} PNRs e ${currency.format(topStation.totalValue)}, com ${formatNumberPt(topStation.valueShare || topStation.share, 1)}% do indicador dispon\u00edvel.`
       : "",
     pnrTopDriver
-      ? `${pnrTopDriver.label} lidera a recorrÃªncia por motorista, com ${integer.format(pnrTopDriver.count)} casos e ${currency.format(pnrTopDriver.totalValue)} em valor associado.`
+      ? `${pnrTopDriver.label} lidera a recorr\u00eancia por motorista, com ${integer.format(pnrTopDriver.count)} casos e ${currency.format(pnrTopDriver.totalValue)} em valor associado.`
       : "",
     summary.valorFaturado
       ? `O valor faturado soma -${currency.format(summary.valorFaturado)} e deve ser acompanhado separadamente dos anulados.`
       : "",
     summary.aberto
-      ? `${integer.format(summary.aberto)} casos permanecem em aberto/anÃ¡lise e ainda podem alterar o saldo do recorte.`
+      ? `${integer.format(summary.aberto)} casos permanecem em aberto/an\u00e1lise e ainda podem alterar o saldo do recorte.`
       : "",
-    `O saldo lÃ­quido do recorte Ã© ${currency.format(saldo)}.`,
+    `O saldo l\u00edquido do recorte \u00e9 ${currency.format(saldo)}.`,
     `Criticidade do recorte: ${severity.label}.`,
   ].filter(Boolean).slice(0, 6);
 
@@ -10924,22 +10924,23 @@ function df91BuildPnrStandardAnalysisFromAggregate() {
       ? `Monitorar o valor faturado mensalmente e investigar picos antes do fechamento.`
       : "",
     topStation
-      ? `Atuar primeiro na estaÃ§Ã£o ${topStation.label}, que concentra ${formatNumberPt(topStation.valueShare || topStation.share, 1)}% do indicador disponÃ­vel.`
+      ? `Atuar primeiro na esta\u00e7\u00e3o ${topStation.label}, que concentra ${formatNumberPt(topStation.valueShare || topStation.share, 1)}% do indicador dispon\u00edvel.`
       : "",
     pnrTopDriver
-      ? `Acompanhar ${pnrTopDriver.label} e os demais grupos recorrentes; quando houver apenas ID, validar a identificaÃ§Ã£o nominal no Excel antes de atribuir responsabilidade individual.`
+      ? `Acompanhar ${pnrTopDriver.label} e os demais grupos recorrentes; quando houver apenas ID, validar a identifica\u00e7\u00e3o nominal no Excel antes de atribuir responsabilidade individual.`
       : "",
-    "Usar a exportaÃ§Ã£o Excel para auditoria cadastral, validaÃ§Ã£o nominal e conferÃªncia dos registros detalhados.",
+    "Usar a exporta\u00e7\u00e3o Excel para auditoria cadastral, valida\u00e7\u00e3o nominal e confer\u00eancia dos registros detalhados.",
   ].filter(Boolean).slice(0, 5);
 
   const pnrPriorityParts = [
     summary.aberto ? `${integer.format(summary.aberto)} casos em aberto` : "",
     summary.valorFaturado ? `${currency.format(summary.valorFaturado)} faturados` : "",
-    topStation ? `concentraÃ§Ã£o na estaÃ§Ã£o ${topStation.label}` : "",
+    topStation ? `concentra\u00e7\u00e3o na esta\u00e7\u00e3o ${topStation.label}` : "",
   ].filter(Boolean);
 
-  analysis.conclusion = `O recorte reÃºne ${integer.format(summary.count)} PNRs, com saldo lÃ­quido ${saldo >= 0 ? "positivo" : "negativo"} de ${currency.format(saldo)}. A prioridade Ã© ${pnrPriorityParts.length ? pnrPriorityParts.join(", ") : "manter o acompanhamento periÃ³dico dos indicadores"}. O resultado deve ser monitorado por valor faturado, casos em aberto, concentraÃ§Ã£o por estaÃ§Ã£o e evoluÃ§Ã£o mensal. A leitura por origem Ã© volumÃ©trica e a qualidade cadastral detalhada permanece disponÃ­vel no Excel.`;
+  analysis.conclusion = `O recorte re\u00fane ${integer.format(summary.count)} PNRs, com saldo l\u00edquido ${saldo >= 0 ? "positivo" : "negativo"} de ${currency.format(saldo)}. A prioridade \u00e9 ${pnrPriorityParts.length ? pnrPriorityParts.join(", ") : "manter o acompanhamento peri\u00f3dico dos indicadores"}. O resultado deve ser monitorado por valor faturado, casos em aberto, concentra\u00e7\u00e3o por esta\u00e7\u00e3o e evolu\u00e7\u00e3o mensal. A leitura por origem \u00e9 volum\u00e9trica e a qualidade cadastral detalhada permanece dispon\u00edvel no Excel.`;
   /* DF94_PNR_DEDUP_END */
+
 
   return analysis;
 }
