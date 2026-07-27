@@ -138,6 +138,7 @@ const PNR_IMPORT_BATCH_TIMEOUT_MS = 90000;
 const PNR_IMPORT_PROGRESS_TOAST_INTERVAL_MS = 12000;
 const PROCESSED_RECORDS_PAGE_SIZE = 1000;
 const PNR_REMOTE_QUERY_DEBOUNCE_MS = 400;
+let isRendering = false; // Fase 1 - proteção contra renderAll concorrente
 const PNR_REMOTE_RPC = "desvios_pnr_dashboard";
 const PNR_SUMMARY_RPC = "desvios_pnr_summary";
 const PNR_TABLE_RPC = "desvios_pnr_table";
@@ -23000,3 +23001,6 @@ function capitalize(text) {
     if (event.key === "Escape") closeCard();
   });
 })();
+
+
+

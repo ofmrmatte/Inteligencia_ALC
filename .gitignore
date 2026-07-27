@@ -18,3 +18,25 @@ scripts/logs/
 
 # Exports grandes Railway/Supabase
 *.jsonl
+*.bak
+app.js.backup-*
+app.js.fase*
+app.js.loading*
+app.js.fix-*
+app.js.before-revert-*
+app.js.perf-*
+conserta_tudo.py
+mapear_layout.py
+patch_layout_unificado.py
+mapa_layout.md
+*.bak
+app.js.backup-*
+app.js.fase*
+app.js.loading*
+app.js.fix-*
+app.js.before-revert-*
+app.js.perf-*
+conserta_tudo.py
+mapear_layout.py
+patch_layout_unificado.py
+mapa_layout.md
