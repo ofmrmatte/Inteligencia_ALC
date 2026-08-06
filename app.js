@@ -15037,11 +15037,6 @@ function getLinkedPackageIds(row) {
   return ids;
 }
 
-function normalizeOccurrenceCurrency(value) {
-  const numeric = Number(value);
-  return Number.isFinite(numeric) ? numeric.toFixed(2) : normalize(value);
-}
-
 function normalizeOccurrenceAmount(value) {
   if (typeof value === "number") {
     return Number.isFinite(value) ? Number(value.toFixed(2)) : 0;
@@ -15049,54 +15044,6 @@ function normalizeOccurrenceAmount(value) {
 
   const parsed = parseMoney(value);
   return Number.isFinite(parsed) ? Number(parsed.toFixed(2)) : 0;
-}
-
-function buildOccurrenceKey(row) {
-  const packageIds = getLinkedPackageIds(row)
-    .map((id) => normalize(id))
-    .filter(Boolean)
-    .sort()
-    .join(",");
-
-  return [
-    packageIds || row.id_pacote || row.id_envio || row.id_caso || row.id || "",
-    getBaseIdentity(row),
-    row.cidade_base,
-    row.motorista,
-    row.n_rota,
-    row.placa,
-    row.tipo_desconto,
-    row.aba_origem || row.tipo_registro,
-    row.data_normalizada,
-    normalizeOccurrenceCurrency(row.valor_numerico),
-  ]
-    .map((value) => normalize(value))
-    .join("|");
-}
-
-function isPnrRow(row) {
-  return normalizeSheetLabel(row?.aba_origem || row?.divisao || row?.sheetName, row?.tipo_desconto || row?.tipo_registro) === "PNR";
-}
-
-function buildPnrLinkedOccurrenceKey(row) {
-  const ids = getLinkedPackageIds(row)
-    .map((id) => normalize(id))
-    .filter(Boolean)
-    .sort();
-  const primaryId = ids.length
-    ? ids.join(",")
-    : (row.id_pacote || row.id_envio || row.id_caso || row.id || row.pacote || row.envio || "");
-
-  return [
-    primaryId,
-    row.motorista || row.driver,
-    row.n_rota || row.numeroRota || row.rota,
-    getBaseIdentity(row),
-    row.tipo_desconto || row.tipo,
-    row.aba_origem || row.tipo_registro || row.categoria,
-  ]
-    .map((value) => normalize(value))
-    .join("|");
 }
 
 function getLinkedValues(row) {
@@ -15113,79 +15060,34 @@ function addUniqueAmount(amounts, value) {
   amounts.push(amount);
 }
 
-function sumUniqueAmounts(amounts) {
-  return amounts.reduce((total, amount) => total + normalizeOccurrenceAmount(amount), 0);
-}
-
 function consolidateLinkedOccurrences(rows) {
-  const map = new Map();
   let linkedOccurrences = 0;
   let linkedIds = 0;
 
-  rows.forEach((sourceRow) => {
-    const row = normalizeStoredRow(sourceRow);
-    const shouldConsolidatePnrByRoute = isPnrRow(row);
-    const occurrenceKey = shouldConsolidatePnrByRoute ? buildPnrLinkedOccurrenceKey(row) : buildOccurrenceKey(row);
-    const ids = getLinkedPackageIds(row);
-    const linkedValues = getLinkedValues(row);
-    if (!linkedValues.length) addUniqueAmount(linkedValues, row.valor_numerico);
+  const consolidated = rows
+    .map((sourceRow) => {
+      const row = normalizeStoredRow(sourceRow);
+      const ids = getLinkedPackageIds(row);
+      const linkedValues = getLinkedValues(row);
+      if (!linkedValues.length) addUniqueAmount(linkedValues, row.valor_numerico);
 
-    if (!map.has(occurrenceKey)) {
-      map.set(occurrenceKey, {
+      const linkedCount = ids.length;
+      const occurrenceCount = Math.max(1, linkedValues.length);
+      if (linkedCount > 1) {
+        linkedOccurrences += 1;
+        linkedIds += linkedCount;
+      }
+      return {
         ...row,
-        occurrence_key: occurrenceKey,
-        ids_vinculados: ids,
-        quantidade_ids: ids.length,
-        linked_ids_count: ids.length,
-        ocorrencias: shouldConsolidatePnrByRoute ? Math.max(1, linkedValues.length) : 1,
-        valores_vinculados: shouldConsolidatePnrByRoute ? linkedValues : getLinkedValues(row),
-        valor_numerico: shouldConsolidatePnrByRoute ? sumUniqueAmounts(linkedValues) : row.valor_numerico,
-      });
-      return;
-    }
-
-    const existing = map.get(occurrenceKey);
-    const currentIds = new Set((existing.ids_vinculados || []).map((id) => normalize(id)));
-    ids.forEach((id) => {
-      const key = normalize(id);
-      if (currentIds.has(key)) return;
-      currentIds.add(key);
-      existing.ids_vinculados.push(id);
-    });
-
-    existing.quantidade_ids = existing.ids_vinculados.length;
-    existing.linked_ids_count = existing.ids_vinculados.length;
-    existing.ocorrencias = 1;
-
-    if (shouldConsolidatePnrByRoute) {
-      const existingValues = getLinkedValues(existing);
-      linkedValues.forEach((value) => addUniqueAmount(existingValues, value));
-      existing.valores_vinculados = existingValues;
-      existing.valor_numerico = sumUniqueAmounts(existingValues);
-      existing.ocorrencias = Math.max(1, existingValues.length);
-    }
-
-    existing._search = buildRowSearchText(existing);
-  });
-
-  const consolidated = Array.from(map.values()).map((row) => {
-    const linkedCount = row.ids_vinculados?.length || 0;
-    const linkedValues = getLinkedValues(row);
-    const occurrenceCount = isPnrRow(row) ? Math.max(1, linkedValues.length) : 1;
-    if (linkedCount > 1) {
-      linkedOccurrences += 1;
-      linkedIds += linkedCount;
-    }
-    return {
-      ...row,
-      quantidade_ids: linkedCount,
-      linked_ids_count: linkedCount,
-      ocorrencias: occurrenceCount,
-      valores_vinculados: linkedValues,
-      valores_vinculados_texto: linkedValues.map((value) => currency.format(value)).join(" + "),
-      _search: buildRowSearchText(row),
-    };
-  });
+        quantidade_ids: linkedCount,
+        linked_ids_count: linkedCount,
+        ocorrencias: occurrenceCount,
+        valores_vinculados: linkedValues,
+        valores_vinculados_texto: linkedValues.map((value) => currency.format(value)).join(" + "),
+        _search: buildRowSearchText(row),
+      };
+    })
+    .filter(Boolean);
 
   consolidateLinkedOccurrences.lastStats = {
     originalRows: rows.length,
@@ -19864,6 +19766,11 @@ function buildPreFaturaRecordDedupeKey(record = {}) {
       record.competencia,
       record.quinzena,
       record.id_envio,
+      record.codigo_base || record.base,
+      record.driver_normalizado || record.driver,
+      record.rota,
+      record.placa,
+      record.data,
       record.tipo,
       record.aba_origem,
       normalizeProcessedDedupeMoney(record.valor),
