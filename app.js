@@ -15269,6 +15269,21 @@ function isPackageSummaryText(value) {
   );
 }
 
+function hasPreFaturaPackageIdentity(idPacote, rota) {
+  return [idPacote, rota].some((value) => {
+    const id = formatId(value);
+    return id && !isPackageSummaryText(id);
+  });
+}
+
+function isPreFaturaTotalRow({ rawBase, motorista, placa, tipoDesc, idPacote, rota, descricao, hasPackageIdentity }) {
+  const primaryFields = [rawBase, idPacote, rota];
+  if (primaryFields.some(isPackageSummaryText)) return true;
+
+  const secondaryFields = [motorista, placa, tipoDesc, descricao];
+  return !hasPackageIdentity && secondaryFields.some(isPackageSummaryText);
+}
+
 function hasPackageStrongDetailAnchor(row) {
   return [
     row.id_pacote,
@@ -16469,9 +16484,18 @@ function normalizeWorkbook(workbook) {
       const valor = readCell(row, idx.valor);
       const descricao = readCell(row, idx.descricao);
       const parsedValue = parseMoney(valor);
-      const hasPackageIdentity = Boolean(formatId(idPacote) || formatId(rota));
+      const hasPackageIdentity = hasPreFaturaPackageIdentity(idPacote, rota);
       const hasFinancialValue = parsedValue > 0;
-      const isTotalRow = normalize(rawBase) === "total";
+      const isTotalRow = isPreFaturaTotalRow({
+        rawBase,
+        motorista,
+        placa,
+        tipoDesc,
+        idPacote,
+        rota,
+        descricao,
+        hasPackageIdentity,
+      });
       if (isTotalRow || (!rawBase && !hasPackageIdentity && !hasFinancialValue)) {
         totalRowsSkipped += 1;
         sheetSkipped += 1;
