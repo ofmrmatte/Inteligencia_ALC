@@ -15016,6 +15016,11 @@ function getLinkedPackageIds(row) {
     ...(Array.isArray(row?.ids_vinculados) ? row.ids_vinculados : []),
     ...(Array.isArray(row?.linked_ids) ? row.linked_ids : []),
     row?.id_pacote,
+    row?.id_envio,
+    row?.id_caso,
+    row?.id,
+    row?.pacote,
+    row?.envio,
   ];
   const ids = [];
   const seen = new Set();
@@ -15047,7 +15052,14 @@ function normalizeOccurrenceAmount(value) {
 }
 
 function buildOccurrenceKey(row) {
+  const packageIds = getLinkedPackageIds(row)
+    .map((id) => normalize(id))
+    .filter(Boolean)
+    .sort()
+    .join(",");
+
   return [
+    packageIds || row.id_pacote || row.id_envio || row.id_caso || row.id || "",
     getBaseIdentity(row),
     row.cidade_base,
     row.motorista,
@@ -15067,7 +15079,16 @@ function isPnrRow(row) {
 }
 
 function buildPnrLinkedOccurrenceKey(row) {
+  const ids = getLinkedPackageIds(row)
+    .map((id) => normalize(id))
+    .filter(Boolean)
+    .sort();
+  const primaryId = ids.length
+    ? ids.join(",")
+    : (row.id_pacote || row.id_envio || row.id_caso || row.id || row.pacote || row.envio || "");
+
   return [
+    primaryId,
     row.motorista || row.driver,
     row.n_rota || row.numeroRota || row.rota,
     getBaseIdentity(row),
@@ -15089,9 +15110,7 @@ function getLinkedValues(row) {
 function addUniqueAmount(amounts, value) {
   const amount = normalizeOccurrenceAmount(value);
   if (!amount) return;
-  if (!amounts.some((current) => normalizeOccurrenceAmount(current) === amount)) {
-    amounts.push(amount);
-  }
+  amounts.push(amount);
 }
 
 function sumUniqueAmounts(amounts) {
@@ -19761,7 +19780,7 @@ function mapPreFaturaRowToProcessedRecord(row, fileRecord) {
     driver_normalizado: normalizeDriverName(row.motorista || row.driver || ""),
     placa: row.placa || "",
     data: toDatabaseDate(row.data_normalizada || row.data_sort),
-    id_envio: row.id_pacote || row.id_envio || "",
+    id_envio: row.id_pacote || row.id_envio || row.id || "",
     rota: row.n_rota || row.rota || "",
     valor: Number(row.valor_numerico || 0),
     aba_origem: division,
@@ -19840,13 +19859,22 @@ function buildProcessedRecordDedupeKey(moduleKey, parts = []) {
 }
 
 function buildPreFaturaRecordDedupeKey(record = {}) {
+  if (record.id_envio) {
+    return buildProcessedRecordDedupeKey(DASHBOARD_MODULE_KEYS.preFatura, [
+      record.competencia,
+      record.quinzena,
+      record.id_envio,
+      record.tipo,
+      record.aba_origem,
+      normalizeProcessedDedupeMoney(record.valor),
+    ]);
+  }
   return buildProcessedRecordDedupeKey(DASHBOARD_MODULE_KEYS.preFatura, [
     record.competencia,
     record.quinzena,
     record.codigo_base || record.base,
     record.driver_normalizado || record.driver,
     record.rota,
-    record.id_envio,
     record.tipo,
     record.aba_origem,
     record.data,
@@ -20605,7 +20633,8 @@ async function saveProcessedRowsForFile(fileRecord, rows) {
   if ([PRE_FATURA_FILE_CATEGORY, PACKAGE_MANAGEMENT_FILE_CATEGORY].includes(fileCategory)) {
     const recordsByDedupe = new Map();
     payload.forEach((record) => {
-      if (record.dedupe_key) recordsByDedupe.set(record.dedupe_key, record);
+      if (!record.dedupe_key) return;
+      if (!recordsByDedupe.has(record.dedupe_key)) recordsByDedupe.set(record.dedupe_key, record);
     });
     payload = Array.from(recordsByDedupe.values());
   }
@@ -23001,6 +23030,3 @@ function capitalize(text) {
     if (event.key === "Escape") closeCard();
   });
 })();
-
-
-
