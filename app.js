@@ -16458,13 +16458,7 @@ function normalizeWorkbook(workbook) {
       const row = matrix[i];
       if (!row || row.every((cell) => cell == null || String(cell).trim() === "")) continue;
 
-      const base = readCell(row, idx.base);
-      if (!base || normalize(base) === "total") {
-        totalRowsSkipped += 1;
-        sheetSkipped += 1;
-        continue;
-      }
-
+      const rawBase = readCell(row, idx.base);
       const motorista = readCell(row, idx.motorista);
       const placa = readCell(row, idx.placa);
       const tipoDesc = readCell(row, idx.tipo) || (sheetName === "PNR" ? "DESCONTO PNR" : "DESCONTO PACOTE PERDIDO");
@@ -16474,6 +16468,17 @@ function normalizeWorkbook(workbook) {
       const rota = readCell(row, idx.rota);
       const valor = readCell(row, idx.valor);
       const descricao = readCell(row, idx.descricao);
+      const parsedValue = parseMoney(valor);
+      const hasPackageIdentity = Boolean(formatId(idPacote) || formatId(rota));
+      const hasFinancialValue = parsedValue > 0;
+      const isTotalRow = normalize(rawBase) === "total";
+      if (isTotalRow || (!rawBase && !hasPackageIdentity && !hasFinancialValue)) {
+        totalRowsSkipped += 1;
+        sheetSkipped += 1;
+        continue;
+      }
+
+      const base = rawBase || "BASE NÃO IDENTIFICADA";
       const parsedDate = parseDateValue(dataValue);
       const baseParts = splitBase(base);
 
@@ -16492,7 +16497,7 @@ function normalizeWorkbook(workbook) {
         data_sort: parsedDate.ts,
         id_pacote: formatId(idPacote),
         n_rota: formatId(rota),
-        valor_numerico: parseMoney(valor),
+        valor_numerico: parsedValue,
       };
 
       normalized.tipo_registro = canonicalSheet === "PNR" ? "PNR" : "PACOTE PERDIDO";
@@ -22223,6 +22228,15 @@ function readCell(row, index) {
   if (index == null || index < 0) return "";
   const value = row[index];
   if (value == null) return "";
+  if (typeof value === "object") {
+    if (value.error) return "";
+    if (value.text != null) return String(value.text).trim();
+    if (value.result != null) return value.result;
+    if (Array.isArray(value.richText)) return value.richText.map((part) => part.text || "").join("").trim();
+    if (value.v != null) return value.v;
+    if (value.w != null) return String(value.w).trim();
+    return "";
+  }
   return typeof value === "string" ? value.trim() : value;
 }
 
