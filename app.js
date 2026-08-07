@@ -16485,7 +16485,6 @@ function normalizeWorkbook(workbook) {
       const descricao = readCell(row, idx.descricao);
       const parsedValue = parseMoney(valor);
       const hasPackageIdentity = hasPreFaturaPackageIdentity(idPacote, rota);
-      const hasFinancialValue = parsedValue > 0;
       const isTotalRow = isPreFaturaTotalRow({
         rawBase,
         motorista,
@@ -16496,7 +16495,7 @@ function normalizeWorkbook(workbook) {
         descricao,
         hasPackageIdentity,
       });
-      if (isTotalRow || (!rawBase && !hasPackageIdentity && !hasFinancialValue)) {
+      if (isTotalRow || !hasPackageIdentity) {
         totalRowsSkipped += 1;
         sheetSkipped += 1;
         continue;
