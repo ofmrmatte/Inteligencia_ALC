@@ -14,22 +14,51 @@ export default async function LoginPage() {
   if (user) redirect("/dashboard");
 
   return (
-    <main className="login-page">
-      <section className="login-page__brand" aria-label="ALC Admin Center">
-        <Image src={BRAND.assets.lockupDark} alt="ALC Admin Center" width={360} height={116} priority />
-        <div>
-          <span>Painel de Inteligência Operacional</span>
-          <h1>Controle operacional com a identidade ALC.</h1>
+    <main className="login-page login-page--inteligencia-loss">
+      <section className="login-page__brand login-page__brand--inteligencia-loss" aria-label="Inteligência LOSS">
+        <div className="login-brand">
+          <Image src={BRAND.assets.symbolDark} alt="Inteligência LOSS" width={52} height={52} priority />
+          <div>
+            <strong>Inteligência LOSS</strong>
+            <span>ALC Pereira &amp; Filho</span>
+          </div>
+        </div>
+
+        <div className="login-hero">
+          <span>PAINEL OPERACIONAL</span>
+          <h1>Informação clara para decisões mais rápidas.</h1>
+          <p>
+            Acompanhe Pré-Fatura, Gestão de Pacotes, Desvios PNR e indicadores
+            operacionais em um único ambiente.
+          </p>
+        </div>
+
+        <div className="login-brand-footer">
+          <span>Inteligência operacional</span>
+          <strong>LOSS</strong>
         </div>
       </section>
 
-      <section className="login-panel" aria-labelledby="login-title">
-        <div className="login-panel__header">
-          <span>Acesso seguro</span>
-          <h2 id="login-title">Entrar</h2>
-          <p>Use sua conta autorizada para acessar os módulos do painel.</p>
+      <section className="login-panel login-panel--inteligencia-loss" aria-labelledby="login-title">
+        <div className="login-panel__mobile-brand" aria-hidden="true">
+          <Image src={BRAND.assets.symbolDark} alt="" width={40} height={40} />
+          <div>
+            <strong>Inteligência LOSS</strong>
+            <span>ALC Pereira &amp; Filho</span>
+          </div>
         </div>
+
+        <div className="login-panel__header">
+          <span>ACESSO RESTRITO</span>
+          <h2 id="login-title">Bem-vindo</h2>
+          <p>Entre com sua conta corporativa para acessar o painel.</p>
+        </div>
+
         <LoginForm />
+
+        <p className="login-panel__security">
+          Ambiente corporativo - acesso destinado a usuários autorizados
+        </p>
       </section>
     </main>
   );

@@ -25,7 +25,7 @@ async function fetchText(pathname) {
 async function assertLogin() {
   const { response, text } = await fetchText("/login");
   if (!response.ok) throw new Error(`/login returned ${response.status}`);
-  for (const signal of ["ALC Admin Center", "Email", "Senha", "Entrar", "/brand/alc-favicon.svg"]) {
+  for (const signal of ["Inteligência LOSS", "ALC Pereira &amp; Filho", "Bem-vindo", "Email", "Senha", "Entrar", "/brand/alc-favicon.svg"]) {
     if (!text.includes(signal)) throw new Error(`/login missing expected signal: ${signal}`);
   }
   console.log("ok /login");
