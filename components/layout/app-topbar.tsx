@@ -1,12 +1,8 @@
 "use client";
 
-import { Menu } from "lucide-react";
+import { ChevronRight, Menu } from "lucide-react";
 import { usePathname } from "next/navigation";
-import { ThemeToggle } from "@/components/layout/theme-toggle";
-import { UserMenu } from "@/components/layout/user-menu";
 import { GlobalSearch } from "@/features/global-search/components/global-search";
-import { OperationalAlertsButton } from "@/features/operational-alerts/components/operational-alerts-button";
-import type { Profile } from "@/lib/auth/types";
 
 const titles: Record<string, string> = {
   "/dashboard": "Dashboard",
@@ -14,28 +10,27 @@ const titles: Record<string, string> = {
   "/gestao-pacotes": "Gestão de Pacotes",
   "/desvios-pnr": "Desvios PNR",
   "/pacotes-faltantes": "Pacotes Faltantes",
+  "/perfil": "Perfil",
   "/configuracoes": "Configurações",
 };
 
-export function AppTopbar({ profile, onOpenMenu }: { profile: Profile | null; onOpenMenu: () => void }) {
+export function AppTopbar({ onOpenMenu }: { onOpenMenu: () => void }) {
   const pathname = usePathname();
-  const title = titles[pathname] || "ALC Admin Center";
+  const title = titles[pathname] || "Admin Center";
 
   return (
     <header className="app-topbar">
       <button type="button" className="icon-button app-topbar__menu" onClick={onOpenMenu} aria-label="Abrir menu">
-        <Menu size={20} aria-hidden="true" />
+        <Menu size={19} aria-hidden="true" />
       </button>
-      <div>
-        <span>Módulo</span>
+
+      <div className="app-topbar__context" aria-label="Localização atual">
+        <span>Admin Center</span>
+        <ChevronRight size={14} aria-hidden="true" />
         <strong>{title}</strong>
       </div>
+
       <GlobalSearch />
-      <div className="app-topbar__actions">
-        <OperationalAlertsButton />
-        <ThemeToggle />
-        <UserMenu profile={profile} />
-      </div>
     </header>
   );
 }

@@ -4,6 +4,7 @@ import type { ReactNode } from "react";
 import { ThemeScript } from "@/components/layout/theme-script";
 import { BRAND } from "@/lib/constants/brand";
 import "./globals.css";
+import "./automy-alignment.css";
 
 const inter = Inter({
   subsets: ["latin"],
