@@ -38,3 +38,10 @@ for (const route of privateRoutes) {
     });
   });
 }
+
+for (const route of ["/api/search?q=123", "/api/alerts"]) {
+  test(`anonymous API request is rejected from ${route}`, async ({ request }) => {
+    const response = await request.get(route);
+    expect(response.status()).toBe(401);
+  });
+}
