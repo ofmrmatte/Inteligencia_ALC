@@ -1,0 +1,120 @@
+:root {
+  --loss-sidebar-width: 240px;
+  --loss-sidebar-collapsed-width: 64px;
+}
+
+.app-shell {
+  grid-template-columns: var(--loss-sidebar-width) minmax(0, 1fr);
+}
+
+.app-shell--collapsed {
+  grid-template-columns: var(--loss-sidebar-collapsed-width) minmax(0, 1fr);
+}
+
+.app-topbar__context {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.app-topbar__context span {
+  color: var(--text-muted);
+  font-size: 0.78rem;
+  font-weight: 600;
+}
+
+.app-topbar__context strong {
+  color: var(--text);
+  font-size: 0.92rem;
+  font-weight: 650;
+  white-space: nowrap;
+}
+
+.app-topbar__context-title {
+  overflow: visible;
+  text-overflow: clip;
+}
+
+.app-sidebar {
+  position: sticky;
+}
+
+.app-sidebar__bottom {
+  display: grid;
+  gap: 8px;
+  margin-top: auto;
+  padding-top: 12px;
+  border-top: 1px solid var(--border);
+}
+
+.app-sidebar__utility-row {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 6px;
+}
+
+.app-sidebar__bottom .icon-button,
+.app-sidebar__toggle-inline {
+  width: 100%;
+  justify-content: center;
+}
+
+.app-sidebar__toggle-inline {
+  min-height: 36px;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--panel);
+  color: var(--text-muted);
+  font-size: 0.82rem;
+  font-weight: 600;
+}
+
+.app-sidebar__toggle-inline:hover {
+  background: var(--panel-soft);
+  color: var(--text);
+}
+
+.app-sidebar--collapsed .app-sidebar__brand div,
+.app-sidebar--collapsed .sidebar-nav__group,
+.app-sidebar--collapsed .sidebar-nav__item span,
+.app-sidebar--collapsed .app-sidebar__bottom .user-menu__trigger > span:last-child,
+.app-sidebar--collapsed .app-sidebar__toggle-inline span {
+  display: none;
+}
+
+.app-sidebar--collapsed .app-sidebar__bottom {
+  width: 100%;
+}
+
+.app-sidebar--collapsed .app-sidebar__utility-row,
+.app-sidebar--collapsed .app-sidebar__bottom .user-menu,
+.app-sidebar--collapsed .app-sidebar__bottom .app-sidebar__toggle-wrap {
+  width: 100%;
+}
+
+.app-sidebar--collapsed .app-sidebar__bottom .icon-button,
+.app-sidebar--collapsed .app-sidebar__bottom .user-menu__trigger,
+.app-sidebar--collapsed .app-sidebar__toggle-inline {
+  width: 40px;
+  min-width: 40px;
+  min-height: 40px;
+  margin-inline: auto;
+  padding: 0;
+}
+
+.app-sidebar--collapsed .app-sidebar__bottom .user-menu__panel {
+  left: 48px;
+  bottom: 0;
+  width: 240px;
+}
+
+@media (max-width: 900px) {
+  .app-shell,
+  .app-shell--collapsed {
+    grid-template-columns: 1fr;
+  }
+}

@@ -1,7 +1,8 @@
 export const BRAND = {
   name: "ALC",
-  productName: "ALC Admin Center",
-  description: "Painel de Inteligência Operacional",
+  companyName: "ALC Pereira & Filho",
+  productName: "Inteligência LOSS",
+  description: "Painel operacional de Inteligência LOSS.",
   assets: {
     favicon: "/brand/alc-favicon.svg",
     symbolDark: "/brand/alc-symbol-dark.svg",

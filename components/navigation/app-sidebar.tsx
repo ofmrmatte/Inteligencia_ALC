@@ -7,7 +7,6 @@ import { PanelLeftClose, PanelLeftOpen } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import { ThemeToggle } from "@/components/layout/theme-toggle";
 import { UserMenu } from "@/components/layout/user-menu";
-import { OperationalAlertsButton } from "@/features/operational-alerts/components/operational-alerts-button";
 import { BRAND } from "@/lib/constants/brand";
 import { adminRoutes, dashboardRoutes } from "@/lib/constants/routes";
 import type { Profile } from "@/lib/auth/types";
@@ -42,16 +41,10 @@ export function AppSidebar({ profile, collapsed, onToggleCollapsed, onNavigate }
         <Image className="app-sidebar__symbol app-sidebar__symbol--light" src={BRAND.assets.symbolLight} alt="ALC" width={34} height={34} priority />
         <Image className="app-sidebar__symbol app-sidebar__symbol--dark" src={BRAND.assets.symbolDark} alt="" width={34} height={34} aria-hidden="true" />
         <div>
-          <strong>Admin Center</strong>
+          <strong>Inteligência LOSS</strong>
           <span>Painel operacional</span>
         </div>
       </div>
-
-      {onToggleCollapsed ? (
-        <button type="button" className="icon-button app-sidebar__collapse" onClick={onToggleCollapsed} aria-label={collapsed ? "Expandir menu" : "Recolher menu"}>
-          {collapsed ? <PanelLeftOpen size={15} aria-hidden="true" /> : <PanelLeftClose size={15} aria-hidden="true" />}
-        </button>
-      ) : null}
 
       <nav className="sidebar-nav">
         <span className="sidebar-nav__group">Operação</span>
@@ -59,17 +52,26 @@ export function AppSidebar({ profile, collapsed, onToggleCollapsed, onNavigate }
           <NavItem key={item.href} href={item.href} label={item.label} Icon={item.icon} collapsed={collapsed} onNavigate={onNavigate} />
         ))}
         {isAdmin ? <span className="sidebar-nav__group">Admin</span> : null}
-        {isAdmin ? adminRoutes.map((item) => (
-          <NavItem key={item.href} href={item.href} label={item.label} Icon={item.icon} collapsed={collapsed} onNavigate={onNavigate} />
-        )) : null}
+        {isAdmin
+          ? adminRoutes.map((item) => (
+              <NavItem key={item.href} href={item.href} label={item.label} Icon={item.icon} collapsed={collapsed} onNavigate={onNavigate} />
+            ))
+          : null}
       </nav>
 
       <div className="app-sidebar__bottom">
-        <div className="app-sidebar__utility-row" aria-label="Preferências e alertas">
-          <OperationalAlertsButton />
+        <div className="app-sidebar__utility-row" aria-label="Preferências">
           <ThemeToggle />
         </div>
         <UserMenu profile={profile} />
+        {onToggleCollapsed ? (
+          <div className="app-sidebar__toggle-wrap">
+            <button type="button" className="app-sidebar__toggle-inline" onClick={onToggleCollapsed} aria-label={collapsed ? "Expandir menu" : "Recolher menu"}>
+              {collapsed ? <PanelLeftOpen size={15} aria-hidden="true" /> : <PanelLeftClose size={15} aria-hidden="true" />}
+              <span>{collapsed ? "Expandir menu" : "Recolher menu"}</span>
+            </button>
+          </div>
+        ) : null}
       </div>
     </aside>
   );
