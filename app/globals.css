@@ -1198,6 +1198,14 @@ a {
   align-items: end;
 }
 
+.filter-form--wide {
+  grid-template-columns: minmax(240px, 1.5fr) repeat(5, minmax(140px, 1fr)) auto;
+}
+
+.filter-form--pnr {
+  grid-template-columns: minmax(260px, 1.7fr) repeat(5, minmax(150px, 1fr));
+}
+
 .filter-form label,
 .import-form label,
 .import-form,
@@ -1233,6 +1241,14 @@ a {
   width: 100%;
   min-width: 980px;
   border-collapse: collapse;
+}
+
+.data-table--wide {
+  min-width: 1240px;
+}
+
+.data-table--pnr {
+  min-width: 1500px;
 }
 
 .data-table th,
@@ -1324,8 +1340,100 @@ a {
   flex-wrap: wrap;
 }
 
+.split-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(260px, 0.72fr);
+  gap: 18px;
+}
+
+.bar-list {
+  display: grid;
+  gap: 12px;
+}
+
+.bar-row {
+  display: grid;
+  grid-template-columns: minmax(0, 0.9fr) minmax(130px, 1fr) auto;
+  gap: 12px;
+  align-items: center;
+}
+
+.bar-row > div:first-child {
+  min-width: 0;
+}
+
+.bar-row span,
+.bar-row small {
+  color: var(--text-muted);
+  font-size: 0.78rem;
+}
+
+.bar-row strong,
+.bar-row span {
+  display: block;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.bar-row__track {
+  height: 8px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: var(--panel-soft);
+}
+
+.bar-row__track span {
+  height: 100%;
+  background: var(--alc-red);
+}
+
+.chart-panel--wide {
+  padding: 18px;
+}
+
+.chart-bars {
+  height: 260px;
+  display: grid;
+  grid-auto-flow: column;
+  grid-auto-columns: minmax(72px, 1fr);
+  align-items: end;
+  gap: 12px;
+  overflow-x: auto;
+  padding-top: 12px;
+}
+
+.chart-bars__item {
+  min-width: 72px;
+  height: 100%;
+  display: grid;
+  grid-template-rows: minmax(0, 1fr) auto auto;
+  gap: 7px;
+  align-items: end;
+  color: var(--text-muted);
+  font-size: 0.72rem;
+}
+
+.chart-bars__item > span {
+  width: 100%;
+  display: block;
+  align-self: end;
+  border-radius: var(--radius-sm) var(--radius-sm) 0 0;
+  background: var(--alc-red);
+}
+
+.chart-bars__item strong,
+.chart-bars__item small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 @media (max-width: 1180px) {
-  .filter-form {
+  .filter-form,
+  .filter-form--wide,
+  .filter-form--pnr {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
@@ -1340,7 +1448,10 @@ a {
   }
 
   .operation-panel__stats,
-  .filter-form {
+  .filter-form,
+  .filter-form--wide,
+  .filter-form--pnr,
+  .split-grid {
     grid-template-columns: 1fr;
   }
 

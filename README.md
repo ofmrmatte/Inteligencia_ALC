@@ -68,8 +68,8 @@ A permissao administrativa exige `profiles.is_admin = true` e `profiles.role = '
 - **Shell autenticado**: sidebar persistente, topbar, menu de usuario, tema dark/light e drawer mobile.
 - **Dashboard Next**: rota `/dashboard`, com indicadores reais de tabelas persistidas, valor consolidado de Pre-Fatura, meta PNR, rankings e arquivos recentes.
 - **Pre-Fatura**: rota `/pre-fatura`, consulta registros persistidos com filtros e paginacao server-side, importa planilhas com abas `SVC PERDIDOS`, `XPT PERDIDOS` e `PNR`, ignora totais/rodapes e exige identidade de pacote/rota antes de persistir.
-- **Gestao de Pacotes**: importa e consolida eventos de pacotes conforme regras do modulo, com leitura processada pelo banco.
-- **Desvios PNR**: usa tabelas/RPCs para consulta paginada e agregacoes de PNR sem baixar todo o historico para a tela.
+- **Gestao de Pacotes**: rota `/gestao-pacotes`, com dados reais de `gestao_pacotes_records`, filtros, metricas, tabela paginada, ordenacao e importacao admin de planilhas.
+- **Desvios PNR**: rota `/desvios-pnr`, usando `desvios_pnr_summary`, `desvios_pnr_table` e `desvios_pnr_metrics_summary` para KPIs, filtros, graficos e tabela server-side sem baixar todo o historico.
 - **Pacotes Faltantes**: mantem categoria separada dentro de gestao de desvios.
 - **Relatorio Executivo**: gera resumo do recorte selecionado com KPIs, rankings e tendencia.
 - **Configuracoes gerais**: permite administrar usuarios, metas e auditoria para administradores.
@@ -149,7 +149,7 @@ npm run cleanup:local
 ```
 
 - `npm run check`: executa lint, typecheck, testes de regras e build da aplicacao Next.
-- `npm run test:rules`: valida regras criticas de identidade/total da Pre-Fatura.
+- `npm run test:rules`: valida regras criticas de identidade, totais, dedupe, filtros e payloads de Pre-Fatura, Gestao de Pacotes e Desvios PNR.
 - `npm run verify:runtime`: verifica se a URL publicada esta servindo Next, nao o legado.
 - `npm run check:legacy`: valida sintaxe dos principais arquivos JavaScript legados.
 - `npm run audit:all`: roda as auditorias locais nao destrutivas encadeadas.

@@ -1,23 +1,27 @@
 import type { Metadata } from "next";
 import { PageHeader } from "@/components/layout/page-header";
-import { ModuleFoundation } from "@/components/layout/module-foundation";
+import { GestaoPacotesWorkspace } from "@/features/gestao-pacotes/components/gestao-pacotes-workspace";
+import { getGestaoPacotesPage } from "@/features/gestao-pacotes/data/queries";
 
 export const metadata: Metadata = {
   title: "Gestao de Pacotes",
 };
 
-export default function GestaoPacotesPage() {
+export default async function GestaoPacotesPage({
+  searchParams,
+}: {
+  searchParams?: Promise<Record<string, string | string[] | undefined>>;
+}) {
+  const data = await getGestaoPacotesPage((await searchParams) ?? {});
+
   return (
     <>
       <PageHeader
         eyebrow="Modulo"
         title="Gestao de Pacotes"
-        description="Area reservada para migrar o fluxo de pacotes processados sem acoplar o monolito legado."
+        description="Acompanhe pacotes, rotas, eventos e status da operacao."
       />
-      <ModuleFoundation
-        title="Estrutura pronta para dados persistidos"
-        description="A proxima etapa deve portar consultas e tabelas deste modulo em componentes dedicados."
-      />
+      <GestaoPacotesWorkspace data={data} />
     </>
   );
 }
