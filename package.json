@@ -4,7 +4,13 @@
   "private": true,
   "description": "Painel de Inteligência Operacional.",
   "scripts": {
-    "check": "node --check app.js && node --check authService.js && node --check config.js && node --check dashboardCacheService.js && node --check railwayApiClient.js && node --check railwayStagingClient.js && node --check supabaseClient.js && node --check scripts/cleanup-local-artifacts.mjs && node --check scripts/run-audits.mjs && node --check scripts/railway/07-serve-railway-dashboard.mjs",
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start",
+    "lint": "eslint app components features lib proxy.ts next.config.ts --max-warnings=0",
+    "typecheck": "tsc --noEmit",
+    "check": "npm run lint && npm run typecheck && npm run build",
+    "check:legacy": "node --check app.js && node --check authService.js && node --check config.js && node --check dashboardCacheService.js && node --check railwayApiClient.js && node --check railwayStagingClient.js && node --check supabaseClient.js && node --check scripts/cleanup-local-artifacts.mjs && node --check scripts/run-audits.mjs && node --check scripts/railway/07-serve-railway-dashboard.mjs",
     "cleanup:local": "node scripts/cleanup-local-artifacts.mjs",
     "audit:all": "node scripts/run-audits.mjs",
     "audit:dashboard": "node scripts/audit-dashboard-health.mjs",
@@ -27,14 +33,20 @@
     "db:migrate:processed-records": "node scripts/apply-processed-records-migration.mjs",
     "db:migrate:missing-packages": "node scripts/apply-missing-packages-migration.mjs",
     "fix:stuck-pnr-processing": "node scripts/fix-stuck-processing-files.mjs",
-    "start": "node scripts/railway/07-serve-railway-dashboard.mjs",
+    "start:legacy-api": "node scripts/railway/07-serve-railway-dashboard.mjs",
     "start:api": "node scripts/railway/07-serve-railway-dashboard.mjs"
   },
   "dependencies": {
+    "@supabase/ssr": "^0.12.4",
     "@supabase/supabase-js": "^2.87.1",
+    "clsx": "^2.1.1",
     "dotenv": "^17.2.3",
     "exceljs": "^4.4.0",
-    "postgres": "^3.4.9"
+    "lucide-react": "^1.31.0",
+    "next": "^16.3.0",
+    "postgres": "^3.4.9",
+    "react": "^19.2.8",
+    "react-dom": "^19.2.8"
   },
   "main": "app.js",
   "repository": {
@@ -44,9 +56,17 @@
   "keywords": [],
   "author": "",
   "license": "ISC",
-  "type": "commonjs",
+  "type": "module",
   "bugs": {
     "url": "https://github.com/ofmrmatte/dashboardfatura/issues"
   },
-  "homepage": "https://github.com/ofmrmatte/dashboardfatura#readme"
+  "homepage": "https://github.com/ofmrmatte/dashboardfatura#readme",
+  "devDependencies": {
+    "@types/node": "^26.2.0",
+    "@types/react": "^19.2.18",
+    "@types/react-dom": "^19.2.4",
+    "eslint": "^9.39.5",
+    "eslint-config-next": "^16.3.0",
+    "typescript": "^6.0.3"
+  }
 }

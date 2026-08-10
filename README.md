@@ -5,8 +5,9 @@ Dashboard web estatico para analise operacional de pre-fatura, descontos, PNR e 
 ## Configuracao geral
 
 - Producao: https://dashboardfatura.vercel.app
-- Hospedagem: Vercel, projeto estatico do tipo `Other`.
-- Aplicacao: frontend web sem framework de build obrigatorio.
+- Hospedagem: Vercel.
+- Aplicacao nova: Next.js App Router + React + TypeScript.
+- Legado: arquivos estaticos na raiz continuam como referencia para migracao.
 - Backend principal: Supabase.
 - Runtime local para scripts: Node.js.
 - Railway: usado apenas em scripts de migracao, validacao e servidor local de staging; os clientes Railway nao sao carregados no HTML normal de producao.
@@ -28,7 +29,7 @@ Nao usar `service_role`, secret keys ou backend local no frontend. Secrets ficam
 
 ### Vercel
 
-A Vercel serve os arquivos estaticos do repositorio. O painel carrega `index.html`, `styles.css`, `config.js`, os clientes locais e `app.js` diretamente no navegador.
+A Vercel deve executar o build Next.js. A nova aplicacao nao depende de `index.html`, `app.js`, `authService.js`, `supabaseClient.js` ou `config.js` em runtime normal.
 
 ### Railway
 
@@ -63,6 +64,9 @@ A permissao administrativa exige `profiles.is_admin = true` e `profiles.role = '
 
 ## Modulos funcionais
 
+- **Login**: rota dedicada `/login`, usando Supabase Auth pela camada nova em `lib/supabase/`.
+- **Shell autenticado**: sidebar persistente, topbar, menu de usuario, tema dark/light e drawer mobile.
+- **Dashboard Next**: rota `/dashboard`, ja com estrutura visual nova e contagens reais simples de registros processados.
 - **Pre-Fatura**: importa planilhas com abas como `SVC PERDIDOS`, `XPT PERDIDOS` e `PNR`, normaliza registros detalhados, ignora linhas de total/rodape e calcula indicadores por mes, periodo, tipo, base, motorista, rota e pacote.
 - **Gestao de Pacotes**: importa e consolida eventos de pacotes conforme regras do modulo, com leitura processada pelo banco.
 - **Desvios PNR**: usa tabelas/RPCs para consulta paginada e agregacoes de PNR sem baixar todo o historico para a tela.
@@ -105,6 +109,11 @@ A permissao administrativa exige `profiles.is_admin = true` e `profiles.role = '
 
 ## Arquivos principais
 
+- `app/`: nova aplicacao Next.js App Router.
+- `components/`: shell, primitives, feedback, filtros, tabelas e charts.
+- `features/`: organizacao por modulo.
+- `lib/`: Supabase, auth, permissoes, constantes e utils.
+- `public/brand/`: Brand Kit oficial ALC usado pela nova interface.
 - `index.html`: estrutura da aplicacao e scripts inline legados de interface.
 - `styles.css`: estilos, tema claro/escuro e responsividade.
 - `config.js`: configuracao publica do frontend.
@@ -121,7 +130,12 @@ A permissao administrativa exige `profiles.is_admin = true` e `profiles.role = '
 
 ```powershell
 npm install
+npm run dev
+npm run lint
+npm run typecheck
+npm run build
 npm run check
+npm run check:legacy
 npm run audit:dashboard
 npm run audit:dead-code
 npm run audit:module-isolation
@@ -132,7 +146,8 @@ npm run audit:supabase
 npm run cleanup:local
 ```
 
-- `npm run check`: valida sintaxe dos principais arquivos JavaScript.
+- `npm run check`: executa lint, typecheck e build da aplicacao Next.
+- `npm run check:legacy`: valida sintaxe dos principais arquivos JavaScript legados.
 - `npm run audit:all`: roda as auditorias locais nao destrutivas encadeadas.
 - `npm run cleanup:local`: faz dry-run de backups/logs/exportacoes locais que podem ser removidos.
 - `npm run cleanup:local -- --apply`: aplica a limpeza local protegida.
