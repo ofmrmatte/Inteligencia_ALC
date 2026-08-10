@@ -1,0 +1,40 @@
+import { expect, test } from "@playwright/test";
+
+const privateRoutes = [
+  "/",
+  "/dashboard",
+  "/pre-fatura",
+  "/gestao-pacotes",
+  "/desvios-pnr",
+  "/pacotes-faltantes",
+  "/perfil",
+  "/configuracoes",
+];
+
+test("login page renders ALC auth surface", async ({ page }) => {
+  await page.goto("/login");
+  await expect(page).toHaveTitle("Login | ALC Admin Center");
+  await expect(page.getByRole("img", { name: "ALC Admin Center" })).toBeVisible();
+  await expect(page.getByLabel("Email", { exact: true })).toBeVisible();
+  const password = page.getByLabel("Senha", { exact: true });
+  await expect(password).toBeVisible();
+  await expect(page.getByRole("button", { name: "Entrar" })).toBeVisible();
+  await expect(page.getByLabel("Lembrar sessão neste dispositivo")).toBeChecked();
+  await expect(page.locator('link[rel="icon"]')).toHaveAttribute("href", "/brand/alc-favicon.svg");
+
+  await expect(password).toHaveAttribute("type", "password");
+  await page.getByRole("button", { name: "Mostrar senha" }).click();
+  await expect(password).toHaveAttribute("type", "text");
+  await page.getByRole("button", { name: "Ocultar senha" }).click();
+  await expect(password).toHaveAttribute("type", "password");
+});
+
+for (const route of privateRoutes) {
+  test(`anonymous user is redirected from ${route} to login`, async ({ page }) => {
+    await page.goto(route);
+    await expect(page).toHaveURL((url) => {
+      const expectedNext = route === "/" ? "/dashboard" : route;
+      return url.pathname === "/login" && url.searchParams.get("next") === expectedNext;
+    });
+  });
+}

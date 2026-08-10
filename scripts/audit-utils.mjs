@@ -52,9 +52,36 @@ export function createSql() {
     console.error("Configure SUPABASE_DB_URL ou DATABASE_URL.");
     process.exit(1);
   }
-  return postgres(databaseUrl, {
+  const readOnly = !process.argv.includes("--apply");
+  const sql = postgres(databaseUrl, {
     max: 1,
     ssl: "require",
+  });
+  if (!readOnly) return sql;
+
+  let initialized = false;
+  async function ensureReadOnly() {
+    if (initialized) return;
+    initialized = true;
+    await sql.unsafe("set session characteristics as transaction read only");
+    await sql.unsafe("set default_transaction_read_only = on");
+  }
+
+  return new Proxy(sql, {
+    apply(target, thisArg, args) {
+      if (!Array.isArray(args[0]) || !Object.hasOwn(args[0], "raw")) {
+        return Reflect.apply(target, thisArg, args);
+      }
+      return ensureReadOnly().then(() => Reflect.apply(target, thisArg, args));
+    },
+    get(target, prop, receiver) {
+      const value = Reflect.get(target, prop, receiver);
+      if (prop === "end" || typeof value !== "function") return value;
+      return async (...args) => {
+        await ensureReadOnly();
+        return value.apply(target, args);
+      };
+    },
   });
 }
 
