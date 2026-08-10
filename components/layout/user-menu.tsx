@@ -1,10 +1,12 @@
 "use client";
 
-import { LogOut, UserRound } from "lucide-react";
+import Link from "next/link";
+import { LogOut, Settings, UserRound } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { useState } from "react";
 import { createBrowserSupabaseClient } from "@/lib/supabase/browser";
 import type { Profile } from "@/lib/auth/types";
+import { isAdminProfile } from "@/lib/permissions/is-admin-profile";
 
 export function UserMenu({ profile }: { profile: Profile | null }) {
   const router = useRouter();
@@ -39,6 +41,16 @@ export function UserMenu({ profile }: { profile: Profile | null }) {
               <span>{profile?.email || "Sessao ativa"}</span>
             </div>
           </div>
+          <Link href="/perfil" role="menuitem">
+            <UserRound size={16} aria-hidden="true" />
+            <span>Perfil</span>
+          </Link>
+          {isAdminProfile(profile) ? (
+            <Link href="/configuracoes" role="menuitem">
+              <Settings size={16} aria-hidden="true" />
+              <span>Configuracoes</span>
+            </Link>
+          ) : null}
           <button type="button" role="menuitem" onClick={logout} disabled={loading}>
             <LogOut size={16} aria-hidden="true" />
             {loading ? "Saindo..." : "Sair"}

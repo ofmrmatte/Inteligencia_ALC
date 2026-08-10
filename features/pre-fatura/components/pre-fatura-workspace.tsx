@@ -179,9 +179,10 @@ export function PreFaturaWorkspace({ data }: { data: PreFaturaPageData }) {
 
       <div className="toolbar-row">
         <ImportPreFaturaButton />
-        <Button type="button" variant="secondary" icon={<Download size={16} aria-hidden="true" />} disabled>
-          Exportar
-        </Button>
+        <Link href={`/api/exports/pre-fatura?${new URLSearchParams(Object.entries(data.filters).map(([key, value]) => [key, String(value || "")])).toString()}`} className="button button--secondary button--md">
+          <Download size={16} aria-hidden="true" />
+          <span>Exportar XLSX</span>
+        </Link>
         <span className="toolbar-row__note">Upload valida identidade, remove totais e grava somente registros validos.</span>
       </div>
 
