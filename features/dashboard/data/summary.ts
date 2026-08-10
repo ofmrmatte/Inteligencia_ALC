@@ -1,4 +1,5 @@
 import { createServerSupabaseClient } from "@/lib/supabase/server";
+import { toNumber } from "@/features/pre-fatura/domain";
 
 export type DashboardSummary = {
   metrics: Array<{
@@ -54,13 +55,6 @@ async function countRows(table: string) {
   return count ?? 0;
 }
 
-function asNumber(value: number | string | null | undefined) {
-  if (typeof value === "number") return Number.isFinite(value) ? value : 0;
-  if (!value) return 0;
-  const parsed = Number(String(value).replace(/\./g, "").replace(",", "."));
-  return Number.isFinite(parsed) ? parsed : 0;
-}
-
 function formatCurrency(value: number) {
   return new Intl.NumberFormat("pt-BR", {
     style: "currency",
@@ -75,7 +69,7 @@ function ranking(rows: PreFaturaDashboardRow[], getLabel: (row: PreFaturaDashboa
     const label = getLabel(row);
     if (!label) return;
     const current = map.get(label) || { value: 0, count: 0 };
-    current.value += asNumber(row.valor);
+    current.value += toNumber(row.valor);
     current.count += 1;
     map.set(label, current);
   });
@@ -112,7 +106,7 @@ export async function getDashboardSummary(): Promise<DashboardSummary> {
     if (settingsResult.error) throw settingsResult.error;
 
     const preRows = (preFaturaRowsResult.data ?? []) as PreFaturaDashboardRow[];
-    const totalValue = preRows.reduce((sum, row) => sum + asNumber(row.valor), 0);
+    const totalValue = preRows.reduce((sum, row) => sum + toNumber(row.valor), 0);
     const monthlyGoal = ((settingsResult.data as DashboardSettingsRow | null)?.value?.monthly_goal
       ?? (settingsResult.data as DashboardSettingsRow | null)?.value?.monthlyGoal
       ?? null);

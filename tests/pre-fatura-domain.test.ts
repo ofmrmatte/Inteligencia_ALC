@@ -4,6 +4,7 @@ import {
   buildPreFaturaDedupeKey,
   hasPreFaturaPackageIdentity,
   isPreFaturaTotalLikeRow,
+  toNumber,
 } from "@/features/pre-fatura/domain";
 
 test("ignora linhas de total mesmo quando possuem valor", () => {
@@ -34,4 +35,26 @@ test("ids diferentes com mesma rota e valor nao colidem", () => {
   const first = buildPreFaturaDedupeKey({ ...base, id_envio: "47561652903" });
   const second = buildPreFaturaDedupeKey({ ...base, id_envio: "47561652904" });
   assert.notEqual(first, second);
+});
+
+test("interpreta decimal Mercado Livre com ponto sem inflar o valor", () => {
+  assert.equal(toNumber("55.95"), 55.95);
+  assert.equal(toNumber("112.30"), 112.3);
+  assert.equal(toNumber(55.95), 55.95);
+});
+
+test("interpreta valores brasileiros com virgula", () => {
+  assert.equal(toNumber("55,95"), 55.95);
+  assert.equal(toNumber("1.234,56"), 1234.56);
+  assert.equal(toNumber("R$ 1.234,56"), 1234.56);
+});
+
+test("interpreta valores americanos com separador de milhar e decimal", () => {
+  assert.equal(toNumber("1,234.56"), 1234.56);
+  assert.equal(toNumber("12,345.67"), 12345.67);
+});
+
+test("mantem agrupamentos inteiros inequívocos", () => {
+  assert.equal(toNumber("1.234.567"), 1234567);
+  assert.equal(toNumber("1,234,567"), 1234567);
 });

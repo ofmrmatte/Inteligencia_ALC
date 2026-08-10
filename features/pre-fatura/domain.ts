@@ -59,8 +59,44 @@ export const PRE_FATURA_SORT_KEYS: PreFaturaSortKey[] = ["valor", "data", "base"
 
 export function toNumber(value: number | string | null | undefined) {
   if (typeof value === "number") return Number.isFinite(value) ? value : 0;
-  if (!value) return 0;
-  const normalized = String(value).trim().replace(/\./g, "").replace(",", ".");
+  if (value == null) return 0;
+
+  const raw = String(value)
+    .trim()
+    .replace(/\s+/g, "")
+    .replace(/^R\$/i, "")
+    .replace(/[^\d,.\-]/g, "");
+
+  if (!raw || raw === "-") return 0;
+
+  const lastComma = raw.lastIndexOf(",");
+  const lastDot = raw.lastIndexOf(".");
+  let normalized = raw;
+
+  if (lastComma >= 0 && lastDot >= 0) {
+    // O último separador é o decimal:
+    // 1.234,56 -> 1234.56
+    // 1,234.56 -> 1234.56
+    if (lastComma > lastDot) {
+      normalized = raw.replace(/\./g, "").replace(",", ".");
+    } else {
+      normalized = raw.replace(/,/g, "");
+    }
+  } else if (lastComma >= 0) {
+    // Padrão brasileiro: 55,95 -> 55.95.
+    // Se vier agrupamento inteiro como 1,234,567, remove os milhares.
+    normalized = /^-?\d{1,3}(?:,\d{3})+$/.test(raw)
+      ? raw.replace(/,/g, "")
+      : raw.replace(",", ".");
+  } else if (lastDot >= 0) {
+    // Mercado Livre usa ponto decimal: 55.95 precisa continuar 55.95.
+    // Só tratamos ponto como milhar quando há agrupamento inequívoco:
+    // 1.234.567 -> 1234567.
+    normalized = /^-?\d{1,3}(?:\.\d{3})+$/.test(raw)
+      ? raw.replace(/\./g, "")
+      : raw;
+  }
+
   const parsed = Number(normalized);
   return Number.isFinite(parsed) ? parsed : 0;
 }
