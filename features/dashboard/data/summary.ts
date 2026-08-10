@@ -123,8 +123,8 @@ export async function getDashboardSummary(): Promise<DashboardSummary> {
 
     return {
       metrics: [
-        { label: "Pre-Fatura", value: preFaturaCount.toLocaleString("pt-BR"), detail: "registros processados", trend: formatCurrency(totalValue) },
-        { label: "Gestao de Pacotes", value: gestaoPacotes.toLocaleString("pt-BR"), detail: "registros processados" },
+        { label: "Pré-Fatura", value: preFaturaCount.toLocaleString("pt-BR"), detail: "registros processados", trend: formatCurrency(totalValue) },
+        { label: "Gestão de Pacotes", value: gestaoPacotes.toLocaleString("pt-BR"), detail: "registros processados" },
         { label: "Desvios PNR", value: desviosPnr.toLocaleString("pt-BR"), detail: "registros processados" },
         { label: "Pacotes Faltantes", value: pacotesFaltantes.toLocaleString("pt-BR"), detail: "registros processados" },
       ],

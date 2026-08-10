@@ -1,137 +1,152 @@
-import { readFile, readdir, stat } from "node:fs/promises";
+import { access, readFile, readdir } from "node:fs/promises";
 import path from "node:path";
 import { printSection, writeAuditReport } from "./audit-utils.mjs";
 
 const ROOT = process.cwd();
-const legacyRoot = "legacy";
-const codeFiles = [
-  "app.js",
-  "index.html",
-  "styles.css",
-  "supabaseClient.js",
-  "authService.js",
-  "dashboardCacheService.js",
-];
-const canonicalKeys = ["pre_fatura", "gestao_pacotes", "desvios_pnr", "pacotes_faltantes"];
-const legacyKeys = ["pre-fatura", "gestao-pacotes", "gestao-desvios-pnr", "desvios-pnr", "pacotes-faltantes"];
+const SOURCE_DIRS = ["app", "components", "features", "lib"];
+const API_ROUTE_EXPECTATIONS = {
+  "app/api/configuracoes/settings/route.ts": "ADMIN",
+  "app/api/configuracoes/users/route.ts": "ADMIN",
+  "app/api/desvios-pnr/status/route.ts": "ADMIN",
+  "app/api/desvios-pnr/validate/route.ts": "AUTH",
+  "app/api/exports/desvios-pnr/route.ts": "AUTH",
+  "app/api/exports/gestao-pacotes/route.ts": "AUTH",
+  "app/api/exports/pacotes-faltantes/route.ts": "AUTH",
+  "app/api/exports/pre-fatura/route.ts": "AUTH",
+  "app/api/gestao-pacotes/validate/route.ts": "AUTH",
+  "app/api/pacotes-faltantes/status/route.ts": "ADMIN",
+  "app/api/perfil/avatar/route.ts": "AUTH",
+  "app/api/perfil/route.ts": "AUTH",
+  "app/api/pre-fatura/validate/route.ts": "AUTH",
+};
 
-async function readProjectFile(file) {
-  return readFile(path.join(ROOT, legacyRoot, file), "utf8");
-}
-
-async function listScripts(dir = path.join(ROOT, "scripts")) {
-  const entries = await readdir(dir, { withFileTypes: true });
-  const files = [];
+async function listFiles(dir) {
+  const entries = await readdir(path.join(ROOT, dir), { withFileTypes: true });
+  const output = [];
   for (const entry of entries) {
-    const full = path.join(dir, entry.name);
-    if (entry.isDirectory()) {
-      files.push(...await listScripts(full));
-    } else if (entry.isFile() && entry.name.endsWith(".mjs")) {
-      files.push(full);
-    }
+    const relative = path.join(dir, entry.name);
+    if (entry.isDirectory()) output.push(...await listFiles(relative));
+    else if (entry.isFile() && /\.(ts|tsx|css)$/.test(entry.name)) output.push(relative.replace(/\\/g, "/"));
   }
-  return files;
+  return output;
 }
 
-function countPattern(content, pattern) {
-  return [...content.matchAll(pattern)].length;
+async function exists(relativePath) {
+  try {
+    await access(path.join(ROOT, relativePath));
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function routeGuard(content) {
+  if (content.includes("requireAdmin(")) return "ADMIN";
+  if (content.includes("requireAuthenticated(")) return "AUTH";
+  return "PUBLIC";
+}
+
+function countPattern(files, pattern) {
+  return files.reduce((matches, file) => (
+    matches + [...file.content.matchAll(pattern)].map(() => file.path).length
+  ), 0);
 }
 
 try {
-  const contents = Object.fromEntries(await Promise.all(codeFiles.map(async (file) => [file, await readProjectFile(file)])));
-  const app = contents["app.js"];
-  const styles = contents["styles.css"];
-  const scripts = await listScripts();
-  const scriptStats = [];
-  for (const file of scripts) {
-    const info = await stat(file);
-    scriptStats.push({
-      file: path.relative(ROOT, file).replace(/\\/g, "/"),
-      bytes: info.size,
-      referencedInPackage: false,
-    });
+  const files = [];
+  for (const dir of SOURCE_DIRS) {
+    const listed = await listFiles(dir);
+    for (const file of listed) {
+      if (/features\/[^/]+\/migration\.ts$/.test(file)) continue;
+      files.push({ path: file, content: await readFile(path.join(ROOT, file), "utf8") });
+    }
   }
+  const allText = files.map((file) => file.content).join("\n");
+  const apiRoutes = files
+    .filter((file) => file.path.startsWith("app/api/") && file.path.endsWith("/route.ts"))
+    .map((file) => ({
+      file: file.path,
+      expected: API_ROUTE_EXPECTATIONS[file.path] || "UNMAPPED",
+      guard: routeGuard(file.content),
+    }));
 
-  const packageJson = JSON.parse(await readFile(path.join(ROOT, "package.json"), "utf8"));
-  const packageScriptText = JSON.stringify(packageJson.scripts || {});
-  scriptStats.forEach((item) => {
-    item.referencedInPackage = packageScriptText.includes(item.file) || packageScriptText.includes(item.file.replace("scripts/", "scripts\\"));
-  });
-
-  const checks = [
-    {
-      id: "keep_raw_uploads_disabled",
-      ok: /const\s+KEEP_RAW_UPLOADS_IN_STORAGE\s*=\s*false\s*;/.test(app),
-      detail: "KEEP_RAW_UPLOADS_IN_STORAGE must stay false for processed-only.",
-    },
-    {
-      id: "no_dashboard_storage_download",
-      ok: !/storage\.from\(["']dashboard-files["']\)\.download\s*\(/.test(app),
-      detail: "Dashboard must not download raw files from Storage to render.",
-    },
-    {
-      id: "dashboard_storage_upload_guarded",
-      ok: /if\s*\(\s*KEEP_RAW_UPLOADS_IN_STORAGE\s*\)[\s\S]{0,300}storage\s*\.from\(["']dashboard-files["']\)\s*\.upload/.test(app),
-      detail: "Raw upload is guarded by KEEP_RAW_UPLOADS_IN_STORAGE.",
-    },
-    {
-      id: "load_persisted_module_path",
-      ok: /async function loadPersistedDatasetForModule/.test(app) && /fetchAllProcessedRowsFromTable/.test(app),
-      detail: "Modules can load from persisted tables.",
-    },
-    {
-      id: "file_delete_uses_tables",
-      ok: /async function deleteImportedRowsForRecord/.test(app) && /deleteProcessedDashboardFileMetadata/.test(app),
-      detail: "Deletion path removes persisted rows and processed metadata.",
-    },
-    {
-      id: "module_key_constants",
-      ok: canonicalKeys.every((key) => app.includes(`"${key}"`)),
-      detail: "Canonical module keys are declared.",
-    },
+  const brandAssets = [
+    "public/brand/alc-admin-center-lockup-dark.svg",
+    "public/brand/alc-admin-center-lockup-light.svg",
+    "public/brand/alc-favicon.svg",
+    "public/brand/alc-loader-dark.svg",
+    "public/brand/alc-loader-light.svg",
+    "public/brand/alc-symbol-dark.svg",
+    "public/brand/alc-symbol-light.svg",
   ];
 
-  const storageMentions = codeFiles.map((file) => ({
-    file,
-    storageMentions: countPattern(contents[file], /storage_path|storage\.from|dashboard-files|KEEP_RAW_UPLOADS_IN_STORAGE/g),
-  }));
-
-  const legacyKeyMentions = codeFiles.map((file) => ({
-    file,
-    mentions: legacyKeys.reduce((sum, key) => sum + contents[file].split(key).length - 1, 0),
-  })).filter((item) => item.mentions > 0);
-
-  const cssDuplicateSelectors = [];
-  const selectorCounts = new Map();
-  for (const match of styles.matchAll(/(^|\n)\s*([^{}\n][^{]+)\s*\{/g)) {
-    const selector = match[2].trim();
-    if (!selector || selector.startsWith("@")) continue;
-    selectorCounts.set(selector, (selectorCounts.get(selector) || 0) + 1);
-  }
-  for (const [selector, count] of selectorCounts) {
-    if (count > 1) cssDuplicateSelectors.push({ selector, count });
-  }
-  cssDuplicateSelectors.sort((a, b) => b.count - a.count || a.selector.localeCompare(b.selector));
+  const adminHelper = await readFile(path.join(ROOT, "lib/permissions/is-admin-profile.ts"), "utf8");
+  const checks = [
+    {
+      id: "no_fake_topbar_search",
+      ok: !/topbar-search|Pesquisar no painel/.test(allText),
+      detail: "Topbar nao deve exibir busca sem backend funcional.",
+    },
+    {
+      id: "no_visible_migration_badge",
+      ok: !/Em migracao|Em migração|em desenvolvimento|modulo em processo|módulo em processo/i.test(allText),
+      detail: "Runtime final nao deve exibir linguagem de placeholder/migracao.",
+    },
+    {
+      id: "no_module_foundation_runtime",
+      ok: !allText.includes("ModuleFoundation") && !await exists("components/layout/module-foundation.tsx"),
+      detail: "Componente foundation temporario foi removido do runtime.",
+    },
+    {
+      id: "no_legacy_runtime_imports",
+      ok: !/legacy\/|legacy\\|assets\/vendor|authService|supabaseClient\.js|dashboardCacheService|window\.supabaseClient/.test(allText),
+      detail: "Runtime Next nao importa app legado nem bibliotecas vendor de navegador.",
+    },
+    {
+      id: "no_service_role_in_runtime",
+      ok: !/SERVICE_ROLE|service_role|SUPABASE_SERVICE/i.test(allText),
+      detail: "Service role nao pode aparecer no runtime app/components/features/lib.",
+    },
+    {
+      id: "admin_rule_single_helper",
+      ok: /is_admin\s*===\s*true/.test(adminHelper) && /role/.test(adminHelper) && /admin/.test(adminHelper) && !/user_metadata/i.test(allText),
+      detail: "Admin exige helper central e nao usa user_metadata.",
+    },
+    {
+      id: "exceljs_server_only",
+      ok: files
+        .filter((file) => file.content.includes("from \"exceljs\""))
+        .every((file) => file.path.startsWith("app/api/") || file.path === "lib/export/xlsx.ts"),
+      detail: "ExcelJS deve ficar em rotas API/export server-side, fora de componentes client.",
+    },
+    {
+      id: "brand_assets_present",
+      ok: (await Promise.all(brandAssets.map(exists))).every(Boolean),
+      detail: "Assets oficiais ALC usados pelo shell/login/loaders estao em public/brand.",
+    },
+    {
+      id: "api_routes_guarded",
+      ok: apiRoutes.every((route) => route.expected !== "UNMAPPED" && route.guard === route.expected),
+      detail: "Rotas app/api devem estar classificadas como AUTH ou ADMIN e usar guard correspondente.",
+    },
+  ];
 
   const report = {
     generatedAt: new Date().toISOString(),
     checks,
-    storageMentions,
-    legacyKeyMentions,
-    scriptStats,
-    cssDuplicateSelectors: cssDuplicateSelectors.slice(0, 80),
-    notes: [
-      "Legacy module key mentions are acceptable only inside normalization or migration compatibility paths.",
-      "Storage mentions are acceptable for avatars, optional guarded raw upload, and best-effort deletion, not rendering.",
-    ],
+    apiRoutes,
+    counts: {
+      sourceFiles: files.length,
+      serviceRoleMentions: countPattern(files, /SERVICE_ROLE|service_role|SUPABASE_SERVICE/gi),
+      legacyMentions: countPattern(files, /legacy\/|legacy\\|window\.supabaseClient/gi),
+      placeholderMentions: countPattern(files, /Em migracao|Em migração|em desenvolvimento|modulo em processo|módulo em processo/gi),
+    },
   };
   const reportPath = await writeAuditReport("dashboard-health", report);
 
   printSection("Dashboard health");
   checks.forEach((check) => console.log(`${check.ok ? "ok" : "falha"} ${check.id}: ${check.detail}`));
-  console.log(`Legacy key files: ${legacyKeyMentions.length}`);
-  console.log(`CSS duplicate selectors sampled: ${report.cssDuplicateSelectors.length}`);
-  console.log(`Scripts found: ${scriptStats.length}`);
+  console.table(apiRoutes);
   console.log(`Relatorio: ${reportPath}`);
 
   if (checks.some((check) => !check.ok)) process.exitCode = 2;

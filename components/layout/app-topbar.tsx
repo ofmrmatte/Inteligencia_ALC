@@ -1,6 +1,6 @@
 "use client";
 
-import { Menu, Search } from "lucide-react";
+import { Menu } from "lucide-react";
 import { usePathname } from "next/navigation";
 import { ThemeToggle } from "@/components/layout/theme-toggle";
 import { UserMenu } from "@/components/layout/user-menu";
@@ -8,11 +8,11 @@ import type { Profile } from "@/lib/auth/types";
 
 const titles: Record<string, string> = {
   "/dashboard": "Dashboard",
-  "/pre-fatura": "Pre-Fatura",
-  "/gestao-pacotes": "Gestao de Pacotes",
+  "/pre-fatura": "Pré-Fatura",
+  "/gestao-pacotes": "Gestão de Pacotes",
   "/desvios-pnr": "Desvios PNR",
   "/pacotes-faltantes": "Pacotes Faltantes",
-  "/configuracoes": "Configuracoes",
+  "/configuracoes": "Configurações",
 };
 
 export function AppTopbar({ profile, onOpenMenu }: { profile: Profile | null; onOpenMenu: () => void }) {
@@ -25,15 +25,10 @@ export function AppTopbar({ profile, onOpenMenu }: { profile: Profile | null; on
         <Menu size={20} aria-hidden="true" />
       </button>
       <div>
-        <span>Modulo</span>
+        <span>Módulo</span>
         <strong>{title}</strong>
       </div>
       <div className="app-topbar__actions">
-        <label className="topbar-search">
-          <Search size={16} aria-hidden="true" />
-          <span className="sr-only">Pesquisar</span>
-          <input type="search" placeholder="Pesquisar no painel" aria-label="Pesquisar no painel" />
-        </label>
         <ThemeToggle />
         <UserMenu profile={profile} />
       </div>

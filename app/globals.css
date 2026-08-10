@@ -612,7 +612,6 @@ a {
 }
 
 .section-header h2,
-.module-foundation h2,
 .empty-state h2,
 .error-state h2 {
   margin: 6px 0 0;
@@ -771,16 +770,6 @@ a {
 
 .data-table-shell {
   overflow: hidden;
-}
-
-.module-foundation {
-  display: grid;
-  gap: 18px;
-}
-
-.module-foundation p {
-  max-width: 760px;
-  color: var(--text-muted);
 }
 
 .rule-list {
@@ -1054,28 +1043,6 @@ a {
   font-weight: 850;
   letter-spacing: 0;
   text-transform: uppercase;
-}
-
-.topbar-search {
-  width: min(30vw, 320px);
-  min-height: 40px;
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
-  padding: 0 12px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  color: var(--text-muted);
-  background: var(--input);
-}
-
-.topbar-search input {
-  width: 100%;
-  min-width: 0;
-  border: 0;
-  color: var(--text);
-  background: transparent;
-  outline: 0;
 }
 
 .metric-card small {
@@ -1561,10 +1528,6 @@ a {
 }
 
 @media (max-width: 820px) {
-  .topbar-search {
-    display: none;
-  }
-
   .operation-panel__stats,
   .filter-form,
   .filter-form--wide,

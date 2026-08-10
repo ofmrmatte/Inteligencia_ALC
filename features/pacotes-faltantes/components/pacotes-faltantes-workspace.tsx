@@ -116,7 +116,7 @@ function MissingPackageFilters({ data }: { data: MissingPackagePageData }) {
 
 function MissingPackagesTable({ data, canManage }: { data: MissingPackagePageData; canManage: boolean }) {
   if (!data.rows.length) {
-    return <EmptyState title="Nenhum pacote faltante encontrado" description="A tabela persistida ainda nao tem registros para este recorte." />;
+    return <EmptyState title="Nenhum pacote faltante encontrado" description="A tabela persistida ainda não tem registros para este recorte." />;
   }
 
   return (
@@ -145,7 +145,7 @@ function MissingPackagesTable({ data, canManage }: { data: MissingPackagePageDat
                   <strong>{row.base || "-"}</strong>
                   <span>{row.tipo_base || ""}</span>
                 </td>
-                <td>{row.driver_nome || "Nao identificado"}</td>
+                <td>{row.driver_nome || "Não identificado"}</td>
                 <td><strong>{row.id_envio || "-"}</strong></td>
                 <td>
                   <strong>{row.caso || "Pacote faltante"}</strong>
@@ -177,7 +177,7 @@ function MissingPackagesTable({ data, canManage }: { data: MissingPackagePageDat
 function Pagination({ data }: { data: MissingPackagePageData }) {
   const current = data.filters.page;
   return (
-    <nav className="pagination" aria-label="Paginacao de Pacotes Faltantes">
+    <nav className="pagination" aria-label="Paginação de Pacotes Faltantes">
       <span>
         Pagina {number(current)} de {number(data.totalPages)} · {number(data.totalRows)} registros
       </span>
@@ -196,7 +196,7 @@ function Pagination({ data }: { data: MissingPackagePageData }) {
 export function PacotesFaltantesWorkspace({ data, canManage }: { data: MissingPackagePageData; canManage: boolean }) {
   return (
     <div className="page-stack">
-      {data.error ? <div className="inline-warning">Pacotes Faltantes indisponivel agora: {data.error}</div> : null}
+      {data.error ? <div className="inline-warning">Pacotes Faltantes indisponível agora: {data.error}</div> : null}
 
       <section className="metric-grid" aria-label="Resumo de Pacotes Faltantes">
         <MetricCard label="Registros" value={number(data.summary.totalRows)} detail="linhas persistidas" tone="accent" />

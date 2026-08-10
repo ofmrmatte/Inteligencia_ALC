@@ -1,7 +1,20 @@
-import { readFile } from "node:fs/promises";
+import { readFile, readdir } from "node:fs/promises";
+import path from "node:path";
 import { bytesToHuman, createSql, printSection, writeAuditReport } from "./audit-utils.mjs";
 
+const ROOT = process.cwd();
 const sql = createSql();
+
+async function listFiles(dir) {
+  const entries = await readdir(path.join(ROOT, dir), { withFileTypes: true });
+  const output = [];
+  for (const entry of entries) {
+    const relative = path.join(dir, entry.name);
+    if (entry.isDirectory()) output.push(...await listFiles(relative));
+    else if (entry.isFile() && /\.(ts|tsx|mjs)$/.test(entry.name)) output.push(relative.replace(/\\/g, "/"));
+  }
+  return output;
+}
 
 async function relationStats(tableName) {
   const [row] = await sql`
@@ -30,11 +43,21 @@ async function relationStats(tableName) {
 }
 
 try {
-  const app = await readFile("legacy/app.js", "utf8");
+  const scannedFiles = [];
+  for (const dir of ["app", "features", "lib", "scripts"]) {
+    for (const file of await listFiles(dir)) {
+      if (file.startsWith("scripts/audit-raw-data-compaction")) continue;
+      scannedFiles.push({ file, content: await readFile(path.join(ROOT, file), "utf8") });
+    }
+  }
+  const rawDataReaders = scannedFiles
+    .filter((item) => /raw_data/.test(item.content))
+    .map((item) => item.file);
   const usageSignals = {
-    pre_fatura_mapper_uses_raw_data: /function mapProcessedPreFaturaRecord[\s\S]+?const raw = record\.raw_data/.test(app),
-    gestao_pacotes_mapper_uses_raw_data: /function mapProcessedPackageRecord[\s\S]+?const raw = record\.raw_data/.test(app),
-    excel_or_report_direct_raw_data_reads: /download|report|Relat[óo]rio/.test(app) && /raw_data/.test(app),
+    runtime_reads_raw_data: rawDataReaders.some((file) => file.startsWith("app/") || file.startsWith("features/") || file.startsWith("lib/")),
+    export_reads_raw_data: rawDataReaders.some((file) => file.startsWith("app/api/exports/") || file.startsWith("lib/export/")),
+    import_persists_raw_data: rawDataReaders.some((file) => file.includes("/validate/route.ts")),
+    raw_data_readers: rawDataReaders,
   };
   const tables = [
     await relationStats("pre_fatura_records"),
@@ -44,10 +67,10 @@ try {
   const report = {
     generatedAt: new Date().toISOString(),
     mode: "audit-only",
-    actionTaken: "Nenhuma compactação foi aplicada.",
-    recommendation: usageSignals.pre_fatura_mapper_uses_raw_data || usageSignals.gestao_pacotes_mapper_uses_raw_data
-      ? "Manter raw_data até a validação funcional provar que os mapeadores, relatórios e downloads não dependem dele."
-      : "Pode compactar em janela controlada após teste funcional completo.",
+    actionTaken: "Nenhuma compactacao foi aplicada.",
+    recommendation: usageSignals.runtime_reads_raw_data
+      ? "Manter raw_data ate teste funcional provar que importacao, relatórios e telas nao dependem do campo."
+      : "Pode compactar em janela controlada apos teste funcional completo.",
     totalEstimatedRecoverableBytes: totalRecoverable,
     totalEstimatedRecoverableSize: bytesToHuman(totalRecoverable),
     usageSignals,
@@ -63,7 +86,7 @@ try {
     raw_data_size: table.raw_data_size,
     estimated_recoverable_size: table.estimated_recoverable_size,
   })));
-  console.log(`Recuperável estimado: ${bytesToHuman(totalRecoverable)}`);
+  console.log(`Recuperavel estimado: ${bytesToHuman(totalRecoverable)}`);
   console.log(`Ação aplicada: nenhuma`);
   console.log(`Relatorio: ${reportPath}`);
 } catch (error) {

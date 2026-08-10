@@ -1,7 +1,7 @@
 export const BRAND = {
   name: "ALC",
   productName: "ALC Admin Center",
-  description: "Painel de Inteligencia Operacional",
+  description: "Painel de Inteligência Operacional",
   assets: {
     favicon: "/brand/alc-favicon.svg",
     symbolDark: "/brand/alc-symbol-dark.svg",

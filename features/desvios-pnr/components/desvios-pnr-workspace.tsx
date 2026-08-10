@@ -180,7 +180,7 @@ function BarList({ title, rows, valueMode = "count" }: { title: string; rows: Pn
           return (
             <div className="bar-row" key={row.label}>
               <div>
-                <span>{row.label || "Nao identificado"}</span>
+                <span>{row.label || "Não identificado"}</span>
                 <strong>{valueMode === "value" ? compactCurrency(row.totalValue) : number(row.count)}</strong>
               </div>
               <div className="bar-row__track">
@@ -251,7 +251,7 @@ function PnrTable({ data, canManage }: { data: PnrPageData; canManage: boolean }
                 <span>{row.dedupe_key || ""}</span>
               </td>
               <td>
-                <strong>{row.produtos || "Produto nao informado"}</strong>
+                <strong>{row.produtos || "Produto não informado"}</strong>
                 <span>{row.id_reclamacao || ""}</span>
               </td>
               <td>{row.estacao_origem || row.tipo_base || "-"}</td>
@@ -287,7 +287,7 @@ function PnrTable({ data, canManage }: { data: PnrPageData; canManage: boolean }
 function Pagination({ data }: { data: PnrPageData }) {
   const current = data.filters.page;
   return (
-    <nav className="pagination" aria-label="Paginacao de Desvios PNR">
+    <nav className="pagination" aria-label="Paginação de Desvios PNR">
       <span>
         Pagina {number(current)} de {number(data.totalPages)} · {number(data.totalRows)} registros
       </span>
@@ -307,7 +307,7 @@ export function DesviosPnrWorkspace({ data, canManage }: { data: PnrPageData; ca
   const summary = data.summary.summary;
   return (
     <div className="page-stack">
-      {data.error ? <div className="inline-warning">Desvios PNR indisponivel agora: {data.error}</div> : null}
+      {data.error ? <div className="inline-warning">Desvios PNR indisponível agora: {data.error}</div> : null}
 
       <section className="metric-grid" aria-label="Resumo de Desvios PNR">
         <MetricCard label="PNRs filtrados" value={number(summary.count)} detail="total no recorte das RPCs" tone="accent" />

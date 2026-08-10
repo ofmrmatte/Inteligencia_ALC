@@ -70,7 +70,7 @@ export function ProfileWorkspace({ profile }: { profile: Profile | null }) {
         <div>
           <span>Conta</span>
           <h2>{profile?.name || "Usuario"}</h2>
-          <p>{profile?.email || "Sessao autenticada"}</p>
+          <p>{profile?.email || "Sessão autenticada"}</p>
         </div>
       </Card>
 
@@ -89,11 +89,11 @@ export function ProfileWorkspace({ profile }: { profile: Profile | null }) {
             <div className="read-only-grid">
               <div>
                 <span>Setor</span>
-                <strong>{profile?.setor || "Nao definido"}</strong>
+                <strong>{profile?.setor || "Não definido"}</strong>
               </div>
               <div>
                 <span>Cargo</span>
-                <strong>{profile?.cargo || "Nao definido"}</strong>
+                <strong>{profile?.cargo || "Não definido"}</strong>
               </div>
               <div>
                 <span>Perfil</span>

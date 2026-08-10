@@ -35,7 +35,7 @@ export function AppSidebar({ profile, collapsed, onToggleCollapsed, onNavigate }
   const initials = (profile?.name || profile?.email || "ALC").slice(0, 2).toUpperCase();
 
   return (
-    <aside className={cn("app-sidebar", collapsed && "app-sidebar--collapsed")} aria-label="Navegacao principal">
+    <aside className={cn("app-sidebar", collapsed && "app-sidebar--collapsed")} aria-label="Navegação principal">
       <div className="app-sidebar__brand">
         <Image src={BRAND.assets.symbolDark} alt="ALC" width={38} height={38} priority />
         <div>
@@ -45,7 +45,7 @@ export function AppSidebar({ profile, collapsed, onToggleCollapsed, onNavigate }
       </div>
 
       <nav className="sidebar-nav">
-        <span className="sidebar-nav__group">Operacao</span>
+        <span className="sidebar-nav__group">Operação</span>
         {dashboardRoutes.map((item) => (
           <NavItem key={item.href} href={item.href} label={item.label} Icon={item.icon} collapsed={collapsed} onNavigate={onNavigate} />
         ))}
@@ -60,8 +60,8 @@ export function AppSidebar({ profile, collapsed, onToggleCollapsed, onNavigate }
           {initials}
         </div>
         <div>
-          <strong>{profile?.name || "Usuario ALC"}</strong>
-          <span>{profile?.setor || profile?.cargo || "Operacao"}</span>
+          <strong>{profile?.name || "Usuário ALC"}</strong>
+          <span>{profile?.setor || profile?.cargo || "Operação"}</span>
         </div>
         {onToggleCollapsed ? (
           <button type="button" className="icon-button app-sidebar__collapse" onClick={onToggleCollapsed} aria-label={collapsed ? "Expandir menu" : "Recolher menu"}>

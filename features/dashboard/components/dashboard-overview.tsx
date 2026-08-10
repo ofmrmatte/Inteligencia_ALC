@@ -39,7 +39,7 @@ export function DashboardOverview({ summary }: { summary: DashboardSummary }) {
         <Card className="operation-panel">
           <div className="section-header">
             <div>
-              <span>Pre-Fatura</span>
+              <span>Pré-Fatura</span>
               <h2>Visao operacional</h2>
             </div>
             <ReceiptText size={20} aria-hidden="true" />
@@ -114,7 +114,7 @@ export function DashboardOverview({ summary }: { summary: DashboardSummary }) {
         <Card className="module-shortcuts">
           <div className="section-header">
             <div>
-              <span>Modulos</span>
+              <span>Módulos</span>
               <h2>Acesso operacional</h2>
             </div>
           </div>
@@ -161,7 +161,7 @@ export function DashboardOverview({ summary }: { summary: DashboardSummary }) {
                 <div key={file.id} className="activity-list__item">
                   <div>
                     <strong>{file.file_name || "Arquivo sem nome"}</strong>
-                    <span>{file.file_type || "tipo nao informado"}</span>
+                    <span>{file.file_type || "tipo não informado"}</span>
                   </div>
                   <Badge tone={file.status === "processed" ? "success" : "neutral"}>{file.status || "registrado"}</Badge>
                 </div>

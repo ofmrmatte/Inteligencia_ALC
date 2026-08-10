@@ -9,7 +9,7 @@ type ErrorStateProps = {
 };
 
 export function ErrorState({
-  title = "Nao foi possivel carregar esta area",
+  title = "Não foi possível carregar esta área",
   message = "Tente novamente em instantes.",
   reset,
 }: ErrorStateProps) {

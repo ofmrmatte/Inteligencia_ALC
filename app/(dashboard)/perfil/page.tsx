@@ -15,7 +15,7 @@ export default async function PerfilPage() {
       <PageHeader
         eyebrow="Conta"
         title="Perfil"
-        description="Dados pessoais, avatar e contexto operacional do usuario autenticado."
+        description="Dados pessoais, avatar e contexto operacional do usuário autenticado."
       />
       <ProfileWorkspace profile={profile} />
     </>

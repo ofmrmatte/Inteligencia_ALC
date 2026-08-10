@@ -1,4 +1,5 @@
 import { buildXlsxResponse } from "@/lib/export/xlsx";
+import { apiError } from "@/lib/server/api-response";
 import { requireAuthenticated } from "@/lib/server/authz";
 import { createServerSupabaseClient } from "@/lib/supabase/server";
 import { parsePreFaturaFilters } from "@/features/pre-fatura/data";
@@ -36,18 +37,18 @@ export async function GET(request: Request) {
   query = applyFilters(query, filters);
 
   const { data, error } = await query.order(filters.sort, { ascending: filters.dir === "asc", nullsFirst: false });
-  if (error) return Response.json({ error: error.message }, { status: 400 });
+  if (error) return apiError("Não foi possível exportar a Pré-Fatura agora.", 400);
 
   return buildXlsxResponse<PreFaturaRecord>({
     fileName: "alc-pre-fatura.xlsx",
-    sheetName: "Pre-Fatura",
+    sheetName: "Pré-Fatura",
     rows: (data ?? []) as PreFaturaRecord[],
     columns: [
-      { header: "Competencia", key: "competencia", width: 14 },
+      { header: "Competência", key: "competencia", width: 14 },
       { header: "Quinzena", key: "quinzena", width: 16 },
       { header: "Tipo", key: "tipo", width: 18 },
       { header: "Base", key: "base", width: 26 },
-      { header: "Codigo base", key: "codigo_base", width: 14 },
+      { header: "Código base", key: "codigo_base", width: 14 },
       { header: "Driver", key: "driver", width: 32 },
       { header: "Placa", key: "placa", width: 14 },
       { header: "Data", key: "data", width: 14 },

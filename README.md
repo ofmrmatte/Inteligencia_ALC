@@ -1,13 +1,19 @@
-# Painel de Inteligencia
+# Painel de Inteligência
 
-Aplicacao web Next.js para analise operacional de pre-fatura, descontos, PNR e gestao de pacotes por base, motorista, competencia, mes e quinzena.
+Aplicação web Next.js para análise operacional de pré-fatura, descontos, PNR e gestão de pacotes por base, motorista, competência, mês e quinzena.
+
+## Estado da Fase 2
+
+A Fase 2 usa Next.js App Router, React e TypeScript como runtime principal. O legado permanece somente como referência histórica e suporte a scripts antigos de staging/backfill; ele não é importado pelo runtime Next nem pela Vercel em fluxo normal.
+
+Relatório de decisão: `docs/LEGACY_PARITY_REPORT.md`.
 
 ## Configuracao geral
 
 - Producao: https://dashboardfatura.vercel.app
 - Hospedagem: Vercel.
-- Aplicacao nova: Next.js App Router + React + TypeScript.
-- Legado: arquivos estaticos ficam em `legacy/` apenas como referencia para migracao.
+- Aplicação principal: Next.js App Router + React + TypeScript.
+- Legado: arquivos estáticos ficam em `legacy/` apenas como referência histórica e suporte a scripts antigos.
 - Backend principal: Supabase.
 - Runtime local para scripts: Node.js.
 - Railway: usado apenas em scripts de migracao, validacao e servidor local de staging; os clientes Railway nao sao carregados no HTML normal de producao.
@@ -25,7 +31,7 @@ O painel depende do Supabase para autenticacao, perfis, permissoes, registros pr
 - Cliente publico: `lib/supabase/browser.ts`.
 - Autenticacao/perfil: `lib/auth/session.ts` e Supabase Auth.
 
-Nao usar `service_role`, secret keys ou backend local no frontend. Secrets ficam apenas em `.env` local ou no ambiente do provedor que executa scripts administrativos.
+Não usar `service_role`, secret keys ou backend local no frontend. Secrets ficam apenas em `.env` local ou no ambiente do provedor que executa scripts administrativos.
 
 ### Vercel
 
@@ -152,7 +158,7 @@ npm run cleanup:local
 - `npm run test:rules`: valida regras criticas de identidade, totais, dedupe, filtros, payloads, Pacotes Faltantes e permissao admin.
 - `npm run verify:runtime`: verifica se a URL publicada esta servindo Next, nao o legado.
 - `npm run check:legacy`: valida sintaxe dos principais arquivos JavaScript legados.
-- `npm run audit:all`: roda as auditorias locais nao destrutivas encadeadas.
+- `npm run audit:all`: roda as auditorias locais não destrutivas encadeadas, incluindo checks de runtime Next, dedupe, módulos, reconciliação e Supabase.
 - `npm run cleanup:local`: faz dry-run de backups/logs/exportacoes locais que podem ser removidos.
 - `npm run cleanup:local -- --apply`: aplica a limpeza local protegida.
 - `npm run railway:*`: scripts de apoio a migracao/validacao Railway; nao fazem parte do fluxo normal da Vercel.

@@ -7,7 +7,7 @@ import { getCurrentSession } from "@/lib/auth/session";
 import { isAdminProfile } from "@/lib/permissions/is-admin-profile";
 
 export const metadata: Metadata = {
-  title: "Configuracoes",
+  title: "Configurações",
 };
 
 export default async function ConfiguracoesPage() {
@@ -18,9 +18,9 @@ export default async function ConfiguracoesPage() {
   return (
     <>
       <PageHeader
-        eyebrow="Administracao"
-        title="Configuracoes"
-        description="Usuarios, permissoes, metas PNR, arquivos processados e auditoria operacional."
+        eyebrow="Administração"
+        title="Configurações"
+        description="Usuários, permissões, metas PNR, arquivos processados e auditoria operacional."
       />
       <ConfiguracoesWorkspace data={data} />
     </>

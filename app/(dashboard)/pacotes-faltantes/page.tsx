@@ -22,7 +22,7 @@ export default async function PacotesFaltantesPage({
   return (
     <>
       <PageHeader
-        eyebrow="Modulo"
+        eyebrow="Módulo"
         title="Pacotes Faltantes"
         description="Tratativas de pacotes faltantes persistidas, com SLA, status e exportacao por recorte."
       />
