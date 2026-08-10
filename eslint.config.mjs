@@ -12,6 +12,7 @@ const eslintConfig = [
       "dist/**",
       "coverage/**",
       "assets/**",
+      "legacy/**",
       "supabase/**",
       "app.js",
       "authService.js",

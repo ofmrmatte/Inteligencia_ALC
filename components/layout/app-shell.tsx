@@ -15,11 +15,23 @@ type AppShellProps = {
 
 export function AppShell({ profile, children }: AppShellProps) {
   const [mobileOpen, setMobileOpen] = useState(false);
+  const [collapsed, setCollapsed] = useState(() => {
+    if (typeof window === "undefined") return false;
+    return localStorage.getItem("alc-sidebar-collapsed") === "true";
+  });
+
+  function toggleCollapsed() {
+    setCollapsed((current) => {
+      const next = !current;
+      localStorage.setItem("alc-sidebar-collapsed", String(next));
+      return next;
+    });
+  }
 
   return (
-    <div className="app-shell">
+    <div className={cn("app-shell", collapsed && "app-shell--collapsed")}>
       <div className="app-shell__desktop-sidebar">
-        <AppSidebar profile={profile} />
+        <AppSidebar profile={profile} collapsed={collapsed} onToggleCollapsed={toggleCollapsed} />
       </div>
       <div className={cn("mobile-drawer", mobileOpen && "mobile-drawer--open")}>
         <button className="mobile-drawer__scrim" type="button" aria-label="Fechar menu" onClick={() => setMobileOpen(false)} />

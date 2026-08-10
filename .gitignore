@@ -13,6 +13,7 @@ dist/
 coverage/
 .turbo/
 *.tsbuildinfo
+.chrome-shot-profile/
 
 # Logs and generated diagnostics
 logs/

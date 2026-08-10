@@ -9,8 +9,8 @@ export function ThemeToggle() {
       window.addEventListener("alc-theme-change", callback);
       return () => window.removeEventListener("alc-theme-change", callback);
     },
-    () => (document.documentElement.dataset.theme === "light" ? "light" : "dark"),
-    () => "dark",
+    () => (document.documentElement.dataset.theme === "dark" ? "dark" : "light"),
+    () => "light",
   );
 
   function toggleTheme() {

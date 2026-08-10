@@ -3,10 +3,11 @@ import path from "node:path";
 import { printSection, writeAuditReport } from "./audit-utils.mjs";
 
 const ROOT = process.cwd();
+const LEGACY_ROOT = "legacy";
 const filesToScan = ["app.js", "styles.css", "index.html", "supabaseClient.js", "authService.js", "dashboardCacheService.js"];
 
 async function readText(file) {
-  return readFile(path.join(ROOT, file), "utf8");
+  return readFile(path.join(ROOT, LEGACY_ROOT, file), "utf8");
 }
 
 async function listFiles(dir) {

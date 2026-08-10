@@ -3,12 +3,20 @@ import path from "node:path";
 import { printSection, writeAuditReport } from "./audit-utils.mjs";
 
 const ROOT = process.cwd();
-const codeFiles = ["app.js", "index.html", "styles.css", "supabaseClient.js", "authService.js", "dashboardCacheService.js"];
+const legacyRoot = "legacy";
+const codeFiles = [
+  "app.js",
+  "index.html",
+  "styles.css",
+  "supabaseClient.js",
+  "authService.js",
+  "dashboardCacheService.js",
+];
 const canonicalKeys = ["pre_fatura", "gestao_pacotes", "desvios_pnr", "pacotes_faltantes"];
 const legacyKeys = ["pre-fatura", "gestao-pacotes", "gestao-desvios-pnr", "desvios-pnr", "pacotes-faltantes"];
 
 async function readProjectFile(file) {
-  return readFile(path.join(ROOT, file), "utf8");
+  return readFile(path.join(ROOT, legacyRoot, file), "utf8");
 }
 
 async function listScripts(dir = path.join(ROOT, "scripts")) {
@@ -44,7 +52,7 @@ try {
     });
   }
 
-  const packageJson = JSON.parse(await readProjectFile("package.json"));
+  const packageJson = JSON.parse(await readFile(path.join(ROOT, "package.json"), "utf8"));
   const packageScriptText = JSON.stringify(packageJson.scripts || {});
   scriptStats.forEach((item) => {
     item.referencedInPackage = packageScriptText.includes(item.file) || packageScriptText.includes(item.file.replace("scripts/", "scripts\\"));
