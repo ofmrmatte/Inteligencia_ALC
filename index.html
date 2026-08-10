@@ -444,9 +444,7 @@
     <div class="toast" id="toast" aria-live="polite" aria-atomic="true"></div>
     <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2" defer></script>
     <script src="./config.js?v=20260529-operational-freeze" defer></script>
-    <script src="./railwayStagingClient.js?v=20260526-staging" defer></script>
     <script src="./supabaseClient.js?v=20260528-hybrid-pnr-auth" defer></script>
-    <script src="./railwayApiClient.js?v=20260528-hybrid-pnr" defer></script>
     <script src="./authService.js" defer></script>
     <script src="./dashboardCacheService.js" defer></script>
     <script src="./app.js?v=20260807-prefatura-detail-rows-only" defer></script>
@@ -909,12 +907,8 @@
   }
 
   function getDf55Const(name, fallback) {
-    try {
-      var value = eval(name);
-      return value || fallback;
-    } catch (error) {
-      return fallback;
-    }
+    var value = window.dashboardLegacyBridge?.get?.(name, fallback);
+    return value || fallback;
   }
 
   function df55Same(a, b) {
@@ -1290,18 +1284,13 @@
   }
 
   function getValue(name, fallback) {
-    try {
-      var value = eval("typeof " + name + " !== 'undefined' ? " + name + " : undefined");
-      return value || fallback;
-    } catch (error) {
-      return fallback;
-    }
+    var value = window.dashboardLegacyBridge?.get?.(name, fallback);
+    return value || fallback;
   }
 
   function callFn(name, args) {
     try {
-      var fn = eval("typeof " + name + " !== 'undefined' ? " + name + " : null");
-      if (typeof fn === "function") return fn.apply(window, args || []);
+      return window.dashboardLegacyBridge?.call?.(name, args || []);
     } catch (error) {
       console.warn("[DF63] Falha ao chamar função:", name, error);
     }
@@ -2086,18 +2075,12 @@
   }
 
   function getValue(name, fallback) {
-    try {
-      var value = eval("typeof " + name + " !== 'undefined' ? " + name + " : undefined");
-      return value ?? fallback;
-    } catch (error) {
-      return fallback;
-    }
+    return window.dashboardLegacyBridge?.get?.(name, fallback) ?? fallback;
   }
 
   function callFn(name, args) {
     try {
-      var fn = eval("typeof " + name + " !== 'undefined' ? " + name + " : null");
-      if (typeof fn === "function") return fn.apply(window, args || []);
+      return window.dashboardLegacyBridge?.call?.(name, args || []);
     } catch (error) {
       console.warn("[DF71] Falha:", name, error);
     }
@@ -3258,8 +3241,7 @@
 
   function callFn(name, args) {
     try {
-      var fn = eval("typeof " + name + " !== 'undefined' ? " + name + " : null");
-      if (typeof fn === "function") return fn.apply(window, args || []);
+      return window.dashboardLegacyBridge?.call?.(name, args || []);
     } catch (error) {
       console.warn("[DF78] Falha:", name, error);
     }
@@ -3267,11 +3249,7 @@
   }
 
   function getObj(name) {
-    try {
-      return eval("typeof " + name + " !== 'undefined' ? " + name + " : null");
-    } catch (error) {
-      return null;
-    }
+    return window.dashboardLegacyBridge?.get?.(name, null) || null;
   }
 
   function filterIsOpenOrFocused() {

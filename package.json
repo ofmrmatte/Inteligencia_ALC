@@ -4,6 +4,9 @@
   "private": true,
   "description": "Painel de Inteligência Operacional.",
   "scripts": {
+    "check": "node --check app.js && node --check authService.js && node --check config.js && node --check dashboardCacheService.js && node --check railwayApiClient.js && node --check railwayStagingClient.js && node --check supabaseClient.js && node --check scripts/cleanup-local-artifacts.mjs && node --check scripts/run-audits.mjs && node --check scripts/railway/07-serve-railway-dashboard.mjs",
+    "cleanup:local": "node scripts/cleanup-local-artifacts.mjs",
+    "audit:all": "node scripts/run-audits.mjs",
     "audit:dashboard": "node scripts/audit-dashboard-health.mjs",
     "audit:supabase": "node scripts/audit-supabase-health.mjs",
     "audit:dead-code": "node scripts/find-dead-code.mjs",
@@ -29,13 +32,11 @@
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.87.1",
-    "chokidar": "^4.0.3",
     "dotenv": "^17.2.3",
     "exceljs": "^4.4.0",
     "postgres": "^3.4.9"
   },
   "main": "app.js",
-  "devDependencies": {},
   "repository": {
     "type": "git",
     "url": "git+https://github.com/ofmrmatte/dashboardfatura.git"

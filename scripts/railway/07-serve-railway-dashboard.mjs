@@ -1,4 +1,4 @@
-﻿#!/usr/bin/env node
+#!/usr/bin/env node
 import fs from 'fs';
 import http from 'http';
 import path from 'path';
@@ -548,7 +548,7 @@ async function loadProfile(sql, authUser) {
 }
 
 function canMutate(profile) {
-  return profile?.is_admin === true || String(profile?.role || '').toLowerCase() === 'admin';
+  return profile?.is_admin === true && String(profile?.role || '').trim().toLowerCase() === 'admin';
 }
 
 function normalizeText(value = '') {
@@ -2115,6 +2115,16 @@ function createDynamicConfig(publicConfig, port) {
   }, null, 2)};\n`;
 }
 
+function injectRailwayClientsForLocalStaging(html) {
+  const marker = '<script src="./supabaseClient.js?v=20260528-hybrid-pnr-auth" defer></script>';
+  if (!html.includes(marker) || html.includes('railwayStagingClient.js')) return html;
+  return html.replace(marker, [
+    '<script src="./railwayStagingClient.js?v=20260526-staging" defer></script>',
+    marker,
+    '<script src="./railwayApiClient.js?v=20260528-hybrid-pnr" defer></script>',
+  ].join('\n    '));
+}
+
 function serveStatic(request, response, publicConfig, port) {
   const url = new URL(request.url, `http://${request.headers.host}`);
   let pathname = decodeURIComponent(url.pathname);
@@ -2137,6 +2147,11 @@ function serveStatic(request, response, publicConfig, port) {
   }
 
   const ext = path.extname(filePath).toLowerCase();
+  if (pathname === '/index.html') {
+    sendText(response, 200, injectRailwayClientsForLocalStaging(fs.readFileSync(filePath, 'utf8')), MIME_TYPES[ext]);
+    return;
+  }
+
   response.writeHead(200, {
     'content-type': MIME_TYPES[ext] || 'application/octet-stream',
     'cache-control': 'no-store',

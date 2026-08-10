@@ -1,24 +1,38 @@
 # Painel de Inteligencia
 
-Dashboard web estatico para analise de pre-fatura, descontos, PNR e pacotes perdidos por base, driver, competencia, mes e quinzena.
+Dashboard web estatico para analise operacional de pre-fatura, descontos, PNR e gestao de pacotes por base, motorista, competencia, mes e quinzena.
 
-## URL do painel
+## Configuracao geral
 
 - Producao: https://dashboardfatura.vercel.app
-- Tipo de projeto no Vercel: `Other` / estatico.
+- Hospedagem: Vercel, projeto estatico do tipo `Other`.
+- Aplicacao: frontend web sem framework de build obrigatorio.
+- Backend principal: Supabase.
+- Runtime local para scripts: Node.js.
+- Railway: usado apenas em scripts de migracao, validacao e servidor local de staging; os clientes Railway nao sao carregados no HTML normal de producao.
 
-Se o dominio de producao for alterado no Vercel, atualizar esta secao e tambem a configuracao de URLs do Supabase Auth.
+Se o dominio de producao for alterado, atualize esta secao e as URLs permitidas no Supabase Auth.
 
-## Dependencia do Supabase
+## Dependencias externas
 
-O painel depende do Supabase para autenticacao, perfis, permissoes, arquivos persistentes e auditoria.
+### Supabase
+
+O painel depende do Supabase para autenticacao, perfis, permissoes, registros processados, metadados de arquivos, configuracoes globais e auditoria.
 
 - Supabase URL: `https://kvgddwmdamnkygyarafy.supabase.co`
-- Chave publica: definida em `config.js` como `SUPABASE_ANON_KEY`
-- Cliente: `supabaseClient.js`
-- Servico de autenticacao/perfil: `authService.js`
+- Chave publica: `APP_CONFIG.SUPABASE_ANON_KEY` em `config.js`
+- Cliente publico: `supabaseClient.js`
+- Autenticacao/perfil: `authService.js`
 
-Nao usar `service_role`, secret keys ou backend local no frontend. O arquivo `config.js` precisa ser publicado junto com o projeto estatico.
+Nao usar `service_role`, secret keys ou backend local no frontend. Secrets ficam apenas em `.env` local ou no ambiente do provedor que executa scripts administrativos.
+
+### Vercel
+
+A Vercel serve os arquivos estaticos do repositorio. O painel carrega `index.html`, `styles.css`, `config.js`, os clientes locais e `app.js` diretamente no navegador.
+
+### Railway
+
+Os arquivos em `scripts/railway/` continuam no repositorio para migracao, comparacao, validacao e staging local. O servidor `scripts/railway/07-serve-railway-dashboard.mjs` injeta os clientes Railway somente quando ele serve o dashboard em modo local/staging.
 
 ## Permissoes
 
@@ -45,9 +59,27 @@ Nao usar `service_role`, secret keys ou backend local no frontend. O arquivo `co
   - pode gerenciar usuarios, setor, cargo e permissao admin;
   - pode visualizar auditoria.
 
-A permissao administrativa vem da tabela `profiles`, pelos campos `role = 'admin'` e `is_admin = true`.
+A permissao administrativa exige `profiles.is_admin = true` e `profiles.role = 'admin'`, com comparacao de `role` normalizada para caixa baixa.
 
-## Tabelas e Storage usados
+## Modulos funcionais
+
+- **Pre-Fatura**: importa planilhas com abas como `SVC PERDIDOS`, `XPT PERDIDOS` e `PNR`, normaliza registros detalhados, ignora linhas de total/rodape e calcula indicadores por mes, periodo, tipo, base, motorista, rota e pacote.
+- **Gestao de Pacotes**: importa e consolida eventos de pacotes conforme regras do modulo, com leitura processada pelo banco.
+- **Desvios PNR**: usa tabelas/RPCs para consulta paginada e agregacoes de PNR sem baixar todo o historico para a tela.
+- **Pacotes Faltantes**: mantem categoria separada dentro de gestao de desvios.
+- **Relatorio Executivo**: gera resumo do recorte selecionado com KPIs, rankings e tendencia.
+- **Configuracoes gerais**: permite administrar usuarios, metas e auditoria para administradores.
+- **Perfil**: permite visualizar dados do usuario autenticado.
+
+## Regras criticas da Pre-Fatura
+
+- Cada linha detalhada precisa preservar sua identidade operacional.
+- PNRs com IDs de pacote/remessa diferentes nao podem ser unidas apenas por mesmo valor, motorista, rota, placa, base ou data.
+- Linhas de totais, subtotais, rodapes e linhas sem identidade real de pacote/rota nao entram nos calculos.
+- Deduplicacao so pode acontecer quando a identidade do proprio registro for a mesma.
+- A tela deve ser alimentada por registros processados persistidos, nao por reprocessamento de arquivo bruto no Storage.
+
+## Tabelas e Storage
 
 ### Supabase Auth
 
@@ -55,104 +87,64 @@ A permissao administrativa vem da tabela `profiles`, pelos campos `role = 'admin
 
 ### Tabelas publicas
 
-- `public.profiles`
-  - perfil do usuario;
-  - campos principais: `id`, `name`, `email`, `role`, `is_admin`, `cargo`, `setor`, `avatar_url`, `created_at`, `updated_at`.
-
-- `public.dashboard_files`
-  - metadados dos arquivos enviados para o painel;
-  - campos principais: `file_name`, `storage_path`, `file_type`, `file_size`, `uploaded_by`, `uploaded_by_email`, `reference_month`, `reference_year`, `period_label`, `period_type`, `is_active`, `status`, `metadata`.
-
-- `public.audit_logs`
-  - auditoria de acoes importantes;
-  - registra login, logout, upload, exclusao, troca de arquivo ativo, geracao de relatorio, alteracao de perfil, setor, permissao admin e meta PNR/LOSS.
-
-- `public.dashboard_settings`
-  - configuracoes globais do dashboard;
-  - chave `pnr_goal` armazena a meta PNR/LOSS mensal e anual;
-  - usuarios logados podem ler, somente administradores podem alterar.
+- `public.profiles`: perfil do usuario e permissao administrativa.
+- `public.dashboard_files`: metadados dos arquivos enviados.
+- `public.processed_dashboard_files`: controle de processamento persistido.
+- `public.pre_fatura_records`: registros detalhados de Pre-Fatura.
+- `public.gestao_pacotes_records`: registros processados de Gestao de Pacotes.
+- `public.desvios_pnr_records`: registros processados de Desvios PNR.
+- `public.gestao_desvios_pacotes_faltantes`: registros de pacotes faltantes.
+- `public.dashboard_metrics_cache`: cache de metricas processadas.
+- `public.dashboard_settings`: configuracoes globais, como meta PNR/LOSS.
+- `public.audit_logs`: auditoria de login, upload, exclusao, perfil, permissoes e metas.
 
 ### Buckets de Storage
 
-- `dashboard-files`
-  - bucket legado/operacional para arquivos brutos quando a configuracao permitir;
-  - com `KEEP_RAW_UPLOADS_IN_STORAGE=false`, uploads do painel usam o arquivo apenas para extracao e nao dependem do bucket para renderizar as abas;
-  - scripts de manutencao podem consultar ou limpar objetos brutos antigos sem transformar Storage em fonte da tela.
-
-- `avatars`
-  - imagens de perfil dos usuarios;
-  - usado para `avatar_url` em `profiles`.
-
-## Fluxo basico de uso
-
-1. Acessar o painel pela URL de producao.
-2. Clicar no icone de usuario no canto superior direito.
-3. Fazer login com uma conta cadastrada no Supabase Auth.
-4. Se for administrador, usar **Enviar arquivo** para carregar uma ou mais planilhas Excel/CSV.
-5. O parser do modulo extrai os campos usados, grava os registros normalizados nas tabelas persistidas e registra metadados em `dashboard_files`/`processed_dashboard_files`.
-6. Com `KEEP_RAW_UPLOADS_IN_STORAGE=false`, o bruto nao vira fonte da tela; o painel recarrega cards, filtros, graficos e tabelas pelos registros processados no banco/RPC.
-7. A meta PNR/LOSS e carregada de `dashboard_settings` e aparece igual para todos os usuarios.
-8. Usuarios comuns podem visualizar os indicadores e baixar relatorios.
-9. Administradores podem excluir arquivos, trocar arquivo ativo, editar usuarios, ajustar a meta global e consultar auditoria em **Configuracoes gerais**.
-
-## Sincronizador local de arquivos
-
-O projeto inclui um sincronizador Node.js para Windows que monitora duas pastas locais e envia automaticamente arquivos Excel para o Supabase:
-
-- Pre-Fatura: `C:\Users\ALC Usuario\Documents\Painel de Inteligência\Pré Fatura`
-- Gestao de Pacotes: `C:\Users\ALC Usuario\Documents\Painel de Inteligência\Gestão de pacotes`
-
-### Configuracao
-
-1. Instale as dependencias:
-
-```powershell
-npm install
-```
-
-2. Copie `.env.example` para `.env`.
-
-3. Preencha no `.env`:
-
-- `SUPABASE_URL`
-- `SUPABASE_SERVICE_ROLE_KEY` para uso local seguro, ou `SUPABASE_ANON_KEY` + `SUPABASE_EMAIL` + `SUPABASE_PASSWORD`
-- `DASHBOARD_BUCKET=dashboard-files`
-- `PRE_FATURA_FOLDER`
-- `GESTAO_FOLDER`
-- `SUPABASE_DB_URL` ou `DATABASE_URL` apenas para aplicar migracoes SQL pelo script local
-
-Nao commitar o `.env`. Ele fica ignorado pelo Git.
-
-### Registros processados
-
-O painel usa leitura processed-only para evitar baixar e reprocessar XLSX/CSV a cada abertura. Aplique a migracao uma vez com uma URL Postgres do Supabase:
-
-```powershell
-npm run db:migrate:processed-records
-```
-
-Tabelas criadas:
-
-- `pre_fatura_records`
-- `gestao_pacotes_records`
-- `desvios_pnr_records`
-- `gestao_desvios_pacotes_faltantes`
-- `dashboard_metrics_cache`
-
-Se as tabelas ainda nao existirem, o dashboard exibe estado controlado e solicita nova importacao pelo upload do painel.
+- `dashboard-files`: bucket legado/operacional. Com `KEEP_RAW_UPLOADS_IN_STORAGE=false`, os arquivos brutos nao sao a fonte normal de renderizacao.
+- `avatars`: imagens de perfil usadas em `profiles.avatar_url`.
 
 ## Arquivos principais
 
-- `index.html`: estrutura da aplicacao.
-- `config.js`: configuracao publica do Supabase para o frontend estatico.
-- `supabaseClient.js`: inicializacao do cliente Supabase.
-- `authService.js`: autenticacao, sessao, perfil e permissoes via Supabase Auth.
-- `app.js`: logica do dashboard, filtros, rankings, graficos, upload, relatorio e permissoes.
+- `index.html`: estrutura da aplicacao e scripts inline legados de interface.
 - `styles.css`: estilos, tema claro/escuro e responsividade.
-- `scripts/apply-processed-records-migration.mjs`: aplica a migracao das tabelas de registros processados quando `SUPABASE_DB_URL` ou `DATABASE_URL` estiver configurada.
-- `scripts/cleanup-unused-supabase-processes.mjs`: gera relatorio e aplica limpeza segura de metadados/processos obsoletos do Supabase.
-- `assets/vendor/xlsx.full.min.js`: biblioteca usada para leitura dos arquivos Excel no navegador.
+- `config.js`: configuracao publica do frontend.
+- `supabaseClient.js`: inicializacao do cliente Supabase e tratamento de sessao expirada.
+- `authService.js`: login, sessao, perfil e usuarios.
+- `dashboardCacheService.js`: cache local de dados processados.
+- `app.js`: regras de negocio, parser, filtros, rankings, graficos, upload, relatorio e permissoes.
+- `railwayApiClient.js` e `railwayStagingClient.js`: clientes usados apenas quando injetados pelo servidor Railway local/staging.
+- `scripts/`: auditorias, migracoes, validacoes e utilitarios locais.
+- `supabase/migrations/`: migracoes SQL versionadas.
+- `assets/vendor/xlsx.full.min.js`: leitura de Excel no navegador.
 
-## Relatorios
+## Scripts
 
-O Relatorio Executivo usa o recorte selecionado para KPIs, rankings e diagnostico principal. Para comparativo e tendencia, o painel usa os registros persistidos e os metadados disponiveis em `dashboard_files`/`processed_dashboard_files` quando existir historico compativel.
+```powershell
+npm install
+npm run check
+npm run audit:dashboard
+npm run audit:dead-code
+npm run audit:module-isolation
+npm run audit:dedupe
+npm run audit:row-counts
+npm run audit:raw-data
+npm run audit:supabase
+npm run cleanup:local
+```
+
+- `npm run check`: valida sintaxe dos principais arquivos JavaScript.
+- `npm run audit:all`: roda as auditorias locais nao destrutivas encadeadas.
+- `npm run cleanup:local`: faz dry-run de backups/logs/exportacoes locais que podem ser removidos.
+- `npm run cleanup:local -- --apply`: aplica a limpeza local protegida.
+- `npm run railway:*`: scripts de apoio a migracao/validacao Railway; nao fazem parte do fluxo normal da Vercel.
+
+## Fluxo basico
+
+1. Usuario acessa a URL de producao.
+2. Faz login pelo Supabase Auth.
+3. O painel carrega perfil e permissoes em `profiles`.
+4. Administrador importa planilhas no navegador.
+5. O parser normaliza os dados, exclui linhas de total e grava registros processados.
+6. A tela consulta registros persistidos/RPCs para cards, filtros, graficos e tabelas.
+7. Usuarios podem visualizar indicadores e baixar relatorios conforme permissao.
+8. Administradores podem administrar arquivos, usuarios, metas e auditoria.

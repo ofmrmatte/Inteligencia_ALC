@@ -41,16 +41,6 @@
     event.preventDefault();
   });
 
-  const nativeConsoleError = console.error.bind(console);
-  console.error = (...args) => {
-    if (args.some(isInvalidRefreshTokenError)) {
-      clearExpiredSupabaseAuthStorage();
-      console.warn("[AUTH] Sessão local expirada; token antigo removido.");
-      return;
-    }
-    nativeConsoleError(...args);
-  };
-
   const supabaseFetch = (input, init = {}) => fetch(input, {
     ...init,
     cache: "no-store",
