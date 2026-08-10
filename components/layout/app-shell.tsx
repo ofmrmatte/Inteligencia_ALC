@@ -40,7 +40,7 @@ export function AppShell({ profile, children }: AppShellProps) {
         </div>
       </div>
       <div className="app-shell__body">
-        <AppTopbar profile={profile} onOpenMenu={() => setMobileOpen(true)} />
+        <AppTopbar onOpenMenu={() => setMobileOpen(true)} />
         <ContentContainer>{children}</ContentContainer>
       </div>
     </div>
