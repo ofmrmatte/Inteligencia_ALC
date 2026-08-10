@@ -20,6 +20,7 @@ import {
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const PROJECT_ROOT = path.resolve(__dirname, '..', '..');
+const LEGACY_ROOT = path.join(PROJECT_ROOT, 'legacy');
 const API_PREFIX = '/api/railway';
 const MODULE_API_PREFIX = '/api';
 const DEFAULT_PORT = 8091;
@@ -124,7 +125,7 @@ const MIME_TYPES = {
 };
 
 function readPublicConfig() {
-  const configPath = path.join(PROJECT_ROOT, 'config.js');
+  const configPath = path.join(LEGACY_ROOT, 'config.js');
   const source = fs.existsSync(configPath) ? fs.readFileSync(configPath, 'utf8') : '';
   const matchValue = (key) => {
     const match = source.match(new RegExp(`${key}\\s*:\\s*["']([^"']+)["']`));
@@ -2135,8 +2136,10 @@ function serveStatic(request, response, publicConfig, port) {
     return;
   }
 
-  const filePath = path.resolve(PROJECT_ROOT, `.${pathname}`);
-  if (!filePath.startsWith(PROJECT_ROOT)) {
+  const legacyFilePath = path.resolve(LEGACY_ROOT, `.${pathname}`);
+  const rootAssetPath = path.resolve(PROJECT_ROOT, `.${pathname}`);
+  const filePath = fs.existsSync(legacyFilePath) ? legacyFilePath : rootAssetPath;
+  if (!filePath.startsWith(LEGACY_ROOT) && !filePath.startsWith(PROJECT_ROOT)) {
     sendText(response, 403, 'Forbidden');
     return;
   }

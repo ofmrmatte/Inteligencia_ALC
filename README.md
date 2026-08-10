@@ -1,13 +1,13 @@
 # Painel de Inteligencia
 
-Dashboard web estatico para analise operacional de pre-fatura, descontos, PNR e gestao de pacotes por base, motorista, competencia, mes e quinzena.
+Aplicacao web Next.js para analise operacional de pre-fatura, descontos, PNR e gestao de pacotes por base, motorista, competencia, mes e quinzena.
 
 ## Configuracao geral
 
 - Producao: https://dashboardfatura.vercel.app
 - Hospedagem: Vercel.
 - Aplicacao nova: Next.js App Router + React + TypeScript.
-- Legado: arquivos estaticos na raiz continuam como referencia para migracao.
+- Legado: arquivos estaticos ficam em `legacy/` apenas como referencia para migracao.
 - Backend principal: Supabase.
 - Runtime local para scripts: Node.js.
 - Railway: usado apenas em scripts de migracao, validacao e servidor local de staging; os clientes Railway nao sao carregados no HTML normal de producao.
@@ -21,9 +21,9 @@ Se o dominio de producao for alterado, atualize esta secao e as URLs permitidas 
 O painel depende do Supabase para autenticacao, perfis, permissoes, registros processados, metadados de arquivos, configuracoes globais e auditoria.
 
 - Supabase URL: `https://kvgddwmdamnkygyarafy.supabase.co`
-- Chave publica: `APP_CONFIG.SUPABASE_ANON_KEY` em `config.js`
-- Cliente publico: `supabaseClient.js`
-- Autenticacao/perfil: `authService.js`
+- Chave publica: `NEXT_PUBLIC_SUPABASE_ANON_KEY`.
+- Cliente publico: `lib/supabase/browser.ts`.
+- Autenticacao/perfil: `lib/auth/session.ts` e Supabase Auth.
 
 Nao usar `service_role`, secret keys ou backend local no frontend. Secrets ficam apenas em `.env` local ou no ambiente do provedor que executa scripts administrativos.
 
@@ -66,8 +66,8 @@ A permissao administrativa exige `profiles.is_admin = true` e `profiles.role = '
 
 - **Login**: rota dedicada `/login`, usando Supabase Auth pela camada nova em `lib/supabase/`.
 - **Shell autenticado**: sidebar persistente, topbar, menu de usuario, tema dark/light e drawer mobile.
-- **Dashboard Next**: rota `/dashboard`, ja com estrutura visual nova e contagens reais simples de registros processados.
-- **Pre-Fatura**: importa planilhas com abas como `SVC PERDIDOS`, `XPT PERDIDOS` e `PNR`, normaliza registros detalhados, ignora linhas de total/rodape e calcula indicadores por mes, periodo, tipo, base, motorista, rota e pacote.
+- **Dashboard Next**: rota `/dashboard`, com indicadores reais de tabelas persistidas, valor consolidado de Pre-Fatura, meta PNR, rankings e arquivos recentes.
+- **Pre-Fatura**: rota `/pre-fatura`, consulta registros persistidos com filtros e paginacao server-side, importa planilhas com abas `SVC PERDIDOS`, `XPT PERDIDOS` e `PNR`, ignora totais/rodapes e exige identidade de pacote/rota antes de persistir.
 - **Gestao de Pacotes**: importa e consolida eventos de pacotes conforme regras do modulo, com leitura processada pelo banco.
 - **Desvios PNR**: usa tabelas/RPCs para consulta paginada e agregacoes de PNR sem baixar todo o historico para a tela.
 - **Pacotes Faltantes**: mantem categoria separada dentro de gestao de desvios.
@@ -114,14 +114,14 @@ A permissao administrativa exige `profiles.is_admin = true` e `profiles.role = '
 - `features/`: organizacao por modulo.
 - `lib/`: Supabase, auth, permissoes, constantes e utils.
 - `public/brand/`: Brand Kit oficial ALC usado pela nova interface.
-- `index.html`: estrutura da aplicacao e scripts inline legados de interface.
-- `styles.css`: estilos, tema claro/escuro e responsividade.
-- `config.js`: configuracao publica do frontend.
-- `supabaseClient.js`: inicializacao do cliente Supabase e tratamento de sessao expirada.
-- `authService.js`: login, sessao, perfil e usuarios.
-- `dashboardCacheService.js`: cache local de dados processados.
-- `app.js`: regras de negocio, parser, filtros, rankings, graficos, upload, relatorio e permissoes.
-- `railwayApiClient.js` e `railwayStagingClient.js`: clientes usados apenas quando injetados pelo servidor Railway local/staging.
+- `legacy/index.html`: estrutura da aplicacao legada e scripts inline historicos.
+- `legacy/styles.css`: estilos legados.
+- `legacy/config.js`: configuracao publica do frontend legado.
+- `legacy/supabaseClient.js`: inicializacao legada do cliente Supabase.
+- `legacy/authService.js`: login, sessao, perfil e usuarios do legado.
+- `legacy/dashboardCacheService.js`: cache local legado de dados processados.
+- `legacy/app.js`: regras de negocio historicas, usadas como especificacao de migracao.
+- `legacy/railwayApiClient.js` e `legacy/railwayStagingClient.js`: clientes usados apenas quando injetados pelo servidor Railway local/staging.
 - `scripts/`: auditorias, migracoes, validacoes e utilitarios locais.
 - `supabase/migrations/`: migracoes SQL versionadas.
 - `assets/vendor/xlsx.full.min.js`: leitura de Excel no navegador.
@@ -134,8 +134,10 @@ npm run dev
 npm run lint
 npm run typecheck
 npm run build
+npm run test:rules
 npm run check
 npm run check:legacy
+npm run verify:runtime
 npm run audit:dashboard
 npm run audit:dead-code
 npm run audit:module-isolation
@@ -146,7 +148,9 @@ npm run audit:supabase
 npm run cleanup:local
 ```
 
-- `npm run check`: executa lint, typecheck e build da aplicacao Next.
+- `npm run check`: executa lint, typecheck, testes de regras e build da aplicacao Next.
+- `npm run test:rules`: valida regras criticas de identidade/total da Pre-Fatura.
+- `npm run verify:runtime`: verifica se a URL publicada esta servindo Next, nao o legado.
 - `npm run check:legacy`: valida sintaxe dos principais arquivos JavaScript legados.
 - `npm run audit:all`: roda as auditorias locais nao destrutivas encadeadas.
 - `npm run cleanup:local`: faz dry-run de backups/logs/exportacoes locais que podem ser removidos.

@@ -5,11 +5,12 @@ type MetricCardProps = {
   label: string;
   value: string;
   detail?: string;
+  trend?: string;
   icon?: ReactNode;
   tone?: "default" | "accent";
 };
 
-export function MetricCard({ label, value, detail, icon, tone = "default" }: MetricCardProps) {
+export function MetricCard({ label, value, detail, trend, icon, tone = "default" }: MetricCardProps) {
   return (
     <article className={cn("metric-card", tone === "accent" && "metric-card--accent")}>
       <div className="metric-card__top">
@@ -18,6 +19,7 @@ export function MetricCard({ label, value, detail, icon, tone = "default" }: Met
       </div>
       <strong>{value}</strong>
       {detail ? <p>{detail}</p> : null}
+      {trend ? <small>{trend}</small> : null}
     </article>
   );
 }

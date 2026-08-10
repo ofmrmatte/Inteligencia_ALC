@@ -5,7 +5,7 @@ Base: `1eeef09 refactor: clean dashboard foundation`
 
 ## Arquitetura adotada
 
-A nova aplicacao usa Next.js App Router, React e TypeScript. O legado permanece na raiz como referencia de regras de negocio, mas nao e importado pela nova runtime.
+A nova aplicacao usa Next.js App Router, React e TypeScript. O legado permanece em `legacy/` como referencia de regras de negocio, mas nao e importado pela nova runtime.
 
 Estrutura principal:
 
@@ -95,7 +95,7 @@ A navegacao usa `Link` com `prefetch` e loading local por rota, sem overlay glob
 
 ## Tema
 
-Tema dark e o padrao inicial. O tema light existe via `data-theme`.
+Tema light e o padrao inicial quando nao ha preferencia local. O tema dark existe via `data-theme` e continua com identidade ALC forte.
 
 - `ThemeScript` aplica o tema antes da hidratacao.
 - `ThemeToggle` persiste a preferencia em `localStorage`.

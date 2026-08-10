@@ -30,7 +30,7 @@ async function relationStats(tableName) {
 }
 
 try {
-  const app = await readFile("app.js", "utf8");
+  const app = await readFile("legacy/app.js", "utf8");
   const usageSignals = {
     pre_fatura_mapper_uses_raw_data: /function mapProcessedPreFaturaRecord[\s\S]+?const raw = record\.raw_data/.test(app),
     gestao_pacotes_mapper_uses_raw_data: /function mapProcessedPackageRecord[\s\S]+?const raw = record\.raw_data/.test(app),

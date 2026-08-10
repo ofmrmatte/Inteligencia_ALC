@@ -9,8 +9,10 @@
     "start": "next start",
     "lint": "eslint app components features lib proxy.ts next.config.ts --max-warnings=0",
     "typecheck": "tsc --noEmit",
-    "check": "npm run lint && npm run typecheck && npm run build",
-    "check:legacy": "node --check app.js && node --check authService.js && node --check config.js && node --check dashboardCacheService.js && node --check railwayApiClient.js && node --check railwayStagingClient.js && node --check supabaseClient.js && node --check scripts/cleanup-local-artifacts.mjs && node --check scripts/run-audits.mjs && node --check scripts/railway/07-serve-railway-dashboard.mjs",
+    "test:rules": "tsx --test tests/pre-fatura-domain.test.ts",
+    "check": "npm run lint && npm run typecheck && npm run test:rules && npm run build",
+    "check:legacy": "node --check legacy/app.js && node --check legacy/authService.js && node --check legacy/config.js && node --check legacy/dashboardCacheService.js && node --check legacy/railwayApiClient.js && node --check legacy/railwayStagingClient.js && node --check legacy/supabaseClient.js && node --check scripts/cleanup-local-artifacts.mjs && node --check scripts/run-audits.mjs && node --check scripts/railway/07-serve-railway-dashboard.mjs",
+    "verify:runtime": "node scripts/verify-production-runtime.mjs",
     "cleanup:local": "node scripts/cleanup-local-artifacts.mjs",
     "audit:all": "node scripts/run-audits.mjs",
     "audit:dashboard": "node scripts/audit-dashboard-health.mjs",
@@ -48,7 +50,6 @@
     "react": "^19.2.8",
     "react-dom": "^19.2.8"
   },
-  "main": "app.js",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/ofmrmatte/dashboardfatura.git"
@@ -67,6 +68,7 @@
     "@types/react-dom": "^19.2.4",
     "eslint": "^9.39.5",
     "eslint-config-next": "^16.3.0",
+    "tsx": "^4.23.11",
     "typescript": "^6.0.3"
   }
 }

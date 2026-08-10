@@ -3,6 +3,7 @@
 import Image from "next/image";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
+import { PanelLeftClose, PanelLeftOpen } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import { BRAND } from "@/lib/constants/brand";
 import { adminRoutes, dashboardRoutes } from "@/lib/constants/routes";
@@ -12,27 +13,29 @@ import { cn } from "@/lib/utils/cn";
 
 type AppSidebarProps = {
   profile: Profile | null;
+  collapsed?: boolean;
+  onToggleCollapsed?: () => void;
   onNavigate?: () => void;
 };
 
-function NavItem({ href, label, Icon, onNavigate }: { href: string; label: string; Icon: LucideIcon; onNavigate?: () => void }) {
+function NavItem({ href, label, Icon, collapsed, onNavigate }: { href: string; label: string; Icon: LucideIcon; collapsed?: boolean; onNavigate?: () => void }) {
   const pathname = usePathname();
   const active = pathname === href || pathname.startsWith(`${href}/`);
 
   return (
-    <Link href={href} prefetch className={cn("sidebar-nav__item", active && "sidebar-nav__item--active")} onClick={onNavigate}>
+    <Link href={href} prefetch className={cn("sidebar-nav__item", active && "sidebar-nav__item--active")} onClick={onNavigate} title={collapsed ? label : undefined} aria-label={label}>
       <Icon size={18} aria-hidden="true" />
       <span>{label}</span>
     </Link>
   );
 }
 
-export function AppSidebar({ profile, onNavigate }: AppSidebarProps) {
+export function AppSidebar({ profile, collapsed, onToggleCollapsed, onNavigate }: AppSidebarProps) {
   const isAdmin = isAdminProfile(profile);
   const initials = (profile?.name || profile?.email || "ALC").slice(0, 2).toUpperCase();
 
   return (
-    <aside className="app-sidebar" aria-label="Navegacao principal">
+    <aside className={cn("app-sidebar", collapsed && "app-sidebar--collapsed")} aria-label="Navegacao principal">
       <div className="app-sidebar__brand">
         <Image src={BRAND.assets.symbolDark} alt="ALC" width={38} height={38} priority />
         <div>
@@ -42,14 +45,14 @@ export function AppSidebar({ profile, onNavigate }: AppSidebarProps) {
       </div>
 
       <nav className="sidebar-nav">
+        <span className="sidebar-nav__group">Operacao</span>
         {dashboardRoutes.map((item) => (
-          <NavItem key={item.href} href={item.href} label={item.label} Icon={item.icon} onNavigate={onNavigate} />
+          <NavItem key={item.href} href={item.href} label={item.label} Icon={item.icon} collapsed={collapsed} onNavigate={onNavigate} />
         ))}
-        {isAdmin
-          ? adminRoutes.map((item) => (
-              <NavItem key={item.href} href={item.href} label={item.label} Icon={item.icon} onNavigate={onNavigate} />
-            ))
-          : null}
+        {isAdmin ? <span className="sidebar-nav__group">Admin</span> : null}
+        {isAdmin ? adminRoutes.map((item) => (
+          <NavItem key={item.href} href={item.href} label={item.label} Icon={item.icon} collapsed={collapsed} onNavigate={onNavigate} />
+        )) : null}
       </nav>
 
       <div className="app-sidebar__footer">
@@ -60,6 +63,11 @@ export function AppSidebar({ profile, onNavigate }: AppSidebarProps) {
           <strong>{profile?.name || "Usuario ALC"}</strong>
           <span>{profile?.setor || profile?.cargo || "Operacao"}</span>
         </div>
+        {onToggleCollapsed ? (
+          <button type="button" className="icon-button app-sidebar__collapse" onClick={onToggleCollapsed} aria-label={collapsed ? "Expandir menu" : "Recolher menu"}>
+            {collapsed ? <PanelLeftOpen size={18} aria-hidden="true" /> : <PanelLeftClose size={18} aria-hidden="true" />}
+          </button>
+        ) : null}
       </div>
     </aside>
   );

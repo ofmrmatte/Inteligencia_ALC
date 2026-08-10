@@ -1,30 +1,27 @@
 import type { Metadata } from "next";
 import { PageHeader } from "@/components/layout/page-header";
-import { ModuleFoundation } from "@/components/layout/module-foundation";
-import { preFaturaMigrationRules } from "@/features/pre-fatura/rules";
+import { PreFaturaWorkspace } from "@/features/pre-fatura/components/pre-fatura-workspace";
+import { getPreFaturaPage } from "@/features/pre-fatura/data";
 
 export const metadata: Metadata = {
   title: "Pre-Fatura",
 };
 
-export default function PreFaturaPage() {
+export default async function PreFaturaPage({
+  searchParams,
+}: {
+  searchParams?: Promise<Record<string, string | string[] | undefined>>;
+}) {
+  const data = await getPreFaturaPage((await searchParams) ?? {});
+
   return (
     <>
       <PageHeader
         eyebrow="Modulo"
         title="Pre-Fatura"
-        description="Fundacao preparada para migrar a regra real de importacao e reconciliacao."
+        description="Consulta operacional dos registros persistidos, mantendo IDs de envio separados e ignorando linhas de totais."
       />
-      <ModuleFoundation
-        title="Migracao controlada da Pre-Fatura"
-        description="A regra analitica completa permanece no legado ate ser portada com validacao contra os arquivos reais."
-      >
-        <ul className="rule-list">
-          {preFaturaMigrationRules.map((rule) => (
-            <li key={rule}>{rule}</li>
-          ))}
-        </ul>
-      </ModuleFoundation>
+      <PreFaturaWorkspace data={data} />
     </>
   );
 }
