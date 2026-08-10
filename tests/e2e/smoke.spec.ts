@@ -11,10 +11,12 @@ const privateRoutes = [
   "/configuracoes",
 ];
 
-test("login page renders ALC auth surface", async ({ page }) => {
+test("login page renders Inteligência LOSS auth surface", async ({ page }) => {
   await page.goto("/login");
   await expect(page).toHaveTitle("Login | Inteligência LOSS");
-  await expect(page.getByRole("img", { name: "ALC Admin Center" })).toBeVisible();
+  await expect(page.getByRole("img", { name: "Inteligência LOSS" })).toBeVisible();
+  await expect(page.getByText("ALC Pereira & Filho").first()).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Bem-vindo" })).toBeVisible();
   await expect(page.getByLabel("Email", { exact: true })).toBeVisible();
   const password = page.getByLabel("Senha", { exact: true });
   await expect(password).toBeVisible();
