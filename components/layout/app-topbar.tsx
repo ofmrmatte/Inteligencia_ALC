@@ -4,6 +4,8 @@ import { Menu } from "lucide-react";
 import { usePathname } from "next/navigation";
 import { ThemeToggle } from "@/components/layout/theme-toggle";
 import { UserMenu } from "@/components/layout/user-menu";
+import { GlobalSearch } from "@/features/global-search/components/global-search";
+import { OperationalAlertsButton } from "@/features/operational-alerts/components/operational-alerts-button";
 import type { Profile } from "@/lib/auth/types";
 
 const titles: Record<string, string> = {
@@ -28,7 +30,9 @@ export function AppTopbar({ profile, onOpenMenu }: { profile: Profile | null; on
         <span>Módulo</span>
         <strong>{title}</strong>
       </div>
+      <GlobalSearch />
       <div className="app-topbar__actions">
+        <OperationalAlertsButton />
         <ThemeToggle />
         <UserMenu profile={profile} />
       </div>

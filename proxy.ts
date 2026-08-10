@@ -27,8 +27,12 @@ export async function proxy(request: NextRequest) {
 
   const pathname = request.nextUrl.pathname;
   const isPublicPath = PUBLIC_PATHS.some((path) => pathname === path || pathname.startsWith(`${path}/`));
+  const isApiPath = pathname.startsWith("/api/");
 
   if (!user && !isPublicPath) {
+    if (isApiPath) {
+      return NextResponse.json({ error: "Sessão expirada. Entre novamente." }, { status: 401 });
+    }
     const loginUrl = request.nextUrl.clone();
     loginUrl.pathname = "/login";
     loginUrl.searchParams.set("next", pathname === "/" ? "/dashboard" : pathname);

@@ -6,7 +6,7 @@ const ROOT = process.cwd();
 const SCAN_DIRS = ["app", "components", "features", "lib"];
 const forbiddenRuntimePatterns = [
   { id: "module_foundation", pattern: /ModuleFoundation|module-foundation|module-foundation/ },
-  { id: "fake_topbar_search", pattern: /topbar-search|Pesquisar no painel/ },
+  { id: "fake_topbar_search", pattern: /topbar-search/ },
   { id: "legacy_runtime", pattern: /legacy\/|legacy\\|window\.supabaseClient|assets\/vendor/ },
 ];
 

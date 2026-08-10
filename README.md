@@ -10,6 +10,7 @@ Relatórios de decisão:
 
 - `docs/LEGACY_PARITY_REPORT.md`
 - `docs/PHASE_3_QUALITY_AUTOMATION.md`
+- `docs/PHASE_3_GLOBAL_SEARCH_ALERTS.md`
 
 ## Configuracao geral
 
@@ -74,6 +75,8 @@ A permissao administrativa exige `profiles.is_admin = true` e `profiles.role = '
 
 - **Login**: rota dedicada `/login`, usando Supabase Auth pela camada nova em `lib/supabase/`.
 - **Shell autenticado**: sidebar persistente, topbar, menu de usuario, tema dark/light e drawer mobile.
+- **Busca Global**: topbar com Command Palette (`Ctrl+K`/`Cmd+K`), endpoint autenticado `/api/search`, resultados reais agrupados por módulo e deep links usando filtros existentes.
+- **Central de Alertas Operacionais**: botão na topbar com badge, endpoint autenticado `/api/alerts`, alertas derivados de status operacionais reais e alertas técnicos restritos a admin.
 - **Dashboard Next**: rota `/dashboard`, com indicadores reais de tabelas persistidas, valor consolidado de Pre-Fatura, meta PNR, rankings e arquivos recentes.
 - **Pre-Fatura**: rota `/pre-fatura`, consulta registros persistidos com filtros e paginacao server-side, importa planilhas com abas `SVC PERDIDOS`, `XPT PERDIDOS` e `PNR`, ignora totais/rodapes e exige identidade de pacote/rota antes de persistir.
 - **Gestao de Pacotes**: rota `/gestao-pacotes`, com dados reais de `gestao_pacotes_records`, filtros, metricas, tabela paginada, ordenacao e importacao admin de planilhas.
@@ -156,6 +159,7 @@ npm run cleanup:local
 
 - `npm run check`: executa lint, typecheck, testes de regras e build da aplicacao Next.
 - `npm run test:rules`: valida regras criticas de identidade, totais, dedupe, filtros, payloads, Pacotes Faltantes e permissao admin.
+- Busca Global e Alertas: validam sanitizacao, limites, classificacao ID/texto, deep links, alerta por status real e alerta administrativo condicionado a admin.
 - `npm run check:metadata`: impede que páginas dupliquem o sufixo `ALC Admin Center` no metadata.
 - `npm run check:scripts`: valida sintaxe dos scripts Node ativos.
 - `npm run check:ci-env`: valida presença de `NEXT_PUBLIC_SUPABASE_URL` e `NEXT_PUBLIC_SUPABASE_ANON_KEY` sem imprimir valores.
@@ -178,5 +182,7 @@ npm run cleanup:local
 4. Administrador importa planilhas no navegador.
 5. O parser normaliza os dados, exclui linhas de total e grava registros processados.
 6. A tela consulta registros persistidos/RPCs para cards, filtros, graficos e tabelas.
-7. Usuarios podem visualizar indicadores e baixar relatorios conforme permissao.
-8. Administradores podem administrar arquivos, usuarios, metas e auditoria.
+7. Usuarios podem pesquisar registros pela topbar e navegar diretamente para o módulo filtrado.
+8. A topbar calcula alertas operacionais atuais sem persistir lido/nao lido.
+9. Usuarios podem visualizar indicadores e baixar relatorios conforme permissao.
+10. Administradores podem administrar arquivos, usuarios, metas e auditoria.

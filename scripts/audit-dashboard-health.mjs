@@ -5,6 +5,7 @@ import { printSection, writeAuditReport } from "./audit-utils.mjs";
 const ROOT = process.cwd();
 const SOURCE_DIRS = ["app", "components", "features", "lib"];
 const API_ROUTE_EXPECTATIONS = {
+  "app/api/alerts/route.ts": "AUTH",
   "app/api/configuracoes/settings/route.ts": "ADMIN",
   "app/api/configuracoes/users/route.ts": "ADMIN",
   "app/api/desvios-pnr/status/route.ts": "ADMIN",
@@ -18,6 +19,7 @@ const API_ROUTE_EXPECTATIONS = {
   "app/api/perfil/avatar/route.ts": "AUTH",
   "app/api/perfil/route.ts": "AUTH",
   "app/api/pre-fatura/validate/route.ts": "AUTH",
+  "app/api/search/route.ts": "AUTH",
 };
 
 async function listFiles(dir) {
@@ -81,10 +83,14 @@ try {
   ];
 
   const adminHelper = await readFile(path.join(ROOT, "lib/permissions/is-admin-profile.ts"), "utf8");
+  const hasTopbarSearch = /Pesquisar no painel/.test(allText);
+  const hasRealSearchBackend = await exists("app/api/search/route.ts")
+    && await exists("features/global-search/data/search.ts")
+    && await exists("features/global-search/components/global-search.tsx");
   const checks = [
     {
       id: "no_fake_topbar_search",
-      ok: !/topbar-search|Pesquisar no painel/.test(allText),
+      ok: !hasTopbarSearch || hasRealSearchBackend,
       detail: "Topbar nao deve exibir busca sem backend funcional.",
     },
     {

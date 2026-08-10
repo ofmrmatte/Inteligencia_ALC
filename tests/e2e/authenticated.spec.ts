@@ -22,6 +22,16 @@ test.describe("common user journey", () => {
       await page.goto(route);
       await expect(page).not.toHaveURL(/\/login/);
     }
+    await page.goto("/dashboard");
+    await page.keyboard.press(process.platform === "darwin" ? "Meta+K" : "Control+K");
+    await expect(page.getByRole("dialog", { name: "Busca global" })).toBeVisible();
+    await page.getByLabel("Pesquisar no painel").fill("123");
+    await page.keyboard.press("Escape");
+    await expect(page.getByRole("dialog", { name: "Busca global" })).toBeHidden();
+    await page.getByRole("button", { name: /alertas operacionais/i }).click();
+    await expect(page.getByRole("dialog", { name: "Central de Alertas Operacionais" })).toBeVisible();
+    await page.getByRole("button", { name: "Fechar alertas" }).click();
+    await expect(page.getByRole("dialog", { name: "Central de Alertas Operacionais" })).toBeHidden();
     await page.locator(".user-menu__trigger").click();
     await page.getByRole("button", { name: /sair/i }).click();
     await expect(page).toHaveURL(/\/login/);
