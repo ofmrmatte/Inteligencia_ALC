@@ -399,3 +399,14 @@
     font-size: 1.75rem;
   }
 }
+
+/* HOTFIX DEFINITIVO: não mostrar controle de navegação na topbar desktop. */
+.app-topbar__mobile-nav-trigger {
+  display: none;
+}
+
+@media (max-width: 900px) {
+  .app-topbar__mobile-nav-trigger {
+    display: inline-flex;
+  }
+}

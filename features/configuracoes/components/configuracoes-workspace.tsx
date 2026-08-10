@@ -1,9 +1,10 @@
-import { Activity, Database, FileClock, ShieldCheck, Target } from "lucide-react";
+import { Activity, Database, ShieldCheck, Target } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Card } from "@/components/ui/card";
 import { MetricCard } from "@/components/ui/metric-card";
 import { AdminUserControl } from "@/features/configuracoes/components/admin-user-control";
 import { PnrGoalForm } from "@/features/configuracoes/components/pnr-goal-form";
+import { ProcessedFilesManager } from "@/features/configuracoes/components/processed-files-manager";
 import type { AdminSettingsPageData } from "@/features/configuracoes/data/queries";
 
 function number(value: number) {
@@ -31,17 +32,17 @@ export function ConfiguracoesWorkspace({ data }: { data: AdminSettingsPageData }
       {data.error ? <div className="inline-warning">Configurações indisponíveis agora: {data.error}</div> : null}
 
       <section className="metric-grid" aria-label="Resumo administrativo">
-        <MetricCard label="Usuarios" value={number(data.profiles.length)} detail={`${number(admins)} administradores`} tone="accent" />
+        <MetricCard label="Usuários" value={number(data.profiles.length)} detail={`${number(admins)} administradores`} tone="accent" />
         <MetricCard label="Meta mensal PNR" value={currency(monthlyGoal)} detail="limite operacional" />
-        <MetricCard label="Arquivos processados" value={number(data.files.length)} detail="ultimos 30 registros" />
-        <MetricCard label="Auditoria" value={number(data.auditLogs.length)} detail="ultimos 40 eventos" />
+        <MetricCard label="Arquivos processados" value={number(data.files.length)} detail="arquivos carregados por módulo" />
+        <MetricCard label="Auditoria" value={number(data.auditLogs.length)} detail="últimos 40 eventos" />
       </section>
 
       <Card className="settings-panel">
         <div className="section-header">
           <div>
-            <span>Permissoes</span>
-            <h2>Usuarios e perfil admin</h2>
+            <span>Permissões</span>
+            <h2>Usuários e perfil admin</h2>
           </div>
           <ShieldCheck size={20} aria-hidden="true" />
         </div>
@@ -49,9 +50,9 @@ export function ConfiguracoesWorkspace({ data }: { data: AdminSettingsPageData }
           <table className="data-table data-table--wide settings-users-table">
             <thead>
               <tr>
-                <th>Usuario</th>
+                <th>Usuário</th>
                 <th>E-mail</th>
-                <th>Permissao</th>
+                <th>Permissão</th>
                 <th>Ajustes</th>
               </tr>
             </thead>
@@ -59,7 +60,7 @@ export function ConfiguracoesWorkspace({ data }: { data: AdminSettingsPageData }
               {data.profiles.map((profile) => (
                 <tr key={profile.id}>
                   <td>
-                    <strong>{profile.name || "Usuario"}</strong>
+                    <strong>{profile.name || "Usuário"}</strong>
                     <span>{profile.cargo || "Perfil operacional"}</span>
                   </td>
                   <td>
@@ -68,7 +69,7 @@ export function ConfiguracoesWorkspace({ data }: { data: AdminSettingsPageData }
                   </td>
                   <td>
                     <Badge tone={profile.role === "admin" && profile.is_admin === true ? "success" : "neutral"}>
-                      {profile.role === "admin" && profile.is_admin === true ? "Admin" : "Usuario"}
+                      {profile.role === "admin" && profile.is_admin === true ? "Admin" : "Usuário"}
                     </Badge>
                     <span>{profile.setor || "Sem setor"} · {profile.cargo || "Sem cargo"}</span>
                   </td>
@@ -103,46 +104,12 @@ export function ConfiguracoesWorkspace({ data }: { data: AdminSettingsPageData }
           <div className="read-only-grid">
             <div><span>Runtime</span><strong>Next.js App Router</strong></div>
             <div><span>Banco</span><strong>Supabase</strong></div>
-            <div><span>Autorizacao</span><strong>profile.is_admin + role admin</strong></div>
+            <div><span>Autorização</span><strong>profile.is_admin + role admin</strong></div>
           </div>
         </Card>
       </div>
 
-      <Card className="settings-panel">
-        <div className="section-header">
-          <div>
-            <span>Arquivos</span>
-            <h2>Historico processado</h2>
-          </div>
-          <FileClock size={20} aria-hidden="true" />
-        </div>
-        <div className="data-table-shell">
-          <table className="data-table">
-            <thead>
-              <tr>
-                <th>Módulo</th>
-                <th>Arquivo</th>
-                <th>Competencia</th>
-                <th>Linhas</th>
-                <th>Status</th>
-                <th>Processado em</th>
-              </tr>
-            </thead>
-            <tbody>
-              {data.files.map((file) => (
-                <tr key={file.id}>
-                  <td>{file.module_key || "-"}</td>
-                  <td>{file.file_name || "-"}</td>
-                  <td>{file.competencia || "-"}</td>
-                  <td>{number(file.row_count || 0)}</td>
-                  <td><Badge tone={file.status === "processed" ? "success" : "warning"}>{file.status || "-"}</Badge></td>
-                  <td>{formatDate(file.processed_at)}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      </Card>
+      <ProcessedFilesManager files={data.files} />
 
       <Card className="settings-panel">
         <div className="section-header">
