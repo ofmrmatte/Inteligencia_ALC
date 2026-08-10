@@ -136,6 +136,7 @@ npm run build
 npm run test:rules
 npm run check:metadata
 npm run check:scripts
+npm run check:ci-env
 npm run check
 npm run test:e2e:smoke
 npm run test:e2e
@@ -143,6 +144,8 @@ npm run verify:runtime
 npm run smoke:production
 npm run audit:dashboard
 npm run audit:dead-code
+npm run audit:ci
+npm run audit:db
 npm run audit:module-isolation
 npm run audit:dedupe
 npm run audit:row-counts
@@ -155,11 +158,14 @@ npm run cleanup:local
 - `npm run test:rules`: valida regras criticas de identidade, totais, dedupe, filtros, payloads, Pacotes Faltantes e permissao admin.
 - `npm run check:metadata`: impede que páginas dupliquem o sufixo `ALC Admin Center` no metadata.
 - `npm run check:scripts`: valida sintaxe dos scripts Node ativos.
+- `npm run check:ci-env`: valida presença de `NEXT_PUBLIC_SUPABASE_URL` e `NEXT_PUBLIC_SUPABASE_ANON_KEY` sem imprimir valores.
 - `npm run test:e2e:smoke`: executa smoke E2E sem sessão com Playwright.
 - `npm run test:e2e`: executa a suíte E2E; cenários autenticados pulam quando credenciais opcionais não existem.
 - `npm run verify:runtime`: verifica se a URL publicada esta servindo Next, nao o legado.
 - `npm run smoke:production`: verifica `/login` e redirects privados em produção sem autenticação.
-- `npm run audit:all`: roda as auditorias locais não destrutivas encadeadas, incluindo checks de runtime Next, dedupe, módulos, reconciliação e Supabase.
+- `npm run audit:ci`: roda somente auditorias offline, adequada para PRs e Dependabot.
+- `npm run audit:db`: roda auditorias PostgreSQL read-only e exige `SUPABASE_DB_URL`.
+- `npm run audit:all`: roda `audit:ci` e `audit:db` para validação local/admin.
 - `npm run cleanup:local`: faz dry-run de backups/logs/exportacoes locais que podem ser removidos.
 - `npm run cleanup:local -- --apply`: aplica a limpeza local protegida.
 - `npm run railway:*`: scripts de apoio a migracao/validacao Railway; nao incluem o frontend estatico antigo e nao fazem parte do fluxo normal da Vercel.

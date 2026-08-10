@@ -12,6 +12,7 @@ Triggers:
 
 - `pull_request` to `main`
 - `push` to `main`
+- `workflow_dispatch`
 
 Quality job:
 
@@ -21,19 +22,44 @@ Quality job:
 - `npm run test:rules`
 - `npm run check:metadata`
 - `npm run check:scripts`
+- `npm run check:ci-env`
 - `npm run build`
-- `npm run audit:all`
+- `npm run audit:ci`
 - `npm run test:e2e:smoke`
 
 The workflow uses `actions/checkout`, `actions/setup-node`, official npm cache through setup-node, minimal `contents: read` permissions, and concurrency cancellation by branch/ref.
 
 Required CI configuration:
 
-- `NEXT_PUBLIC_SUPABASE_URL` as GitHub Actions variable or secret
-- `NEXT_PUBLIC_SUPABASE_ANON_KEY` as GitHub Actions secret
-- `SUPABASE_DB_URL` as GitHub Actions secret for read-only audits
+- `NEXT_PUBLIC_SUPABASE_URL` as a GitHub Actions repository variable
+- `NEXT_PUBLIC_SUPABASE_ANON_KEY` as a GitHub Actions repository variable
 
-No `service_role` key is required for frontend CI.
+These values are public frontend configuration. They intentionally use repository variables so normal PRs and Dependabot PRs can build without private secrets.
+
+Optional database audit configuration:
+
+- `SUPABASE_DB_URL` as a GitHub Actions repository secret
+
+No `service_role` key is required for frontend CI. The normal Quality Gate does not receive `SUPABASE_DB_URL`.
+
+## Audit Groups
+
+`npm run audit:ci` runs only static/offline audits and is safe for PRs and Dependabot:
+
+- `audit:dashboard`: static/offline source and runtime guard checks
+- `audit:dead-code`: static/offline source heuristic
+
+`npm run audit:db` runs PostgreSQL read-only audits and requires `SUPABASE_DB_URL`:
+
+- `audit:module-isolation`
+- `audit:dedupe`
+- `audit:row-counts`
+- `audit:raw-data`
+- `audit:supabase`
+
+`npm run audit:all` remains for local/admin validation and runs both groups.
+
+The GitHub `database-audit` job runs only outside pull requests. If `SUPABASE_DB_URL` is missing, it emits a notice and skips the database audit commands.
 
 ## E2E
 
