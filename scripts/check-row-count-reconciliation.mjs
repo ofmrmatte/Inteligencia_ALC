@@ -2,11 +2,32 @@ import { createSql, printSection, writeAuditReport } from "./audit-utils.mjs";
 
 const sql = createSql();
 const expectedMismatches = {
-  PRE_FATURA: { max: 0, note: "Pré-Fatura precisa reconciliar sem divergências." },
-  GESTAO_PACOTES: { max: 0, note: "Gestão de Pacotes precisa reconciliar sem divergências." },
-  DESVIOS_PNR: { max: 4, note: "Tolerância histórica da Fase 2: até 4 divergências de metadado PNR." },
-  PACOTES_FALTANTES: { max: 0, note: "Pacotes Faltantes precisa reconciliar sem divergências." },
+  PRE_FATURA: { expected: [], note: "Pré-Fatura precisa reconciliar sem divergências." },
+  GESTAO_PACOTES: { expected: [], note: "Gestão de Pacotes precisa reconciliar sem divergências." },
+  DESVIOS_PNR: {
+    expected: [
+      { fileName: "PNR 1Q Julho 2026.xlsx", rowsPersisted: 3594, actualPersistedRows: 3574 },
+      { fileName: "PNR 1Q Junho 2026.xlsx", rowsPersisted: 3502, actualPersistedRows: 3481 },
+      { fileName: "PNR 2Q Junho 2026.xlsx", rowsPersisted: 3920, actualPersistedRows: 3873 },
+      { fileName: "PNR 2Q Maio 2026.xlsx", rowsPersisted: 3108, actualPersistedRows: 3104 },
+    ],
+    note: "Quatro divergências históricas de metadado PNR identificadas na Fase 2. Qualquer arquivo diferente é regressão.",
+  },
+  PACOTES_FALTANTES: { expected: [], note: "Pacotes Faltantes precisa reconciliar sem divergências." },
 };
+
+function mismatchKey(row) {
+  return [
+    row.file_type,
+    row.file_name,
+    Number(row.rows_persisted || 0),
+    Number(row.actual_persisted_rows || 0),
+  ].join("|");
+}
+
+function expectedKey(fileType, item) {
+  return [fileType, item.fileName, item.rowsPersisted, item.actualPersistedRows].join("|");
+}
 
 try {
   const rows = await sql.unsafe(`
@@ -85,6 +106,7 @@ try {
     },
     summary,
     expectedMismatches,
+    observedMismatches: rows.filter((row) => row.reconciliation_status !== "ok"),
     rows,
   };
   const reportPath = await writeAuditReport("row-count-reconciliation", report);
@@ -98,24 +120,37 @@ try {
     rows_persisted: item.rowsPersisted,
     mismatches: item.mismatches,
   })));
-  const regressions = Object.entries(summary)
-    .map(([fileType, item]) => ({
-      fileType,
-      mismatches: item.mismatches,
-      allowed: expectedMismatches[fileType]?.max ?? 0,
-      note: expectedMismatches[fileType]?.note || "Sem tolerância configurada.",
-    }))
-    .filter((item) => item.mismatches > item.allowed);
+  const observedMismatchRows = rows.filter((row) => row.reconciliation_status !== "ok");
+  const observedMismatchKeys = new Set(observedMismatchRows.map(mismatchKey));
+  const expectedMismatchKeys = new Set(Object.entries(expectedMismatches).flatMap(([fileType, rule]) =>
+    rule.expected.map((item) => expectedKey(fileType, item))
+  ));
+  const unexpectedMismatches = observedMismatchRows.filter((row) => !expectedMismatchKeys.has(mismatchKey(row)));
+  const missingExpectedMismatches = [...expectedMismatchKeys].filter((key) => !observedMismatchKeys.has(key));
+  const strictRegressions = [
+    ...unexpectedMismatches.map((row) => ({
+      type: "unexpected_mismatch",
+      fileType: row.file_type,
+      fileName: row.file_name,
+      rowsPersisted: row.rows_persisted,
+      actualPersistedRows: row.actual_persisted_rows,
+    })),
+    ...missingExpectedMismatches.map((key) => ({
+      type: "expected_mismatch_changed_or_missing",
+      key,
+    })),
+  ];
   const totalMismatches = Object.values(summary).reduce((sum, item) => sum + item.mismatches, 0);
   console.log(`Persisted metadata mismatches: ${totalMismatches}`);
   console.table(Object.entries(expectedMismatches).map(([fileType, rule]) => ({
     file_type: fileType,
-    allowed_mismatches: rule.max,
+    expected_mismatches: rule.expected.length,
     observed_mismatches: summary[fileType]?.mismatches ?? 0,
   })));
+  if (strictRegressions.length) console.table(strictRegressions);
   console.log(`Relatorio: ${reportPath}`);
 
-  if (regressions.length) process.exitCode = 2;
+  if (strictRegressions.length) process.exitCode = 2;
 } catch (error) {
   console.error("[Row Count] Falha:", error);
   process.exit(1);

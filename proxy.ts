@@ -31,7 +31,7 @@ export async function proxy(request: NextRequest) {
   if (!user && !isPublicPath) {
     const loginUrl = request.nextUrl.clone();
     loginUrl.pathname = "/login";
-    loginUrl.searchParams.set("next", pathname);
+    loginUrl.searchParams.set("next", pathname === "/" ? "/dashboard" : pathname);
     return NextResponse.redirect(loginUrl);
   }
 

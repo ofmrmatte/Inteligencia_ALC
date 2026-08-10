@@ -14,6 +14,8 @@ coverage/
 .turbo/
 *.tsbuildinfo
 .chrome-shot-profile/
+playwright-report/
+test-results/
 
 # Logs and generated diagnostics
 logs/

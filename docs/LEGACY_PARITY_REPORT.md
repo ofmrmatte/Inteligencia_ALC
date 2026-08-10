@@ -1,73 +1,62 @@
 # Legacy Parity Report
 
-## Contexto
+## Status
 
-Este relatório registra a decisão de hardening final da Fase 2 sobre o runtime legado.
+Legacy runtime: **RETIRED**.
 
-A aplicação principal em produção é Next.js App Router. O runtime Next não importa `legacy/`, `assets/vendor/`, `window.supabaseClient`, `authService.js`, `config.js`, `dashboardCacheService.js` nem scripts globais do dashboard antigo.
+The production application is the Next.js App Router runtime. The retired static dashboard files and old browser vendor bundles were removed from the repository in Phase 3A. Git history remains the source for historical recovery.
 
-## Inventário
+## Removed Runtime Surface
 
-Arquivos legados ainda presentes:
+- Static HTML/CSS/JS dashboard from `legacy/`.
+- Browser globals from the old runtime: `window.supabaseClient`, `authService.js`, `config.js`, and `dashboardCacheService.js`.
+- Browser vendor XLSX bundles from `assets/vendor/`.
+- Legacy Railway/static dashboard server script.
+- `npm run check:legacy`.
 
-- `legacy/index.html`
-- `legacy/app.js`
-- `legacy/styles.css`
-- `legacy/config.js`
-- `legacy/supabaseClient.js`
-- `legacy/authService.js`
-- `legacy/dashboardCacheService.js`
-- `legacy/railwayApiClient.js`
-- `legacy/railwayStagingClient.js`
-- `assets/vendor/xlsx.full.min.js`
-- `assets/vendor/exceljs.min.js`
-- `assets/logo-alc-dashboard.png`
-- `assets/logo-alc.jpeg`
+## Preserved Modern Runtime
 
-## Dependências Restantes
+- `app/`: Next.js App Router pages, layouts, API routes, loading states, errors, and not-found.
+- `components/`: shell, primitives, feedback, filters, tables, charts, and brand components.
+- `features/`: operational modules organized by feature.
+- `lib/`: Supabase, auth, permissions, constants, server helpers, and exports.
+- `public/brand/`: official ALC assets used at runtime.
 
-Os arquivos acima não são usados pelo runtime Next, mas ainda existem dependências operacionais históricas:
+## Business Parity Preserved
 
-- `npm run check:legacy` valida sintaxe do legado enquanto os scripts antigos ainda existirem.
-- `scripts/railway/07-serve-railway-dashboard.mjs` serve o dashboard legado em staging local Railway/híbrido.
-- `scripts/backfill-pnr-records.mjs` ainda usa `assets/vendor/xlsx.full.min.js` para backfill histórico de PNR.
-- `scripts/railway/README.md` e `scripts/railway/CUTOVER_RUNBOOK.md` documentam fluxos Railway antigos fora do runtime normal da Vercel.
+Critical rules remain in the modern feature modules and rule tests:
 
-Por isso, a remoção física de `legacy/` e `assets/vendor/` não é segura nesta etapa sem antes migrar ou aposentar esses scripts.
+- Pré-Fatura requires real package and route identity.
+- Different package/shipment IDs are never merged only by route, value, driver, plate, base, or date.
+- Total, subtotal, footer, and identity-less rows do not enter calculations.
+- Gestão de Pacotes ignores total-like rows and preserves operational identity.
+- Desvios PNR preserves shipment/case/claim identity and does not use route/value as a unique key.
+- Admin authorization requires the central helper rule: `profile.is_admin === true` and normalized `profile.role === "admin"`.
+- `user_metadata` is not an authorization source.
 
-## Paridade Funcional Preservada
+## PNR Backfill
 
-Regras críticas mantidas no Next:
+`scripts/backfill-pnr-records.mjs` now uses the server-side `exceljs` package directly. It no longer depends on a browser XLSX bundle.
 
-- Pré-Fatura exige identidade real de pacote/rota.
-- IDs diferentes não podem ser agrupados apenas por rota, valor, motorista, placa, base ou data.
-- Linhas de totais, subtotais, rodapés e linhas sem identidade válida não entram nos cálculos.
-- Gestão de Pacotes ignora totais e preserva identidade operacional.
-- Desvios PNR preserva ID/reclamação e não usa rota/valor como chave única.
-- Autorização admin usa somente `profile.is_admin === true` e `role` normalizada como `admin`.
-- `user_metadata` não é fonte de autorização.
+Use dry-run for validation:
 
-## Auditorias Atualizadas
+```powershell
+node scripts/backfill-pnr-records.mjs --dry-run
+```
 
-As auditorias abaixo foram movidas para o runtime Next:
+Dry-run downloads and normalizes candidate files but skips deletes, inserts, metadata updates, and RPC refreshes.
 
-- `scripts/audit-dashboard-health.mjs`
-- `scripts/find-dead-code.mjs`
-- `scripts/audit-raw-data-compaction.mjs`
+## Railway
 
-Elas não dependem mais de `legacy/app.js` para validar saúde do dashboard, dead code do runtime atual ou uso de `raw_data`.
+Railway database migration, export, import, compare, validate, sizing, and dry-run scripts remain because they are not the retired frontend runtime. The removed piece was only the old static dashboard server.
 
-## Critérios de Reconciliação
+## Row Count Reconciliation
 
-O script `scripts/check-row-count-reconciliation.mjs` mantém tolerância explícita:
+The reconciliation audit keeps the known contract:
 
 - `PRE_FATURA`: `mismatches = 0`
 - `GESTAO_PACOTES`: `mismatches = 0`
-- `DESVIOS_PNR`: até `4` divergências históricas de metadado; `>= 5` é regressão
+- `DESVIOS_PNR`: exactly four historical metadata mismatches, identified by file and counts
 - `PACOTES_FALTANTES`: `mismatches = 0`
 
-Nenhuma correção desta etapa altera dados do Supabase.
-
-## Próximo Passo Recomendado
-
-Criar uma etapa curta para aposentar o servidor Railway/híbrido e migrar `scripts/backfill-pnr-records.mjs` para `exceljs` server-side. Depois disso, remover `legacy/`, `assets/vendor/` e `check:legacy` com segurança.
+Any new mismatch or changed historical mismatch fails the audit.

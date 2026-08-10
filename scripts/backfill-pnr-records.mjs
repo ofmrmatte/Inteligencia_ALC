@@ -1,15 +1,13 @@
 import "dotenv/config";
 import { createClient } from "@supabase/supabase-js";
-import { createRequire } from "node:module";
-
-const require = createRequire(import.meta.url);
-const XLSX = require("../assets/vendor/xlsx.full.min.js");
+import ExcelJS from "exceljs";
 
 const SUPABASE_URL = process.env.SUPABASE_URL || "https://kvgddwmdamnkygyarafy.supabase.co";
 const SUPABASE_ANON_KEY = process.env.SUPABASE_ANON_KEY || "sb_publishable_pZtgtlrQgL13gP-cEVKzDA_hJuYBfqk";
 const EMAIL = process.env.SUPABASE_TEST_EMAIL || process.env.TEST_EMAIL;
 const PASSWORD = process.env.SUPABASE_TEST_PASSWORD || process.env.TEST_PASSWORD;
 const BATCH_SIZE = Number(process.env.PNR_BACKFILL_BATCH_SIZE || 500);
+const DRY_RUN = process.argv.includes("--dry-run") || process.env.PNR_BACKFILL_DRY_RUN === "1";
 
 const MONTHS = ["Janeiro", "Fevereiro", "Marco", "Abril", "Maio", "Junho", "Julho", "Agosto", "Setembro", "Outubro", "Novembro", "Dezembro"];
 const MONTH_ABBR = ["Jan", "Fev", "Mar", "Abr", "Mai", "Jun", "Jul", "Ago", "Set", "Out", "Nov", "Dez"];
@@ -156,10 +154,41 @@ function cell(row, headerIndex, aliases) {
   return "";
 }
 
+function excelValue(cellValue) {
+  if (cellValue == null) return "";
+  if (cellValue instanceof Date) return cellValue;
+  if (typeof cellValue !== "object") return cellValue;
+  if ("result" in cellValue) return excelValue(cellValue.result);
+  if ("text" in cellValue) return cellValue.text;
+  if ("richText" in cellValue && Array.isArray(cellValue.richText)) {
+    return cellValue.richText.map((item) => item.text || "").join("");
+  }
+  if ("hyperlink" in cellValue && "text" in cellValue) return cellValue.text;
+  return String(cellValue);
+}
+
+function worksheetToMatrix(worksheet) {
+  const rows = [];
+  worksheet.eachRow({ includeEmpty: false }, (row, rowNumber) => {
+    const values = [];
+    row.eachCell({ includeEmpty: true }, (cellValue, colNumber) => {
+      values[colNumber - 1] = excelValue(cellValue.value);
+    });
+    rows[rowNumber - 1] = values;
+  });
+  return rows.filter((row) => Array.isArray(row) && row.some((value) => String(value ?? "").trim()));
+}
+
+async function readWorkbook(buffer) {
+  const workbook = new ExcelJS.Workbook();
+  await workbook.xlsx.load(buffer);
+  return workbook;
+}
+
 function buildRecords(fileRecord, workbook) {
   const records = [];
-  for (const sheetName of workbook.SheetNames) {
-    const matrix = XLSX.utils.sheet_to_json(workbook.Sheets[sheetName], { header: 1, raw: true, defval: "" });
+  for (const worksheet of workbook.worksheets) {
+    const matrix = worksheetToMatrix(worksheet);
     if (!matrix.length) continue;
     const headers = matrix[0].map(normalizeHeader);
     const headerIndex = new Map(headers.map((header, index) => [header, index]));
@@ -316,10 +345,14 @@ async function main() {
     console.log(`[PNR Backfill] baixando ${file.file_name}`);
     const { data: blob, error: downloadError } = await supabase.storage.from("dashboard-files").download(file.storage_path);
     if (downloadError) throw downloadError;
-    const workbook = XLSX.read(Buffer.from(await blob.arrayBuffer()), { type: "buffer", cellDates: true });
+    const workbook = await readWorkbook(Buffer.from(await blob.arrayBuffer()));
     const records = buildRecords(file, workbook);
     console.log(`[PNR Backfill] ${file.file_name}: ${records.length} registros normalizados`);
     if (!records.length) continue;
+    if (DRY_RUN) {
+      console.log(`[PNR Backfill] dry-run: nenhuma exclusão, inserção, atualização de metadado ou RPC será executada para ${file.file_name}`);
+      continue;
+    }
 
     const { error: deleteError } = await supabase.from("desvios_pnr_records").delete().eq("file_id", file.id);
     if (deleteError) throw deleteError;

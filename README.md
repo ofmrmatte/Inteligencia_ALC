@@ -2,21 +2,23 @@
 
 Aplicação web Next.js para análise operacional de pré-fatura, descontos, PNR e gestão de pacotes por base, motorista, competência, mês e quinzena.
 
-## Estado da Fase 2
+## Estado Atual
 
-A Fase 2 usa Next.js App Router, React e TypeScript como runtime principal. O legado permanece somente como referência histórica e suporte a scripts antigos de staging/backfill; ele não é importado pelo runtime Next nem pela Vercel em fluxo normal.
+A aplicação principal usa Next.js App Router, React e TypeScript. O runtime estático legado foi aposentado na Fase 3A; regras críticas permanecem cobertas por módulos modernos, auditorias e testes.
 
-Relatório de decisão: `docs/LEGACY_PARITY_REPORT.md`.
+Relatórios de decisão:
+
+- `docs/LEGACY_PARITY_REPORT.md`
+- `docs/PHASE_3_QUALITY_AUTOMATION.md`
 
 ## Configuracao geral
 
 - Producao: https://dashboardfatura.vercel.app
 - Hospedagem: Vercel.
 - Aplicação principal: Next.js App Router + React + TypeScript.
-- Legado: arquivos estáticos ficam em `legacy/` apenas como referência histórica e suporte a scripts antigos.
 - Backend principal: Supabase.
 - Runtime local para scripts: Node.js.
-- Railway: usado apenas em scripts de migracao, validacao e servidor local de staging; os clientes Railway nao sao carregados no HTML normal de producao.
+- Railway: usado apenas em scripts de migracao, exportacao, importacao, comparacao, validacao e sizing. Nao faz parte do runtime normal da Vercel.
 
 Se o dominio de producao for alterado, atualize esta secao e as URLs permitidas no Supabase Auth.
 
@@ -39,7 +41,7 @@ A Vercel deve executar o build Next.js. A nova aplicacao nao depende de `index.h
 
 ### Railway
 
-Os arquivos em `scripts/railway/` continuam no repositorio para migracao, comparacao, validacao e staging local. O servidor `scripts/railway/07-serve-railway-dashboard.mjs` injeta os clientes Railway somente quando ele serve o dashboard em modo local/staging.
+Os arquivos em `scripts/railway/` continuam no repositorio para migracao, comparacao, validacao e sizing. O servidor estatico legado foi removido; staging funcional deve usar o runtime Next.js.
 
 ## Permissoes
 
@@ -120,17 +122,8 @@ A permissao administrativa exige `profiles.is_admin = true` e `profiles.role = '
 - `features/`: organizacao por modulo.
 - `lib/`: Supabase, auth, permissoes, constantes e utils.
 - `public/brand/`: Brand Kit oficial ALC usado pela nova interface.
-- `legacy/index.html`: estrutura da aplicacao legada e scripts inline historicos.
-- `legacy/styles.css`: estilos legados.
-- `legacy/config.js`: configuracao publica do frontend legado.
-- `legacy/supabaseClient.js`: inicializacao legada do cliente Supabase.
-- `legacy/authService.js`: login, sessao, perfil e usuarios do legado.
-- `legacy/dashboardCacheService.js`: cache local legado de dados processados.
-- `legacy/app.js`: regras de negocio historicas, usadas como especificacao de migracao.
-- `legacy/railwayApiClient.js` e `legacy/railwayStagingClient.js`: clientes usados apenas quando injetados pelo servidor Railway local/staging.
 - `scripts/`: auditorias, migracoes, validacoes e utilitarios locais.
 - `supabase/migrations/`: migracoes SQL versionadas.
-- `assets/vendor/xlsx.full.min.js`: leitura de Excel no navegador.
 
 ## Scripts
 
@@ -141,9 +134,13 @@ npm run lint
 npm run typecheck
 npm run build
 npm run test:rules
+npm run check:metadata
+npm run check:scripts
 npm run check
-npm run check:legacy
+npm run test:e2e:smoke
+npm run test:e2e
 npm run verify:runtime
+npm run smoke:production
 npm run audit:dashboard
 npm run audit:dead-code
 npm run audit:module-isolation
@@ -156,12 +153,16 @@ npm run cleanup:local
 
 - `npm run check`: executa lint, typecheck, testes de regras e build da aplicacao Next.
 - `npm run test:rules`: valida regras criticas de identidade, totais, dedupe, filtros, payloads, Pacotes Faltantes e permissao admin.
+- `npm run check:metadata`: impede que páginas dupliquem o sufixo `ALC Admin Center` no metadata.
+- `npm run check:scripts`: valida sintaxe dos scripts Node ativos.
+- `npm run test:e2e:smoke`: executa smoke E2E sem sessão com Playwright.
+- `npm run test:e2e`: executa a suíte E2E; cenários autenticados pulam quando credenciais opcionais não existem.
 - `npm run verify:runtime`: verifica se a URL publicada esta servindo Next, nao o legado.
-- `npm run check:legacy`: valida sintaxe dos principais arquivos JavaScript legados.
+- `npm run smoke:production`: verifica `/login` e redirects privados em produção sem autenticação.
 - `npm run audit:all`: roda as auditorias locais não destrutivas encadeadas, incluindo checks de runtime Next, dedupe, módulos, reconciliação e Supabase.
 - `npm run cleanup:local`: faz dry-run de backups/logs/exportacoes locais que podem ser removidos.
 - `npm run cleanup:local -- --apply`: aplica a limpeza local protegida.
-- `npm run railway:*`: scripts de apoio a migracao/validacao Railway; nao fazem parte do fluxo normal da Vercel.
+- `npm run railway:*`: scripts de apoio a migracao/validacao Railway; nao incluem o frontend estatico antigo e nao fazem parte do fluxo normal da Vercel.
 
 ## Fluxo basico
 

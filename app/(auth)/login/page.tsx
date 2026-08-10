@@ -6,7 +6,7 @@ import { BRAND } from "@/lib/constants/brand";
 import { getCurrentSession } from "@/lib/auth/session";
 
 export const metadata: Metadata = {
-  title: "Login | ALC Admin Center",
+  title: "Login",
 };
 
 export default async function LoginPage() {

@@ -104,6 +104,57 @@ a {
   justify-content: center;
 }
 
+.not-found-page {
+  min-height: 100vh;
+  display: grid;
+  place-items: center;
+  padding: 32px;
+  background: linear-gradient(135deg, #050505 0%, #111111 46%, #000000 100%);
+}
+
+.not-found-panel {
+  width: min(100%, 460px);
+  display: grid;
+  justify-items: start;
+  gap: 28px;
+  padding: 32px;
+  border: 1px solid rgb(255 255 255 / 12%);
+  border-radius: var(--radius-lg);
+  background: rgb(17 17 17 / 88%);
+  box-shadow: var(--shadow-panel);
+}
+
+.not-found-panel img {
+  width: min(248px, 100%);
+  height: auto;
+}
+
+.not-found-panel__content {
+  display: grid;
+  gap: 10px;
+}
+
+.not-found-panel__content span {
+  color: var(--alc-red-bright);
+  font-size: 0.76rem;
+  font-weight: 800;
+  letter-spacing: 0;
+}
+
+.not-found-panel__content h1 {
+  margin: 0;
+  color: var(--alc-white);
+  font-size: clamp(2rem, 8vw, 3.4rem);
+  line-height: 1;
+  letter-spacing: 0;
+}
+
+.not-found-panel__content p {
+  margin: 0;
+  color: var(--alc-muted);
+  line-height: 1.6;
+}
+
 .login-page__brand {
   display: grid;
   gap: 42px;
