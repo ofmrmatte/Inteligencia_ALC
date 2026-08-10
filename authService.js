@@ -6,6 +6,10 @@
     return window.supabaseClient;
   }
 
+  function isAdminProfile(profile) {
+    return profile?.is_admin === true && String(profile?.role || "").trim().toLowerCase() === "admin";
+  }
+
   window.authService = {
     async login(email, password) {
       const { data, error } = await getClient().auth.signInWithPassword({
@@ -89,7 +93,7 @@
       return {
         user,
         profile,
-        isAdmin: profile?.is_admin === true,
+        isAdmin: isAdminProfile(profile),
       };
     },
 

@@ -138,7 +138,6 @@ const PNR_IMPORT_BATCH_TIMEOUT_MS = 90000;
 const PNR_IMPORT_PROGRESS_TOAST_INTERVAL_MS = 12000;
 const PROCESSED_RECORDS_PAGE_SIZE = 1000;
 const PNR_REMOTE_QUERY_DEBOUNCE_MS = 400;
-let isRendering = false; // Fase 1 - proteção contra renderAll concorrente
 const PNR_REMOTE_RPC = "desvios_pnr_dashboard";
 const PNR_SUMMARY_RPC = "desvios_pnr_summary";
 const PNR_TABLE_RPC = "desvios_pnr_table";
@@ -3705,7 +3704,7 @@ function renderSettingsPage() {
   const users = knownUsers;
   el.settingsUsersList.innerHTML = users
     .map((user) => {
-      const isAdmin = user.is_admin === true || user.isAdmin === true || user.role === "admin";
+      const isAdmin = isAdminProfile(user);
       const name = user.name || (user.email ? user.email.split("@")[0] : "Usuário");
       const cargo = user.cargo || (isAdmin ? "Administrador" : "Usuário");
       const setor = user.setor || "LOSS";
@@ -21339,8 +21338,12 @@ function applyTheme(theme) {
   state.theme = resolved;
 }
 
+function isAdminProfile(profile) {
+  return profile?.is_admin === true && String(profile?.role || "").trim().toLowerCase() === "admin";
+}
+
 function canEdit() {
-  return currentProfile?.is_admin === true;
+  return isAdminProfile(currentProfile);
 }
 
 function getActionPermissions() {
@@ -21985,9 +21988,9 @@ async function updateUserRole(userId, role) {
   if (!userId || !canEdit() || !window.authService) return;
   try {
     const users = knownUsers.length ? knownUsers : await window.authService.getUsers();
-    const admins = users.filter((user) => user.is_admin === true || user.isAdmin === true || user.role === "admin");
+    const admins = users.filter(isAdminProfile);
     const target = users.find((user) => String(user.id) === String(userId));
-    const targetIsAdmin = target?.is_admin === true || target?.isAdmin === true || target?.role === "admin";
+    const targetIsAdmin = isAdminProfile(target);
     const nextIsAdmin = role === "admin";
     if (targetIsAdmin && !nextIsAdmin && admins.length <= 1) {
       showToast("Não é possível remover o último administrador.", "warn", 5200);
@@ -22056,7 +22059,7 @@ function renderUsers() {
     ? knownUsers
         .map(
           (user) => {
-            const isAdmin = user.is_admin === true || user.isAdmin === true || user.role === "admin";
+            const isAdmin = isAdminProfile(user);
             const name = user.name || (user.email ? user.email.split("@")[0] : "Usuário");
             const cargo = user.cargo || (isAdmin ? "Administrador" : "Usuário");
             return `
@@ -22974,3 +22977,55 @@ function capitalize(text) {
     if (event.key === "Escape") closeCard();
   });
 })();
+
+window.dashboardLegacyBridge = {
+  get(name, fallback = undefined) {
+    const values = {
+      state,
+      dashboardFileRecords,
+      moduleLoadingState,
+      pnrRemoteState,
+      PRE_FATURA_VIEW,
+      PREFATURA_VIEW_OVERVIEW,
+      PACKAGE_MANAGEMENT_VIEW,
+      DEVIATION_MANAGEMENT_VIEW,
+      DEVIATION_CATEGORY_PNRS,
+      DEVIATION_PNR_FILE_CATEGORY,
+      DEVIATION_CATEGORY_MISSING_PACKAGES,
+      MISSING_PACKAGES_FILE_CATEGORY,
+      MAIN_TYPE_OPTIONS,
+    };
+    return Object.prototype.hasOwnProperty.call(values, name) ? values[name] : fallback;
+  },
+  call(name, args = []) {
+    const functions = {
+      persistState,
+      hydrateControls,
+      renderAll,
+      updateAccessControls,
+      handlePreFaturaCategorySelection,
+      activateSheetTab,
+      ensurePackageManagementRowsLoaded,
+      handleDeviationCategorySelection,
+      loadMissingPackagesFromSupabase,
+      schedulePnrRemoteRefresh,
+      getPeriodDropdownOptions,
+      getPnrMonthOptions,
+      getActiveMonthOptions,
+      getPnrFilterOptions,
+      getMissingPackagesFilterOptions,
+      getActiveMonthSelectionValues,
+      getActivePeriodMode,
+      syncMonthFilterControl,
+      applyPnrFilterValue,
+      applyMonthOptionChange,
+      applyPeriodOptionChange,
+      applyPackageTypeOptionChange,
+      syncPackageTypeFilterControl,
+      scheduleSearchRender,
+      resetDashboardFilters,
+    };
+    const fn = functions[name];
+    return typeof fn === "function" ? fn(...(Array.isArray(args) ? args : [])) : undefined;
+  },
+};
