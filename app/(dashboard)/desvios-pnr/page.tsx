@@ -1,23 +1,27 @@
 import type { Metadata } from "next";
 import { PageHeader } from "@/components/layout/page-header";
-import { ModuleFoundation } from "@/components/layout/module-foundation";
+import { DesviosPnrWorkspace } from "@/features/desvios-pnr/components/desvios-pnr-workspace";
+import { getPnrPage } from "@/features/desvios-pnr/data/queries";
 
 export const metadata: Metadata = {
   title: "Desvios PNR",
 };
 
-export default function DesviosPnrPage() {
+export default async function DesviosPnrPage({
+  searchParams,
+}: {
+  searchParams?: Promise<Record<string, string | string[] | undefined>>;
+}) {
+  const data = await getPnrPage((await searchParams) ?? {});
+
   return (
     <>
       <PageHeader
         eyebrow="Modulo"
         title="Desvios PNR"
-        description="Fundacao para consultas paginadas e agregacoes sem bloquear o shell."
+        description="Monitore PNRs, status, fontes de cruzamento e impacto financeiro por periodo."
       />
-      <ModuleFoundation
-        title="Migracao planejada para RPCs e tabelas"
-        description="Este modulo deve carregar seus dados de forma independente, sem bloquear Dashboard ou Pre-Fatura."
-      />
+      <DesviosPnrWorkspace data={data} />
     </>
   );
 }
