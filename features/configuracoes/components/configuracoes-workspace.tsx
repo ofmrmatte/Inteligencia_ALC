@@ -46,7 +46,7 @@ export function ConfiguracoesWorkspace({ data }: { data: AdminSettingsPageData }
           <ShieldCheck size={20} aria-hidden="true" />
         </div>
         <div className="data-table-shell">
-          <table className="data-table data-table--wide">
+          <table className="data-table data-table--wide settings-users-table">
             <thead>
               <tr>
                 <th>Usuario</th>
@@ -58,8 +58,14 @@ export function ConfiguracoesWorkspace({ data }: { data: AdminSettingsPageData }
             <tbody>
               {data.profiles.map((profile) => (
                 <tr key={profile.id}>
-                  <td>{profile.name || "Usuario"}</td>
-                  <td>{profile.email || "-"}</td>
+                  <td>
+                    <strong>{profile.name || "Usuario"}</strong>
+                    <span>{profile.cargo || "Perfil operacional"}</span>
+                  </td>
+                  <td>
+                    <strong>{profile.email || "-"}</strong>
+                    <span>{profile.setor || "Sem setor"}</span>
+                  </td>
                   <td>
                     <Badge tone={profile.role === "admin" && profile.is_admin === true ? "success" : "neutral"}>
                       {profile.role === "admin" && profile.is_admin === true ? "Admin" : "Usuario"}
