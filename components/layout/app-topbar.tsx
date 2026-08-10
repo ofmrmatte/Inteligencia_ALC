@@ -1,6 +1,6 @@
 "use client";
 
-import { Menu } from "lucide-react";
+import { PanelLeftOpen } from "lucide-react";
 import { usePathname } from "next/navigation";
 import { GlobalSearch } from "@/features/global-search/components/global-search";
 
@@ -20,8 +20,13 @@ export function AppTopbar({ onOpenMenu }: { onOpenMenu: () => void }) {
 
   return (
     <header className="app-topbar">
-      <button type="button" className="icon-button app-topbar__menu" onClick={onOpenMenu} aria-label="Abrir menu">
-        <Menu size={19} aria-hidden="true" />
+      <button
+        type="button"
+        className="icon-button app-topbar__mobile-nav-trigger"
+        onClick={onOpenMenu}
+        aria-label="Abrir navegação"
+      >
+        <PanelLeftOpen size={18} aria-hidden="true" />
       </button>
 
       <div className="app-topbar__context" aria-label="Localização atual">

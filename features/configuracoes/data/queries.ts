@@ -55,7 +55,7 @@ export async function getAdminSettingsPage(): Promise<AdminSettingsPageData> {
         .from("processed_dashboard_files")
         .select("id,module_key,file_name,competencia,row_count,status,processed_at,raw_file_deleted,file_role")
         .order("processed_at", { ascending: false, nullsFirst: false })
-        .limit(30),
+        .limit(250),
       supabase
         .from("audit_logs")
         .select("id,user_email,action,entity_type,entity_id,created_at,details")
@@ -81,7 +81,7 @@ export async function getAdminSettingsPage(): Promise<AdminSettingsPageData> {
       pnrGoal: null,
       files: [],
       auditLogs: [],
-      error: error instanceof Error ? error.message : "Falha ao carregar configuracoes.",
+      error: error instanceof Error ? error.message : "Falha ao carregar configurações.",
     };
   }
 }
