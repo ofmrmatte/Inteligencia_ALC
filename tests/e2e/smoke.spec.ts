@@ -13,7 +13,7 @@ const privateRoutes = [
 
 test("login page renders ALC auth surface", async ({ page }) => {
   await page.goto("/login");
-  await expect(page).toHaveTitle("Login | ALC Admin Center");
+  await expect(page).toHaveTitle("Login | Inteligência LOSS");
   await expect(page.getByRole("img", { name: "ALC Admin Center" })).toBeVisible();
   await expect(page.getByLabel("Email", { exact: true })).toBeVisible();
   const password = page.getByLabel("Senha", { exact: true });

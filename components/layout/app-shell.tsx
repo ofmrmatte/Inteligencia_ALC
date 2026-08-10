@@ -15,17 +15,10 @@ type AppShellProps = {
 
 export function AppShell({ profile, children }: AppShellProps) {
   const [mobileOpen, setMobileOpen] = useState(false);
-  const [collapsed, setCollapsed] = useState(() => {
-    if (typeof window === "undefined") return false;
-    return localStorage.getItem("alc-sidebar-collapsed") === "true";
-  });
+  const [collapsed, setCollapsed] = useState(false);
 
   function toggleCollapsed() {
-    setCollapsed((current) => {
-      const next = !current;
-      localStorage.setItem("alc-sidebar-collapsed", String(next));
-      return next;
-    });
+    setCollapsed((current) => !current);
   }
 
   return (

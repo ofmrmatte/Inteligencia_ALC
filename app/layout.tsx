@@ -5,6 +5,7 @@ import { ThemeScript } from "@/components/layout/theme-script";
 import { BRAND } from "@/lib/constants/brand";
 import "./globals.css";
 import "./automy-alignment.css";
+import "./inteligencia-loss-overrides.css";
 
 const inter = Inter({
   subsets: ["latin"],
