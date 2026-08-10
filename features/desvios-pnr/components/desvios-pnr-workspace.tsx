@@ -1,12 +1,14 @@
 import Link from "next/link";
 import type { ReactNode } from "react";
-import { ArrowDownUp, ChevronLeft, ChevronRight, RefreshCw, Route, Search } from "lucide-react";
+import { ArrowDownUp, ChevronLeft, ChevronRight, Download, RefreshCw, Route, Search } from "lucide-react";
 import { EmptyState } from "@/components/feedback/empty-state";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { MetricCard } from "@/components/ui/metric-card";
 import { toNumber, type PnrMetricRow, type PnrPageData, type PnrRecord, type PnrSortKey } from "@/features/desvios-pnr/domain";
+import { ImportPnrButton } from "@/features/desvios-pnr/components/import-pnr-button";
+import { PnrStatusControl } from "@/features/desvios-pnr/components/pnr-status-control";
 
 function currency(value: number | string | null | undefined) {
   return new Intl.NumberFormat("pt-BR", { style: "currency", currency: "BRL" }).format(toNumber(value));
@@ -50,6 +52,14 @@ function paramsFromFilters(data: PnrPageData, overrides: Record<string, string |
     else params.set(key, String(value));
   });
   return `/desvios-pnr?${params.toString()}`;
+}
+
+function exportHref(data: PnrPageData) {
+  const params = new URLSearchParams();
+  Object.entries(data.filters).forEach(([key, value]) => {
+    if (key !== "page" && value) params.set(key, String(value));
+  });
+  return `/api/exports/desvios-pnr?${params.toString()}`;
 }
 
 function SortLink({ data, sort, children }: { data: PnrPageData; sort: PnrSortKey; children: ReactNode }) {
@@ -210,7 +220,7 @@ function Evolution({ data }: { data: PnrPageData }) {
   );
 }
 
-function PnrTable({ data }: { data: PnrPageData }) {
+function PnrTable({ data, canManage }: { data: PnrPageData; canManage: boolean }) {
   if (!data.rows.length) {
     return <EmptyState title="Nenhum PNR encontrado" description="Ajuste os filtros para consultar a base persistida." />;
   }
@@ -230,6 +240,7 @@ function PnrTable({ data }: { data: PnrPageData }) {
             <th>Periodo</th>
             <th>Datas</th>
             <th className="is-right"><SortLink data={data} sort="valorCompraNumerico">Valor</SortLink></th>
+            {canManage ? <th>Acoes</th> : null}
           </tr>
         </thead>
         <tbody>
@@ -260,6 +271,11 @@ function PnrTable({ data }: { data: PnrPageData }) {
                 <span>Entrega {formatDate(row.data_entrega)}</span>
               </td>
               <td className="is-right"><strong>{currency(row.valor_compra)}</strong></td>
+              {canManage ? (
+                <td>
+                  <PnrStatusControl id={row.id} status={row.status_normalizado || row.status_original} />
+                </td>
+              ) : null}
             </tr>
           ))}
         </tbody>
@@ -287,7 +303,7 @@ function Pagination({ data }: { data: PnrPageData }) {
   );
 }
 
-export function DesviosPnrWorkspace({ data }: { data: PnrPageData }) {
+export function DesviosPnrWorkspace({ data, canManage }: { data: PnrPageData; canManage: boolean }) {
   const summary = data.summary.summary;
   return (
     <div className="page-stack">
@@ -301,9 +317,14 @@ export function DesviosPnrWorkspace({ data }: { data: PnrPageData }) {
       </section>
 
       <div className="toolbar-row">
+        {canManage ? <ImportPnrButton /> : null}
         <Link href={paramsFromFilters(data, { page: data.filters.page })} prefetch className="button button--secondary button--md">
           <RefreshCw size={16} aria-hidden="true" />
           <span>Atualizar</span>
+        </Link>
+        <Link href={exportHref(data)} className="button button--secondary button--md">
+          <Download size={16} aria-hidden="true" />
+          <span>Exportar XLSX</span>
         </Link>
         <span className="toolbar-row__note">Resumo, graficos e tabela respeitam os filtros atuais.</span>
       </div>
@@ -328,7 +349,7 @@ export function DesviosPnrWorkspace({ data }: { data: PnrPageData }) {
           </div>
           <Route size={20} aria-hidden="true" />
         </div>
-        <PnrTable data={data} />
+        <PnrTable data={data} canManage={canManage} />
         <Pagination data={data} />
       </Card>
     </div>

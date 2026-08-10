@@ -156,7 +156,5 @@ Cobertura adicionada:
 
 ## Riscos e pendencias
 
-- Exportacao XLSX de Gestao e PNR ainda nao foi exposta.
-- Alteracao manual de status PNR via RPC segue disponivel no banco, mas nao foi aberta nesta UI para evitar ampliar superficie de escrita sem validacao visual completa.
-- Importacao PNR completa continua para etapa posterior; esta entrega migra consulta, filtros, KPIs, graficos e tabela detalhada.
+- Nota posterior: exportacao XLSX de Gestao/PNR, alteracao manual de status PNR e importacao PNR foram implementadas na branch `feat/phase-2-final-modules-admin`.
 - As quatro divergencias historicas de PNR devem ser tratadas em uma tarefa propria de metadados/reconciliacao, sem apagar dados.

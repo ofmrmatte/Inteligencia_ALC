@@ -1,7 +1,8 @@
 import type { Metadata } from "next";
 import { redirect } from "next/navigation";
 import { PageHeader } from "@/components/layout/page-header";
-import { ModuleFoundation } from "@/components/layout/module-foundation";
+import { ConfiguracoesWorkspace } from "@/features/configuracoes/components/configuracoes-workspace";
+import { getAdminSettingsPage } from "@/features/configuracoes/data/queries";
 import { getCurrentSession } from "@/lib/auth/session";
 import { isAdminProfile } from "@/lib/permissions/is-admin-profile";
 
@@ -12,18 +13,16 @@ export const metadata: Metadata = {
 export default async function ConfiguracoesPage() {
   const { profile } = await getCurrentSession();
   if (!isAdminProfile(profile)) redirect("/dashboard");
+  const data = await getAdminSettingsPage();
 
   return (
     <>
       <PageHeader
         eyebrow="Administracao"
         title="Configuracoes"
-        description="Area reservada para perfis, permissoes, metas e auditoria na nova arquitetura."
+        description="Usuarios, permissoes, metas PNR, arquivos processados e auditoria operacional."
       />
-      <ModuleFoundation
-        title="Administracao protegida"
-        description="A rota ja usa o helper unico de admin e sera expandida sem duplicar regras de autorizacao."
-      />
+      <ConfiguracoesWorkspace data={data} />
     </>
   );
 }

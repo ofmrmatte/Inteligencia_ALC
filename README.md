@@ -69,11 +69,11 @@ A permissao administrativa exige `profiles.is_admin = true` e `profiles.role = '
 - **Dashboard Next**: rota `/dashboard`, com indicadores reais de tabelas persistidas, valor consolidado de Pre-Fatura, meta PNR, rankings e arquivos recentes.
 - **Pre-Fatura**: rota `/pre-fatura`, consulta registros persistidos com filtros e paginacao server-side, importa planilhas com abas `SVC PERDIDOS`, `XPT PERDIDOS` e `PNR`, ignora totais/rodapes e exige identidade de pacote/rota antes de persistir.
 - **Gestao de Pacotes**: rota `/gestao-pacotes`, com dados reais de `gestao_pacotes_records`, filtros, metricas, tabela paginada, ordenacao e importacao admin de planilhas.
-- **Desvios PNR**: rota `/desvios-pnr`, usando `desvios_pnr_summary`, `desvios_pnr_table` e `desvios_pnr_metrics_summary` para KPIs, filtros, graficos e tabela server-side sem baixar todo o historico.
-- **Pacotes Faltantes**: mantem categoria separada dentro de gestao de desvios.
+- **Desvios PNR**: rota `/desvios-pnr`, usando `desvios_pnr_summary`, `desvios_pnr_table` e `desvios_pnr_metrics_summary` para KPIs, filtros, graficos, tabela server-side, exportacao XLSX, importacao admin e atualizacao manual admin de status.
+- **Pacotes Faltantes**: rota `/pacotes-faltantes`, com dados reais de `gestao_desvios_pacotes_faltantes`, filtros, metricas, tabela paginada, exportacao XLSX e atualizacao admin de status.
 - **Relatorio Executivo**: gera resumo do recorte selecionado com KPIs, rankings e tendencia.
 - **Configuracoes gerais**: permite administrar usuarios, metas e auditoria para administradores.
-- **Perfil**: permite visualizar dados do usuario autenticado.
+- **Perfil**: permite visualizar e atualizar dados do usuario autenticado, incluindo avatar no bucket `avatars`.
 
 ## Regras criticas da Pre-Fatura
 
@@ -149,7 +149,7 @@ npm run cleanup:local
 ```
 
 - `npm run check`: executa lint, typecheck, testes de regras e build da aplicacao Next.
-- `npm run test:rules`: valida regras criticas de identidade, totais, dedupe, filtros e payloads de Pre-Fatura, Gestao de Pacotes e Desvios PNR.
+- `npm run test:rules`: valida regras criticas de identidade, totais, dedupe, filtros, payloads, Pacotes Faltantes e permissao admin.
 - `npm run verify:runtime`: verifica se a URL publicada esta servindo Next, nao o legado.
 - `npm run check:legacy`: valida sintaxe dos principais arquivos JavaScript legados.
 - `npm run audit:all`: roda as auditorias locais nao destrutivas encadeadas.

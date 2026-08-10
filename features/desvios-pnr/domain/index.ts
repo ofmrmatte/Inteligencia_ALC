@@ -122,6 +122,17 @@ export type PnrPageData = {
 
 export const PNR_SORT_KEYS: PnrSortKey[] = ["", "valorCompraNumerico", "statusNormalizado", "estacaoOrigem"];
 
+export const PNR_ALLOWED_STATUSES = [
+  "Anulado",
+  "Enviado para faturamento",
+  "Aguardando Comprovante",
+  "Com Penalidade",
+  "Comprovante Carregado",
+  "Em Revisão",
+  "Sin Comprovante Carregado",
+  "Em aberto/análise",
+] as const;
+
 export function toNumber(value: number | string | null | undefined) {
   if (typeof value === "number") return Number.isFinite(value) ? value : 0;
   if (!value) return 0;

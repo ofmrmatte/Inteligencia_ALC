@@ -236,9 +236,10 @@ export function GestaoPacotesWorkspace({ data }: { data: GestaoPacotesPageData }
 
       <div className="toolbar-row">
         <ImportGestaoPacotesButton />
-        <Button type="button" variant="secondary" icon={<Download size={16} aria-hidden="true" />} disabled>
-          Exportar
-        </Button>
+        <Link href={`/api/exports/gestao-pacotes?${new URLSearchParams(Object.entries(data.filters).map(([key, value]) => [key, String(value || "")])).toString()}`} className="button button--secondary button--md">
+          <Download size={16} aria-hidden="true" />
+          <span>Exportar XLSX</span>
+        </Link>
         <span className="toolbar-row__note">Registros validados por identidade do pacote e evento operacional.</span>
       </div>
 
