@@ -154,7 +154,7 @@ export async function getPreFaturaPage(searchParams: SearchParamsInput): Promise
       totalPages: 1,
       filters,
       options: { competencias: [], quinzenas: [], tipos: [], bases: [] },
-      error: error instanceof Error ? error.message : "Falha ao carregar Pre-Fatura.",
+      error: error instanceof Error ? error.message : "Falha ao carregar Pré-Fatura.",
     };
   }
 }

@@ -52,8 +52,8 @@ export function ImportGestaoPacotesButton() {
           <div className="modal-panel" role="dialog" aria-modal="true" aria-labelledby="gestao-pacotes-import-title">
             <div className="section-header">
               <div>
-                <span>Validacao</span>
-                <h2 id="gestao-pacotes-import-title">Importar Gestao de Pacotes</h2>
+                <span>Validação</span>
+                <h2 id="gestao-pacotes-import-title">Importar Gestão de Pacotes</h2>
               </div>
               <button type="button" className="icon-button" onClick={() => setOpen(false)} aria-label="Fechar">
                 <X size={18} aria-hidden="true" />
@@ -62,10 +62,10 @@ export function ImportGestaoPacotesButton() {
             <form action={validate} className="import-form">
               <label>
                 <span>Arquivo .xlsx</span>
-                <input name="file" type="file" accept=".xlsx,.xlsm,.xls" required />
+                <input name="file" type="file" accept=".xlsx,.xlsm" required />
               </label>
               <div className="inline-warning">
-                A importacao ignora totais, preserva IDs de pacote e grava por identidade operacional completa.
+                A importação ignora totais, preserva IDs de pacote e grava por identidade operacional completa.
               </div>
               {error ? <div className="form-alert">{error}</div> : null}
               {result ? (

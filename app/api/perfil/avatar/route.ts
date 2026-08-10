@@ -1,5 +1,6 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { recordAuditLog } from "@/lib/server/audit";
+import { apiError } from "@/lib/server/api-response";
 import { requireAuthenticated } from "@/lib/server/authz";
 import { createServerSupabaseClient } from "@/lib/supabase/server";
 
@@ -17,17 +18,17 @@ export async function POST(request: NextRequest) {
   const formData = await request.formData();
   const file = formData.get("avatar");
   if (!(file instanceof File)) {
-    return NextResponse.json({ error: "Envie uma imagem valida." }, { status: 400 });
+    return apiError("Envie uma imagem válida.", 400);
   }
   if (file.size > MAX_SIZE) {
-    return NextResponse.json({ error: "Imagem maior que 5 MB." }, { status: 400 });
+    return apiError("Imagem maior que 5 MB.", 413);
   }
 
   const buffer = await file.arrayBuffer();
   const bytes = new Uint8Array(buffer);
   const signature = MIME_BY_SIGNATURE.find((item) => item.test(bytes));
   if (!signature || signature.mime !== file.type) {
-    return NextResponse.json({ error: "Formato de imagem invalido." }, { status: 400 });
+    return apiError("Formato de imagem inválido.", 400);
   }
 
   const extension = signature.mime.split("/")[1].replace("jpeg", "jpg");
@@ -37,7 +38,7 @@ export async function POST(request: NextRequest) {
     .from("avatars")
     .upload(path, Buffer.from(buffer), { contentType: signature.mime, upsert: true });
 
-  if (uploadError) return NextResponse.json({ error: uploadError.message }, { status: 400 });
+  if (uploadError) return apiError("Não foi possível enviar o avatar agora.", 400);
 
   const { data: publicData } = supabase.storage.from("avatars").getPublicUrl(path);
   const avatarUrl = publicData.publicUrl;
@@ -46,7 +47,7 @@ export async function POST(request: NextRequest) {
     .update({ avatar_url: avatarUrl, updated_at: new Date().toISOString() })
     .eq("id", session.user.id);
 
-  if (profileError) return NextResponse.json({ error: profileError.message }, { status: 400 });
+  if (profileError) return apiError("Não foi possível atualizar o avatar agora.", 400);
 
   await recordAuditLog({
     userId: session.user.id,

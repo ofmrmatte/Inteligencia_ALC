@@ -1,4 +1,5 @@
 import { buildXlsxResponse } from "@/lib/export/xlsx";
+import { apiError } from "@/lib/server/api-response";
 import { requireAuthenticated } from "@/lib/server/authz";
 import { createServerSupabaseClient } from "@/lib/supabase/server";
 import { parseMissingPackageFilters } from "@/features/pacotes-faltantes/data/queries";
@@ -43,7 +44,7 @@ export async function GET(request: Request) {
   query = applyFilters(query, filters);
 
   const { data, error } = await query.order(filters.sort, { ascending: filters.dir === "asc", nullsFirst: false });
-  if (error) return Response.json({ error: error.message }, { status: 400 });
+  if (error) return apiError("Não foi possível exportar Pacotes Faltantes agora.", 400);
 
   return buildXlsxResponse<MissingPackageRecord>({
     fileName: "alc-pacotes-faltantes.xlsx",
@@ -60,7 +61,7 @@ export async function GET(request: Request) {
       { header: "Status caso", key: "status_caso", width: 18 },
       { header: "Status MELI", key: "status_contato_meli", width: 20 },
       { header: "Prazo tratativa", key: "prazo_tratativa", width: 22 },
-      { header: "Situacao prazo", key: "situacao_prazo", width: 22 },
+      { header: "Situação prazo", key: "situacao_prazo", width: 22 },
       { header: "Arquivo", key: "file_name", width: 34 },
     ],
   });

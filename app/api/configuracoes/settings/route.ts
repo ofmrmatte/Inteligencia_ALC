@@ -1,5 +1,6 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { recordAuditLog } from "@/lib/server/audit";
+import { apiError } from "@/lib/server/api-response";
 import { requireAdmin } from "@/lib/server/authz";
 import { createServerSupabaseClient } from "@/lib/supabase/server";
 
@@ -14,13 +15,13 @@ export async function POST(request: NextRequest) {
   } | null;
 
   if (payload?.key !== "pnr_goal") {
-    return NextResponse.json({ error: "Configuracao invalida." }, { status: 400 });
+    return apiError("Configuração inválida.", 400);
   }
 
   const monthlyGoal = Number(payload.monthly_goal);
   const annualGoal = Number(payload.annual_goal);
   if (!Number.isFinite(monthlyGoal) || monthlyGoal < 0 || !Number.isFinite(annualGoal) || annualGoal < 0) {
-    return NextResponse.json({ error: "Metas precisam ser numeros positivos." }, { status: 400 });
+    return apiError("Metas precisam ser números positivos.", 400);
   }
 
   const supabase = await createServerSupabaseClient();
@@ -42,7 +43,7 @@ export async function POST(request: NextRequest) {
     }, { onConflict: "key" })
     .select("key,value,updated_by_email,updated_at")
     .single();
-  if (error) return NextResponse.json({ error: error.message }, { status: 400 });
+  if (error) return apiError("Não foi possível atualizar as metas agora.", 400);
 
   await recordAuditLog({
     userId: session.user.id,

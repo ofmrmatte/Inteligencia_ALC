@@ -15,7 +15,7 @@ export default async function DashboardPage() {
       <PageHeader
         eyebrow="Visao geral"
         title="Dashboard"
-        description="Resumo rapido dos registros processados e dos modulos operacionais."
+        description="Resumo rápido dos registros processados e dos módulos operacionais."
       />
       <DashboardOverview summary={summary} />
     </>

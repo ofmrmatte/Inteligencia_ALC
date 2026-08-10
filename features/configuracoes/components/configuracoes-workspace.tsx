@@ -28,7 +28,7 @@ export function ConfiguracoesWorkspace({ data }: { data: AdminSettingsPageData }
 
   return (
     <div className="page-stack">
-      {data.error ? <div className="inline-warning">Configuracoes indisponiveis agora: {data.error}</div> : null}
+      {data.error ? <div className="inline-warning">Configurações indisponíveis agora: {data.error}</div> : null}
 
       <section className="metric-grid" aria-label="Resumo administrativo">
         <MetricCard label="Usuarios" value={number(data.profiles.length)} detail={`${number(admins)} administradores`} tone="accent" />
@@ -114,7 +114,7 @@ export function ConfiguracoesWorkspace({ data }: { data: AdminSettingsPageData }
           <table className="data-table">
             <thead>
               <tr>
-                <th>Modulo</th>
+                <th>Módulo</th>
                 <th>Arquivo</th>
                 <th>Competencia</th>
                 <th>Linhas</th>
@@ -151,7 +151,7 @@ export function ConfiguracoesWorkspace({ data }: { data: AdminSettingsPageData }
             <div className="activity-list__item" key={item.id}>
               <div>
                 <strong>{item.action}</strong>
-                <span>{item.entity_type || "-"} · {item.user_email || "usuario"}</span>
+                <span>{item.entity_type || "-"} · {item.user_email || "usuário"}</span>
               </div>
               <span>{formatDate(item.created_at)}</span>
             </div>

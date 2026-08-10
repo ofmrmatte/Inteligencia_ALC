@@ -51,7 +51,7 @@ export function ImportPnrButton() {
           <div className="modal-panel" role="dialog" aria-modal="true" aria-labelledby="pnr-import-title">
             <div className="section-header">
               <div>
-                <span>Validacao</span>
+                <span>Validação</span>
                 <h2 id="pnr-import-title">Importar Desvios PNR</h2>
               </div>
               <button type="button" className="icon-button" onClick={() => setOpen(false)} aria-label="Fechar">
@@ -61,10 +61,10 @@ export function ImportPnrButton() {
             <form action={validate} className="import-form">
               <label>
                 <span>Arquivo .xlsx</span>
-                <input name="file" type="file" accept=".xlsx,.xlsm,.xls" required />
+                <input name="file" type="file" accept=".xlsx,.xlsm" required />
               </label>
               <div className="inline-warning">
-                A importacao preserva cada ID/reclamacao como registro proprio e nao usa rota/valor como chave unica.
+                A importação preserva cada ID/reclamação como registro próprio e não usa rota/valor como chave única.
               </div>
               {error ? <div className="form-alert">{error}</div> : null}
               {result ? (
@@ -74,7 +74,7 @@ export function ImportPnrButton() {
                   <div>
                     <span>Aceitas: {result.acceptedRows.toLocaleString("pt-BR")}</span>
                     <span>Ignoradas: {result.ignoredRows.toLocaleString("pt-BR")}</span>
-                    <span>Chaves unicas: {result.uniqueRows.toLocaleString("pt-BR")}</span>
+                    <span>Chaves únicas: {result.uniqueRows.toLocaleString("pt-BR")}</span>
                     <span>Duplicadas: {result.duplicated.toLocaleString("pt-BR")}</span>
                     {result.persisted ? <span>Persistidas: {result.persistence?.persistedRows.toLocaleString("pt-BR")}</span> : null}
                   </div>

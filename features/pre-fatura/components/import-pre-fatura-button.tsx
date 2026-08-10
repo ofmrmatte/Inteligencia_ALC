@@ -49,8 +49,8 @@ export function ImportPreFaturaButton() {
           <div className="modal-panel" role="dialog" aria-modal="true" aria-labelledby="pre-fatura-import-title">
             <div className="section-header">
               <div>
-                <span>Validacao</span>
-                <h2 id="pre-fatura-import-title">Importar Pre-Fatura</h2>
+                <span>Validação</span>
+                <h2 id="pre-fatura-import-title">Importar Pré-Fatura</h2>
               </div>
               <button type="button" className="icon-button" onClick={() => setOpen(false)} aria-label="Fechar">
                 <X size={18} aria-hidden="true" />
@@ -59,10 +59,10 @@ export function ImportPreFaturaButton() {
             <form action={validate} className="import-form">
               <label>
                 <span>Arquivo .xlsx</span>
-                <input name="file" type="file" accept=".xlsx,.xlsm,.xls" required />
+                <input name="file" type="file" accept=".xlsx,.xlsm" required />
               </label>
               <div className="inline-warning">
-                A importacao aplica as regras de total e identidade de pacote/rota antes de gravar. IDs diferentes permanecem registros separados.
+                A importação aplica as regras de total e identidade de pacote/rota antes de gravar. IDs diferentes permanecem registros separados.
               </div>
               {error ? <div className="form-alert">{error}</div> : null}
               {result ? (

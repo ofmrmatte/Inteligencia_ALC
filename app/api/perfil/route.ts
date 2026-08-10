@@ -1,4 +1,5 @@
 import { NextResponse, type NextRequest } from "next/server";
+import { apiError } from "@/lib/server/api-response";
 import { recordAuditLog } from "@/lib/server/audit";
 import { requireAuthenticated } from "@/lib/server/authz";
 import { createServerSupabaseClient } from "@/lib/supabase/server";
@@ -19,7 +20,7 @@ export async function POST(request: NextRequest) {
     .select("id,name,email,role,is_admin,cargo,setor,avatar_url")
     .single();
 
-  if (error) return NextResponse.json({ error: error.message }, { status: 400 });
+  if (error) return apiError("Não foi possível atualizar o perfil agora.", 400);
 
   await recordAuditLog({
     userId: session.user.id,

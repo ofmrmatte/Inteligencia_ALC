@@ -151,6 +151,6 @@ export async function getGestaoPacotesPage(searchParams: SearchParamsInput): Pro
       error: null,
     };
   } catch (error) {
-    return emptyPage(filters, error instanceof Error ? error.message : "Falha ao carregar Gestao de Pacotes.");
+    return emptyPage(filters, error instanceof Error ? error.message : "Falha ao carregar Gestão de Pacotes.");
   }
 }

@@ -33,7 +33,7 @@ export function LoginForm() {
       const { error: signInError } = await supabase.auth.signInWithPassword({ email, password });
 
       if (signInError) {
-        setError("Credenciais invalidas ou sessao indisponivel.");
+        setError("Credenciais inválidas ou sessão indisponível.");
         return;
       }
 
@@ -68,7 +68,7 @@ export function LoginForm() {
 
       <label className="checkbox-row">
         <input type="checkbox" checked={remember} onChange={(event) => setRemember(event.target.checked)} disabled={pending} />
-        <span>Lembrar sessao neste dispositivo</span>
+        <span>Lembrar sessão neste dispositivo</span>
       </label>
 
       {error ? <div className="form-alert">{error}</div> : null}

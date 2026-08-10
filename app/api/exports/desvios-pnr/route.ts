@@ -1,4 +1,5 @@
 import { buildXlsxResponse } from "@/lib/export/xlsx";
+import { apiError } from "@/lib/server/api-response";
 import { requireAuthenticated } from "@/lib/server/authz";
 import { createServerSupabaseClient } from "@/lib/supabase/server";
 import { parsePnrFilters } from "@/features/desvios-pnr/data/queries";
@@ -62,14 +63,14 @@ export async function GET(request: Request) {
   query = applyFilters(query, filters);
 
   const { data, error } = await query.order(orderColumn(filters), { ascending: filters.dir === "asc", nullsFirst: false });
-  if (error) return Response.json({ error: error.message }, { status: 400 });
+  if (error) return apiError("Não foi possível exportar Desvios PNR agora.", 400);
 
   return buildXlsxResponse<PnrRecord>({
     fileName: "alc-desvios-pnr.xlsx",
     sheetName: "Desvios PNR",
     rows: (data ?? []) as PnrRecord[],
     columns: [
-      { header: "Competencia", key: "competencia", width: 14 },
+      { header: "Competência", key: "competencia", width: 14 },
       { header: "Quinzena", key: "quinzena", width: 16 },
       { header: "Month key", key: "month_key", width: 14 },
       { header: "Status", key: "status_normalizado", width: 24 },
@@ -77,7 +78,7 @@ export async function GET(request: Request) {
       { header: "ID envio", key: "id_envio", width: 20 },
       { header: "Produto", key: "produtos", width: 30 },
       { header: "Valor compra", key: "valor_compra", width: 16 },
-      { header: "Estacao", key: "estacao_origem", width: 16 },
+      { header: "Estação", key: "estacao_origem", width: 16 },
       { header: "Tipo base", key: "tipo_base", width: 16 },
       { header: "Tipo operacional", key: "tipo_operacional", width: 20 },
       { header: "Rota", key: "id_rota", width: 18 },
@@ -87,7 +88,7 @@ export async function GET(request: Request) {
       { header: "Fonte cruzamento", key: "fonte_cruzamento", width: 20 },
       { header: "Data caso", key: "data_caso", width: 14 },
       { header: "Data entrega", key: "data_entrega", width: 14 },
-      { header: "ID reclamacao", key: "id_reclamacao", width: 22 },
+      { header: "ID reclamação", key: "id_reclamacao", width: 22 },
       { header: "Arquivo origem", key: "source_file_name", width: 34 },
     ],
   });

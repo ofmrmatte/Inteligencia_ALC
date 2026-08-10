@@ -1,4 +1,5 @@
 import { buildXlsxResponse } from "@/lib/export/xlsx";
+import { apiError } from "@/lib/server/api-response";
 import { requireAuthenticated } from "@/lib/server/authz";
 import { createServerSupabaseClient } from "@/lib/supabase/server";
 import { parseGestaoPacotesFilters } from "@/features/gestao-pacotes/data/queries";
@@ -45,26 +46,26 @@ export async function GET(request: Request) {
   query = applyFilters(query, filters);
 
   const { data, error } = await query.order(filters.sort, { ascending: filters.dir === "asc", nullsFirst: false });
-  if (error) return Response.json({ error: error.message }, { status: 400 });
+  if (error) return apiError("Não foi possível exportar Gestão de Pacotes agora.", 400);
 
   return buildXlsxResponse<GestaoPacotesRecord>({
     fileName: "alc-gestao-pacotes.xlsx",
-    sheetName: "Gestao de Pacotes",
+    sheetName: "Gestão de Pacotes",
     rows: (data ?? []) as GestaoPacotesRecord[],
     columns: [
-      { header: "Competencia", key: "competencia", width: 14 },
+      { header: "Competência", key: "competencia", width: 14 },
       { header: "Quinzena", key: "quinzena", width: 16 },
       { header: "Tipo", key: "tipo", width: 18 },
       { header: "Desconto", key: "desconto", width: 18 },
       { header: "Base", key: "base", width: 26 },
-      { header: "Codigo base", key: "codigo_base", width: 14 },
+      { header: "Código base", key: "codigo_base", width: 14 },
       { header: "Driver", key: "driver", width: 32 },
       { header: "Data", key: "data", width: 14 },
       { header: "ID envio", key: "id_envio", width: 20 },
       { header: "Rota", key: "rota", width: 18 },
       { header: "Valor", key: "valor", width: 14 },
-      { header: "Decisao ADM", key: "decisao_adm", width: 34 },
-      { header: "Observacao", key: "observacao", width: 34 },
+      { header: "Decisão ADM", key: "decisao_adm", width: 34 },
+      { header: "Observação", key: "observacao", width: 34 },
       { header: "Aba origem", key: "aba_origem", width: 18 },
     ],
   });

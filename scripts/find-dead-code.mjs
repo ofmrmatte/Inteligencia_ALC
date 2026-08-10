@@ -3,78 +3,69 @@ import path from "node:path";
 import { printSection, writeAuditReport } from "./audit-utils.mjs";
 
 const ROOT = process.cwd();
-const LEGACY_ROOT = "legacy";
-const filesToScan = ["app.js", "styles.css", "index.html", "supabaseClient.js", "authService.js", "dashboardCacheService.js"];
-
-async function readText(file) {
-  return readFile(path.join(ROOT, LEGACY_ROOT, file), "utf8");
-}
+const SCAN_DIRS = ["app", "components", "features", "lib"];
+const forbiddenRuntimePatterns = [
+  { id: "module_foundation", pattern: /ModuleFoundation|module-foundation|module-foundation/ },
+  { id: "fake_topbar_search", pattern: /topbar-search|Pesquisar no painel/ },
+  { id: "legacy_runtime", pattern: /legacy\/|legacy\\|window\.supabaseClient|assets\/vendor/ },
+];
 
 async function listFiles(dir) {
-  const entries = await readdir(dir, { withFileTypes: true });
+  const entries = await readdir(path.join(ROOT, dir), { withFileTypes: true });
   const output = [];
   for (const entry of entries) {
-    const full = path.join(dir, entry.name);
-    if (entry.isDirectory()) output.push(...await listFiles(full));
-    else if (entry.isFile()) output.push(full);
+    const relative = path.join(dir, entry.name);
+    if (entry.isDirectory()) output.push(...await listFiles(relative));
+    else if (entry.isFile() && /\.(ts|tsx|css)$/.test(entry.name)) output.push(relative.replace(/\\/g, "/"));
   }
   return output;
 }
 
-function countWord(allText, name) {
+function exportNames(content) {
+  return [
+    ...content.matchAll(/export\s+(?:function|const|class|type|interface)\s+([A-Za-z_$][\w$]*)/g),
+  ].map((match) => match[1]);
+}
+
+function countRefs(allText, name) {
   const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
   return [...allText.matchAll(new RegExp(`\\b${escaped}\\b`, "g"))].length;
 }
 
 try {
-  const contents = Object.fromEntries(await Promise.all(filesToScan.map(async (file) => [file, await readText(file)])));
-  const scripts = await listFiles(path.join(ROOT, "scripts"));
-  for (const script of scripts.filter((file) => file.endsWith(".mjs"))) {
-    contents[path.relative(ROOT, script).replace(/\\/g, "/")] = await readFile(script, "utf8");
+  const files = [];
+  for (const dir of SCAN_DIRS) {
+    for (const file of await listFiles(dir)) {
+      files.push({ path: file, content: await readFile(path.join(ROOT, file), "utf8") });
+    }
   }
-  const allText = Object.values(contents).join("\n");
-  const applicationText = filesToScan.map((file) => contents[file] || "").join("\n");
-  const app = contents["app.js"];
-
-  const functions = [...app.matchAll(/(?:async\s+)?function\s+([A-Za-z_$][\w$]*)\s*\(/g)]
-    .map((match) => match[1])
-    .filter((name) => !name.startsWith("_"));
-
-  const variables = [...app.matchAll(/\b(?:const|let|var)\s+([A-Z][A-Z0-9_]{3,}|[a-zA-Z_$][\w$]*)\s*=/g)]
-    .map((match) => match[1])
-    .filter((name) => !["el", "state", "library"].includes(name));
-
-  const functionCandidates = [...new Set(functions)]
-    .map((name) => ({ name, references: countWord(allText, name) }))
-    .filter((item) => item.references <= 1)
-    .sort((a, b) => a.references - b.references || a.name.localeCompare(b.name));
-
-  const variableCandidates = [...new Set(variables)]
-    .map((name) => ({ name, references: countWord(allText, name) }))
-    .filter((item) => item.references <= 1)
-    .sort((a, b) => a.references - b.references || a.name.localeCompare(b.name));
-
-  const oldPatternHits = [
-    { pattern: "textarea", matches: [...applicationText.matchAll(/textarea/gi)].length },
-    { pattern: "Storage download dashboard-files", matches: [...applicationText.matchAll(/storage\.from\(["']dashboard-files["']\)\.download/gi)].length },
-    { pattern: "legacy module keys", matches: [...applicationText.matchAll(/pre-fatura|gestao-pacotes|gestao-desvios-pnr|desvios-pnr|pacotes-faltantes/g)].length },
-    { pattern: "ofensividade", matches: [...applicationText.matchAll(/ofensividade/gi)].length },
-  ];
+  const allText = files.map((file) => file.content).join("\n");
+  const forbiddenHits = forbiddenRuntimePatterns.flatMap((item) =>
+    files
+      .filter((file) => item.pattern.test(file.content))
+      .map((file) => ({ id: item.id, file: file.path }))
+  );
+  const exportedSymbols = files.flatMap((file) =>
+    exportNames(file.content).map((name) => ({ file: file.path, name, references: countRefs(allText, name) }))
+  );
+  const lowReferenceExports = exportedSymbols
+    .filter((symbol) => symbol.references <= 1 && !/\/page\.tsx$|\/layout\.tsx$|\/loading\.tsx$|\/route\.ts$/.test(symbol.file))
+    .sort((a, b) => a.references - b.references || a.file.localeCompare(b.file) || a.name.localeCompare(b.name));
 
   const report = {
     generatedAt: new Date().toISOString(),
-    caveat: "Static heuristic only. Review every candidate before removal because browser handlers and dynamic selectors can look unused.",
-    functionCandidates,
-    variableCandidates: variableCandidates.slice(0, 120),
-    oldPatternHits,
+    caveat: "Heuristica estatica. Exports com baixa referencia devem ser revisados antes de remocao.",
+    forbiddenHits,
+    lowReferenceExports: lowReferenceExports.slice(0, 120),
   };
   const reportPath = await writeAuditReport("dead-code", report);
 
   printSection("Dead code heuristic");
-  console.log(`Functions with <=1 reference: ${functionCandidates.length}`);
-  console.log(`Variables/constants with <=1 reference: ${report.variableCandidates.length}`);
-  oldPatternHits.forEach((hit) => console.log(`${hit.pattern}: ${hit.matches}`));
+  console.log(`Forbidden runtime hits: ${forbiddenHits.length}`);
+  console.log(`Low-reference exports sampled: ${report.lowReferenceExports.length}`);
   console.log(`Relatorio: ${reportPath}`);
+
+  if (forbiddenHits.length) process.exitCode = 2;
 } catch (error) {
   console.error("[Dead Code] Falha:", error);
   process.exit(1);

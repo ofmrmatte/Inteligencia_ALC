@@ -22,9 +22,9 @@ export default async function DesviosPnrPage({
   return (
     <>
       <PageHeader
-        eyebrow="Modulo"
+        eyebrow="Módulo"
         title="Desvios PNR"
-        description="Monitore PNRs, status, fontes de cruzamento e impacto financeiro por periodo."
+        description="Monitore PNRs, status, fontes de cruzamento e impacto financeiro por período."
       />
       <DesviosPnrWorkspace data={data} canManage={isAdminProfile(profile)} />
     </>

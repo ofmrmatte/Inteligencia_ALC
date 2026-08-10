@@ -104,7 +104,7 @@ function PreFaturaFilters({ data }: { data: PreFaturaPageData }) {
 
 function PreFaturaTable({ data }: { data: PreFaturaPageData }) {
   if (!data.rows.length) {
-    return <EmptyState title="Nenhum registro encontrado" description="Ajuste os filtros ou importe uma planilha valida de Pre-Fatura." />;
+    return <EmptyState title="Nenhum registro encontrado" description="Ajuste os filtros ou importe uma planilha válida de Pré-Fatura." />;
   }
 
   return (
@@ -149,7 +149,7 @@ function PreFaturaTable({ data }: { data: PreFaturaPageData }) {
 function Pagination({ data }: { data: PreFaturaPageData }) {
   const current = data.filters.page;
   return (
-    <nav className="pagination" aria-label="Paginacao da Pre-Fatura">
+    <nav className="pagination" aria-label="Paginação da Pré-Fatura">
       <span>
         Pagina {current.toLocaleString("pt-BR")} de {data.totalPages.toLocaleString("pt-BR")} · {data.totalRows.toLocaleString("pt-BR")} registros
       </span>
@@ -168,12 +168,12 @@ function Pagination({ data }: { data: PreFaturaPageData }) {
 export function PreFaturaWorkspace({ data }: { data: PreFaturaPageData }) {
   return (
     <div className="page-stack">
-      {data.error ? <div className="inline-warning">Pre-Fatura indisponivel agora: {data.error}</div> : null}
+      {data.error ? <div className="inline-warning">Pré-Fatura indisponível agora: {data.error}</div> : null}
 
-      <section className="metric-grid" aria-label="Resumo da Pre-Fatura">
-        <MetricCard label="Valor filtrado" value={currency(data.summary.totalValue)} detail="soma dos registros validos" tone="accent" />
+      <section className="metric-grid" aria-label="Resumo da Pré-Fatura">
+        <MetricCard label="Valor filtrado" value={currency(data.summary.totalValue)} detail="soma dos registros válidos" tone="accent" />
         <MetricCard label="Registros" value={data.summary.totalRows.toLocaleString("pt-BR")} detail="linhas persistidas" />
-        <MetricCard label="IDs de envio" value={data.summary.packageIds.toLocaleString("pt-BR")} detail="identidades unicas" />
+        <MetricCard label="IDs de envio" value={data.summary.packageIds.toLocaleString("pt-BR")} detail="identidades únicas" />
         <MetricCard label="Ticket medio" value={currency(data.summary.averageValue)} detail={`${data.summary.bases.toLocaleString("pt-BR")} bases`} />
       </section>
 
@@ -183,7 +183,7 @@ export function PreFaturaWorkspace({ data }: { data: PreFaturaPageData }) {
           <Download size={16} aria-hidden="true" />
           <span>Exportar XLSX</span>
         </Link>
-        <span className="toolbar-row__note">Upload valida identidade, remove totais e grava somente registros validos.</span>
+        <span className="toolbar-row__note">Upload valida identidade, remove totais e grava somente registros válidos.</span>
       </div>
 
       <PreFaturaFilters data={data} />
@@ -191,7 +191,7 @@ export function PreFaturaWorkspace({ data }: { data: PreFaturaPageData }) {
         <div className="section-header">
           <div>
             <span>Registros</span>
-            <h2>Pre-Fatura persistida</h2>
+            <h2>Pré-Fatura persistida</h2>
           </div>
           <Upload size={20} aria-hidden="true" />
         </div>

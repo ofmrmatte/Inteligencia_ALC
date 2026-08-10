@@ -27,10 +27,10 @@ export function AdminUserControl({ profile }: { profile: Profile }) {
         }),
       });
       const payload = await response.json();
-      if (!response.ok) throw new Error(payload?.error || "Falha ao atualizar usuario.");
+      if (!response.ok) throw new Error(payload?.error || "Falha ao atualizar usuário.");
       router.refresh();
     } catch (caught) {
-      setError(caught instanceof Error ? caught.message : "Falha ao atualizar usuario.");
+      setError(caught instanceof Error ? caught.message : "Falha ao atualizar usuário.");
     } finally {
       setLoading(false);
     }

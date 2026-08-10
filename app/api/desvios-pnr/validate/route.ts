@@ -3,6 +3,8 @@ import ExcelJS from "exceljs";
 import { createHash } from "node:crypto";
 import { recordAuditLog } from "@/lib/server/audit";
 import { requireAuthenticated } from "@/lib/server/authz";
+import { apiError } from "@/lib/server/api-response";
+import { validateSpreadsheetFile } from "@/lib/server/upload-validation";
 import { isAdminProfile } from "@/lib/permissions/is-admin-profile";
 import { createServerSupabaseClient } from "@/lib/supabase/server";
 
@@ -173,7 +175,7 @@ function buildDedupe(record: Pick<ParsedPnrRecord, "id_envio" | "id_reclamacao" 
 
 function parseWorksheet(worksheet: ExcelJS.Worksheet, fileName: string, period: ReturnType<typeof detectPeriod>) {
   const header = findHeaderRow(worksheet);
-  if (!header) return { stats: { name: worksheet.name, acceptedRows: 0, ignoredRows: worksheet.actualRowCount, reason: "Cabecalho PNR nao encontrado" }, records: [] as ParsedPnrRecord[] };
+  if (!header) return { stats: { name: worksheet.name, acceptedRows: 0, ignoredRows: worksheet.actualRowCount, reason: "Cabeçalho PNR não encontrado" }, records: [] as ParsedPnrRecord[] };
 
   const indexes = {
     status: findHeaderIndex(header.headers, ["STATUS NORMALIZADO", "STATUS"]),
@@ -245,7 +247,7 @@ function parseWorksheet(worksheet: ExcelJS.Worksheet, fileName: string, period: 
       nome_motorista: indexes.motorista >= 0 ? values[indexes.motorista] || "" : "",
       motorista_display: indexes.motorista >= 0 ? values[indexes.motorista] || "" : "",
       status_motorista: indexes.statusMotorista >= 0 ? values[indexes.statusMotorista] || "" : "",
-      fonte_cruzamento: indexes.fonte >= 0 ? values[indexes.fonte] || "" : "Importacao PNR",
+      fonte_cruzamento: indexes.fonte >= 0 ? values[indexes.fonte] || "" : "Importação PNR",
       data_caso: indexes.dataCaso >= 0 ? parseDate(values[indexes.dataCaso]) : null,
       data_entrega: indexes.dataEntrega >= 0 ? parseDate(values[indexes.dataEntrega]) : null,
       id_reclamacao: reclamacao,
@@ -352,25 +354,32 @@ export async function POST(request: NextRequest) {
   const formData = await request.formData();
   const shouldPersist = formData.get("persist") === "true";
   if (shouldPersist && !isAdminProfile(session.profile)) {
-    return NextResponse.json({ error: "Apenas administradores podem persistir importacoes PNR." }, { status: 403 });
+    return apiError("Apenas administradores podem persistir importações PNR.", 403);
   }
 
   const file = formData.get("file");
   if (!(file instanceof File)) {
-    return NextResponse.json({ error: "Envie um arquivo .xlsx valido." }, { status: 400 });
+    return apiError("Envie uma planilha .xlsx ou .xlsm válida.", 400);
   }
 
+  const validation = await validateSpreadsheetFile(file);
+  if (!validation.ok) return validation.response;
+
   const workbook = new ExcelJS.Workbook();
-  const buffer = await file.arrayBuffer();
+  const buffer = validation.buffer;
   const period = detectPeriod(file.name);
-  await workbook.xlsx.load(buffer);
+  try {
+    await workbook.xlsx.load(buffer);
+  } catch {
+    return apiError("Não foi possível ler a planilha. Verifique se o arquivo está íntegro e tente novamente.", 422);
+  }
   const parsedSheets = workbook.worksheets.map((worksheet) => parseWorksheet(worksheet, file.name, period));
   const sheets = parsedSheets.map((sheet) => sheet.stats);
   const records = parsedSheets.flatMap((sheet) => sheet.records);
   const uniqueKeys = new Set(records.map((record) => record.dedupe_key));
 
   if (!records.length) {
-    return NextResponse.json({ error: "Nenhum registro PNR valido foi encontrado." }, { status: 422 });
+    return apiError("Nenhum registro PNR válido foi encontrado.", 422);
   }
 
   const persistence = shouldPersist
@@ -405,6 +414,6 @@ export async function POST(request: NextRequest) {
     sheets,
     persisted: Boolean(persistence),
     persistence,
-    message: persistence ? "PNR importado e metricas atualizadas." : "PNR validado sem persistencia.",
+    message: persistence ? "PNR importado e métricas atualizadas." : "PNR validado sem persistência.",
   });
 }

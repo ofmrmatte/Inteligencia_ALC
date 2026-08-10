@@ -155,7 +155,7 @@ function DecisionMix({ data }: { data: GestaoPacotesPageData }) {
 
 function GestaoPacotesTable({ data }: { data: GestaoPacotesPageData }) {
   if (!data.rows.length) {
-    return <EmptyState title="Nenhum pacote encontrado" description="Ajuste os filtros ou importe arquivos validos de Gestao de Pacotes." />;
+    return <EmptyState title="Nenhum pacote encontrado" description="Ajuste os filtros ou importe arquivos válidos de Gestão de Pacotes." />;
   }
 
   return (
@@ -181,7 +181,7 @@ function GestaoPacotesTable({ data }: { data: GestaoPacotesPageData }) {
                 <strong>{row.base || row.codigo_base || "-"}</strong>
                 <span>{row.codigo_base || ""}</span>
               </td>
-              <td>{row.driver || "Nao identificado"}</td>
+              <td>{row.driver || "Não identificado"}</td>
               <td>
                 <strong>{row.id_envio || "-"}</strong>
                 <span>{row.aba_origem || ""}</span>
@@ -206,7 +206,7 @@ function GestaoPacotesTable({ data }: { data: GestaoPacotesPageData }) {
 function Pagination({ data }: { data: GestaoPacotesPageData }) {
   const current = data.filters.page;
   return (
-    <nav className="pagination" aria-label="Paginacao da Gestao de Pacotes">
+    <nav className="pagination" aria-label="Paginação da Gestão de Pacotes">
       <span>
         Pagina {number(current)} de {number(data.totalPages)} · {number(data.totalRows)} registros
       </span>
@@ -225,9 +225,9 @@ function Pagination({ data }: { data: GestaoPacotesPageData }) {
 export function GestaoPacotesWorkspace({ data }: { data: GestaoPacotesPageData }) {
   return (
     <div className="page-stack">
-      {data.error ? <div className="inline-warning">Gestao de Pacotes indisponivel agora: {data.error}</div> : null}
+      {data.error ? <div className="inline-warning">Gestão de Pacotes indisponível agora: {data.error}</div> : null}
 
-      <section className="metric-grid" aria-label="Resumo de Gestao de Pacotes">
+      <section className="metric-grid" aria-label="Resumo de Gestão de Pacotes">
         <MetricCard label="Valor filtrado" value={currency(data.summary.totalValue)} detail="soma dos registros persistidos" tone="accent" />
         <MetricCard label="Registros" value={number(data.summary.totalRows)} detail={`${number(data.summary.packageIds)} IDs de pacote`} />
         <MetricCard label="Dispatcher" value={currency(data.summary.dispatcherValue)} detail="direcionado ao dispatcher" />

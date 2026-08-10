@@ -4,7 +4,7 @@ import { GestaoPacotesWorkspace } from "@/features/gestao-pacotes/components/ges
 import { getGestaoPacotesPage } from "@/features/gestao-pacotes/data/queries";
 
 export const metadata: Metadata = {
-  title: "Gestao de Pacotes",
+  title: "Gestão de Pacotes",
 };
 
 export default async function GestaoPacotesPage({
@@ -17,9 +17,9 @@ export default async function GestaoPacotesPage({
   return (
     <>
       <PageHeader
-        eyebrow="Modulo"
-        title="Gestao de Pacotes"
-        description="Acompanhe pacotes, rotas, eventos e status da operacao."
+        eyebrow="Módulo"
+        title="Gestão de Pacotes"
+        description="Acompanhe pacotes, rotas, eventos e status da operação."
       />
       <GestaoPacotesWorkspace data={data} />
     </>

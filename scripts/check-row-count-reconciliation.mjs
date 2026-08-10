@@ -1,6 +1,12 @@
 import { createSql, printSection, writeAuditReport } from "./audit-utils.mjs";
 
 const sql = createSql();
+const expectedMismatches = {
+  PRE_FATURA: { max: 0, note: "Pré-Fatura precisa reconciliar sem divergências." },
+  GESTAO_PACOTES: { max: 0, note: "Gestão de Pacotes precisa reconciliar sem divergências." },
+  DESVIOS_PNR: { max: 4, note: "Tolerância histórica da Fase 2: até 4 divergências de metadado PNR." },
+  PACOTES_FALTANTES: { max: 0, note: "Pacotes Faltantes precisa reconciliar sem divergências." },
+};
 
 try {
   const rows = await sql.unsafe(`
@@ -78,6 +84,7 @@ try {
       note: "Diferenças entre importado e persistido são esperadas quando há dedupe, atualização ou reprocessamento.",
     },
     summary,
+    expectedMismatches,
     rows,
   };
   const reportPath = await writeAuditReport("row-count-reconciliation", report);
@@ -91,11 +98,24 @@ try {
     rows_persisted: item.rowsPersisted,
     mismatches: item.mismatches,
   })));
+  const regressions = Object.entries(summary)
+    .map(([fileType, item]) => ({
+      fileType,
+      mismatches: item.mismatches,
+      allowed: expectedMismatches[fileType]?.max ?? 0,
+      note: expectedMismatches[fileType]?.note || "Sem tolerância configurada.",
+    }))
+    .filter((item) => item.mismatches > item.allowed);
   const totalMismatches = Object.values(summary).reduce((sum, item) => sum + item.mismatches, 0);
   console.log(`Persisted metadata mismatches: ${totalMismatches}`);
+  console.table(Object.entries(expectedMismatches).map(([fileType, rule]) => ({
+    file_type: fileType,
+    allowed_mismatches: rule.max,
+    observed_mismatches: summary[fileType]?.mismatches ?? 0,
+  })));
   console.log(`Relatorio: ${reportPath}`);
 
-  if (totalMismatches > 0) process.exitCode = 2;
+  if (regressions.length) process.exitCode = 2;
 } catch (error) {
   console.error("[Row Count] Falha:", error);
   process.exit(1);

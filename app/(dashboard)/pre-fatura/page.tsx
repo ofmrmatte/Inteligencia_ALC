@@ -4,7 +4,7 @@ import { PreFaturaWorkspace } from "@/features/pre-fatura/components/pre-fatura-
 import { getPreFaturaPage } from "@/features/pre-fatura/data";
 
 export const metadata: Metadata = {
-  title: "Pre-Fatura",
+  title: "Pré-Fatura",
 };
 
 export default async function PreFaturaPage({
@@ -17,8 +17,8 @@ export default async function PreFaturaPage({
   return (
     <>
       <PageHeader
-        eyebrow="Modulo"
-        title="Pre-Fatura"
+        eyebrow="Módulo"
+        title="Pré-Fatura"
         description="Consulta operacional dos registros persistidos, mantendo IDs de envio separados e ignorando linhas de totais."
       />
       <PreFaturaWorkspace data={data} />

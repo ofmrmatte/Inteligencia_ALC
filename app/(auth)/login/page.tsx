@@ -18,7 +18,7 @@ export default async function LoginPage() {
       <section className="login-page__brand" aria-label="ALC Admin Center">
         <Image src={BRAND.assets.lockupDark} alt="ALC Admin Center" width={360} height={116} priority />
         <div>
-          <span>Painel de Inteligencia Operacional</span>
+          <span>Painel de Inteligência Operacional</span>
           <h1>Controle operacional com a identidade ALC.</h1>
         </div>
       </section>
@@ -27,7 +27,7 @@ export default async function LoginPage() {
         <div className="login-panel__header">
           <span>Acesso seguro</span>
           <h2 id="login-title">Entrar</h2>
-          <p>Use sua conta autorizada para acessar os modulos do painel.</p>
+          <p>Use sua conta autorizada para acessar os módulos do painel.</p>
         </div>
         <LoginForm />
       </section>

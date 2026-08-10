@@ -12,7 +12,7 @@ export function UserMenu({ profile }: { profile: Profile | null }) {
   const router = useRouter();
   const [open, setOpen] = useState(false);
   const [loading, setLoading] = useState(false);
-  const label = profile?.name || profile?.email || "Usuario";
+  const label = profile?.name || profile?.email || "Usuário";
   const initials = label.slice(0, 2).toUpperCase();
 
   async function logout() {
@@ -38,7 +38,7 @@ export function UserMenu({ profile }: { profile: Profile | null }) {
             <UserRound size={18} aria-hidden="true" />
             <div>
               <strong>{label}</strong>
-              <span>{profile?.email || "Sessao ativa"}</span>
+              <span>{profile?.email || "Sessão ativa"}</span>
             </div>
           </div>
           <Link href="/perfil" role="menuitem">
@@ -48,7 +48,7 @@ export function UserMenu({ profile }: { profile: Profile | null }) {
           {isAdminProfile(profile) ? (
             <Link href="/configuracoes" role="menuitem">
               <Settings size={16} aria-hidden="true" />
-              <span>Configuracoes</span>
+              <span>Configurações</span>
             </Link>
           ) : null}
           <button type="button" role="menuitem" onClick={logout} disabled={loading}>

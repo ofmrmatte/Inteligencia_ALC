@@ -1,8 +1,10 @@
 import { NextResponse, type NextRequest } from "next/server";
 import ExcelJS from "exceljs";
 import { createHash } from "node:crypto";
-import { getCurrentSession } from "@/lib/auth/session";
+import { requireAuthenticated } from "@/lib/server/authz";
 import { isAdminProfile } from "@/lib/permissions/is-admin-profile";
+import { apiError } from "@/lib/server/api-response";
+import { validateSpreadsheetFile } from "@/lib/server/upload-validation";
 import { createServerSupabaseClient } from "@/lib/supabase/server";
 import {
   buildPreFaturaDedupeKey,
@@ -278,26 +280,31 @@ async function persistImport({
 }
 
 export async function POST(request: NextRequest) {
-  const { user, profile } = await getCurrentSession();
-  if (!user) {
-    return NextResponse.json({ error: "Sessao expirada. Entre novamente." }, { status: 401 });
-  }
+  const { session, response } = await requireAuthenticated();
+  if (response) return response;
 
   const formData = await request.formData();
   const shouldPersist = formData.get("persist") === "true";
-  if (shouldPersist && !isAdminProfile(profile)) {
-    return NextResponse.json({ error: "Apenas administradores podem persistir importacoes." }, { status: 403 });
+  if (shouldPersist && !isAdminProfile(session.profile)) {
+    return apiError("Apenas administradores podem persistir importações.", 403);
   }
 
   const file = formData.get("file");
   if (!(file instanceof File)) {
-    return NextResponse.json({ error: "Envie um arquivo .xlsx valido." }, { status: 400 });
+    return apiError("Envie uma planilha .xlsx ou .xlsm válida.", 400);
   }
 
+  const validation = await validateSpreadsheetFile(file);
+  if (!validation.ok) return validation.response;
+
   const workbook = new ExcelJS.Workbook();
-  const buffer = await file.arrayBuffer();
+  const buffer = validation.buffer;
   const period = detectPeriod(file.name);
-  await workbook.xlsx.load(buffer);
+  try {
+    await workbook.xlsx.load(buffer);
+  } catch {
+    return apiError("Não foi possível ler a planilha. Verifique se o arquivo está íntegro e tente novamente.", 422);
+  }
   const parsedSheets = workbook.worksheets
     .filter((worksheet) => TARGET_SHEETS.includes(normalizeIdentity(worksheet.name)))
     .map((worksheet) => parseWorksheet(worksheet, period));
@@ -317,8 +324,8 @@ export async function POST(request: NextRequest) {
       records,
       stats: sheets,
       period,
-      userId: user.id,
-      userEmail: profile?.email || user.email || null,
+      userId: session.user.id,
+      userEmail: session.profile?.email || session.user.email || null,
     })
     : null;
 
@@ -331,8 +338,8 @@ export async function POST(request: NextRequest) {
     persistence,
     message: acceptedRows
       ? persistence
-        ? "Planilha importada com regras de identidade e exclusao de totais."
-        : "Planilha validada com regras de identidade e exclusao de totais."
-      : "Planilha lida, mas nenhum registro valido foi encontrado.",
+        ? "Planilha importada com regras de identidade e exclusão de totais."
+        : "Planilha validada com regras de identidade e exclusão de totais."
+      : "Planilha lida, mas nenhum registro válido foi encontrado.",
   });
 }

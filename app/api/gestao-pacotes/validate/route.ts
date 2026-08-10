@@ -1,8 +1,10 @@
 import { NextResponse, type NextRequest } from "next/server";
 import ExcelJS from "exceljs";
 import { createHash } from "node:crypto";
-import { getCurrentSession } from "@/lib/auth/session";
+import { requireAuthenticated } from "@/lib/server/authz";
 import { isAdminProfile } from "@/lib/permissions/is-admin-profile";
+import { apiError } from "@/lib/server/api-response";
+import { validateSpreadsheetFile } from "@/lib/server/upload-validation";
 import { createServerSupabaseClient } from "@/lib/supabase/server";
 import {
   buildPackageDedupeKey,
@@ -194,7 +196,7 @@ function parseWorksheet(worksheet: ExcelJS.Worksheet, period: ReturnType<typeof 
   const sheetType = detectSheetType(worksheet.name) || detectSheetType(fileName);
   if (!sheetType) {
     return {
-      stats: { name: worksheet.name, acceptedRows: 0, ignoredRows: worksheet.actualRowCount, sheetType: "", reason: "Aba nao reconhecida" },
+      stats: { name: worksheet.name, acceptedRows: 0, ignoredRows: worksheet.actualRowCount, sheetType: "", reason: "Aba não reconhecida" },
       records: [] as ParsedRecord[],
     };
   }
@@ -202,7 +204,7 @@ function parseWorksheet(worksheet: ExcelJS.Worksheet, period: ReturnType<typeof 
   const header = findHeaderRow(worksheet);
   if (!header) {
     return {
-      stats: { name: worksheet.name, acceptedRows: 0, ignoredRows: worksheet.actualRowCount, sheetType, reason: "Cabecalho nao encontrado" },
+      stats: { name: worksheet.name, acceptedRows: 0, ignoredRows: worksheet.actualRowCount, sheetType, reason: "Cabeçalho não encontrado" },
       records: [] as ParsedRecord[],
     };
   }
@@ -364,26 +366,31 @@ async function persistImport({
 }
 
 export async function POST(request: NextRequest) {
-  const { user, profile } = await getCurrentSession();
-  if (!user) {
-    return NextResponse.json({ error: "Sessao expirada. Entre novamente." }, { status: 401 });
-  }
+  const { session, response } = await requireAuthenticated();
+  if (response) return response;
 
   const formData = await request.formData();
   const shouldPersist = formData.get("persist") === "true";
-  if (shouldPersist && !isAdminProfile(profile)) {
-    return NextResponse.json({ error: "Apenas administradores podem persistir importacoes." }, { status: 403 });
+  if (shouldPersist && !isAdminProfile(session.profile)) {
+    return apiError("Apenas administradores podem persistir importações.", 403);
   }
 
   const file = formData.get("file");
   if (!(file instanceof File)) {
-    return NextResponse.json({ error: "Envie um arquivo .xlsx valido." }, { status: 400 });
+    return apiError("Envie uma planilha .xlsx ou .xlsm válida.", 400);
   }
 
+  const validation = await validateSpreadsheetFile(file);
+  if (!validation.ok) return validation.response;
+
   const workbook = new ExcelJS.Workbook();
-  const buffer = await file.arrayBuffer();
+  const buffer = validation.buffer;
   const period = detectPeriod(file.name);
-  await workbook.xlsx.load(buffer);
+  try {
+    await workbook.xlsx.load(buffer);
+  } catch {
+    return apiError("Não foi possível ler a planilha. Verifique se o arquivo está íntegro e tente novamente.", 422);
+  }
   const parsedSheets = workbook.worksheets.map((worksheet) => parseWorksheet(worksheet, period, file.name));
   const sheets = parsedSheets.map((sheet) => sheet.stats);
   const records = parsedSheets.flatMap((sheet) => sheet.records);
@@ -391,7 +398,7 @@ export async function POST(request: NextRequest) {
   const ignoredRows = sheets.reduce((sum, sheet) => sum + sheet.ignoredRows, 0);
 
   if (!sheets.some((sheet) => sheet.sheetType)) {
-    return NextResponse.json({ error: "Nenhuma aba de Gestao de Pacotes foi reconhecida." }, { status: 422 });
+    return apiError("Nenhuma aba de Gestão de Pacotes foi reconhecida.", 422);
   }
 
   const persistence = shouldPersist && records.length
@@ -401,8 +408,8 @@ export async function POST(request: NextRequest) {
       records,
       stats: sheets,
       period,
-      userId: user.id,
-      userEmail: profile?.email || user.email || null,
+      userId: session.user.id,
+      userEmail: session.profile?.email || session.user.email || null,
     })
     : null;
 
@@ -418,8 +425,8 @@ export async function POST(request: NextRequest) {
     persistence,
     message: acceptedRows
       ? persistence
-        ? "Planilha importada com identidade de pacote e exclusao de totais."
-        : "Planilha validada com identidade de pacote e exclusao de totais."
-      : "Planilha lida, mas nenhum evento valido foi encontrado.",
+        ? "Planilha importada com identidade de pacote e exclusão de totais."
+        : "Planilha validada com identidade de pacote e exclusão de totais."
+      : "Planilha lida, mas nenhum evento válido foi encontrado.",
   });
 }
