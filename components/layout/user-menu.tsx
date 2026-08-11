@@ -4,6 +4,7 @@ import Link from "next/link";
 import { LogOut, Settings, UserRound } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { useState } from "react";
+import { UserAvatar } from "@/components/ui/user-avatar";
 import { createBrowserSupabaseClient } from "@/lib/supabase/browser";
 import type { Profile } from "@/lib/auth/types";
 import { isAdminProfile } from "@/lib/permissions/is-admin-profile";
@@ -13,7 +14,6 @@ export function UserMenu({ profile }: { profile: Profile | null }) {
   const [open, setOpen] = useState(false);
   const [loading, setLoading] = useState(false);
   const label = profile?.name || profile?.email || "Usuário";
-  const initials = label.slice(0, 2).toUpperCase();
 
   async function logout() {
     setLoading(true);
@@ -26,16 +26,14 @@ export function UserMenu({ profile }: { profile: Profile | null }) {
   return (
     <div className="user-menu">
       <button type="button" className="user-menu__trigger" onClick={() => setOpen((current) => !current)} aria-expanded={open}>
-        <span className="user-avatar" aria-hidden="true">
-          {initials}
-        </span>
+        <UserAvatar name={profile?.name} email={profile?.email} src={profile?.avatar_url} size="sm" />
         <span>{label}</span>
       </button>
 
       {open ? (
         <div className="user-menu__panel" role="menu">
           <div className="user-menu__identity">
-            <UserRound size={18} aria-hidden="true" />
+            <UserAvatar name={profile?.name} email={profile?.email} src={profile?.avatar_url} size="md" />
             <div>
               <strong>{label}</strong>
               <span>{profile?.email || "Sessão ativa"}</span>

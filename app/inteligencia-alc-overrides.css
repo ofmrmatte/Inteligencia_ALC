@@ -3,6 +3,90 @@
   --alc-sidebar-collapsed-width: 64px;
 }
 
+html,
+body {
+  max-width: 100%;
+}
+
+body {
+  overflow-x: clip;
+}
+
+.app-shell,
+.app-shell__body,
+.content-container,
+.page-stack,
+.dashboard-grid,
+.metric-grid,
+.split-grid,
+.operation-panel,
+.ranking-card,
+.filter-panel,
+.table-card,
+.settings-panel,
+.card,
+.metric-card,
+.empty-state,
+.error-state,
+.chart-panel,
+.toolbar-row,
+.filter-form,
+.filter-form label,
+.settings-form,
+.settings-form label,
+.admin-user-form,
+.read-only-grid,
+.data-table-shell,
+.section-header,
+.page-header,
+.page-header > div,
+.user-menu,
+.user-menu__identity,
+.user-menu__identity > div {
+  min-width: 0;
+}
+
+.metric-card strong,
+.metric-card p,
+.card,
+.empty-state,
+.error-state,
+.section-header h2,
+.page-header h1,
+.page-header p,
+.read-only-grid strong,
+.validation-result,
+.muted-copy,
+.settings-form label,
+.data-table th,
+.data-table td,
+.user-menu__identity strong,
+.user-menu__identity span {
+  overflow-wrap: anywhere;
+}
+
+.button,
+.icon-button,
+.sidebar-nav__item,
+.module-shortcut,
+.filter-form input,
+.filter-form select,
+.settings-form input,
+.settings-form select,
+.admin-user-form input,
+.status-control select {
+  min-width: 0;
+}
+
+.button span,
+.module-shortcut span,
+.sidebar-nav__item span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .app-shell {
   grid-template-columns: var(--alc-sidebar-width) minmax(0, 1fr);
 }
@@ -121,6 +205,63 @@
   left: 48px;
   bottom: 0;
   width: 240px;
+}
+
+.user-avatar {
+  --user-avatar-size: 36px;
+  position: relative;
+  width: var(--user-avatar-size);
+  height: var(--user-avatar-size);
+  overflow: hidden;
+  border: 1px solid color-mix(in srgb, var(--alc-red), var(--border) 36%);
+  background: linear-gradient(135deg, color-mix(in srgb, var(--alc-red-bright), var(--alc-red) 42%), var(--alc-red-dark));
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--panel), transparent 24%);
+}
+
+.user-avatar--sm {
+  --user-avatar-size: 32px;
+  font-size: 0.72rem;
+}
+
+.user-avatar--md {
+  --user-avatar-size: 36px;
+}
+
+.user-avatar--lg {
+  --user-avatar-size: 72px;
+  font-size: 1.1rem;
+}
+
+.user-avatar__image {
+  width: 100%;
+  height: 100%;
+  display: block;
+  object-fit: cover;
+}
+
+.user-avatar__initials {
+  width: 100%;
+  height: 100%;
+  display: grid;
+  place-items: center;
+  color: var(--alc-white);
+}
+
+.page-header {
+  align-items: flex-start;
+  flex-wrap: wrap;
+}
+
+.data-table-shell {
+  max-width: 100%;
+  overflow-x: auto;
+  overscroll-behavior-inline: contain;
+}
+
+.data-table th,
+.data-table td {
+  max-width: 320px;
+  white-space: normal;
 }
 
 /* Login - Inteligência ALC */
@@ -382,6 +523,14 @@
 }
 
 @media (max-width: 520px) {
+  .page-header {
+    display: grid;
+  }
+
+  .page-header__actions {
+    justify-content: flex-start;
+  }
+
   .login-page--inteligencia-alc {
     padding: 16px;
   }

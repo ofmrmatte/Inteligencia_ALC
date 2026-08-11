@@ -1,12 +1,12 @@
 "use client";
 
-import Image from "next/image";
 import { useRouter } from "next/navigation";
 import { useState } from "react";
 import { Camera, Save } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
+import { UserAvatar } from "@/components/ui/user-avatar";
 import type { Profile } from "@/lib/auth/types";
 
 export function ProfileWorkspace({ profile }: { profile: Profile | null }) {
@@ -60,16 +60,10 @@ export function ProfileWorkspace({ profile }: { profile: Profile | null }) {
   return (
     <div className="page-stack">
       <Card className="profile-card">
-        <div className="profile-card__avatar">
-          {profile?.avatar_url ? (
-            <Image src={profile.avatar_url} alt="" width={72} height={72} unoptimized />
-          ) : (
-            <span>{(profile?.name || profile?.email || "US").slice(0, 2).toUpperCase()}</span>
-          )}
-        </div>
+        <UserAvatar name={profile?.name} email={profile?.email} src={profile?.avatar_url} size="lg" className="profile-card__avatar" />
         <div>
           <span>Conta</span>
-          <h2>{profile?.name || "Usuario"}</h2>
+          <h2>{profile?.name || "Usuário"}</h2>
           <p>{profile?.email || "Sessão autenticada"}</p>
         </div>
       </Card>
@@ -97,7 +91,7 @@ export function ProfileWorkspace({ profile }: { profile: Profile | null }) {
               </div>
               <div>
                 <span>Perfil</span>
-                <strong>{profile?.role === "admin" && profile.is_admin ? "Admin" : "Usuario"}</strong>
+                <strong>{profile?.role === "admin" && profile.is_admin ? "Admin" : "Usuário"}</strong>
               </div>
             </div>
             {error ? <div className="form-alert">{error}</div> : null}
@@ -119,7 +113,7 @@ export function ProfileWorkspace({ profile }: { profile: Profile | null }) {
               <span>Arquivo</span>
               <input name="avatar" type="file" accept="image/jpeg,image/png,image/webp" required />
             </label>
-            <p className="muted-copy">PNG, JPG ou WebP ate 5 MB. O arquivo fica no bucket publico de avatars.</p>
+            <p className="muted-copy">PNG, JPG ou WebP até 5 MB. O arquivo fica no bucket público de avatars.</p>
             <Button type="submit" disabled={avatarLoading} variant="secondary" icon={<Camera size={16} aria-hidden="true" />}>
               {avatarLoading ? "Enviando..." : "Atualizar avatar"}
             </Button>
