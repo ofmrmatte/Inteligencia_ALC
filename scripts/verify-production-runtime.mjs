@@ -17,7 +17,7 @@ const nextSignals = [
   "/_next/",
   "__next",
   "self.__next_f",
-  "ALC Admin Center",
+  "Inteligência ALC",
 ];
 
 function includesAny(html, signals) {

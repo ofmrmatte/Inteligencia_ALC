@@ -73,8 +73,6 @@ try {
     }));
 
   const brandAssets = [
-    "public/brand/alc-admin-center-lockup-dark.svg",
-    "public/brand/alc-admin-center-lockup-light.svg",
     "public/brand/alc-favicon.svg",
     "public/brand/alc-loader-dark.svg",
     "public/brand/alc-loader-light.svg",

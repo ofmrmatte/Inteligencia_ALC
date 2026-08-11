@@ -3,7 +3,7 @@ import { readFile, readdir } from "node:fs/promises";
 import path from "node:path";
 
 const ROOT = process.cwd();
-const PRODUCT_NAME = "ALC Admin Center";
+const PRODUCT_NAME = "Inteligência ALC";
 const APP_DIR = path.join(ROOT, "app");
 
 async function listPages(dir) {

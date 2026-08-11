@@ -37,8 +37,6 @@ Assets copiados para `public/brand/`:
 - `alc-favicon.svg`
 - `alc-wordmark-dark.svg`
 - `alc-wordmark-light.svg`
-- `alc-admin-center-lockup-dark.svg`
-- `alc-admin-center-lockup-light.svg`
 - `alc-loader-dark.svg`
 - `alc-loader-light.svg`
 - `alc-brand-tokens.css`
@@ -76,7 +74,7 @@ Arquivo:
 
 ## Login
 
-`/login` e uma tela dedicada, dark-first, com lockup ALC Admin Center, formulario de email/senha, mostrar/ocultar senha, lembrar sessao, loading no botao e mensagens de erro discretas.
+`/login` e uma tela dedicada, dark-first, com lockup Inteligência ALC, formulario de email/senha, mostrar/ocultar senha, lembrar sessao, loading no botao e mensagens de erro discretas.
 
 Nao ha login Google.
 
@@ -171,8 +169,7 @@ Validacao HTTP local:
 - `/login`: 200.
 - `/dashboard` sem sessao: 307 para `/login?next=%2Fdashboard`.
 - `/brand/alc-favicon.svg`: 200.
-- `/brand/alc-admin-center-lockup-dark.svg`: 200.
-- HTML de `/login`: inclui lockup, formulario e script de tema; nao inclui runtime antigo.
+- HTML de `/login`: inclui marca, formulario e script de tema; nao inclui runtime antigo.
 - Log de erro do dev server: vazio nas rotas testadas.
 - `supabase/`: sem diff.
 

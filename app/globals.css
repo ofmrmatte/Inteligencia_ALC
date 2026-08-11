@@ -152,6 +152,59 @@ a {
   height: auto;
 }
 
+.not-found-panel__brand,
+.brand-mark--lockup {
+  display: inline-flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.not-found-panel__brand img,
+.brand-mark--lockup img {
+  width: 48px;
+  height: 48px;
+  flex: 0 0 auto;
+}
+
+.not-found-panel__brand strong {
+  color: var(--alc-white);
+  font-size: 1.05rem;
+  font-weight: 800;
+}
+
+.brand-mark--symbol {
+  width: 48px;
+  height: 48px;
+}
+
+.brand-mark__text {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.brand-mark__text strong {
+  color: var(--text);
+  font-size: 0.98rem;
+  font-weight: 800;
+  line-height: 1.1;
+}
+
+.brand-mark__text span {
+  color: var(--text-muted);
+  font-size: 0.72rem;
+  font-weight: 650;
+  line-height: 1.2;
+}
+
+.brand-mark--light .brand-mark__text strong {
+  color: var(--alc-white);
+}
+
+.brand-mark--light .brand-mark__text span {
+  color: var(--alc-muted);
+}
+
 .not-found-panel__content {
   display: grid;
   gap: 10px;

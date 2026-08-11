@@ -41,7 +41,7 @@ export function AppSidebar({ profile, collapsed, onToggleCollapsed, onNavigate }
         <Image className="app-sidebar__symbol app-sidebar__symbol--light" src={BRAND.assets.symbolLight} alt="ALC" width={34} height={34} priority />
         <Image className="app-sidebar__symbol app-sidebar__symbol--dark" src={BRAND.assets.symbolDark} alt="" width={34} height={34} aria-hidden="true" />
         <div>
-          <strong>Inteligência LOSS</strong>
+          <strong>Inteligência ALC</strong>
           <span>Painel operacional</span>
         </div>
       </div>

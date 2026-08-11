@@ -6,7 +6,10 @@ export default function NotFound() {
   return (
     <main className="not-found-page">
       <section className="not-found-panel" aria-labelledby="not-found-title">
-        <Image src={BRAND.assets.lockupDark} alt="ALC Admin Center" width={248} height={80} priority />
+        <div className="not-found-panel__brand" aria-label={BRAND.productName}>
+          <Image src={BRAND.assets.symbolLight} alt="" width={52} height={52} priority aria-hidden="true" />
+          <strong>{BRAND.productName}</strong>
+        </div>
         <div className="not-found-panel__content">
           <span>404</span>
           <h1 id="not-found-title">Página não encontrada</h1>

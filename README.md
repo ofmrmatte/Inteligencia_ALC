@@ -160,7 +160,7 @@ npm run cleanup:local
 - `npm run check`: executa lint, typecheck, testes de regras e build da aplicacao Next.
 - `npm run test:rules`: valida regras criticas de identidade, totais, dedupe, filtros, payloads, Pacotes Faltantes e permissao admin.
 - Busca Global e Alertas: validam sanitizacao, limites, classificacao ID/texto, deep links, alerta por status real e alerta administrativo condicionado a admin.
-- `npm run check:metadata`: impede que páginas dupliquem o sufixo `ALC Admin Center` no metadata.
+- `npm run check:metadata`: impede que páginas dupliquem o sufixo `Inteligência ALC` no metadata.
 - `npm run check:scripts`: valida sintaxe dos scripts Node ativos.
 - `npm run check:ci-env`: valida presença de `NEXT_PUBLIC_SUPABASE_URL` e `NEXT_PUBLIC_SUPABASE_ANON_KEY` sem imprimir valores.
 - `npm run test:e2e:smoke`: executa smoke E2E sem sessão com Playwright.

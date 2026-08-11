@@ -85,18 +85,18 @@ Root metadata in `app/layout.tsx` owns the title suffix template:
 template: `%s | ${BRAND.productName}`
 ```
 
-Page metadata must provide only the page title, such as `Login` or `Dashboard`. `scripts/check-metadata-titles.mjs` fails if a page title includes `ALC Admin Center` directly.
+Page metadata must provide only the page title, such as `Login` or `Dashboard`. `scripts/check-metadata-titles.mjs` fails if a page title includes `Inteligência ALC` directly.
 
 The confirmed production bug:
 
 ```txt
-Login | ALC Admin Center | ALC Admin Center
+Login | Inteligência ALC | Inteligência ALC
 ```
 
 is corrected to:
 
 ```txt
-Login | ALC Admin Center
+Login | Inteligência ALC
 ```
 
 ## 404 And Errors

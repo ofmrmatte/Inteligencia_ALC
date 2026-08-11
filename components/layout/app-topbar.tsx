@@ -3,6 +3,7 @@
 import { PanelLeftOpen } from "lucide-react";
 import { usePathname } from "next/navigation";
 import { GlobalSearch } from "@/features/global-search/components/global-search";
+import { BRAND } from "@/lib/constants/brand";
 
 const titles: Record<string, string> = {
   "/dashboard": "Dashboard",
@@ -16,7 +17,7 @@ const titles: Record<string, string> = {
 
 export function AppTopbar({ onOpenMenu }: { onOpenMenu: () => void }) {
   const pathname = usePathname();
-  const title = titles[pathname] || "Inteligência LOSS";
+  const title = titles[pathname] || BRAND.productName;
 
   return (
     <header className="app-topbar">
@@ -30,7 +31,7 @@ export function AppTopbar({ onOpenMenu }: { onOpenMenu: () => void }) {
       </button>
 
       <div className="app-topbar__context" aria-label="Localização atual">
-        <span>Inteligência LOSS</span>
+        <span>Inteligência ALC</span>
         <strong className="app-topbar__context-title">{title}</strong>
       </div>
 

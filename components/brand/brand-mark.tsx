@@ -10,23 +10,28 @@ type BrandMarkProps = {
 };
 
 export function BrandMark({ variant = "lockup", tone = "dark", className, priority }: BrandMarkProps) {
-  const src =
-    variant === "symbol"
-      ? tone === "dark"
-        ? BRAND.assets.symbolDark
-        : BRAND.assets.symbolLight
-      : tone === "dark"
-        ? BRAND.assets.lockupDark
-        : BRAND.assets.lockupLight;
+  const src = tone === "dark" ? BRAND.assets.symbolDark : BRAND.assets.symbolLight;
+
+  if (variant === "symbol") {
+    return (
+      <Image
+        src={src}
+        alt="ALC"
+        width={48}
+        height={48}
+        priority={priority}
+        className={cn("brand-mark brand-mark--symbol", className)}
+      />
+    );
+  }
 
   return (
-    <Image
-      src={src}
-      alt={variant === "symbol" ? "ALC" : BRAND.productName}
-      width={variant === "symbol" ? 48 : 224}
-      height={variant === "symbol" ? 48 : 72}
-      priority={priority}
-      className={cn("brand-mark", className)}
-    />
+    <div className={cn("brand-mark brand-mark--lockup", `brand-mark--${tone}`, className)} aria-label={BRAND.productName}>
+      <Image src={src} alt="" width={48} height={48} priority={priority} aria-hidden="true" />
+      <div className="brand-mark__text">
+        <strong>{BRAND.productName}</strong>
+        <span>{BRAND.companyName}</span>
+      </div>
+    </div>
   );
 }

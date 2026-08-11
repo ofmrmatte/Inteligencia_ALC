@@ -23,7 +23,7 @@ export async function buildXlsxResponse<T>({
   rows: T[];
 }) {
   const workbook = new ExcelJS.Workbook();
-  workbook.creator = "ALC Admin Center";
+  workbook.creator = "Inteligência ALC";
   workbook.created = new Date();
 
   const sheet = workbook.addWorksheet(sheetName.slice(0, 31));

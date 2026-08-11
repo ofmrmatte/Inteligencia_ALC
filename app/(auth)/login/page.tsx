@@ -14,12 +14,12 @@ export default async function LoginPage() {
   if (user) redirect("/dashboard");
 
   return (
-    <main className="login-page login-page--inteligencia-loss">
-      <section className="login-page__brand login-page__brand--inteligencia-loss" aria-label="Inteligência LOSS">
+    <main className="login-page login-page--inteligencia-alc">
+      <section className="login-page__brand login-page__brand--inteligencia-alc" aria-label="Inteligência ALC">
         <div className="login-brand">
-          <Image src={BRAND.assets.symbolDark} alt="Inteligência LOSS" width={52} height={52} priority />
+          <Image src={BRAND.assets.symbolDark} alt="Inteligência ALC" width={52} height={52} priority />
           <div>
-            <strong>Inteligência LOSS</strong>
+            <strong>Inteligência ALC</strong>
             <span>ALC Pereira &amp; Filho</span>
           </div>
         </div>
@@ -35,15 +35,15 @@ export default async function LoginPage() {
 
         <div className="login-brand-footer">
           <span>Inteligência operacional</span>
-          <strong>LOSS</strong>
+          <strong>ALC</strong>
         </div>
       </section>
 
-      <section className="login-panel login-panel--inteligencia-loss" aria-labelledby="login-title">
+      <section className="login-panel login-panel--inteligencia-alc" aria-labelledby="login-title">
         <div className="login-panel__mobile-brand" aria-hidden="true">
           <Image src={BRAND.assets.symbolDark} alt="" width={40} height={40} />
           <div>
-            <strong>Inteligência LOSS</strong>
+            <strong>Inteligência ALC</strong>
             <span>ALC Pereira &amp; Filho</span>
           </div>
         </div>

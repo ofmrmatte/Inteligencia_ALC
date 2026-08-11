@@ -2,7 +2,7 @@
 
 ## Objetivo
 
-Adicionar capacidade nova ao ALC Admin Center sem reintroduzir legado: busca global real, Command Palette, deep links para módulos e alertas operacionais calculados a partir de estados persistidos.
+Adicionar capacidade nova ao Inteligência ALC sem reintroduzir legado: busca global real, Command Palette, deep links para módulos e alertas operacionais calculados a partir de estados persistidos.
 
 ## Arquitetura
 

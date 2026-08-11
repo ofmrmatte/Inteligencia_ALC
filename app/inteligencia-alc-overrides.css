@@ -1,14 +1,14 @@
 :root {
-  --loss-sidebar-width: 240px;
-  --loss-sidebar-collapsed-width: 64px;
+  --alc-sidebar-width: 240px;
+  --alc-sidebar-collapsed-width: 64px;
 }
 
 .app-shell {
-  grid-template-columns: var(--loss-sidebar-width) minmax(0, 1fr);
+  grid-template-columns: var(--alc-sidebar-width) minmax(0, 1fr);
 }
 
 .app-shell--collapsed {
-  grid-template-columns: var(--loss-sidebar-collapsed-width) minmax(0, 1fr);
+  grid-template-columns: var(--alc-sidebar-collapsed-width) minmax(0, 1fr);
 }
 
 .app-topbar__context {
@@ -123,8 +123,8 @@
   width: 240px;
 }
 
-/* Login - Inteligência LOSS */
-.login-page--inteligencia-loss {
+/* Login - Inteligência ALC */
+.login-page--inteligencia-alc {
   min-height: 100vh;
   grid-template-columns: minmax(0, 1.15fr) minmax(380px, 460px);
   gap: clamp(56px, 7rem, 120px);
@@ -134,7 +134,7 @@
     linear-gradient(145deg, #050608 0%, #090a0d 52%, #040405 100%);
 }
 
-.login-page__brand--inteligencia-loss {
+.login-page__brand--inteligencia-alc {
   align-self: stretch;
   display: flex;
   flex-direction: column;
@@ -225,7 +225,7 @@
   background: rgb(255 255 255 / 18%);
 }
 
-.login-panel--inteligencia-loss {
+.login-panel--inteligencia-alc {
   align-self: center;
   padding: 34px;
   border: 1px solid rgb(255 255 255 / 10%);
@@ -235,7 +235,7 @@
   backdrop-filter: none;
 }
 
-.login-panel--inteligencia-loss::before {
+.login-panel--inteligencia-alc::before {
   content: "";
   display: block;
   width: 42px;
@@ -245,18 +245,18 @@
   background: #d60000;
 }
 
-.login-panel--inteligencia-loss .login-panel__header {
+.login-panel--inteligencia-alc .login-panel__header {
   margin-bottom: 24px;
 }
 
-.login-panel--inteligencia-loss .login-panel__header > span {
+.login-panel--inteligencia-alc .login-panel__header > span {
   color: #ff120c;
   font-size: 0.68rem;
   font-weight: 750;
   letter-spacing: 0.08em;
 }
 
-.login-panel--inteligencia-loss .login-panel__header h2 {
+.login-panel--inteligencia-alc .login-panel__header h2 {
   margin: 8px 0 8px;
   color: #ffffff;
   font-size: 2rem;
@@ -264,7 +264,7 @@
   letter-spacing: 0;
 }
 
-.login-panel--inteligencia-loss .login-panel__header p {
+.login-panel--inteligencia-alc .login-panel__header p {
   max-width: 340px;
   margin: 0;
   color: #8f98a8;
@@ -272,17 +272,17 @@
   line-height: 1.55;
 }
 
-.login-panel--inteligencia-loss .field {
+.login-panel--inteligencia-alc .field {
   gap: 7px;
 }
 
-.login-panel--inteligencia-loss .field__label {
+.login-panel--inteligencia-alc .field__label {
   color: #c7ccd5;
   font-size: 0.78rem;
   font-weight: 600;
 }
 
-.login-panel--inteligencia-loss .input {
+.login-panel--inteligencia-alc .input {
   min-height: 48px;
   border-color: #252830;
   border-radius: 10px;
@@ -291,25 +291,25 @@
   box-shadow: none;
 }
 
-.login-panel--inteligencia-loss .input:focus {
+.login-panel--inteligencia-alc .input:focus {
   border-color: #d60000;
   box-shadow: 0 0 0 3px rgb(214 0 0 / 12%);
 }
 
-.login-panel--inteligencia-loss .input::placeholder {
+.login-panel--inteligencia-alc .input::placeholder {
   color: #8b95a5;
 }
 
-.login-panel--inteligencia-loss .password-field__toggle {
+.login-panel--inteligencia-alc .password-field__toggle {
   color: #667085;
 }
 
-.login-panel--inteligencia-loss .checkbox-row {
+.login-panel--inteligencia-alc .checkbox-row {
   color: #9ba3b2;
   font-size: 0.82rem;
 }
 
-.login-panel--inteligencia-loss .button--primary {
+.login-panel--inteligencia-alc .button--primary {
   min-height: 46px;
   border-radius: 10px;
   border-color: #d60000;
@@ -317,7 +317,7 @@
   box-shadow: none;
 }
 
-.login-panel--inteligencia-loss .button--primary:hover:not(:disabled) {
+.login-panel--inteligencia-alc .button--primary:hover:not(:disabled) {
   border-color: #b90000;
   background: #b90000;
   transform: none;
@@ -342,18 +342,18 @@
     grid-template-columns: 1fr;
   }
 
-  .login-page--inteligencia-loss {
+  .login-page--inteligencia-alc {
     display: grid;
     grid-template-columns: 1fr;
     place-items: center;
     padding: 28px 20px;
   }
 
-  .login-page__brand--inteligencia-loss {
+  .login-page__brand--inteligencia-alc {
     display: none;
   }
 
-  .login-panel--inteligencia-loss {
+  .login-panel--inteligencia-alc {
     width: min(100%, 460px);
   }
 
@@ -382,20 +382,20 @@
 }
 
 @media (max-width: 520px) {
-  .login-page--inteligencia-loss {
+  .login-page--inteligencia-alc {
     padding: 16px;
   }
 
-  .login-panel--inteligencia-loss {
+  .login-panel--inteligencia-alc {
     padding: 26px 22px;
     border-radius: 16px;
   }
 
-  .login-panel--inteligencia-loss::before {
+  .login-panel--inteligencia-alc::before {
     margin-bottom: 22px;
   }
 
-  .login-panel--inteligencia-loss .login-panel__header h2 {
+  .login-panel--inteligencia-alc .login-panel__header h2 {
     font-size: 1.75rem;
   }
 }

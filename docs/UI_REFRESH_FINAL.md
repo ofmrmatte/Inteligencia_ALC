@@ -2,7 +2,7 @@
 
 ## Escopo
 
-Esta entrega refinou apenas a camada visual do ALC Admin Center. Regras de negocio, schema Supabase, RLS, permissoes, APIs, importacoes, exportacoes, dedupe, auditorias e reconciliacoes nao foram alterados.
+Esta entrega refinou apenas a camada visual do Inteligência ALC. Regras de negocio, schema Supabase, RLS, permissoes, APIs, importacoes, exportacoes, dedupe, auditorias e reconciliacoes nao foram alterados.
 
 ## Problemas Corrigidos
 

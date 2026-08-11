@@ -13,8 +13,8 @@ type AppShellProps = {
   children: ReactNode;
 };
 
-const SIDEBAR_STORAGE_KEY = "inteligencia-loss-sidebar-collapsed";
-const SIDEBAR_STORAGE_EVENT = "inteligencia-loss-sidebar-storage";
+const SIDEBAR_STORAGE_KEY = "inteligencia-alc-sidebar-collapsed";
+const SIDEBAR_STORAGE_EVENT = "inteligencia-alc-sidebar-storage";
 
 function readSidebarCollapsed() {
   if (typeof window === "undefined") return false;
