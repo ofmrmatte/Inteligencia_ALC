@@ -1,5 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import ExcelJS from "exceljs";
+import * as XLSX from "xlsx";
 import {
   buildPreFaturaDedupeKey,
   calculatePreFaturaSummary,
@@ -9,8 +11,15 @@ import {
   planPreFaturaPersistence,
   toNumber,
 } from "@/features/pre-fatura/domain";
-import { preFaturaImportFailedResponse } from "@/app/api/pre-fatura/validate/route";
+import { preFaturaImportFailedResponse, preFaturaMissingSheetsResponse } from "@/app/api/pre-fatura/validate/route";
 import { parsePreFaturaImportResponse } from "@/features/pre-fatura/components/import-pre-fatura-button";
+import {
+  detectPreFaturaPeriod,
+  parsePreFaturaSheet,
+  PreFaturaWorkbookUnreadableError,
+  readPreFaturaWorkbook,
+  readPreFaturaWorkbookWithSheetJs,
+} from "@/app/api/pre-fatura/_lib/workbook";
 
 function shipment(id_envio: string, overrides = {}) {
   return {
@@ -30,6 +39,37 @@ function shipment(id_envio: string, overrides = {}) {
   };
 }
 
+const PRE_FATURA_HEADER = ["BASE", "MOTORISTA", "PLACA", "TIPO", "DATA", "ID DO PACOTE", "Nº ROTA", "VALOR"];
+
+function preFaturaRows(...rows: unknown[][]) {
+  return [PRE_FATURA_HEADER, ...rows];
+}
+
+function arrayBufferFrom(value: ExcelJS.Buffer | Buffer | ArrayBuffer) {
+  const buffer = Buffer.from(value as Buffer);
+  return buffer.buffer.slice(buffer.byteOffset, buffer.byteOffset + buffer.byteLength);
+}
+
+async function excelJsWorkbookBuffer() {
+  const workbook = new ExcelJS.Workbook();
+  workbook.addWorksheet("SVC PERDIDOS").addRows(preFaturaRows(["SMG3", "Driver A", "ABC1D23", "PNR", "20/07/2026", "47441232434", "404597432", 55.95]));
+  workbook.addWorksheet("IGNORADA").addRows([["A"], ["B"]]);
+  const buffer = await workbook.xlsx.writeBuffer();
+  return arrayBufferFrom(buffer);
+}
+
+function sheetJsWorkbookBuffer() {
+  const workbook = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(workbook, XLSX.utils.aoa_to_sheet(preFaturaRows(
+    ["SMG3", "Driver A", "ABC1D23", "PNR", "20/07/2026", "47441232434", "404597432", 55.95],
+    ["SMG3", "Driver B", "ABC1D24", "PNR", "21/07/2026", "47441232435", "404597432", "55,95"],
+    ["TOTAL", "", "", "", "", "", "", "111,90"],
+  )), "PNR");
+  XLSX.utils.book_append_sheet(workbook, XLSX.utils.aoa_to_sheet([["ignored"]]), "OUTRA");
+  const buffer = XLSX.write(workbook, { type: "buffer", bookType: "xlsx" }) as Buffer;
+  return arrayBufferFrom(buffer);
+}
+
 test("1500 registros entram nas metricas, nao apenas os primeiros 1000", () => {
   const rows = Array.from({ length: 1500 }, (_, index) => shipment(String(100000 + index), {
     valor: 1,
@@ -41,6 +81,86 @@ test("1500 registros entram nas metricas, nao apenas os primeiros 1000", () => {
   assert.equal(summary.totalValue, 1500);
   assert.equal(summary.bases, 2);
   assert.equal(summary.averageValue, 1);
+});
+
+test("workbook normal e lido pelo ExcelJS", async () => {
+  const result = await readPreFaturaWorkbook(await excelJsWorkbookBuffer(), { fileName: "PRE FATURA 2 Q MAIO 26.xlsx", fileSize: 10 });
+  assert.equal(result.reader, "exceljs");
+  assert.deepEqual(result.sheets.map((sheet) => sheet.name), ["SVC PERDIDOS"]);
+  const parsed = parsePreFaturaSheet(result.sheets[0], detectPreFaturaPeriod("PRE FATURA 2 Q MAIO 26.xlsx"));
+  assert.equal(parsed.records.length, 1);
+  assert.equal(parsed.records[0].id_envio, "47441232434");
+  assert.equal(parsed.records[0].valor, 55.95);
+});
+
+test("fallback e chamado quando ExcelJS lanca erro", async () => {
+  const result = await readPreFaturaWorkbook(new ArrayBuffer(0), { fileName: "falha.xlsx", fileSize: 0 }, {
+    excelJs: async () => {
+      throw new TypeError("Cannot read properties of undefined (reading 'sheets')");
+    },
+    sheetJs: () => [{ name: "PNR", rows: preFaturaRows(["SMG3", "Driver A", "ABC1D23", "PNR", "20/07/2026", "47441232434", "404597432", 55.95]) }],
+  });
+  assert.equal(result.reader, "sheetjs");
+  assert.deepEqual(result.sheets.map((sheet) => sheet.name), ["PNR"]);
+});
+
+test("fallback SheetJS retorna apenas as abas esperadas", () => {
+  const sheets = readPreFaturaWorkbookWithSheetJs(sheetJsWorkbookBuffer());
+  assert.deepEqual(sheets.map((sheet) => sheet.name), ["PNR"]);
+});
+
+test("ids grandes permanecem strings corretas no parser generico", () => {
+  const parsed = parsePreFaturaSheet({
+    name: "PNR",
+    rows: preFaturaRows(["SMG3", "Driver A", "ABC1D23", "PNR", "20/07/2026", 47441232434, 404597432, 55.95]),
+  }, detectPreFaturaPeriod("PRE FATURA 2 Q MAIO 26.xlsx"));
+  assert.equal(parsed.records[0].id_envio, "47441232434");
+  assert.equal(parsed.records[0].rota, "404597432");
+});
+
+test("SheetJS preserva decimal numerico e texto brasileiro para toNumber", () => {
+  const parsed = parsePreFaturaSheet(readPreFaturaWorkbookWithSheetJs(sheetJsWorkbookBuffer())[0], detectPreFaturaPeriod("PRE FATURA 2 Q MAIO 26.xlsx"));
+  assert.equal(parsed.records.length, 2);
+  assert.equal(parsed.records[0].valor, 55.95);
+  assert.equal(parsed.records[1].valor, 55.95);
+});
+
+test("ausencia das tres abas retorna 422", async () => {
+  const response = preFaturaMissingSheetsResponse();
+  assert.equal(response.status, 422);
+  assert.match((await response.json()).error, /Nenhuma aba esperada/);
+});
+
+test("falha dos dois leitores retorna erro de workbook ilegivel", async () => {
+  await assert.rejects(
+    () => readPreFaturaWorkbook(new ArrayBuffer(0), { fileName: "falha.xlsx", fileSize: 0 }, {
+      excelJs: async () => {
+        throw new Error("exceljs failed");
+      },
+      sheetJs: () => {
+        throw new Error("sheetjs failed");
+      },
+    }),
+    PreFaturaWorkbookUnreadableError,
+  );
+});
+
+test("fallback nao altera dedupe, totais ou identidade de registros", () => {
+  const sheet = {
+    name: "PNR",
+    rows: preFaturaRows(
+      ["SMG3", "Driver A", "ABC1D23", "PNR", "20/07/2026", "47441232434", "404597432", 55.95],
+      ["SMG3", "Driver A", "ABC1D23", "PNR", "20/07/2026", "47441232435", "404597432", 55.95],
+      ["SMG3", "Driver A", "ABC1D23", "PNR", "20/07/2026", "47441232435", "404597432", 55.95],
+      ["TOTAL", "", "", "", "", "", "", "167,85"],
+    ),
+  };
+  const parsed = parsePreFaturaSheet(sheet, detectPreFaturaPeriod("PRE FATURA 2 Q MAIO 26.xlsx"));
+  const collapsed = collapsePreFaturaRecordsByShipmentId(parsed.records);
+  assert.equal(parsed.records.length, 3);
+  assert.equal(collapsed.acceptedRows, 2);
+  assert.equal(collapsed.duplicateRowsCollapsed, 1);
+  assert.deepEqual(collapsed.records.map((record) => record.id_envio), ["47441232434", "47441232435"]);
 });
 
 test("ignora linhas de total mesmo quando possuem valor", () => {
