@@ -6,13 +6,45 @@ import { Button } from "@/components/ui/button";
 
 type ValidationResult = {
   fileName: string;
+  sourceValidRows: number;
   acceptedRows: number;
+  duplicateRowsCollapsed: number;
+  duplicateIdsWithConflicts: string[];
+  existingIdsSkipped: number;
   ignoredRows: number;
+  duplicateFile: boolean;
   persisted: boolean;
   persistence: { persistedRows: number } | null;
   sheets: Array<{ name: string; acceptedRows: number; ignoredRows: number }>;
   message: string;
 };
+
+const FALLBACK_IMPORT_ERROR = "Não foi possível processar a planilha. Tente novamente ou verifique os detalhes do arquivo.";
+
+export async function parsePreFaturaImportResponse(response: Response): Promise<ValidationResult> {
+  const text = await response.text();
+  let payload: unknown = null;
+  if (text.trim()) {
+    try {
+      payload = JSON.parse(text);
+    } catch {
+      payload = null;
+    }
+  }
+
+  if (!response.ok) {
+    const error = typeof payload === "object" && payload && "error" in payload && typeof payload.error === "string"
+      ? payload.error
+      : FALLBACK_IMPORT_ERROR;
+    throw new Error(error);
+  }
+
+  if (!payload || typeof payload !== "object") {
+    throw new Error(FALLBACK_IMPORT_ERROR);
+  }
+
+  return payload as ValidationResult;
+}
 
 export function ImportPreFaturaButton() {
   const [open, setOpen] = useState(false);
@@ -29,11 +61,10 @@ export function ImportPreFaturaButton() {
         method: "POST",
         body: formData,
       });
-      const payload = await response.json();
-      if (!response.ok) throw new Error(payload?.error || "Falha ao validar planilha.");
+      const payload = await parsePreFaturaImportResponse(response);
       setResult(payload);
     } catch (caught) {
-      setError(caught instanceof Error ? caught.message : "Falha ao validar planilha.");
+      setError(caught instanceof Error ? caught.message : FALLBACK_IMPORT_ERROR);
     } finally {
       setLoading(false);
     }
@@ -70,9 +101,14 @@ export function ImportPreFaturaButton() {
                   <strong>{result.message}</strong>
                   <span>{result.fileName}</span>
                   <div>
-                    <span>Aceitas: {result.acceptedRows.toLocaleString("pt-BR")}</span>
+                    <span>Encontradas: {result.sourceValidRows.toLocaleString("pt-BR")}</span>
+                    <span>Únicas aceitas: {result.acceptedRows.toLocaleString("pt-BR")}</span>
+                    <span>Duplicidades consolidadas: {result.duplicateRowsCollapsed.toLocaleString("pt-BR")}</span>
+                    <span>IDs já existentes ignorados: {result.existingIdsSkipped.toLocaleString("pt-BR")}</span>
                     <span>Ignoradas: {result.ignoredRows.toLocaleString("pt-BR")}</span>
                     {result.persisted ? <span>Persistidas: {result.persistence?.persistedRows.toLocaleString("pt-BR")}</span> : null}
+                    {result.duplicateFile ? <span>Arquivo repetido: nenhum registro duplicado</span> : null}
+                    {result.duplicateIdsWithConflicts.length ? <span>IDs repetidos com divergência: {result.duplicateIdsWithConflicts.length.toLocaleString("pt-BR")}</span> : null}
                   </div>
                 </div>
               ) : null}

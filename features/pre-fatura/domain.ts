@@ -16,6 +16,25 @@ export type PreFaturaRecord = {
   created_at: string | null;
 };
 
+export type PreFaturaSummaryInput = Pick<PreFaturaRecord, "valor" | "id_envio" | "codigo_base" | "base" | "driver" | "rota">;
+
+export type PreFaturaShipmentRecord = Pick<PreFaturaRecord, "id_envio" | "base" | "codigo_base" | "driver" | "placa" | "data" | "rota" | "valor" | "tipo" | "aba_origem">;
+
+export type PreFaturaCollapseResult<T> = {
+  records: T[];
+  duplicateRowsCollapsed: number;
+  duplicateIdsWithConflicts: string[];
+  sourceValidRows: number;
+  acceptedRows: number;
+};
+
+export type PreFaturaPersistencePlan<T> = {
+  duplicateFile: boolean;
+  newRecords: T[];
+  existingRecords: T[];
+  existingIdsSkipped: number;
+};
+
 export type PreFaturaFilters = {
   page: number;
   pageSize: number;
@@ -56,6 +75,20 @@ export type PreFaturaPageData = {
 };
 
 export const PRE_FATURA_SORT_KEYS: PreFaturaSortKey[] = ["valor", "data", "base", "driver", "rota", "id_envio", "created_at"];
+
+function preFaturaConflictFingerprint(row: PreFaturaShipmentRecord) {
+  return [
+    normalizeIdentity(row.base),
+    normalizeIdentity(row.codigo_base),
+    normalizeIdentity(row.driver),
+    normalizeIdentity(row.placa),
+    normalizeIdentity(row.data),
+    normalizeIdentity(row.rota),
+    normalizeIdentity(row.valor),
+    normalizeIdentity(row.tipo),
+    normalizeIdentity(row.aba_origem),
+  ].join("|");
+}
 
 export function toNumber(value: number | string | null | undefined) {
   if (typeof value === "number") return Number.isFinite(value) ? value : 0;
@@ -110,6 +143,91 @@ export function normalizeIdentity(value: unknown) {
     .toUpperCase();
 }
 
+export function calculatePreFaturaSummary(rows: PreFaturaSummaryInput[], totalRows = rows.length) {
+  const totalValue = rows.reduce((sum, row) => sum + toNumber(row.valor), 0);
+  return {
+    totalRows,
+    totalValue,
+    packageIds: new Set(rows.map((row) => normalizeIdentity(row.id_envio)).filter(Boolean)).size,
+    bases: new Set(rows.map((row) => normalizeIdentity(row.codigo_base || row.base)).filter(Boolean)).size,
+    drivers: new Set(rows.map((row) => normalizeIdentity(row.driver)).filter(Boolean)).size,
+    routes: new Set(rows.map((row) => normalizeIdentity(row.rota)).filter(Boolean)).size,
+    averageValue: rows.length ? totalValue / rows.length : 0,
+  };
+}
+
+export function collapsePreFaturaRecordsByShipmentId<T extends PreFaturaShipmentRecord>(records: T[]): PreFaturaCollapseResult<T> {
+  const byShipmentId = new Map<string, { record: T; fingerprint: string; conflict: boolean }>();
+
+  records.forEach((record) => {
+    const shipmentId = normalizeIdentity(record.id_envio);
+    if (!shipmentId) return;
+    const fingerprint = preFaturaConflictFingerprint(record);
+    const existing = byShipmentId.get(shipmentId);
+    if (!existing) {
+      byShipmentId.set(shipmentId, { record, fingerprint, conflict: false });
+      return;
+    }
+    if (existing.fingerprint !== fingerprint) {
+      existing.conflict = true;
+    }
+  });
+
+  const collapsed = [...byShipmentId.values()];
+  return {
+    records: collapsed.map((entry) => entry.record),
+    duplicateRowsCollapsed: records.length - collapsed.length,
+    duplicateIdsWithConflicts: collapsed
+      .filter((entry) => entry.conflict)
+      .map((entry) => normalizeIdentity(entry.record.id_envio)),
+    sourceValidRows: records.length,
+    acceptedRows: collapsed.length,
+  };
+}
+
+export function splitPreFaturaRecordsByExistingShipmentIds<T extends Pick<PreFaturaRecord, "id_envio">>(
+  records: T[],
+  existingShipmentIds: Iterable<string>,
+) {
+  const existing = new Set([...existingShipmentIds].map(normalizeIdentity).filter(Boolean));
+  const newRecords: T[] = [];
+  const existingRecords: T[] = [];
+
+  records.forEach((record) => {
+    if (existing.has(normalizeIdentity(record.id_envio))) {
+      existingRecords.push(record);
+    } else {
+      newRecords.push(record);
+    }
+  });
+
+  return {
+    newRecords,
+    existingRecords,
+    existingIdsSkipped: existingRecords.length,
+  };
+}
+
+export function planPreFaturaPersistence<T extends Pick<PreFaturaRecord, "id_envio">>(
+  records: T[],
+  existingShipmentIds: Iterable<string>,
+  alreadyProcessedFile: boolean,
+): PreFaturaPersistencePlan<T> {
+  if (alreadyProcessedFile) {
+    return {
+      duplicateFile: true,
+      newRecords: [],
+      existingRecords: [],
+      existingIdsSkipped: 0,
+    };
+  }
+
+  return {
+    duplicateFile: false,
+    ...splitPreFaturaRecordsByExistingShipmentIds(records, existingShipmentIds),
+  };
+}
+
 export function hasPreFaturaPackageIdentity(row: Pick<PreFaturaRecord, "id_envio" | "rota">) {
   return Boolean(normalizeIdentity(row.id_envio) && normalizeIdentity(row.rota));
 }
@@ -127,16 +245,6 @@ export function isPreFaturaTotalLikeRow(input: Record<string, unknown>) {
 export function buildPreFaturaDedupeKey(row: Pick<PreFaturaRecord, "competencia" | "quinzena" | "id_envio" | "codigo_base" | "base" | "driver" | "rota" | "placa" | "data" | "tipo" | "aba_origem" | "valor">) {
   return [
     "pre_fatura",
-    normalizeIdentity(row.competencia),
-    normalizeIdentity(row.quinzena),
     normalizeIdentity(row.id_envio),
-    normalizeIdentity(row.codigo_base || row.base),
-    normalizeIdentity(row.driver),
-    normalizeIdentity(row.rota),
-    normalizeIdentity(row.placa),
-    normalizeIdentity(row.data),
-    normalizeIdentity(row.tipo),
-    normalizeIdentity(row.aba_origem),
-    normalizeIdentity(row.valor),
   ].join("|");
 }

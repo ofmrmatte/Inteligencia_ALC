@@ -1,4 +1,5 @@
 import { createServerSupabaseClient } from "@/lib/supabase/server";
+import { fetchAllSupabaseRows } from "@/lib/supabase/fetch-all";
 import { toNumber } from "@/features/pre-fatura/domain";
 
 export type DashboardSummary = {
@@ -83,16 +84,16 @@ function ranking(rows: PreFaturaDashboardRow[], getLabel: (row: PreFaturaDashboa
 export async function getDashboardSummary(): Promise<DashboardSummary> {
   try {
     const supabase = await createServerSupabaseClient();
-    const [preFaturaCount, gestaoPacotes, desviosPnr, pacotesFaltantes, preFaturaRowsResult, recentFilesResult, settingsResult] = await Promise.all([
+    const [preFaturaCount, gestaoPacotes, desviosPnr, pacotesFaltantes, preRows, recentFilesResult, settingsResult] = await Promise.all([
       countRows("pre_fatura_records"),
       countRows("gestao_pacotes_records"),
       countRows("desvios_pnr_records"),
       countRows("gestao_desvios_pacotes_faltantes"),
-      supabase
+      fetchAllSupabaseRows<PreFaturaDashboardRow>((from, to) => supabase
         .from("pre_fatura_records")
         .select("tipo,base,codigo_base,driver,rota,id_envio,valor")
         .eq("module_key", "pre_fatura")
-        .limit(12000),
+        .range(from, to)),
       supabase
         .from("dashboard_files")
         .select("id,file_name,file_type,status,created_at")
@@ -102,10 +103,8 @@ export async function getDashboardSummary(): Promise<DashboardSummary> {
     ]);
 
     if (recentFilesResult.error) throw recentFilesResult.error;
-    if (preFaturaRowsResult.error) throw preFaturaRowsResult.error;
     if (settingsResult.error) throw settingsResult.error;
 
-    const preRows = (preFaturaRowsResult.data ?? []) as PreFaturaDashboardRow[];
     const totalValue = preRows.reduce((sum, row) => sum + toNumber(row.valor), 0);
     const monthlyGoal = ((settingsResult.data as DashboardSettingsRow | null)?.value?.monthly_goal
       ?? (settingsResult.data as DashboardSettingsRow | null)?.value?.monthlyGoal

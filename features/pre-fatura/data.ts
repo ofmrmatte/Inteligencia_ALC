@@ -1,7 +1,8 @@
 import { createServerSupabaseClient } from "@/lib/supabase/server";
+import { fetchAllSupabaseRows } from "@/lib/supabase/fetch-all";
 import {
   PRE_FATURA_SORT_KEYS,
-  toNumber,
+  calculatePreFaturaSummary,
   type PreFaturaFilters,
   type PreFaturaPageData,
   type PreFaturaRecord,
@@ -48,21 +49,28 @@ function searchFilter(q: string) {
   return `driver.ilike.%${safe}%,base.ilike.%${safe}%,codigo_base.ilike.%${safe}%,id_envio.ilike.%${safe}%,rota.ilike.%${safe}%,placa.ilike.%${safe}%`;
 }
 
-function buildSummary(rows: PreFaturaRecord[], totalRows: number) {
-  const totalValue = rows.reduce((sum, row) => sum + toNumber(row.valor), 0);
-  return {
-    totalRows,
-    totalValue,
-    packageIds: new Set(rows.map((row) => row.id_envio).filter(Boolean)).size,
-    bases: new Set(rows.map((row) => row.codigo_base || row.base).filter(Boolean)).size,
-    drivers: new Set(rows.map((row) => row.driver).filter(Boolean)).size,
-    routes: new Set(rows.map((row) => row.rota).filter(Boolean)).size,
-    averageValue: rows.length ? totalValue / rows.length : 0,
-  };
-}
-
 function uniqueSorted(values: Array<string | null>) {
   return [...new Set(values.filter(Boolean) as string[])].sort((a, b) => a.localeCompare(b, "pt-BR"));
+}
+
+type PagedFilterQuery = {
+  eq: (column: string, value: string) => PagedFilterQuery;
+  or: (filters: string) => PagedFilterQuery;
+  range: (from: number, to: number) => PromiseLike<{ data: unknown[] | null; error: unknown }>;
+};
+
+function asPagedFilterQuery(query: unknown) {
+  return query as PagedFilterQuery;
+}
+
+function applyPagedFilters(query: PagedFilterQuery, filters: PreFaturaFilters) {
+  let next = query;
+  if (filters.competencia) next = next.eq("competencia", filters.competencia);
+  if (filters.quinzena) next = next.eq("quinzena", filters.quinzena);
+  if (filters.tipo) next = next.eq("tipo", filters.tipo);
+  if (filters.base) next = next.eq("codigo_base", filters.base);
+  if (filters.q) next = next.or(searchFilter(filters.q));
+  return next;
 }
 
 export async function getPreFaturaPage(searchParams: SearchParamsInput): Promise<PreFaturaPageData> {
@@ -77,52 +85,35 @@ export async function getPreFaturaPage(searchParams: SearchParamsInput): Promise
       .from("pre_fatura_records")
       .select("id,competencia,quinzena,tipo,base,codigo_base,driver,placa,data,id_envio,rota,valor,aba_origem,file_id,created_at", { count: "exact" })
       .eq("module_key", "pre_fatura");
-    let metricsQuery = supabase
-      .from("pre_fatura_records")
-      .select("id,valor,id_envio,codigo_base,base,driver,rota")
-      .eq("module_key", "pre_fatura")
-      .limit(50000);
 
-    if (filters.competencia) {
-      rowsQuery = rowsQuery.eq("competencia", filters.competencia);
-      metricsQuery = metricsQuery.eq("competencia", filters.competencia);
-    }
-    if (filters.quinzena) {
-      rowsQuery = rowsQuery.eq("quinzena", filters.quinzena);
-      metricsQuery = metricsQuery.eq("quinzena", filters.quinzena);
-    }
-    if (filters.tipo) {
-      rowsQuery = rowsQuery.eq("tipo", filters.tipo);
-      metricsQuery = metricsQuery.eq("tipo", filters.tipo);
-    }
-    if (filters.base) {
-      rowsQuery = rowsQuery.eq("codigo_base", filters.base);
-      metricsQuery = metricsQuery.eq("codigo_base", filters.base);
-    }
-    if (filters.q) {
-      const filter = searchFilter(filters.q);
-      rowsQuery = rowsQuery.or(filter);
-      metricsQuery = metricsQuery.or(filter);
-    }
+    if (filters.competencia) rowsQuery = rowsQuery.eq("competencia", filters.competencia);
+    if (filters.quinzena) rowsQuery = rowsQuery.eq("quinzena", filters.quinzena);
+    if (filters.tipo) rowsQuery = rowsQuery.eq("tipo", filters.tipo);
+    if (filters.base) rowsQuery = rowsQuery.eq("codigo_base", filters.base);
+    if (filters.q) rowsQuery = rowsQuery.or(searchFilter(filters.q));
 
     const pagedRowsQuery = rowsQuery
       .order(filters.sort, { ascending: filters.dir === "asc", nullsFirst: false })
       .range(from, to);
 
-    const optionsQuery = supabase
+    const metricsRowsPromise = fetchAllSupabaseRows<PreFaturaRecord>((pageFrom, pageTo) => applyPagedFilters(
+      asPagedFilterQuery(supabase
+        .from("pre_fatura_records")
+        .select("id,valor,id_envio,codigo_base,base,driver,rota")
+        .eq("module_key", "pre_fatura")),
+      filters,
+    ).range(pageFrom, pageTo));
+
+    const optionRowsPromise = fetchAllSupabaseRows<PreFaturaRecord>((pageFrom, pageTo) => supabase
       .from("pre_fatura_records")
       .select("competencia,quinzena,tipo,codigo_base,base")
       .eq("module_key", "pre_fatura")
-      .limit(50000);
+      .range(pageFrom, pageTo));
 
-    const [rowsResult, metricsResult, optionsResult] = await Promise.all([pagedRowsQuery, metricsQuery, optionsQuery]);
+    const [rowsResult, metricsRows, optionRows] = await Promise.all([pagedRowsQuery, metricsRowsPromise, optionRowsPromise]);
     if (rowsResult.error) throw rowsResult.error;
-    if (metricsResult.error) throw metricsResult.error;
-    if (optionsResult.error) throw optionsResult.error;
 
     const rows = (rowsResult.data ?? []) as PreFaturaRecord[];
-    const metricsRows = (metricsResult.data ?? []) as PreFaturaRecord[];
-    const optionRows = (optionsResult.data ?? []) as PreFaturaRecord[];
     const totalRows = rowsResult.count ?? 0;
 
     const baseMap = new Map<string, string>();
@@ -132,7 +123,7 @@ export async function getPreFaturaPage(searchParams: SearchParamsInput): Promise
 
     return {
       rows,
-      summary: buildSummary(metricsRows, totalRows),
+      summary: calculatePreFaturaSummary(metricsRows, totalRows),
       totalRows,
       totalPages: Math.max(1, Math.ceil(totalRows / filters.pageSize)),
       filters,
@@ -149,7 +140,7 @@ export async function getPreFaturaPage(searchParams: SearchParamsInput): Promise
   } catch (error) {
     return {
       rows: [],
-      summary: buildSummary([], 0),
+      summary: calculatePreFaturaSummary([], 0),
       totalRows: 0,
       totalPages: 1,
       filters,
