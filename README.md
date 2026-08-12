@@ -140,6 +140,7 @@ npm run build
 npm run test:rules
 npm run check:metadata
 npm run check:scripts
+npm run check:encoding
 npm run check:ci-env
 npm run check
 npm run test:e2e:smoke
@@ -163,6 +164,7 @@ npm run cleanup:local
 - Busca Global e Alertas: validam sanitizacao, limites, classificacao ID/texto, deep links, alerta por status real e alerta administrativo condicionado a admin.
 - `npm run check:metadata`: impede que páginas dupliquem o sufixo `Inteligência ALC` no metadata.
 - `npm run check:scripts`: valida sintaxe dos scripts Node ativos.
+- `npm run check:encoding`: valida encoding UTF-8 dos arquivos textuais versionados relevantes.
 - `npm run check:ci-env`: valida presença de `NEXT_PUBLIC_SUPABASE_URL` e `NEXT_PUBLIC_SUPABASE_ANON_KEY` sem imprimir valores.
 - `npm run test:e2e:smoke`: executa smoke E2E sem sessão com Playwright.
 - `npm run test:e2e`: executa a suíte E2E; cenários autenticados pulam quando credenciais opcionais não existem.
