@@ -65,8 +65,6 @@ test.describe("common user journey", () => {
     });
     expect(statusResponse.status()).toBe(403);
 
-    const persistForm = new FormData();
-    persistForm.set("persist", "true");
     const importResponse = await page.request.post("/api/pre-fatura/validate", { multipart: { persist: "true" } });
     expect(importResponse.status()).toBe(403);
 
