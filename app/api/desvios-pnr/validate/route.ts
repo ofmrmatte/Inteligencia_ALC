@@ -380,7 +380,7 @@ export async function POST(request: NextRequest) {
       profile: session.profile,
       action: "import_desvios_pnr",
       entityType: "desvios_pnr_records",
-      entityId: persistence.fileId,
+      entityId: persistence.fileId || undefined,
       details: { fileName: file.name, rows: records.length, uniqueRows: uniqueKeys.size },
     });
   }
