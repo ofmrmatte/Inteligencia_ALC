@@ -1,6 +1,4 @@
 import { createServerSupabaseClient } from "@/lib/supabase/server";
-import { fetchAllSupabaseRows } from "@/lib/supabase/fetch-all";
-import { toNumber } from "@/features/pre-fatura/domain";
 
 export type DashboardSummary = {
   metrics: Array<{
@@ -31,16 +29,6 @@ export type DashboardSummary = {
   error: string | null;
 };
 
-type PreFaturaDashboardRow = {
-  tipo: string | null;
-  base: string | null;
-  codigo_base: string | null;
-  driver: string | null;
-  rota: string | null;
-  id_envio: string | null;
-  valor: number | string | null;
-};
-
 type DashboardSettingsRow = {
   key: string;
   value: {
@@ -49,11 +37,41 @@ type DashboardSettingsRow = {
   } | null;
 };
 
-async function countRows(table: string) {
-  const supabase = await createServerSupabaseClient();
-  const { count, error } = await supabase.from(table).select("id", { count: "exact", head: true });
-  if (error) throw error;
-  return count ?? 0;
+type RankingItem = {
+  label: string;
+  value: number | string;
+  count: number | string;
+};
+
+type DashboardMetricsRow = {
+  pre_fatura_count: number | string | null;
+  gestao_pacotes_count: number | string | null;
+  desvios_pnr_count: number | string | null;
+  pacotes_faltantes_count: number | string | null;
+  pre_fatura_total: number | string | null;
+  pre_fatura_bases: number | string | null;
+  pre_fatura_drivers: number | string | null;
+  pre_fatura_routes: number | string | null;
+  pre_fatura_package_ids: number | string | null;
+  top_bases: RankingItem[] | null;
+  top_drivers: RankingItem[] | null;
+  type_mix: RankingItem[] | null;
+};
+
+function toFiniteNumber(value: unknown) {
+  const parsed = typeof value === "number" ? value : Number(value ?? 0);
+  return Number.isFinite(parsed) ? parsed : 0;
+}
+
+function normalizeRanking(value: RankingItem[] | null | undefined) {
+  if (!Array.isArray(value)) return [];
+  return value
+    .filter((item) => item && String(item.label || "").trim())
+    .map((item) => ({
+      label: String(item.label).trim(),
+      value: toFiniteNumber(item.value),
+      count: toFiniteNumber(item.count),
+    }));
 }
 
 function formatCurrency(value: number) {
@@ -64,36 +82,11 @@ function formatCurrency(value: number) {
   }).format(value);
 }
 
-function ranking(rows: PreFaturaDashboardRow[], getLabel: (row: PreFaturaDashboardRow) => string | null) {
-  const map = new Map<string, { value: number; count: number }>();
-  rows.forEach((row) => {
-    const label = getLabel(row);
-    if (!label) return;
-    const current = map.get(label) || { value: 0, count: 0 };
-    current.value += toNumber(row.valor);
-    current.count += 1;
-    map.set(label, current);
-  });
-
-  return [...map.entries()]
-    .map(([label, item]) => ({ label, value: item.value, count: item.count }))
-    .sort((a, b) => b.value - a.value)
-    .slice(0, 5);
-}
-
 export async function getDashboardSummary(): Promise<DashboardSummary> {
   try {
     const supabase = await createServerSupabaseClient();
-    const [preFaturaCount, gestaoPacotes, desviosPnr, pacotesFaltantes, preRows, recentFilesResult, settingsResult] = await Promise.all([
-      countRows("pre_fatura_records"),
-      countRows("gestao_pacotes_records"),
-      countRows("desvios_pnr_records"),
-      countRows("gestao_desvios_pacotes_faltantes"),
-      fetchAllSupabaseRows<PreFaturaDashboardRow>((from, to) => supabase
-        .from("pre_fatura_records")
-        .select("tipo,base,codigo_base,driver,rota,id_envio,valor")
-        .eq("module_key", "pre_fatura")
-        .range(from, to)),
+    const [metricsResult, recentFilesResult, settingsResult] = await Promise.all([
+      supabase.rpc("get_dashboard_summary_metrics").single(),
       supabase
         .from("dashboard_files")
         .select("id,file_name,file_type,status,created_at")
@@ -102,17 +95,21 @@ export async function getDashboardSummary(): Promise<DashboardSummary> {
       supabase.from("dashboard_settings").select("key,value").eq("key", "pnr_goal").maybeSingle(),
     ]);
 
+    if (metricsResult.error) throw metricsResult.error;
     if (recentFilesResult.error) throw recentFilesResult.error;
     if (settingsResult.error) throw settingsResult.error;
 
-    const totalValue = preRows.reduce((sum, row) => sum + toNumber(row.valor), 0);
+    const aggregates = metricsResult.data as DashboardMetricsRow | null;
+    if (!aggregates) throw new Error("Resumo operacional não retornou dados.");
+
+    const preFaturaCount = toFiniteNumber(aggregates.pre_fatura_count);
+    const gestaoPacotes = toFiniteNumber(aggregates.gestao_pacotes_count);
+    const desviosPnr = toFiniteNumber(aggregates.desvios_pnr_count);
+    const pacotesFaltantes = toFiniteNumber(aggregates.pacotes_faltantes_count);
+    const totalValue = toFiniteNumber(aggregates.pre_fatura_total);
     const monthlyGoal = ((settingsResult.data as DashboardSettingsRow | null)?.value?.monthly_goal
       ?? (settingsResult.data as DashboardSettingsRow | null)?.value?.monthlyGoal
       ?? null);
-    const baseSet = new Set(preRows.map((row) => row.codigo_base || row.base).filter(Boolean));
-    const driverSet = new Set(preRows.map((row) => row.driver).filter(Boolean));
-    const routeSet = new Set(preRows.map((row) => row.rota).filter(Boolean));
-    const packageSet = new Set(preRows.map((row) => row.id_envio).filter(Boolean));
 
     return {
       metrics: [
@@ -123,14 +120,14 @@ export async function getDashboardSummary(): Promise<DashboardSummary> {
       ],
       preFatura: {
         totalValue,
-        totalRows: preRows.length,
-        bases: baseSet.size,
-        drivers: driverSet.size,
-        routes: routeSet.size,
-        packageIds: packageSet.size,
-        topBases: ranking(preRows, (row) => row.codigo_base || row.base),
-        topDrivers: ranking(preRows, (row) => row.driver),
-        typeMix: ranking(preRows, (row) => row.tipo),
+        totalRows: preFaturaCount,
+        bases: toFiniteNumber(aggregates.pre_fatura_bases),
+        drivers: toFiniteNumber(aggregates.pre_fatura_drivers),
+        routes: toFiniteNumber(aggregates.pre_fatura_routes),
+        packageIds: toFiniteNumber(aggregates.pre_fatura_package_ids),
+        topBases: normalizeRanking(aggregates.top_bases),
+        topDrivers: normalizeRanking(aggregates.top_drivers),
+        typeMix: normalizeRanking(aggregates.type_mix),
         monthlyGoal,
       },
       recentFiles: recentFilesResult.data ?? [],

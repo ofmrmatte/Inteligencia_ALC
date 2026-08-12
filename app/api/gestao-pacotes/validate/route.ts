@@ -314,9 +314,8 @@ async function persistImport({
     raw_storage_persisted: false,
   };
 
-  const { data: fileRecord, error: fileError } = await supabase
-    .from("dashboard_files")
-    .insert({
+  const { data, error } = await supabase.rpc("commit_gestao_pacotes_import", {
+    p_file: {
       file_name: file.name,
       storage_path: storagePath,
       file_type: "GESTAO_PACOTES",
@@ -326,43 +325,25 @@ async function persistImport({
       reference_month: period.reference_month || null,
       reference_year: period.reference_year || null,
       is_active: true,
-      status: "processed",
       period_label: period.quinzena || null,
       period_type: period.period_type || null,
       metadata,
-    })
-    .select("id")
-    .single();
-
-  if (fileError) throw fileError;
-
-  const rows = records.map((record) => ({ ...record, file_id: fileRecord.id }));
-  for (let index = 0; index < rows.length; index += 500) {
-    const { error } = await supabase
-      .from("gestao_pacotes_records")
-      .upsert(rows.slice(index, index + 500), { onConflict: "module_key,dedupe_key" });
-    if (error) throw error;
-  }
-
-  const { error: processedError } = await supabase
-    .from("processed_dashboard_files")
-    .upsert({
+    },
+    p_rows: records,
+    p_processed: {
       module_key: "gestao_pacotes",
       file_name: file.name,
       file_hash: fileHash,
       file_size: file.size,
+      last_modified: String(file.lastModified || ""),
       competencia: period.competencia || null,
-      row_count: rows.length,
-      status: "processed",
-      metadata,
       storage_path: storagePath,
       raw_file_deleted: true,
       file_role: "quinzena",
-    }, { onConflict: "module_key,file_hash" });
-
-  if (processedError) throw processedError;
-
-  return { fileId: fileRecord.id, fileHash, persistedRows: rows.length };
+    },
+  });
+  if (error) throw error;
+  return data as { fileId: string | null; fileHash: string; duplicateFile: boolean; persistedRows: number };
 }
 
 export async function POST(request: NextRequest) {
@@ -421,12 +402,14 @@ export async function POST(request: NextRequest) {
     uniquePackages: new Set(records.map((record) => record.id_envio).filter(Boolean)).size,
     events: records.length,
     duplicated: Math.max(records.length - new Set(records.map((record) => record.dedupe_key)).size, 0),
-    persisted: Boolean(persistence),
+    persisted: Boolean(persistence && !persistence.duplicateFile),
     persistence,
     message: acceptedRows
-      ? persistence
-        ? "Planilha importada com identidade de pacote e exclusão de totais."
-        : "Planilha validada com identidade de pacote e exclusão de totais."
+      ? persistence?.duplicateFile
+        ? "Este arquivo já havia sido processado. Nenhum registro foi duplicado."
+        : persistence
+          ? "Planilha importada com identidade de pacote e exclusão de totais."
+          : "Planilha validada com identidade de pacote e exclusão de totais."
       : "Planilha lida, mas nenhum evento válido foi encontrado.",
   });
 }

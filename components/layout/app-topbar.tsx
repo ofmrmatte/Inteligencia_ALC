@@ -3,6 +3,7 @@
 import { PanelLeftOpen } from "lucide-react";
 import { usePathname } from "next/navigation";
 import { GlobalSearch } from "@/features/global-search/components/global-search";
+import { OperationalAlertsButton } from "@/features/operational-alerts/components/operational-alerts-button";
 import { BRAND } from "@/lib/constants/brand";
 
 const titles: Record<string, string> = {
@@ -36,6 +37,7 @@ export function AppTopbar({ onOpenMenu }: { onOpenMenu: () => void }) {
       </div>
 
       <GlobalSearch />
+      <OperationalAlertsButton />
     </header>
   );
 }

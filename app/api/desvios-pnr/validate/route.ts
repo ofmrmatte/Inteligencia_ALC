@@ -295,9 +295,8 @@ async function persistImport({
     raw_storage_persisted: false,
   };
 
-  const { data: fileRecord, error: fileError } = await supabase
-    .from("dashboard_files")
-    .insert({
+  const { data, error } = await supabase.rpc("commit_desvios_pnr_import", {
+    p_file: {
       file_name: file.name,
       storage_path: storagePath,
       file_type: "DESVIOS_PNR",
@@ -307,44 +306,25 @@ async function persistImport({
       reference_month: period.mes || null,
       reference_year: period.ano || null,
       is_active: true,
-      status: "processed",
       period_label: period.quinzena || null,
       period_type: period.quinzenaKey || null,
       metadata,
-    })
-    .select("id")
-    .single();
-
-  if (fileError) throw fileError;
-
-  const rows = records.map((record) => ({ ...record, file_id: fileRecord.id }));
-  for (let index = 0; index < rows.length; index += 500) {
-    const { error } = await supabase
-      .from("desvios_pnr_records")
-      .upsert(rows.slice(index, index + 500), { onConflict: "module_key,dedupe_key" });
-    if (error) throw error;
-  }
-
-  const { error: processedError } = await supabase
-    .from("processed_dashboard_files")
-    .upsert({
+    },
+    p_rows: records,
+    p_processed: {
       module_key: "desvios_pnr",
       file_name: file.name,
       file_hash: fileHash,
       file_size: file.size,
+      last_modified: String(file.lastModified || ""),
       competencia: period.competencia || null,
-      row_count: rows.length,
-      status: "processed",
-      metadata,
       storage_path: storagePath,
       raw_file_deleted: true,
       file_role: "pnr",
-    }, { onConflict: "module_key,file_hash" });
-
-  if (processedError) throw processedError;
-
-  await supabase.rpc("refresh_desvios_pnr_metrics_summary", { p_file_ids: [fileRecord.id] });
-  return { fileId: fileRecord.id, fileHash, persistedRows: rows.length };
+    },
+  });
+  if (error) throw error;
+  return data as { fileId: string | null; fileHash: string; duplicateFile: boolean; persistedRows: number };
 }
 
 export async function POST(request: NextRequest) {
@@ -394,13 +374,13 @@ export async function POST(request: NextRequest) {
     })
     : null;
 
-  if (persistence) {
+  if (persistence && !persistence.duplicateFile) {
     await recordAuditLog({
       userId: session.user.id,
       profile: session.profile,
       action: "import_desvios_pnr",
       entityType: "desvios_pnr_records",
-      entityId: persistence.fileId,
+      entityId: persistence.fileId || undefined,
       details: { fileName: file.name, rows: records.length, uniqueRows: uniqueKeys.size },
     });
   }
@@ -412,8 +392,8 @@ export async function POST(request: NextRequest) {
     uniqueRows: uniqueKeys.size,
     duplicated: Math.max(records.length - uniqueKeys.size, 0),
     sheets,
-    persisted: Boolean(persistence),
+    persisted: Boolean(persistence && !persistence.duplicateFile),
     persistence,
-    message: persistence ? "PNR importado e métricas atualizadas." : "PNR validado sem persistência.",
+    message: persistence?.duplicateFile ? "Este PNR já havia sido processado. Nenhum registro foi duplicado." : persistence ? "PNR importado e métricas atualizadas." : "PNR validado sem persistência.",
   });
 }

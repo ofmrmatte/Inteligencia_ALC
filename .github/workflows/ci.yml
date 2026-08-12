@@ -25,16 +25,19 @@ jobs:
       SUPABASE_ANON_KEY: ${{ vars.NEXT_PUBLIC_SUPABASE_ANON_KEY }}
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Setup Node
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v7
         with:
           node-version: 24
           cache: npm
 
       - name: Install dependencies
         run: npm ci
+
+      - name: Dependency audit
+        run: npm audit --audit-level=moderate
 
       - name: Lint
         run: npm run lint
@@ -50,6 +53,9 @@ jobs:
 
       - name: Script syntax check
         run: npm run check:scripts
+
+      - name: Text encoding check
+        run: npm run check:encoding
 
       - name: Validate public CI environment
         run: npm run check:ci-env
@@ -70,6 +76,7 @@ jobs:
     name: Authenticated E2E
     runs-on: ubuntu-latest
     needs: quality
+    if: github.event_name != 'pull_request'
     env:
       NEXT_PUBLIC_SUPABASE_URL: ${{ vars.NEXT_PUBLIC_SUPABASE_URL }}
       NEXT_PUBLIC_SUPABASE_ANON_KEY: ${{ vars.NEXT_PUBLIC_SUPABASE_ANON_KEY }}
@@ -79,13 +86,25 @@ jobs:
       E2E_ADMIN_PASSWORD: ${{ secrets.E2E_ADMIN_PASSWORD }}
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Setup Node
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v7
         with:
           node-version: 24
           cache: npm
+
+      - name: Require authenticated E2E credentials
+        shell: bash
+        run: |
+          missing=0
+          for name in E2E_USER_EMAIL E2E_USER_PASSWORD E2E_ADMIN_EMAIL E2E_ADMIN_PASSWORD; do
+            if [ -z "${!name}" ]; then
+              echo "::error::$name is not configured. Authenticated E2E cannot be reported as passing."
+              missing=1
+            fi
+          done
+          exit "$missing"
 
       - name: Install dependencies
         run: npm ci
@@ -107,29 +126,24 @@ jobs:
       SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Setup Node
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v7
         with:
           node-version: 24
           cache: npm
 
-      - name: Install dependencies
-        run: npm ci
-
-      - name: Check database audit configuration
-        id: db-env
+      - name: Require database audit connection
         shell: bash
         run: |
           if [ -z "$SUPABASE_DB_URL" ]; then
-            echo "configured=false" >> "$GITHUB_OUTPUT"
-            echo "::notice::SUPABASE_DB_URL is not configured; skipping database audit."
-          else
-            echo "configured=true" >> "$GITHUB_OUTPUT"
-            echo "Database audit secret is configured."
+            echo "::error::SUPABASE_DB_URL is not configured. Database Audit cannot be reported as passing."
+            exit 1
           fi
 
+      - name: Install dependencies
+        run: npm ci
+
       - name: PostgreSQL read-only audits
-        if: steps.db-env.outputs.configured == 'true'
         run: npm run audit:db
