@@ -5,6 +5,7 @@ import { ThemeScript } from "@/components/layout/theme-script";
 import { BRAND } from "@/lib/constants/brand";
 import "./globals.css";
 import "./ui-refresh.css";
+import "./ui-modules.css";
 
 const manrope = Manrope({
   subsets: ["latin"],
