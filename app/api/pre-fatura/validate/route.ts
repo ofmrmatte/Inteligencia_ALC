@@ -29,6 +29,21 @@ type ImportCounters = {
   existingIdsSkipped: number;
 };
 
+type PersistenceResult = {
+  fileId: string | null;
+  fileHash: string;
+  duplicateFile: boolean;
+  existingIdsSkipped: number;
+  persistedRows: number;
+  processedFile: {
+    id: string;
+    file_name: string | null;
+    row_count: number | null;
+    status: string | null;
+    processed_at: string | null;
+  } | null;
+};
+
 function chunks<T>(items: T[], size: number) {
   const output: T[][] = [];
   for (let index = 0; index < items.length; index += size) output.push(items.slice(index, index + size));
@@ -70,14 +85,6 @@ async function findExistingShipmentIds(supabase: Awaited<ReturnType<typeof creat
   return existing;
 }
 
-async function cleanupFailedImport(supabase: Awaited<ReturnType<typeof createServerSupabaseClient>>, fileId: string | null) {
-  if (!fileId) return;
-  const recordsCleanup = await supabase.from("pre_fatura_records").delete().eq("file_id", fileId);
-  if (recordsCleanup.error) console.error("[pre_fatura_import_cleanup_records_failed]", { fileId, error: recordsCleanup.error });
-  const fileCleanup = await supabase.from("dashboard_files").delete().eq("id", fileId);
-  if (fileCleanup.error) console.error("[pre_fatura_import_cleanup_file_failed]", { fileId, error: fileCleanup.error });
-}
-
 async function persistImport({
   file,
   fileHash,
@@ -96,7 +103,7 @@ async function persistImport({
   counters: Omit<ImportCounters, "existingIdsSkipped">;
   userId: string;
   userEmail: string | null;
-}) {
+}): Promise<PersistenceResult> {
   const supabase = await createServerSupabaseClient();
   const processedFile = await findProcessedFileByHash(supabase, fileHash);
   if (processedFile) {
@@ -137,75 +144,38 @@ async function persistImport({
     existing_ids_skipped: plan.existingIdsSkipped,
     raw_storage_persisted: false,
   };
-  let fileRecordId: string | null = null;
 
-  try {
-    const { data: fileRecord, error: fileError } = await supabase
-      .from("dashboard_files")
-      .insert({
-        file_name: file.name,
-        storage_path: storagePath,
-        file_type: "PRE_FATURA",
-        file_size: file.size,
-        uploaded_by: userId,
-        uploaded_by_email: userEmail,
-        reference_month: period.reference_month || null,
-        reference_year: period.reference_year || null,
-        is_active: true,
-        status: "processing",
-        period_label: period.quinzena || null,
-        period_type: period.period_type || null,
-        metadata,
-      })
-      .select("id")
-      .single();
+  const { data, error } = await supabase.rpc("commit_pre_fatura_import", {
+    p_file: {
+      file_name: file.name,
+      storage_path: storagePath,
+      file_type: "PRE_FATURA",
+      file_size: file.size,
+      uploaded_by: userId,
+      uploaded_by_email: userEmail,
+      reference_month: period.reference_month || null,
+      reference_year: period.reference_year || null,
+      is_active: true,
+      period_label: period.quinzena || null,
+      period_type: period.period_type || null,
+      metadata,
+    },
+    p_rows: plan.newRecords,
+    p_processed: {
+      module_key: "pre_fatura",
+      file_name: file.name,
+      file_hash: fileHash,
+      file_size: file.size,
+      last_modified: String(file.lastModified || ""),
+      competencia: period.competencia || null,
+      storage_path: storagePath,
+      raw_file_deleted: true,
+      file_role: "quinzena",
+    },
+  });
 
-    if (fileError) throw fileError;
-    fileRecordId = fileRecord.id;
-
-    const rows = plan.newRecords.map((record) => ({ ...record, file_id: fileRecord.id }));
-    for (const batch of chunks(rows, 500)) {
-      const { error } = await supabase.from("pre_fatura_records").insert(batch);
-      if (error) throw error;
-    }
-
-    const processedMetadata = { ...metadata, persisted_rows: rows.length };
-    const updateFile = await supabase
-      .from("dashboard_files")
-      .update({ status: "processed", metadata: processedMetadata })
-      .eq("id", fileRecord.id);
-    if (updateFile.error) throw updateFile.error;
-
-    const { error: processedError } = await supabase
-      .from("processed_dashboard_files")
-      .upsert({
-        module_key: "pre_fatura",
-        file_name: file.name,
-        file_hash: fileHash,
-        file_size: file.size,
-        competencia: period.competencia || null,
-        row_count: rows.length,
-        status: "processed",
-        metadata: processedMetadata,
-        storage_path: storagePath,
-        raw_file_deleted: true,
-        file_role: "quinzena",
-      }, { onConflict: "module_key,file_hash" });
-
-    if (processedError) throw processedError;
-
-    return {
-      fileId: fileRecord.id,
-      fileHash,
-      duplicateFile: false,
-      existingIdsSkipped: plan.existingIdsSkipped,
-      persistedRows: rows.length,
-      processedFile: null,
-    };
-  } catch (error) {
-    await cleanupFailedImport(supabase, fileRecordId);
-    throw error;
-  }
+  if (error) throw error;
+  return data as PersistenceResult;
 }
 
 export function preFaturaImportFailedResponse() {
