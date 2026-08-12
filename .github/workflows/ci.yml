@@ -15,62 +15,6 @@ permissions:
   contents: read
 
 jobs:
-  hardening-final-source-fix:
-    name: Hardening Final Source Fix
-    if: github.event_name == 'pull_request' && github.head_ref == 'agent/hardening-before-ui'
-    runs-on: ubuntu-latest
-    permissions:
-      contents: write
-    steps:
-      - name: Checkout PR branch
-        uses: actions/checkout@v7
-        with:
-          ref: ${{ github.head_ref }}
-
-      - name: Setup Node
-        uses: actions/setup-node@v7
-        with:
-          node-version: 24
-          cache: npm
-
-      - name: Fix nullable audit entity id
-        shell: bash
-        run: |
-          python3 - <<'PY'
-          from pathlib import Path
-          path = Path('app/api/desvios-pnr/validate/route.ts')
-          text = path.read_text(encoding='utf-8')
-          old = '      entityId: persistence.fileId,'
-          new = '      entityId: persistence.fileId || undefined,'
-          if old not in text:
-              raise SystemExit('Expected audit entityId line not found')
-          path.write_text(text.replace(old, new, 1), encoding='utf-8')
-          PY
-
-      - name: Install dependencies
-        run: npm ci
-
-      - name: Inspect dead-code heuristic
-        shell: bash
-        run: |
-          npm run audit:dead-code
-          latest=$(ls -1t scripts/logs/dead-code-*.json | head -1)
-          echo "Dead-code report: $latest"
-          cat "$latest"
-
-      - name: Commit typing fix
-        shell: bash
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add app/api/desvios-pnr/validate/route.ts
-          if git diff --cached --quiet; then
-            echo "No source change required."
-            exit 0
-          fi
-          git commit -m "narrow pnr audit entity id"
-          git push origin "HEAD:${{ github.head_ref }}"
-
   quality:
     name: Quality Gate
     runs-on: ubuntu-latest
