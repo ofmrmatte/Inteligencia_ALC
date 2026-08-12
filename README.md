@@ -8,6 +8,7 @@ A aplicação principal usa Next.js App Router, React e TypeScript. O runtime es
 
 Relatórios de decisão:
 
+- `docs/HARDENING_2026-08-12.md`
 - `docs/LEGACY_PARITY_REPORT.md`
 - `docs/PHASE_3_QUALITY_AUTOMATION.md`
 - `docs/PHASE_3_GLOBAL_SEARCH_ALERTS.md`
