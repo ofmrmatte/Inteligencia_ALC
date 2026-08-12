@@ -6,6 +6,7 @@ import { BRAND } from "@/lib/constants/brand";
 import "./globals.css";
 import "./ui-refresh.css";
 import "./ui-modules.css";
+import "./ui-polish.css";
 
 const manrope = Manrope({
   subsets: ["latin"],
