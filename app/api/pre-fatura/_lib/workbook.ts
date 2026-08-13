@@ -178,6 +178,13 @@ export function detectPreFaturaOperationalType(sheetName: string) {
   return "";
 }
 
+function detectPreFaturaDiscountType(headers: unknown[], sheetName: string) {
+  const normalizedHeaders = headers.map((header) => normalizeIdentity(normalizedText(header)));
+  if (normalizedHeaders.includes("DESCONTO PACOTE PERDIDO")) return "DESCONTO PACOTE PERDIDO";
+  if (normalizedHeaders.includes("DESCONTO PNR")) return "DESCONTO PNR";
+  return detectPreFaturaOperationalType(sheetName) || "PNR";
+}
+
 export function parsePreFaturaSheet(sheet: ParsedSpreadsheetSheet, period: PreFaturaPeriod): ParsedPreFaturaSheet {
   const header = findPreFaturaHeaderRow(sheet.rows);
   if (!header) {
@@ -198,7 +205,7 @@ export function parsePreFaturaSheet(sheet: ParsedSpreadsheetSheet, period: PreFa
     valor: findHeaderIndex(header.headers, ["DESCONTO", "VALOR", "VALOR DESCONTO", "VALOR DO DESCONTO"]),
   };
 
-  const operationalType = detectPreFaturaOperationalType(sheet.name) || "PNR";
+  const operationalType = detectPreFaturaDiscountType(header.headers, sheet.name);
   let acceptedRows = 0;
   let ignoredRows = 0;
   const records: ParsedPreFaturaRecord[] = [];

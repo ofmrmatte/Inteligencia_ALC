@@ -3,6 +3,7 @@ import { fetchAllSupabaseRows } from "@/lib/supabase/fetch-all";
 import {
   PRE_FATURA_SORT_KEYS,
   calculatePreFaturaSummary,
+  normalizeIdentity,
   type PreFaturaFilters,
   type PreFaturaPageData,
   type PreFaturaRecord,
@@ -13,6 +14,8 @@ type SearchParamsInput = Record<string, string | string[] | undefined>;
 
 const DEFAULT_PAGE_SIZE = 25;
 const MAX_PAGE_SIZE = 100;
+const LOST_PACKAGE_TYPE = "DESCONTO PACOTE PERDIDO";
+const PNR_DISCOUNT_TYPE = "DESCONTO PNR";
 
 function first(value: string | string[] | undefined) {
   return Array.isArray(value) ? value[0] : value;
@@ -20,6 +23,18 @@ function first(value: string | string[] | undefined) {
 
 function clean(value: string | string[] | undefined) {
   return (first(value) || "").trim();
+}
+
+function normalizePreFaturaType(tipo: string | null | undefined, abaOrigem = "") {
+  const sheet = normalizeIdentity(abaOrigem);
+  if (sheet.includes("SVC") || sheet.includes("XPT")) return LOST_PACKAGE_TYPE;
+  if (sheet.includes("PNR")) return PNR_DISCOUNT_TYPE;
+
+  const normalized = normalizeIdentity(tipo);
+  if (!normalized) return "";
+  if (normalized.includes(LOST_PACKAGE_TYPE) || normalized === "SVC" || normalized === "XPT") return LOST_PACKAGE_TYPE;
+  if (normalized.includes(PNR_DISCOUNT_TYPE) || normalized === "PNR") return PNR_DISCOUNT_TYPE;
+  return String(tipo || "").trim();
 }
 
 function asPositiveInt(value: string | string[] | undefined, fallback: number, max = Number.MAX_SAFE_INTEGER) {
@@ -37,7 +52,7 @@ export function parsePreFaturaFilters(searchParams: SearchParamsInput = {}): Pre
     q: clean(searchParams.q),
     competencia: clean(searchParams.competencia),
     quinzena: clean(searchParams.quinzena),
-    tipo: clean(searchParams.tipo),
+    tipo: normalizePreFaturaType(clean(searchParams.tipo)),
     base: clean(searchParams.base),
     sort: PRE_FATURA_SORT_KEYS.includes(sortParam) ? sortParam : "valor",
     dir: dirParam === "asc" ? "asc" : "desc",
@@ -55,6 +70,7 @@ function uniqueSorted(values: Array<string | null>) {
 
 type PagedFilterQuery = {
   eq: (column: string, value: string) => PagedFilterQuery;
+  in: (column: string, values: string[]) => PagedFilterQuery;
   or: (filters: string) => PagedFilterQuery;
   range: (from: number, to: number) => PromiseLike<{ data: unknown[] | null; error: unknown }>;
 };
@@ -63,11 +79,18 @@ function asPagedFilterQuery(query: unknown) {
   return query as PagedFilterQuery;
 }
 
+function applyTipoFilter(query: PagedFilterQuery, tipo: string) {
+  const normalized = normalizePreFaturaType(tipo);
+  if (normalized === LOST_PACKAGE_TYPE) return query.in("aba_origem", ["SVC PERDIDOS", "XPT PERDIDOS"]);
+  if (normalized === PNR_DISCOUNT_TYPE) return query.eq("aba_origem", "PNR");
+  return query.eq("tipo", tipo);
+}
+
 function applyPagedFilters(query: PagedFilterQuery, filters: PreFaturaFilters) {
   let next = query;
   if (filters.competencia) next = next.eq("competencia", filters.competencia);
   if (filters.quinzena) next = next.eq("quinzena", filters.quinzena);
-  if (filters.tipo) next = next.eq("tipo", filters.tipo);
+  if (filters.tipo) next = applyTipoFilter(next, filters.tipo);
   if (filters.base) next = next.eq("codigo_base", filters.base);
   if (filters.q) next = next.or(searchFilter(filters.q));
   return next;
@@ -88,7 +111,9 @@ export async function getPreFaturaPage(searchParams: SearchParamsInput): Promise
 
     if (filters.competencia) rowsQuery = rowsQuery.eq("competencia", filters.competencia);
     if (filters.quinzena) rowsQuery = rowsQuery.eq("quinzena", filters.quinzena);
-    if (filters.tipo) rowsQuery = rowsQuery.eq("tipo", filters.tipo);
+    if (filters.tipo === LOST_PACKAGE_TYPE) rowsQuery = rowsQuery.in("aba_origem", ["SVC PERDIDOS", "XPT PERDIDOS"]);
+    else if (filters.tipo === PNR_DISCOUNT_TYPE) rowsQuery = rowsQuery.eq("aba_origem", "PNR");
+    else if (filters.tipo) rowsQuery = rowsQuery.eq("tipo", filters.tipo);
     if (filters.base) rowsQuery = rowsQuery.eq("codigo_base", filters.base);
     if (filters.q) rowsQuery = rowsQuery.or(searchFilter(filters.q));
 
@@ -106,14 +131,17 @@ export async function getPreFaturaPage(searchParams: SearchParamsInput): Promise
 
     const optionRowsPromise = fetchAllSupabaseRows<PreFaturaRecord>((pageFrom, pageTo) => supabase
       .from("pre_fatura_records")
-      .select("competencia,quinzena,tipo,codigo_base,base")
+      .select("competencia,quinzena,tipo,codigo_base,base,aba_origem")
       .eq("module_key", "pre_fatura")
       .range(pageFrom, pageTo));
 
     const [rowsResult, metricsRows, optionRows] = await Promise.all([pagedRowsQuery, metricsRowsPromise, optionRowsPromise]);
     if (rowsResult.error) throw rowsResult.error;
 
-    const rows = (rowsResult.data ?? []) as PreFaturaRecord[];
+    const rows = ((rowsResult.data ?? []) as PreFaturaRecord[]).map((row) => ({
+      ...row,
+      tipo: normalizePreFaturaType(row.tipo, row.aba_origem || ""),
+    }));
     const totalRows = rowsResult.count ?? 0;
 
     const baseMap = new Map<string, string>();
@@ -130,7 +158,7 @@ export async function getPreFaturaPage(searchParams: SearchParamsInput): Promise
       options: {
         competencias: uniqueSorted(optionRows.map((row) => row.competencia)),
         quinzenas: uniqueSorted(optionRows.map((row) => row.quinzena)),
-        tipos: uniqueSorted(optionRows.map((row) => row.tipo)),
+        tipos: uniqueSorted(optionRows.map((row) => normalizePreFaturaType(row.tipo, row.aba_origem || ""))),
         bases: [...baseMap.entries()]
           .map(([value, label]) => ({ value, label }))
           .sort((a, b) => a.value.localeCompare(b.value, "pt-BR")),
