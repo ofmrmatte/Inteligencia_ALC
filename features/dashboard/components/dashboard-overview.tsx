@@ -129,23 +129,6 @@ export function DashboardOverview({ summary }: { summary: DashboardSummary }) {
           </div>
         </Card>
 
-        <Card className="ranking-card">
-          <div className="section-header">
-            <div>
-              <span>Mix</span>
-              <h2>Valor por tipo</h2>
-            </div>
-          </div>
-          <div className="ranking-list">
-            {summary.preFatura.typeMix.map((item) => (
-              <div key={item.label} className="ranking-list__row">
-                <span>{item.label}</span>
-                <strong>{currency.format(item.value)}</strong>
-              </div>
-            ))}
-          </div>
-        </Card>
-
         <Card className="recent-activity">
           <div className="section-header">
             <div>
