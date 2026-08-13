@@ -28,16 +28,18 @@ export function AppTopbar({ onOpenMenu }: { onOpenMenu: () => void }) {
         onClick={onOpenMenu}
         aria-label="Abrir navegação"
       >
-        <PanelLeftOpen size={18} aria-hidden="true" />
+        <PanelLeftOpen size={17} aria-hidden="true" />
       </button>
 
       <div className="app-topbar__context" aria-label="Localização atual">
-        <span>Inteligência ALC</span>
+        <span>Workspace operacional</span>
         <strong className="app-topbar__context-title">{title}</strong>
       </div>
 
-      <GlobalSearch />
-      <OperationalAlertsButton />
+      <div className="app-topbar__tools">
+        <GlobalSearch />
+        <OperationalAlertsButton />
+      </div>
     </header>
   );
 }

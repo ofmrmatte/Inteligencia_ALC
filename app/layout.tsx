@@ -1,20 +1,17 @@
 import type { Metadata } from "next";
-import { Manrope, Sora } from "next/font/google";
+import { Inter } from "next/font/google";
 import type { ReactNode } from "react";
 import { ThemeScript } from "@/components/layout/theme-script";
 import { BRAND } from "@/lib/constants/brand";
 import "./globals.css";
+import "./ui-refresh.css";
+import "./ui-modules.css";
+import "./ui-polish.css";
 
-const manrope = Manrope({
+const inter = Inter({
   subsets: ["latin"],
   display: "swap",
-  variable: "--font-manrope",
-});
-
-const sora = Sora({
-  subsets: ["latin"],
-  display: "swap",
-  variable: "--font-sora",
+  variable: "--font-inter",
 });
 
 export const metadata: Metadata = {
@@ -35,7 +32,7 @@ export default function RootLayout({ children }: { children: ReactNode }) {
       <head>
         <ThemeScript />
       </head>
-      <body className={`${manrope.variable} ${sora.variable}`}>{children}</body>
+      <body className={inter.variable}>{children}</body>
     </html>
   );
 }
