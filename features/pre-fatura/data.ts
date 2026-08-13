@@ -11,11 +11,34 @@ import {
 } from "@/features/pre-fatura/domain";
 
 type SearchParamsInput = Record<string, string | string[] | undefined>;
+type SupabaseClient = Awaited<ReturnType<typeof createServerSupabaseClient>>;
+
+type DriverReference = {
+  id_envio: string | null;
+  rota: string | null;
+  placa: string | null;
+  driver: string | null;
+};
 
 const DEFAULT_PAGE_SIZE = 25;
 const MAX_PAGE_SIZE = 100;
 const LOST_PACKAGE_TYPE = "DESCONTO PACOTE PERDIDO";
 const PNR_DISCOUNT_TYPE = "DESCONTO PNR";
+const INVALID_DRIVER_VALUES = new Set([
+  "",
+  "[OBJECT OBJECT]",
+  "N/A",
+  "#N/A",
+  "#N/D",
+  "NA",
+  "NAO INFORMADO",
+  "NÃO INFORMADO",
+  "SEM MOTORISTA",
+  "DESCONHECIDO",
+  "MOTORISTA",
+  "DRIVER",
+  "-",
+]);
 
 function first(value: string | string[] | undefined) {
   return Array.isArray(value) ? value[0] : value;
@@ -23,6 +46,10 @@ function first(value: string | string[] | undefined) {
 
 function clean(value: string | string[] | undefined) {
   return (first(value) || "").trim();
+}
+
+function cleanText(value: unknown) {
+  return String(value ?? "").trim();
 }
 
 function normalizePreFaturaType(tipo: string | null | undefined, abaOrigem = "") {
@@ -35,6 +62,132 @@ function normalizePreFaturaType(tipo: string | null | undefined, abaOrigem = "")
   if (normalized.includes(LOST_PACKAGE_TYPE) || normalized === "SVC" || normalized === "XPT") return LOST_PACKAGE_TYPE;
   if (normalized.includes(PNR_DISCOUNT_TYPE) || normalized === "PNR") return PNR_DISCOUNT_TYPE;
   return String(tipo || "").trim();
+}
+
+function isReliableDriverName(value: unknown) {
+  const normalized = normalizeIdentity(value);
+  return Boolean(normalized)
+    && !INVALID_DRIVER_VALUES.has(normalized)
+    && /[A-Z]/.test(normalized);
+}
+
+function validCrossKey(value: unknown) {
+  const normalized = normalizeIdentity(value);
+  if (!normalized || normalized === "[OBJECT OBJECT]") return "";
+  return normalized;
+}
+
+function addCandidate(map: Map<string, Map<string, string>>, key: string, driver: unknown) {
+  if (!key || !isReliableDriverName(driver)) return;
+  const display = cleanText(driver);
+  const normalizedDriver = normalizeIdentity(display);
+  const values = map.get(key) ?? new Map<string, string>();
+  if (!values.has(normalizedDriver)) values.set(normalizedDriver, display);
+  map.set(key, values);
+}
+
+function uniqueCandidate(values: Map<string, string> | undefined) {
+  if (!values || values.size !== 1) return null;
+  return [...values.values()][0] ?? null;
+}
+
+function resolveDriver(row: PreFaturaRecord, references: DriverReference[]) {
+  if (isReliableDriverName(row.driver)) return row.driver;
+
+  const idEnvio = validCrossKey(row.id_envio);
+  const rota = validCrossKey(row.rota);
+  const placa = validCrossKey(row.placa);
+  const byId = new Map<string, Map<string, string>>();
+  const byRoutePlate = new Map<string, Map<string, string>>();
+  const byRoute = new Map<string, Map<string, string>>();
+
+  references.forEach((reference) => {
+    const referenceId = validCrossKey(reference.id_envio);
+    const referenceRoute = validCrossKey(reference.rota);
+    const referencePlate = validCrossKey(reference.placa);
+    if (referenceId) addCandidate(byId, referenceId, reference.driver);
+    if (referenceRoute && referencePlate) addCandidate(byRoutePlate, `${referenceRoute}|${referencePlate}`, reference.driver);
+    if (referenceRoute) addCandidate(byRoute, referenceRoute, reference.driver);
+  });
+
+  const byIdMatch = idEnvio ? uniqueCandidate(byId.get(idEnvio)) : null;
+  if (byIdMatch) return byIdMatch;
+
+  const byRoutePlateMatch = rota && placa ? uniqueCandidate(byRoutePlate.get(`${rota}|${placa}`)) : null;
+  if (byRoutePlateMatch) return byRoutePlateMatch;
+
+  const byRouteMatch = rota ? uniqueCandidate(byRoute.get(rota)) : null;
+  return byRouteMatch || row.driver;
+}
+
+async function enrichHistoricalDrivers(supabase: SupabaseClient, rows: PreFaturaRecord[]) {
+  const missing = rows.filter((row) => !isReliableDriverName(row.driver));
+  if (!missing.length) return rows;
+
+  const ids = [...new Set(missing.map((row) => cleanText(row.id_envio)).filter((value) => validCrossKey(value)))];
+  const routes = [...new Set(missing.map((row) => cleanText(row.rota)).filter((value) => validCrossKey(value)))];
+  if (!ids.length && !routes.length) return rows;
+
+  const emptyResult = Promise.resolve({ data: [], error: null });
+  const [preFaturaByRoute, gestaoById, gestaoByRoute, desviosById, desviosByRoute] = await Promise.all([
+    routes.length
+      ? supabase.from("pre_fatura_records").select("id_envio,rota,placa,driver").eq("module_key", "pre_fatura").in("rota", routes)
+      : emptyResult,
+    ids.length
+      ? supabase.from("gestao_pacotes_records").select("id_envio,rota,driver").eq("module_key", "gestao_pacotes").in("id_envio", ids)
+      : emptyResult,
+    routes.length
+      ? supabase.from("gestao_pacotes_records").select("id_envio,rota,driver").eq("module_key", "gestao_pacotes").in("rota", routes)
+      : emptyResult,
+    ids.length
+      ? supabase.from("desvios_pnr_records").select("id_envio,id_rota,nome_motorista,motorista_display").eq("module_key", "desvios_pnr").in("id_envio", ids)
+      : emptyResult,
+    routes.length
+      ? supabase.from("desvios_pnr_records").select("id_envio,id_rota,nome_motorista,motorista_display").eq("module_key", "desvios_pnr").in("id_rota", routes)
+      : emptyResult,
+  ]);
+
+  for (const result of [preFaturaByRoute, gestaoById, gestaoByRoute, desviosById, desviosByRoute]) {
+    if (result.error) throw result.error;
+  }
+
+  const references: DriverReference[] = [
+    ...(preFaturaByRoute.data ?? []).map((row) => ({
+      id_envio: row.id_envio,
+      rota: row.rota,
+      placa: row.placa,
+      driver: row.driver,
+    })),
+    ...(gestaoById.data ?? []).map((row) => ({
+      id_envio: row.id_envio,
+      rota: row.rota,
+      placa: null,
+      driver: row.driver,
+    })),
+    ...(gestaoByRoute.data ?? []).map((row) => ({
+      id_envio: row.id_envio,
+      rota: row.rota,
+      placa: null,
+      driver: row.driver,
+    })),
+    ...(desviosById.data ?? []).map((row) => ({
+      id_envio: row.id_envio,
+      rota: row.id_rota,
+      placa: null,
+      driver: row.motorista_display || row.nome_motorista,
+    })),
+    ...(desviosByRoute.data ?? []).map((row) => ({
+      id_envio: row.id_envio,
+      rota: row.id_rota,
+      placa: null,
+      driver: row.motorista_display || row.nome_motorista,
+    })),
+  ];
+
+  return rows.map((row) => {
+    const crossedDriver = resolveDriver(row, references);
+    return crossedDriver && crossedDriver !== row.driver ? { ...row, driver: crossedDriver } : row;
+  });
 }
 
 function asPositiveInt(value: string | string[] | undefined, fallback: number, max = Number.MAX_SAFE_INTEGER) {
@@ -138,7 +291,8 @@ export async function getPreFaturaPage(searchParams: SearchParamsInput): Promise
     const [rowsResult, metricsRows, optionRows] = await Promise.all([pagedRowsQuery, metricsRowsPromise, optionRowsPromise]);
     if (rowsResult.error) throw rowsResult.error;
 
-    const rows = ((rowsResult.data ?? []) as PreFaturaRecord[]).map((row) => ({
+    const enrichedRows = await enrichHistoricalDrivers(supabase, (rowsResult.data ?? []) as PreFaturaRecord[]);
+    const rows = enrichedRows.map((row) => ({
       ...row,
       tipo: normalizePreFaturaType(row.tipo, row.aba_origem || ""),
     }));
