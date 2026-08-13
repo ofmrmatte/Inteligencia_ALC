@@ -19,6 +19,13 @@ function formatDate(value: string | null) {
   return new Intl.DateTimeFormat("pt-BR").format(date);
 }
 
+function displayText(value: string | null | undefined) {
+  const text = String(value ?? "").trim();
+  if (!text) return "-";
+  if (/^\[?object\s+object\]?$/i.test(text)) return "-";
+  return text;
+}
+
 function withPage(data: PreFaturaPageData, page: number) {
   const params = new URLSearchParams();
   Object.entries(data.filters).forEach(([key, value]) => {
@@ -127,16 +134,16 @@ function PreFaturaTable({ data }: { data: PreFaturaPageData }) {
           {data.rows.map((row: PreFaturaRecord) => (
             <tr key={row.id}>
               <td>
-                <strong>{row.base || "-"}</strong>
-                <span>{row.codigo_base || ""}</span>
+                <strong>{displayText(row.base)}</strong>
+                <span>{displayText(row.codigo_base) === "-" ? "" : displayText(row.codigo_base)}</span>
               </td>
-              <td>{row.driver || "-"}</td>
-              <td>{row.placa || "-"}</td>
-              <td>{row.tipo || "-"}</td>
-              <td>{row.aba_origem || "-"}</td>
+              <td>{displayText(row.driver)}</td>
+              <td>{displayText(row.placa)}</td>
+              <td>{displayText(row.tipo)}</td>
+              <td>{displayText(row.aba_origem)}</td>
               <td>{formatDate(row.data)}</td>
-              <td>{row.id_envio || "-"}</td>
-              <td>{row.rota || "-"}</td>
+              <td>{displayText(row.id_envio)}</td>
+              <td>{displayText(row.rota)}</td>
               <td className="is-right"><strong>{currency(row.valor)}</strong></td>
             </tr>
           ))}
