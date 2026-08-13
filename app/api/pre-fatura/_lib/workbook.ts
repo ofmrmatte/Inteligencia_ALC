@@ -100,6 +100,8 @@ export function normalizeSpreadsheetCell(value: unknown): string | number {
     if ("richText" in value && Array.isArray((value as { richText?: Array<{ text?: string }> }).richText)) {
       return ((value as { richText: Array<{ text?: string }> }).richText).map((item) => item.text || "").join("").trim();
     }
+    if ("error" in value) return "";
+    return "";
   }
   return String(value).trim();
 }
@@ -168,6 +170,14 @@ function cellAt(values: unknown[], index: number) {
   return index >= 0 ? values[index] : "";
 }
 
+export function detectPreFaturaOperationalType(sheetName: string) {
+  const normalized = normalizeIdentity(sheetName);
+  if (normalized.includes("SVC")) return "SVC";
+  if (normalized.includes("XPT")) return "XPT";
+  if (normalized.includes("PNR")) return "PNR";
+  return "";
+}
+
 export function parsePreFaturaSheet(sheet: ParsedSpreadsheetSheet, period: PreFaturaPeriod): ParsedPreFaturaSheet {
   const header = findPreFaturaHeaderRow(sheet.rows);
   if (!header) {
@@ -188,6 +198,7 @@ export function parsePreFaturaSheet(sheet: ParsedSpreadsheetSheet, period: PreFa
     valor: findHeaderIndex(header.headers, ["DESCONTO", "VALOR", "VALOR DESCONTO", "VALOR DO DESCONTO"]),
   };
 
+  const operationalType = detectPreFaturaOperationalType(sheet.name) || "PNR";
   let acceptedRows = 0;
   let ignoredRows = 0;
   const records: ParsedPreFaturaRecord[] = [];
@@ -216,7 +227,7 @@ export function parsePreFaturaSheet(sheet: ParsedSpreadsheetSheet, period: PreFa
     const parsed: ParsedPreFaturaRecord = {
       competencia: period.competencia,
       quinzena: period.quinzena,
-      tipo: row.tipo || "PNR",
+      tipo: operationalType,
       base: row.base,
       codigo_base: baseCode(row.base),
       driver: row.driver,

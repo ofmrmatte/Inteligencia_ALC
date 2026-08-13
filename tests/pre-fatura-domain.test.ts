@@ -15,6 +15,7 @@ import { preFaturaImportFailedResponse, preFaturaMissingSheetsResponse } from "@
 import { parsePreFaturaImportResponse } from "@/features/pre-fatura/components/import-pre-fatura-button";
 import {
   detectPreFaturaPeriod,
+  detectPreFaturaOperationalType,
   parsePreFaturaSheet,
   PreFaturaWorkbookUnreadableError,
   readPreFaturaWorkbook,
@@ -91,6 +92,7 @@ test("workbook normal e lido pelo ExcelJS", async () => {
   assert.equal(parsed.records.length, 1);
   assert.equal(parsed.records[0].id_envio, "47441232434");
   assert.equal(parsed.records[0].valor, 55.95);
+  assert.equal(parsed.records[0].tipo, "SVC");
 });
 
 test("fallback e chamado quando ExcelJS lanca erro", async () => {
@@ -107,6 +109,41 @@ test("fallback e chamado quando ExcelJS lanca erro", async () => {
 test("fallback SheetJS retorna apenas as abas esperadas", () => {
   const sheets = readPreFaturaWorkbookWithSheetJs(sheetJsWorkbookBuffer());
   assert.deepEqual(sheets.map((sheet) => sheet.name), ["PNR"]);
+});
+
+test("tipo operacional da pre-fatura vem da aba, nao da coluna livre", () => {
+  assert.equal(detectPreFaturaOperationalType("SVC PERDIDOS"), "SVC");
+  assert.equal(detectPreFaturaOperationalType("XPT PERDIDOS"), "XPT");
+  assert.equal(detectPreFaturaOperationalType("PNR"), "PNR");
+
+  const svc = parsePreFaturaSheet({
+    name: "SVC PERDIDOS",
+    rows: preFaturaRows(["SMG3", "Driver A", "ABC1D23", "PNR", "20/07/2026", "47441232434", "404597432", 55.95]),
+  }, detectPreFaturaPeriod("PRE FATURA 2 Q MAIO 26.xlsx"));
+  const xpt = parsePreFaturaSheet({
+    name: "XPT PERDIDOS",
+    rows: preFaturaRows(["SMG3", "Driver B", "ABC1D24", "DESCONTO PACOTE PERDIDO ROTA", "20/07/2026", "47441232435", "404597433", 55.95]),
+  }, detectPreFaturaPeriod("PRE FATURA 2 Q MAIO 26.xlsx"));
+
+  assert.equal(svc.records[0].tipo, "SVC");
+  assert.equal(xpt.records[0].tipo, "XPT");
+  assert.equal(svc.records[0].raw_data.TIPO, "PNR");
+  assert.equal(xpt.records[0].raw_data.TIPO, "DESCONTO PACOTE PERDIDO ROTA");
+});
+
+test("erros de formula do Excel nao viram texto object Object", () => {
+  const parsed = parsePreFaturaSheet({
+    name: "PNR",
+    rows: preFaturaRows(
+      [{ error: "#N/A" }, "Driver A", "ABC1D23", "PNR", "20/07/2026", "47441232434", "404597432", 55.95],
+      ["SMG3", "Driver B", "ABC1D24", "PNR", "20/07/2026", "47441232435", { error: "#N/A" }, 55.95],
+    ),
+  }, detectPreFaturaPeriod("PRE FATURA 2 Q MAIO 26.xlsx"));
+
+  assert.equal(parsed.records.length, 1);
+  assert.equal(parsed.records[0].base, "");
+  assert.equal(parsed.records[0].raw_data.BASE, "");
+  assert.equal(parsed.stats.ignoredRows, 1);
 });
 
 test("ids grandes permanecem strings corretas no parser generico", () => {

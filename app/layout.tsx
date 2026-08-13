@@ -32,7 +32,7 @@ export default function RootLayout({ children }: { children: ReactNode }) {
       <head>
         <ThemeScript />
       </head>
-      <body className={inter.variable}>{children}</body>
+      <body className={`${inter.className} ${inter.variable}`}>{children}</body>
     </html>
   );
 }

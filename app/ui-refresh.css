@@ -5,7 +5,7 @@
  */
 
 :root {
-  --font-display: var(--font-sora), Sora, var(--font-ui);
+  --font-display: var(--font-ui);
   --sidebar-width: 248px;
   --sidebar-width-collapsed: 76px;
   --topbar-height: 64px;
