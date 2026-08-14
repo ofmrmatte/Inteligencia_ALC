@@ -1,7 +1,7 @@
 "use client";
 
 import { RotateCcw } from "lucide-react";
-import { filterOptions, formatFortnightLabel } from "@/lib/metrics";
+import { filterOptions, formatFortnightLabel, formatMonthLabel } from "@/lib/metrics";
 import { useDashboardStore } from "@/lib/store";
 
 function SelectFilter({ label, value, options, allLabel, onChange, formatOption }: { label: string; value: string; options: string[]; allLabel: string; onChange: (value: string) => void; formatOption?: (value: string) => string }) {
@@ -26,6 +26,7 @@ export function GlobalFilters() {
 
   return (
     <section className="filters-bar" aria-label="Filtros globais">
+      <SelectFilter label="Mês" value={filters.month} options={options.months} allLabel="Todos" onChange={(value) => setFilter("month", value)} formatOption={formatMonthLabel} />
       <SelectFilter label="Quinzena" value={filters.fortnight} options={options.fortnights} allLabel="Todas" onChange={(value) => setFilter("fortnight", value)} formatOption={formatFortnightLabel} />
       <SelectFilter label="Coordenador" value={filters.coordinator} options={options.coordinators} allLabel="Todos" onChange={(value) => setFilter("coordinator", value)} />
       <SelectFilter label="Sigla" value={filters.sigla} options={options.siglas} allLabel="Todas" onChange={(value) => setFilter("sigla", value)} />

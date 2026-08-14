@@ -16,7 +16,7 @@ const schema = z.object({
 
 export async function signInAction(_state: LoginState, formData: FormData): Promise<LoginState> {
   if (!isSupabaseConfigured()) {
-    return { error: "Supabase ainda não está configurado neste ambiente." };
+    return { error: "Autenticação do painel ainda não configurada neste ambiente." };
   }
 
   const parsed = schema.safeParse({

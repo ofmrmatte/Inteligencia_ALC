@@ -18,7 +18,7 @@ export function Sidebar({
   onImport: () => void;
   canImport: boolean;
 }) {
-  const groups = ["Análises", "Controle de dados"] as const;
+  const groups = ["Análises", "Controle de dados", "Administração"] as const;
   return (
     <aside className={collapsed ? "sidebar sidebar--collapsed" : "sidebar"}>
       <div className="sidebar__brand"><Brand compact={collapsed} /></div>

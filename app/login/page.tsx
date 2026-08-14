@@ -1,4 +1,5 @@
 import { redirect } from "next/navigation";
+import Image from "next/image";
 import { Brand } from "@/components/brand";
 import { getCurrentProfile } from "@/lib/auth-server";
 import { isSupabaseConfigured } from "@/lib/supabase/config";
@@ -13,16 +14,17 @@ export default async function LoginPage() {
       <section className="login-card" aria-labelledby="login-title">
         <Brand />
         <div className="login-copy">
-          <span>Acesso restrito</span>
+          <span>Painel operacional ALC</span>
           <h1 id="login-title">Inteligência ALC</h1>
-          <p>Entre com seu usuário Supabase para acessar os dados conforme o perfil liberado: Coordenador, Supervisor, Diretor ou ADM.</p>
+          <p>Monitoramento de PNR, pré-faturamento, pacotes, risco logístico e decisões por base.</p>
         </div>
         <LoginForm supabaseReady={isSupabaseConfigured()} />
       </section>
-      <aside className="login-aside" aria-label="Perfis de acesso">
-        <div><strong>Coordenador</strong><span>Bases, supervisores, motoristas e pacotes sob sua responsabilidade.</span></div>
-        <div><strong>Supervisor</strong><span>Operação do próprio escopo e consulta de indicadores autorizados.</span></div>
-        <div><strong>Diretor / ADM</strong><span>Visão completa, importações oficiais e gestão administrativa.</span></div>
+      <aside className="login-aside" aria-label="Inteligência ALC">
+        <Image className="login-aside__logo" src="/brand/alc-logo.png" alt="ALC Pereira Filho & Transportes" width={380} height={380} priority />
+        <div><strong>Controle por quinzena</strong><span>Acompanhamento operacional por mês, Q1/Q2, base, motorista e status.</span></div>
+        <div><strong>Decisão orientada por dados</strong><span>Prioridades de cobrança, revisão, documentação, faturamento e encerramento.</span></div>
+        <div><strong>Acesso por perfil</strong><span>Coordenador, Supervisor, Diretor e ADM com escopo protegido no banco.</span></div>
       </aside>
     </main>
   );

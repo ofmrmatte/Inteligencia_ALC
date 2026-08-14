@@ -2,7 +2,7 @@
 
 import { Bar, BarChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
 import { BadgeDollarSign, Boxes, CircleCheckBig, Link2, TimerReset } from "lucide-react";
-import { scopeData, uniqueByShipment } from "@/lib/metrics";
+import { pnrDecisionRows, scopeData, uniqueByShipment } from "@/lib/metrics";
 import { normalizeText } from "@/lib/normalize";
 import { useDashboardStore } from "@/lib/store";
 import { formatCurrency, formatNumber, formatPercent, KpiCard, Panel, PageIntro, StatusBadge } from "@/components/ui";
@@ -23,6 +23,7 @@ export function PnrView() {
     current.cases += 1; current.value += row.purchaseValue; statusMap.set(key, current);
   });
   const status = [...statusMap.values()].sort((a, b) => b.cases - a.cases);
+  const decisions = pnrDecisionRows(rows);
   const completed = rows.filter((row) => /PROCEDENTE|APROVADO|CONCLUIDO/.test(normalizeText(row.status))).length;
   const prefaturaIds = new Set(scoped.prefatura.map((row) => row.shipmentId));
   const matched = rows.filter((row) => prefaturaIds.has(row.shipmentId)).length;
@@ -52,6 +53,12 @@ export function PnrView() {
           <div className="status-list">{status.map((item, index) => <div key={item.status}><span className="status-list__rank">{String(index + 1).padStart(2, "0")}</span><div><strong>{item.status}</strong><small>{item.cases} casos</small></div><span className="status-list__value">{formatCurrency(item.value)}</span></div>)}</div>
         </Panel>
       </div>
+      <Panel title="Monitoramento e tomada de decisão" subtitle="Status, exposição e próxima ação operacional por recorte">
+        <TableWrap>
+          <thead><tr><th>Status</th><th>Casos</th><th>% do total</th><th className="align-right">Valor exposto</th><th>Prioridade</th><th>Ação sugerida</th></tr></thead>
+          <tbody>{decisions.map((row) => <tr className={`decision-row decision-row--${row.tone}`} key={row.status}><td><strong>{row.status}</strong></td><td>{formatNumber(row.cases)}</td><td>{formatPercent(row.percentage)}</td><td className="align-right"><strong>{formatCurrency(row.value)}</strong></td><td>{row.priority}</td><td>{row.action}</td></tr>)}</tbody>
+        </TableWrap>
+      </Panel>
       <Panel title="Casos PNR" subtitle="Detalhe rastreável até arquivo, aba e linha" action={<StatusBadge tone="neutral"><TimerReset size={13} /> {rows.length} IDs</StatusBadge>}>
         <TableWrap><thead><tr><th>ID de envio</th><th>Status</th><th>Data</th><th>Base de origem</th><th>Motorista</th><th>Rota</th><th className="align-right">Valor</th></tr></thead>
           <tbody>{rows.slice(0, 50).map((row) => <tr key={`${row.batchId}-${row.shipmentId}`}><td><strong className="mono">{row.shipmentId}</strong><small className="cell-subtitle">{row.sourceFile}</small></td><td><StatusBadge tone={/PROCEDENTE|APROVADO/.test(normalizeText(row.status)) ? "green" : /ANALISE|PENDENTE/.test(normalizeText(row.status)) ? "amber" : "neutral"}>{row.status || "Sem status"}</StatusBadge></td><td>{row.caseDate ? new Date(`${row.caseDate}T12:00:00`).toLocaleDateString("pt-BR") : "—"}</td><td>{row.originStation || "—"}</td><td className="mono">{row.driverId || "—"}</td><td className="mono">{row.routeId || "—"}</td><td className="align-right"><strong>{formatCurrency(row.purchaseValue)}</strong></td></tr>)}</tbody>

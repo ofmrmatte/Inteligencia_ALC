@@ -121,6 +121,7 @@ export interface ParsedBatch {
 }
 
 export interface DashboardFilters {
+  month: string;
   fortnight: string;
   coordinator: string;
   base: string;
@@ -141,6 +142,7 @@ export const EMPTY_DATA: DashboardData = {
 };
 
 export const EMPTY_FILTERS: DashboardFilters = {
+  month: "Todos",
   fortnight: "Todas",
   coordinator: "Todos",
   base: "Todas",

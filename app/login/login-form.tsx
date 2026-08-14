@@ -35,7 +35,7 @@ export function LoginForm({ supabaseReady }: { supabaseReady: boolean }) {
         </div>
       </label>
       {state.error ? <p className="login-error">{state.error}</p> : null}
-      {!supabaseReady ? <p className="login-error">Defina as variáveis do Supabase para habilitar login real.</p> : null}
+      {!supabaseReady ? <p className="login-error">Autenticação do painel ainda não configurada neste ambiente.</p> : null}
       <SubmitButton />
     </form>
   );

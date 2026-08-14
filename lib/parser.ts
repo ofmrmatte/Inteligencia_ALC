@@ -1,6 +1,7 @@
 import { unzipSync } from "fflate";
 import * as XLSX from "xlsx";
 import { asDate, asId, asNumber, cleanText, headerKey, normalizeText, parseBase } from "@/lib/normalize";
+import { normalizeFortnight } from "@/lib/metrics";
 import type {
   DriverRecord,
   HierarchyRecord,
@@ -67,6 +68,10 @@ function operationFromSheet(sheetName: string): Operation | null {
   return null;
 }
 
+function periodFromSource(sheetName: string, value: unknown) {
+  return normalizeFortnight(cleanText(value)) || normalizeFortnight(sheetName);
+}
+
 function parseWorkbook(bytes: Uint8Array, sourceFile: string, batchId: string) {
   const workbook = XLSX.read(bytes, { type: "array", cellDates: true, dense: true });
   const hierarchy: HierarchyRecord[] = [];
@@ -111,7 +116,7 @@ function parseWorkbook(bytes: Uint8Array, sourceFile: string, batchId: string) {
         const base = parseBase(row.values.BASE);
         prefatura.push({
           ...trace(batchId, sourceFile, sheetName, row.rowNumber),
-          period: cleanText(row.values.QUINZENA),
+          period: periodFromSource(sheetName, row.values.QUINZENA),
           baseLabel: base.label,
           baseName: base.name,
           baseKey: base.baseKey,
@@ -140,7 +145,7 @@ function parseWorkbook(bytes: Uint8Array, sourceFile: string, batchId: string) {
           ...trace(batchId, sourceFile, sheetName, row.rowNumber),
           caseDate: asDate(row.values["DATA DO CASO"]),
           status: cleanText(row.values.STATUS),
-          billingPeriod: cleanText(row.values["PERIODO DE FATURAMENTO"]),
+          billingPeriod: periodFromSource(sheetName, row.values["PERIODO DE FATURAMENTO"]),
           shipmentId,
           products: cleanText(row.values.PRODUTOS),
           purchaseValue: asNumber(row.values["VALOR DA COMPRA"]),
@@ -150,7 +155,7 @@ function parseWorkbook(bytes: Uint8Array, sourceFile: string, batchId: string) {
           sigla: station.sigla || normalizeText(station.label),
           routeId: asId(row.values["ID DA ROTA"]),
           driverId: asId(row.values["ID DO MOTORISTA"]),
-          custom: cleanText(row.values.PERSONALIZAR),
+          custom: cleanText(row.values.ACAO ?? row.values.PERSONALIZAR),
         });
       }
       kinds.add("pnr");

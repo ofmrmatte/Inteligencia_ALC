@@ -28,16 +28,28 @@ export function fortnightFromDate(date: string | null) {
 export function normalizeFortnight(value: string | null | undefined) {
   const normalized = normalizeText(value ?? "").replace(/\s+/g, "");
   if (!normalized) return "";
-  const compactMatch = /^0?([12])Q?(\d{2})(\d{4})$/.exec(normalized);
+  const yearFirstMatch = /(\d{4})(\d{2})Q?([12])/.exec(normalized);
+  if (yearFirstMatch) return `0${yearFirstMatch[3]}Q${yearFirstMatch[2]}${yearFirstMatch[1]}`;
+  const compactMatch = /0?([12])Q?(\d{2})(\d{4})/.exec(normalized);
   if (compactMatch) return `0${compactMatch[1]}Q${compactMatch[2]}${compactMatch[3]}`;
   return normalized;
 }
 
-export function formatFortnightLabel(value: string) {
+export function monthFromFortnight(value: string) {
   const match = /^(0[12])Q(\d{2})(\d{4})$/.exec(value);
+  return match ? `${match[3]}-${match[2]}` : "";
+}
+
+export function formatMonthLabel(value: string) {
+  const match = /^(\d{4})-(\d{2})$/.exec(value);
   if (!match) return value;
-  const [, half, month, year] = match;
-  return `${half === "01" ? "1ª" : "2ª"} quinzena ${month}/${year}`;
+  return new Intl.DateTimeFormat("pt-BR", { month: "long", year: "numeric", timeZone: "UTC" }).format(new Date(`${value}-01T12:00:00Z`));
+}
+
+export function formatFortnightLabel(value: string) {
+  if (value === "Q1") return "Quinzena 1";
+  if (value === "Q2") return "Quinzena 2";
+  return value;
 }
 
 function rowFortnight(period: string | null | undefined, date: string | null) {
@@ -45,8 +57,10 @@ function rowFortnight(period: string | null | undefined, date: string | null) {
 }
 
 function inFortnight(period: string | null | undefined, date: string | null, filters: DashboardFilters) {
+  const fortnight = rowFortnight(period, date);
+  if (filters.month !== "Todos" && monthFromFortnight(fortnight) !== filters.month) return false;
   if (filters.fortnight === "Todas") return true;
-  return rowFortnight(period, date) === filters.fortnight;
+  return fortnight.startsWith(filters.fortnight === "Q1" ? "01Q" : "02Q");
 }
 
 function unique<T>(values: T[]): T[] {
@@ -108,7 +122,7 @@ export function scopeData(data: DashboardData, filters: DashboardFilters): Scope
 
   const visibleDriverNames = new Set(prefatura.map((row) => normalizeText(row.driverName)));
   const visibleDriverIds = new Set([...pnr.map((row) => row.driverId), ...risk.map((row) => row.driverId)]);
-  const operationalScopeActive = scopeActive || filters.operation !== "Todas" || filters.fortnight !== "Todas";
+  const operationalScopeActive = scopeActive || filters.operation !== "Todas" || filters.month !== "Todos" || filters.fortnight !== "Todas";
   const drivers = data.drivers.filter((driver) => {
     if (filters.driver !== "Todos" && normalizeText(driver.name) !== normalizeText(filters.driver)) return false;
     if (!operationalScopeActive) return true;
@@ -129,13 +143,18 @@ export function filterOptions(data: DashboardData, filters: DashboardFilters) {
     ...scoped.pnr.map((row) => namesFromIds.get(row.driverId) ?? row.driverId),
     ...scoped.risk.map((row) => namesFromIds.get(row.driverId) ?? row.driverId),
   ].filter(Boolean)).sort((a, b) => a.localeCompare(b, "pt-BR"));
-  const fortnights = unique([
+  const fortnights = [
+    ...(data.prefatura.some((row) => rowFortnight(row.period, row.routeDate).startsWith("01Q")) || data.pnr.some((row) => rowFortnight(row.billingPeriod, row.caseDate).startsWith("01Q")) || data.risk.some((row) => rowFortnight(undefined, row.failureDate).startsWith("01Q")) ? ["Q1"] : []),
+    ...(data.prefatura.some((row) => rowFortnight(row.period, row.routeDate).startsWith("02Q")) || data.pnr.some((row) => rowFortnight(row.billingPeriod, row.caseDate).startsWith("02Q")) || data.risk.some((row) => rowFortnight(undefined, row.failureDate).startsWith("02Q")) ? ["Q2"] : []),
+  ];
+  const months = unique([
     ...data.prefatura.map((row) => rowFortnight(row.period, row.routeDate)),
     ...data.pnr.map((row) => rowFortnight(row.billingPeriod, row.caseDate)),
     ...data.risk.map((row) => rowFortnight(undefined, row.failureDate)),
-  ].filter(Boolean)).sort();
+  ].map(monthFromFortnight).filter(Boolean)).sort();
 
   return {
+    months,
     fortnights,
     coordinators: unique(data.hierarchy.map((row) => row.coordinator)).sort((a, b) => a.localeCompare(b, "pt-BR")),
     siglas: unique(afterCoordinator.map((row) => row.sigla)).sort(),
@@ -143,6 +162,48 @@ export function filterOptions(data: DashboardData, filters: DashboardFilters) {
     supervisors: unique(afterBase.map((row) => row.supervisor)).sort((a, b) => a.localeCompare(b, "pt-BR")),
     drivers: driverNames,
   };
+}
+
+export interface PnrDecisionRow {
+  status: string;
+  cases: number;
+  percentage: number;
+  value: number;
+  priority: "Alta" | "Média" | "Baixa";
+  action: string;
+  tone: "critical" | "warning" | "neutral";
+}
+
+const PNR_DECISION_RULES: Array<Omit<PnrDecisionRow, "cases" | "percentage" | "value">> = [
+  { status: "Aguardando comprovante", priority: "Alta", action: "Cobrar comprovante", tone: "critical" },
+  { status: "Com penalidade", priority: "Alta", action: "Revisar penalidade", tone: "critical" },
+  { status: "Em revisão", priority: "Alta", action: "Priorizar análise", tone: "critical" },
+  { status: "Comprovante carregado", priority: "Média", action: "Validar comprovante", tone: "warning" },
+  { status: "Sin comprovante carregado", priority: "Média", action: "Corrigir documentação", tone: "warning" },
+  { status: "Enviados para faturamento", priority: "Baixa", action: "Acompanhar faturamento", tone: "neutral" },
+  { status: "Anulado", priority: "Baixa", action: "Monitorar encerramento", tone: "neutral" },
+];
+
+export function pnrDecisionRows(records: PnrRecord[]): PnrDecisionRow[] {
+  const totalCases = records.length || 1;
+  const byStatus = new Map<string, { cases: number; value: number }>();
+  records.forEach((record) => {
+    const status = record.status || "Sem status";
+    const current = byStatus.get(status) ?? { cases: 0, value: 0 };
+    current.cases += 1;
+    current.value += record.purchaseValue;
+    byStatus.set(status, current);
+  });
+
+  return PNR_DECISION_RULES.map((rule) => {
+    const current = byStatus.get(rule.status) ?? { cases: 0, value: 0 };
+    return {
+      ...rule,
+      cases: current.cases,
+      value: current.value,
+      percentage: (current.cases / totalCases) * 100,
+    };
+  });
 }
 
 export function sumByUniqueShipment<T extends { shipmentId: string }>(records: T[], value: (record: T) => number) {

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { duplicateGroups, fortnightFromDate, normalizeFortnight, reconciliation, sumByUniqueShipment, uniqueByShipment } from "@/lib/metrics";
+import { duplicateGroups, fortnightFromDate, monthFromFortnight, normalizeFortnight, reconciliation, sumByUniqueShipment, uniqueByShipment } from "@/lib/metrics";
 import type { ScopedData } from "@/lib/metrics";
 
 describe("grão por ID de pacote", () => {
@@ -51,5 +51,8 @@ describe("filtro por quinzena", () => {
   it("normaliza códigos de quinzena importados", () => {
     expect(normalizeFortnight("1Q082026")).toBe("01Q082026");
     expect(normalizeFortnight("02Q082026")).toBe("02Q082026");
+    expect(normalizeFortnight("202608Q1")).toBe("01Q082026");
+    expect(normalizeFortnight("LOGISTICS_PNR - 202608Q2")).toBe("02Q082026");
+    expect(monthFromFortnight("01Q082026")).toBe("2026-08");
   });
 });
