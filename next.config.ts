@@ -1,9 +1,8 @@
 import type { NextConfig } from "next";
 
 const nextConfig: NextConfig = {
-  reactStrictMode: true,
   poweredByHeader: false,
-  agentRules: false,
+  reactStrictMode: true,
 };
 
 export default nextConfig;

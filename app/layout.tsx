@@ -1,38 +1,23 @@
 import type { Metadata } from "next";
-import { Inter } from "next/font/google";
-import type { ReactNode } from "react";
-import { ThemeScript } from "@/components/layout/theme-script";
-import { BRAND } from "@/lib/constants/brand";
+import { Montserrat, Poppins } from "next/font/google";
+import { Toaster } from "sonner";
 import "./globals.css";
-import "./ui-refresh.css";
-import "./ui-modules.css";
-import "./ui-polish.css";
 
-const inter = Inter({
-  subsets: ["latin"],
-  display: "swap",
-  variable: "--font-inter",
-});
+const montserrat = Montserrat({ subsets: ["latin"], variable: "--font-heading", display: "swap" });
+const poppins = Poppins({ subsets: ["latin"], weight: ["400", "500", "600"], variable: "--font-body", display: "swap" });
 
 export const metadata: Metadata = {
-  title: {
-    default: BRAND.productName,
-    template: `%s | ${BRAND.productName}`,
-  },
-  description: BRAND.description,
-  icons: {
-    icon: BRAND.assets.favicon,
-    shortcut: BRAND.assets.favicon,
-  },
+  title: "Inteligência ALC",
+  description: "Painel de inteligência operacional, pré-faturamento e risco logístico.",
 };
 
-export default function RootLayout({ children }: { children: ReactNode }) {
+export default function RootLayout({ children }: Readonly<{ children: React.ReactNode }>) {
   return (
-    <html lang="pt-BR" suppressHydrationWarning>
-      <head>
-        <ThemeScript />
-      </head>
-      <body className={`${inter.className} ${inter.variable}`}>{children}</body>
+    <html lang="pt-BR" className={`${montserrat.variable} ${poppins.variable}`}>
+      <body>
+        {children}
+        <Toaster position="top-right" richColors closeButton />
+      </body>
     </html>
   );
 }

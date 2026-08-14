@@ -1,51 +1,22 @@
-# Environment and secrets
-.env
-.env.*
+# dependencies
+/node_modules
+
+# next.js
+/.next
+/out
+
+# tests
+/coverage
+
+# local tooling
+.vercel
+.env*
 !.env.example
 
-# Dependencies
-node_modules/
-
-# Build outputs and caches
-.next/
-out/
-dist/
-coverage/
-.turbo/
-*.tsbuildinfo
-.chrome-shot-profile/
-playwright-report/
-test-results/
-
-# Logs and generated diagnostics
-logs/
-scripts/logs/
+# OS / editors
+.DS_Store
 *.log
 
-# Railway/Supabase local exports
-scripts/railway/exports/
-scripts/railway/logs/
-*.jsonl
-
-# OS files
-.DS_Store
-Thumbs.db
-
-# Local backups and temporary artifacts
-*.bak
-*.old
-*.orig
-*.rej
-*.tmp
-app.js.backup*
-app.js.bak*
-app.js.fase*
-app.js.loading*
-app.js.fix-*
-app.js.before-revert-*
-app.js.perf-*
-index.html.bak
-conserta_tudo.py
-mapear_layout.py
-patch_layout_unificado.py
-mapa_layout.md
+# TypeScript
+*.tsbuildinfo
+next-env.d.ts

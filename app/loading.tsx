@@ -1,6 +1,8 @@
-import { AppLoader } from "@/components/feedback/app-loader";
-import { BRAND } from "@/lib/constants/brand";
-
-export default function RootLoading() {
-  return <AppLoader label={`Iniciando ${BRAND.productName}`} className="app-loader--fullscreen" />;
+export default function Loading() {
+  return (
+    <main className="boot-screen">
+      <div className="boot-mark">ALC</div>
+      <p>Preparando painel de inteligência…</p>
+    </main>
+  );
 }

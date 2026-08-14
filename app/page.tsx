@@ -1,5 +1,5 @@
-import { redirect } from "next/navigation";
+import { DashboardApp } from "@/components/dashboard-app";
 
 export default function HomePage() {
-  redirect("/dashboard");
+  return <DashboardApp section="visao-geral" />;
 }
