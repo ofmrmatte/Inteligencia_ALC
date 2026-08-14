@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useState, useSyncExternalStore } from "react";
 import dynamic from "next/dynamic";
 import { FlaskConical } from "lucide-react";
 import { toast } from "sonner";
@@ -15,17 +15,31 @@ import { useDashboardStore } from "@/lib/store";
 
 const ImportPanel = dynamic(() => import("@/components/import-panel").then((module) => module.ImportPanel), { ssr: false });
 const SIDEBAR_KEY = "alc-inteligencia:sidebar-collapsed";
+const SIDEBAR_EVENT = "alc-inteligencia:sidebar-change";
 const ADMIN_SECTIONS: SectionId[] = ["configuracoes", "perfil"];
+
+function subscribeSidebarChange(callback: () => void) {
+  window.addEventListener("storage", callback);
+  window.addEventListener(SIDEBAR_EVENT, callback);
+  return () => {
+    window.removeEventListener("storage", callback);
+    window.removeEventListener(SIDEBAR_EVENT, callback);
+  };
+}
+
+function getSidebarSnapshot() {
+  return window.localStorage.getItem(SIDEBAR_KEY) !== "false";
+}
+
+function getServerSidebarSnapshot() {
+  return true;
+}
 
 export function DashboardApp({ section, profile }: { section: SectionId; profile: AuthProfile }) {
   const hydrate = useDashboardStore((state) => state.hydrate);
   const hydrated = useDashboardStore((state) => state.hydrated);
   const data = useDashboardStore((state) => state.data);
-  const [collapsed, setCollapsed] = useState(() => {
-    if (typeof window === "undefined") return true;
-    const saved = window.localStorage.getItem(SIDEBAR_KEY);
-    return saved ? saved === "true" : true;
-  });
+  const collapsed = useSyncExternalStore(subscribeSidebarChange, getSidebarSnapshot, getServerSidebarSnapshot);
   const [mobileMenu, setMobileMenu] = useState(false);
   const [importOpen, setImportOpen] = useState(false);
   const meta = SECTION_META[section];
@@ -43,11 +57,8 @@ export function DashboardApp({ section, profile }: { section: SectionId; profile
 
   useEffect(() => { void hydrate(); }, [hydrate]);
   const toggleCollapsed = () => {
-    setCollapsed((value) => {
-      const next = !value;
-      window.localStorage.setItem(SIDEBAR_KEY, String(next));
-      return next;
-    });
+    window.localStorage.setItem(SIDEBAR_KEY, String(!collapsed));
+    window.dispatchEvent(new Event(SIDEBAR_EVENT));
   };
 
   if (!hydrated) return <main className="boot-screen"><div className="boot-mark">ALC</div><p>Restaurando dados locais…</p></main>;

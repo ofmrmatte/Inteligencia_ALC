@@ -41,4 +41,18 @@ describe("detecção de planilhas", () => {
     expect(new Set(parsed.prefatura.map((row) => row.batchId)).size).toBe(1);
     expect(parsed.entry.rowCount).toBe(2);
   });
+
+  it("extrai quinzena de abas PNR no formato AAAAMMQ e preserva ação operacional", async () => {
+    const bytes = workbookBytes({
+      "LOGISTICS_PNR - 202608Q1": [
+        ["ID DO CASO", "DATA DO CASO", "TIPO", "STATUS", "ID DE ENVIO", "PRODUTOS", "VALOR DA COMPRA", "TRANSPORTADORA", "ESTAÇÃO DE ORIGEM", "ID DA ROTA", "ID DO MOTORISTA", "Ação"],
+        [1, "02/08/2026", "PNR", "Aguardando comprovante", 4800001, "Produto", 125.5, "ALC", "GUAXUPÉ - SMG5", 9001, 7001, "Cobrar comprovante"],
+      ],
+    });
+    const parsed = await parseFile(new File([bytes], "LOGISTICS_PNR.xlsx"));
+    expect(parsed.pnr).toHaveLength(1);
+    expect(parsed.pnr[0].billingPeriod).toBe("01Q082026");
+    expect(parsed.pnr[0].custom).toBe("Cobrar comprovante");
+    expect(parsed.pnr[0].sigla).toBe("SMG5");
+  });
 });

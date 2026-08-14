@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { duplicateGroups, fortnightFromDate, monthFromFortnight, normalizeFortnight, reconciliation, sumByUniqueShipment, uniqueByShipment } from "@/lib/metrics";
+import { duplicateGroups, fortnightFromDate, monthFromFortnight, normalizeFortnight, pnrDecisionRows, reconciliation, sumByUniqueShipment, uniqueByShipment } from "@/lib/metrics";
 import type { ScopedData } from "@/lib/metrics";
 
 describe("grão por ID de pacote", () => {
@@ -39,6 +39,23 @@ describe("conciliação entre fontes", () => {
     expect(rows.find((row) => row.shipmentId === "A")?.status).toBe("Conciliado");
     expect(rows.find((row) => row.shipmentId === "B")?.status).toBe("Isolado");
     expect(rows.find((row) => row.shipmentId === "C")?.status).toBe("Isolado");
+  });
+});
+
+describe("quadro de decisão PNR", () => {
+  it("calcula prioridade e ação sugerida por status operacional", () => {
+    const rows = pnrDecisionRows([
+      { status: "Aguardando comprovante", purchaseValue: 100 },
+      { status: "Aguardando comprovante", purchaseValue: 50 },
+      { status: "Anulado", purchaseValue: 25 },
+    ] as never);
+    expect(rows.find((row) => row.status === "Aguardando comprovante")).toMatchObject({
+      cases: 2,
+      value: 150,
+      priority: "Alta",
+      action: "Cobrar comprovante",
+    });
+    expect(rows.find((row) => row.status === "Anulado")?.percentage).toBeCloseTo(33.333, 2);
   });
 });
 
