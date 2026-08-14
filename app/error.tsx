@@ -1,11 +1,12 @@
 "use client";
 
-import { ErrorState } from "@/components/feedback/error-state";
-
-export default function AppError({ reset }: { error: Error; reset: () => void }) {
+export default function ErrorPage({ reset }: { error: Error & { digest?: string }; reset: () => void }) {
   return (
-    <main className="content-container">
-      <ErrorState reset={reset} />
+    <main className="not-found">
+      <span>!</span>
+      <h1>Não foi possível abrir esta tela</h1>
+      <p>Os dados locais permanecem preservados. Tente carregar novamente.</p>
+      <button className="primary-button" onClick={reset}>Tentar novamente</button>
     </main>
   );
 }

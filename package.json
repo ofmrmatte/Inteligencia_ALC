@@ -1,84 +1,44 @@
 {
-  "name": "dashboardfatura",
+  "name": "alc-painel-inteligencia",
   "version": "1.0.0",
   "private": true,
-  "description": "Painel de Inteligência Operacional.",
+  "type": "module",
   "scripts": {
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "lint": "eslint app components features lib proxy.ts next.config.ts --max-warnings=0",
+    "lint": "eslint .",
     "typecheck": "tsc --noEmit",
-    "test:rules": "tsx --test tests/*.test.ts",
-    "check:metadata": "node scripts/check-metadata-titles.mjs",
-    "check:scripts": "node scripts/check-node-scripts.mjs",
-    "check:encoding": "node scripts/check-text-encoding.mjs",
-    "check:ci-env": "node scripts/check-ci-public-env.mjs",
-    "check": "npm run lint && npm run typecheck && npm run test:rules && npm run check:metadata && npm run check:scripts && npm run check:encoding && npm run build",
-    "test:e2e": "playwright test",
-    "test:e2e:smoke": "playwright test tests/e2e/smoke.spec.ts",
-    "test:e2e:headed": "playwright test --headed",
-    "verify:runtime": "node scripts/verify-production-runtime.mjs",
-    "smoke:production": "node scripts/smoke-production.mjs",
-    "cleanup:local": "node scripts/cleanup-local-artifacts.mjs",
-    "audit:all": "node scripts/run-audits.mjs",
-    "audit:ci": "node scripts/run-audits.mjs ci",
-    "audit:db": "node scripts/run-audits.mjs db",
-    "audit:dashboard": "node scripts/audit-dashboard-health.mjs",
-    "audit:supabase": "node scripts/audit-supabase-health.mjs",
-    "audit:dead-code": "node scripts/find-dead-code.mjs",
-    "audit:module-isolation": "node scripts/check-module-isolation.mjs",
-    "audit:dedupe": "node scripts/check-dedupe-integrity.mjs",
-    "audit:row-counts": "node scripts/check-row-count-reconciliation.mjs",
-    "audit:raw-data": "node scripts/audit-raw-data-compaction.mjs",
-    "audit:railway": "node scripts/check-railway-sizing.mjs",
-    "railway:check": "node scripts/railway/01-check-railway-connection.mjs",
-    "railway:schema": "node scripts/railway/02-apply-schema.mjs",
-    "railway:export": "node scripts/railway/03-export-supabase-clean.mjs",
-    "railway:import": "node scripts/railway/04-import-railway.mjs",
-    "railway:compare": "node scripts/railway/05-compare-supabase-railway.mjs",
-    "railway:validate": "node scripts/railway/06-validate-railway-dashboard.mjs",
-    "railway:dry-run": "npm run railway:schema -- --dry-run && npm run railway:export -- --dry-run && npm run railway:import -- --dry-run && npm run railway:compare -- --dry-run && npm run railway:validate -- --dry-run",
-    "db:migrate:processed-records": "node scripts/apply-processed-records-migration.mjs",
-    "db:migrate:missing-packages": "node scripts/apply-missing-packages-migration.mjs",
-    "fix:stuck-pnr-processing": "node scripts/fix-stuck-processing-files.mjs"
+    "test": "vitest run",
+    "test:watch": "vitest"
+  },
+  "engines": {
+    "node": ">=20"
   },
   "dependencies": {
-    "@supabase/ssr": "^0.12.4",
-    "@supabase/supabase-js": "^2.87.1",
     "clsx": "^2.1.1",
-    "dotenv": "^17.2.3",
-    "exceljs": "^4.4.0",
+    "date-fns": "^4.4.0",
+    "fflate": "^0.8.3",
+    "idb-keyval": "^6.3.0",
     "lucide-react": "^1.31.0",
-    "next": "^16.3.0",
-    "postgres": "^3.4.9",
+    "next": "^16.3.1",
     "react": "^19.2.8",
     "react-dom": "^19.2.8",
-    "xlsx": "https://cdn.sheetjs.com/xlsx-0.20.3/xlsx-0.20.3.tgz"
+    "react-dropzone": "^20.1.0",
+    "recharts": "^3.10.1",
+    "sonner": "^2.0.8",
+    "xlsx": "https://cdn.sheetjs.com/xlsx-0.20.3/xlsx-0.20.3.tgz",
+    "zod": "^4.4.3",
+    "zustand": "^5.0.15"
   },
-  "overrides": {
-    "uuid": "11.1.1"
-  },
-  "repository": {
-    "type": "git",
-    "url": "git+https://github.com/ofmrmatte/dashboardfatura.git"
-  },
-  "keywords": [],
-  "author": "",
-  "license": "ISC",
-  "type": "module",
-  "bugs": {
-    "url": "https://github.com/ofmrmatte/dashboardfatura/issues"
-  },
-  "homepage": "https://github.com/ofmrmatte/dashboardfatura#readme",
   "devDependencies": {
-    "@playwright/test": "^1.62.1",
     "@types/node": "^26.2.0",
     "@types/react": "^19.2.18",
     "@types/react-dom": "^19.2.4",
+    "@vitest/coverage-v8": "^4.1.10",
     "eslint": "^9.39.5",
-    "eslint-config-next": "^16.3.0",
-    "tsx": "^4.23.11",
-    "typescript": "^6.0.3"
+    "eslint-config-next": "^16.3.1",
+    "typescript": "^6.0.3",
+    "vitest": "^4.1.10"
   }
 }

@@ -1,20 +1,9 @@
-import nextCoreWebVitals from "eslint-config-next/core-web-vitals";
+import { defineConfig, globalIgnores } from "eslint/config";
+import nextVitals from "eslint-config-next/core-web-vitals";
 import nextTypescript from "eslint-config-next/typescript";
 
-const eslintConfig = [
-  ...nextCoreWebVitals,
+export default defineConfig([
+  ...nextVitals,
   ...nextTypescript,
-  {
-    ignores: [
-      ".next/**",
-      "node_modules/**",
-      "out/**",
-      "dist/**",
-      "coverage/**",
-      "supabase/**",
-      "scripts/**",
-    ],
-  },
-];
-
-export default eslintConfig;
+  globalIgnores([".next/**", "coverage/**", "next-env.d.ts"]),
+]);
