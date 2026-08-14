@@ -17,11 +17,36 @@ export interface ScopedData {
   drivers: DriverRecord[];
 }
 
-function inDate(date: string | null, filters: DashboardFilters) {
-  if (!date) return !filters.dateFrom && !filters.dateTo;
-  if (filters.dateFrom && date < filters.dateFrom) return false;
-  if (filters.dateTo && date > filters.dateTo) return false;
-  return true;
+export function fortnightFromDate(date: string | null) {
+  if (!date) return "";
+  const match = /^(\d{4})-(\d{2})-(\d{2})/.exec(date);
+  if (!match) return "";
+  const [, year, month, day] = match;
+  return `${Number(day) <= 15 ? "01" : "02"}Q${month}${year}`;
+}
+
+export function normalizeFortnight(value: string | null | undefined) {
+  const normalized = normalizeText(value ?? "").replace(/\s+/g, "");
+  if (!normalized) return "";
+  const compactMatch = /^0?([12])Q?(\d{2})(\d{4})$/.exec(normalized);
+  if (compactMatch) return `0${compactMatch[1]}Q${compactMatch[2]}${compactMatch[3]}`;
+  return normalized;
+}
+
+export function formatFortnightLabel(value: string) {
+  const match = /^(0[12])Q(\d{2})(\d{4})$/.exec(value);
+  if (!match) return value;
+  const [, half, month, year] = match;
+  return `${half === "01" ? "1ª" : "2ª"} quinzena ${month}/${year}`;
+}
+
+function rowFortnight(period: string | null | undefined, date: string | null) {
+  return normalizeFortnight(period) || fortnightFromDate(date);
+}
+
+function inFortnight(period: string | null | undefined, date: string | null, filters: DashboardFilters) {
+  if (filters.fortnight === "Todas") return true;
+  return rowFortnight(period, date) === filters.fortnight;
 }
 
 function unique<T>(values: T[]): T[] {
@@ -61,21 +86,21 @@ export function scopeData(data: DashboardData, filters: DashboardFilters): Scope
   const selectedDriverId = filters.driver === "Todos" ? "" : idByName.get(normalizeText(filters.driver)) ?? filters.driver;
 
   const prefatura = data.prefatura.filter((row) => {
-    if (!inDate(row.routeDate, filters)) return false;
+    if (!inFortnight(row.period, row.routeDate, filters)) return false;
     if (!matchesScope(row, allowedBases, allowedSiglas, scopeActive)) return false;
     if (filters.operation !== "Todas" && row.operation !== filters.operation) return false;
     if (filters.driver !== "Todos" && normalizeText(row.driverName) !== normalizeText(filters.driver)) return false;
     return true;
   });
   const pnr = data.pnr.filter((row) => {
-    if (!inDate(row.caseDate, filters)) return false;
+    if (!inFortnight(row.billingPeriod, row.caseDate, filters)) return false;
     if (!matchesScope(row, allowedBases, allowedSiglas, scopeActive)) return false;
     if (filters.operation !== "Todas" && filters.operation !== "PNR") return false;
     if (selectedDriverId && row.driverId !== selectedDriverId) return false;
     return true;
   });
   const risk = data.risk.filter((row) => {
-    if (!inDate(row.failureDate, filters)) return false;
+    if (!inFortnight(undefined, row.failureDate, filters)) return false;
     if (!matchesScope(row, allowedBases, allowedSiglas, scopeActive)) return false;
     if (selectedDriverId && row.driverId !== selectedDriverId) return false;
     return true;
@@ -83,9 +108,8 @@ export function scopeData(data: DashboardData, filters: DashboardFilters): Scope
 
   const visibleDriverNames = new Set(prefatura.map((row) => normalizeText(row.driverName)));
   const visibleDriverIds = new Set([...pnr.map((row) => row.driverId), ...risk.map((row) => row.driverId)]);
-  const operationalScopeActive = scopeActive || filters.operation !== "Todas" || filters.dateFrom !== "" || filters.dateTo !== "";
+  const operationalScopeActive = scopeActive || filters.operation !== "Todas" || filters.fortnight !== "Todas";
   const drivers = data.drivers.filter((driver) => {
-    if (!inDate(driver.lastUpdated, { ...filters, dateFrom: "", dateTo: "" })) return false;
     if (filters.driver !== "Todos" && normalizeText(driver.name) !== normalizeText(filters.driver)) return false;
     if (!operationalScopeActive) return true;
     return visibleDriverNames.has(normalizeText(driver.name)) || visibleDriverIds.has(driver.driverId);
@@ -105,8 +129,14 @@ export function filterOptions(data: DashboardData, filters: DashboardFilters) {
     ...scoped.pnr.map((row) => namesFromIds.get(row.driverId) ?? row.driverId),
     ...scoped.risk.map((row) => namesFromIds.get(row.driverId) ?? row.driverId),
   ].filter(Boolean)).sort((a, b) => a.localeCompare(b, "pt-BR"));
+  const fortnights = unique([
+    ...data.prefatura.map((row) => rowFortnight(row.period, row.routeDate)),
+    ...data.pnr.map((row) => rowFortnight(row.billingPeriod, row.caseDate)),
+    ...data.risk.map((row) => rowFortnight(undefined, row.failureDate)),
+  ].filter(Boolean)).sort();
 
   return {
+    fortnights,
     coordinators: unique(data.hierarchy.map((row) => row.coordinator)).sort((a, b) => a.localeCompare(b, "pt-BR")),
     siglas: unique(afterCoordinator.map((row) => row.sigla)).sort(),
     bases: unique(afterSigla.map((row) => row.base)).sort((a, b) => a.localeCompare(b, "pt-BR")),

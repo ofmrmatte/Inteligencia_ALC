@@ -10,11 +10,13 @@ export function Sidebar({
   collapsed,
   onToggle,
   onImport,
+  canImport,
 }: {
   active: SectionId;
   collapsed: boolean;
   onToggle: () => void;
   onImport: () => void;
+  canImport: boolean;
 }) {
   const groups = ["Análises", "Controle de dados"] as const;
   return (
@@ -37,7 +39,7 @@ export function Sidebar({
         ))}
       </nav>
       <div className="sidebar__footer">
-        <button className="sidebar__import" onClick={onImport} title="Importar planilhas">
+        <button className="sidebar__import" onClick={onImport} disabled={!canImport} title={canImport ? "Importar planilhas" : "Importação restrita a Diretor/ADM"}>
           <HardDriveUpload size={19} />
           {!collapsed && <span>Importar dados</span>}
         </button>

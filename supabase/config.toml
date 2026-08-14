@@ -1,0 +1,7 @@
+project_id = "inteligencia-alc"
+
+[api]
+enabled = true
+
+[auth]
+enabled = true

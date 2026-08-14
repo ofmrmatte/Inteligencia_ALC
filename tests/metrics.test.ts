@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { duplicateGroups, reconciliation, sumByUniqueShipment, uniqueByShipment } from "@/lib/metrics";
+import { duplicateGroups, fortnightFromDate, normalizeFortnight, reconciliation, sumByUniqueShipment, uniqueByShipment } from "@/lib/metrics";
 import type { ScopedData } from "@/lib/metrics";
 
 describe("grão por ID de pacote", () => {
@@ -39,5 +39,17 @@ describe("conciliação entre fontes", () => {
     expect(rows.find((row) => row.shipmentId === "A")?.status).toBe("Conciliado");
     expect(rows.find((row) => row.shipmentId === "B")?.status).toBe("Isolado");
     expect(rows.find((row) => row.shipmentId === "C")?.status).toBe("Isolado");
+  });
+});
+
+describe("filtro por quinzena", () => {
+  it("deriva a quinzena a partir da data quando a fonte não traz período explícito", () => {
+    expect(fortnightFromDate("2026-08-15")).toBe("01Q082026");
+    expect(fortnightFromDate("2026-08-16")).toBe("02Q082026");
+  });
+
+  it("normaliza códigos de quinzena importados", () => {
+    expect(normalizeFortnight("1Q082026")).toBe("01Q082026");
+    expect(normalizeFortnight("02Q082026")).toBe("02Q082026");
   });
 });

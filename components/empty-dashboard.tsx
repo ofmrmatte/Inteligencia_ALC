@@ -3,7 +3,7 @@
 import { FileSpreadsheet, FlaskConical, LockKeyhole } from "lucide-react";
 import { useDashboardStore } from "@/lib/store";
 
-export function EmptyDashboard({ onImport }: { onImport: () => void }) {
+export function EmptyDashboard({ onImport, canImport }: { onImport: () => void; canImport: boolean }) {
   const loadDemo = useDashboardStore((state) => state.loadDemo);
   return (
     <section className="empty-dashboard">
@@ -12,7 +12,7 @@ export function EmptyDashboard({ onImport }: { onImport: () => void }) {
         <h2>Transforme suas planilhas em uma visão operacional única.</h2>
         <p>Importe os ZIPs enviados pelas bases e a planilha de coordenadores. O painel identifica as abas, cruza IDs explícitos e ativa os filtros hierárquicos.</p>
         <div className="empty-dashboard__actions">
-          <button className="primary-button" onClick={onImport}><FileSpreadsheet size={18} />Importar dados reais</button>
+          <button className="primary-button" onClick={onImport} disabled={!canImport} title={canImport ? "Importar dados reais" : "Importação restrita a Diretor/ADM"}><FileSpreadsheet size={18} />Importar dados reais</button>
           <button className="secondary-button" onClick={() => void loadDemo()}><FlaskConical size={18} />Ver demonstração</button>
         </div>
         <div className="local-pill"><LockKeyhole size={15} />Arquivos processados somente neste navegador</div>
