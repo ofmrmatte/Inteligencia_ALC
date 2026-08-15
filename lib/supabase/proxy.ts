@@ -8,10 +8,17 @@ function isPublicPath(pathname: string) {
   return PUBLIC_PATHS.has(pathname);
 }
 
+function isApiPath(pathname: string) {
+  return pathname.startsWith("/api/");
+}
+
 export async function updateSession(request: NextRequest) {
   const { pathname } = request.nextUrl;
 
   if (!isSupabaseConfigured() || !supabaseUrl || !supabasePublishableKey) {
+    if (isApiPath(pathname)) {
+      return NextResponse.json({ error: "Supabase não configurado." }, { status: 503 });
+    }
     if (!isPublicPath(pathname)) {
       const redirectUrl = request.nextUrl.clone();
       redirectUrl.pathname = "/login";
@@ -39,6 +46,9 @@ export async function updateSession(request: NextRequest) {
   const { data, error } = await supabase.auth.getClaims();
   const isAuthenticated = Boolean(data?.claims && !error);
   if (!isAuthenticated && !isPublicPath(pathname)) {
+    if (isApiPath(pathname)) {
+      return NextResponse.json({ error: "Sessão expirada. Entre novamente." }, { status: 401 });
+    }
     const redirectUrl = request.nextUrl.clone();
     redirectUrl.pathname = "/login";
     redirectUrl.searchParams.set("next", pathname);
