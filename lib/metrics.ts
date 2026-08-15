@@ -4,6 +4,7 @@ import type {
   DashboardFilters,
   DriverRecord,
   HierarchyRecord,
+  ImportEntry,
   PnrRecord,
   PrefaturaRecord,
   RiskRecord,
@@ -74,6 +75,30 @@ export function uniqueByShipment<T extends { shipmentId: string }>(records: T[])
     seen.add(record.shipmentId);
     return true;
   });
+}
+
+function importTimeByBatch(imports: ImportEntry[]) {
+  return new Map(imports.map((entry) => [entry.batchId, Date.parse(entry.importedAt) || 0]));
+}
+
+export function latestPnrByShipment(records: PnrRecord[], imports: ImportEntry[] = []): PnrRecord[] {
+  const importedAt = importTimeByBatch(imports);
+  const latest = new Map<string, PnrRecord>();
+
+  for (const record of records) {
+    if (!record.shipmentId) continue;
+    const current = latest.get(record.shipmentId);
+    if (!current) {
+      latest.set(record.shipmentId, record);
+      continue;
+    }
+
+    const recordTime = importedAt.get(record.batchId) ?? 0;
+    const currentTime = importedAt.get(current.batchId) ?? 0;
+    if (recordTime > currentTime) latest.set(record.shipmentId, record);
+  }
+
+  return [...latest.values()];
 }
 
 function matchesScope(record: { baseKey: string; sigla: string }, allowedBases: Set<string>, allowedSiglas: Set<string>, scopeActive: boolean) {
@@ -244,7 +269,7 @@ export function prefaturaByOperation(records: PrefaturaRecord[]) {
   });
 }
 
-export function monthlyMovement(scoped: ScopedData) {
+export function monthlyMovement(scoped: ScopedData, imports: ImportEntry[] = []) {
   const months = new Map<string, { month: string; prefatura: number; pnr: number; risco: number }>();
   const touch = (date: string | null) => {
     const month = date?.slice(0, 7) || "Sem data";
@@ -252,7 +277,7 @@ export function monthlyMovement(scoped: ScopedData) {
     return months.get(month)!;
   };
   for (const row of uniqueByShipment(scoped.prefatura)) touch(row.routeDate).prefatura += row.value;
-  for (const row of uniqueByShipment(scoped.pnr)) touch(row.caseDate).pnr += row.purchaseValue;
+  for (const row of latestPnrByShipment(scoped.pnr, imports)) touch(row.caseDate).pnr += row.purchaseValue;
   for (const row of uniqueByShipment(scoped.risk)) touch(row.failureDate).risco += row.gmvBrl;
   return [...months.values()].sort((a, b) => a.month.localeCompare(b.month)).slice(-12);
 }
@@ -311,7 +336,7 @@ export interface ReconciliationRow {
   value: number;
 }
 
-export function reconciliation(scoped: ScopedData): ReconciliationRow[] {
+export function reconciliation(scoped: ScopedData, imports: ImportEntry[] = []): ReconciliationRow[] {
   const groups = new Map<string, ReconciliationRow>();
   const add = (shipmentId: string, kind: "prefatura" | "pnr" | "risk", value: number) => {
     if (!shipmentId) return;
@@ -322,7 +347,7 @@ export function reconciliation(scoped: ScopedData): ReconciliationRow[] {
     groups.set(shipmentId, row);
   };
   scoped.prefatura.forEach((row) => add(row.shipmentId, "prefatura", row.value));
-  scoped.pnr.forEach((row) => add(row.shipmentId, "pnr", row.purchaseValue));
+  latestPnrByShipment(scoped.pnr, imports).forEach((row) => add(row.shipmentId, "pnr", row.purchaseValue));
   scoped.risk.forEach((row) => add(row.shipmentId, "risk", row.gmvBrl));
   for (const row of groups.values()) {
     row.sources = [row.prefatura, row.pnr, row.risk].filter(Boolean).length;

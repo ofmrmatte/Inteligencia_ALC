@@ -2,7 +2,7 @@
 
 import { Bar, BarChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
 import { BadgeDollarSign, Boxes, CircleCheckBig, Link2, TimerReset } from "lucide-react";
-import { pnrDecisionRows, scopeData, uniqueByShipment } from "@/lib/metrics";
+import { latestPnrByShipment, pnrDecisionRows, scopeData } from "@/lib/metrics";
 import { normalizeText } from "@/lib/normalize";
 import { useDashboardStore } from "@/lib/store";
 import { formatCurrency, formatNumber, formatPercent, KpiCard, Panel, PageIntro, StatusBadge } from "@/components/ui";
@@ -12,7 +12,7 @@ export function PnrView() {
   const data = useDashboardStore((state) => state.data);
   const filters = useDashboardStore((state) => state.filters);
   const scoped = scopeData(data, filters);
-  const rows = uniqueByShipment(scoped.pnr);
+  const rows = latestPnrByShipment(scoped.pnr, data.imports);
   if (!rows.length) return <NoResults title="Nenhum caso PNR neste recorte" />;
 
   const value = rows.reduce((sum, row) => sum + row.purchaseValue, 0);

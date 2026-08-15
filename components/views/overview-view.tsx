@@ -12,7 +12,7 @@ export function OverviewView() {
   const filters = useDashboardStore((state) => state.filters);
   const scoped = scopeData(data, filters);
   const metrics = overviewMetrics(scoped);
-  const movement = monthlyMovement(scoped);
+  const movement = monthlyMovement(scoped, data.imports);
   const operations = prefaturaByOperation(scoped.prefatura);
   const hasRows = metrics.uniquePackages || scoped.drivers.length;
 

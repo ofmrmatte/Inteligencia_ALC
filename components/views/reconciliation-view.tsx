@@ -9,7 +9,7 @@ import { NoResults, TableWrap } from "./shared";
 export function ReconciliationView() {
   const data = useDashboardStore((state) => state.data);
   const filters = useDashboardStore((state) => state.filters);
-  const rows = reconciliation(scopeData(data, filters));
+  const rows = reconciliation(scopeData(data, filters), data.imports);
   if (!rows.length) return <NoResults title="Nenhum ID disponível para conciliação" />;
   const reconciled = rows.filter((row) => row.status === "Conciliado");
   const duplicates = rows.filter((row) => row.status === "Duplicado");

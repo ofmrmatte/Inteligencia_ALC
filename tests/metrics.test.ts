@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
-import { duplicateGroups, fortnightFromDate, monthFromFortnight, normalizeFortnight, pnrDecisionRows, reconciliation, sumByUniqueShipment, uniqueByShipment } from "@/lib/metrics";
+import { duplicateGroups, fortnightFromDate, latestPnrByShipment, monthFromFortnight, normalizeFortnight, pnrDecisionRows, reconciliation, sumByUniqueShipment, uniqueByShipment } from "@/lib/metrics";
 import type { ScopedData } from "@/lib/metrics";
+import type { ImportEntry, PnrRecord } from "@/lib/types";
 
 describe("grão por ID de pacote", () => {
   it("mantém IDs diferentes na mesma rota como produtos separados", () => {
@@ -39,6 +40,45 @@ describe("conciliação entre fontes", () => {
     expect(rows.find((row) => row.shipmentId === "A")?.status).toBe("Conciliado");
     expect(rows.find((row) => row.shipmentId === "B")?.status).toBe("Isolado");
     expect(rows.find((row) => row.shipmentId === "C")?.status).toBe("Isolado");
+  });
+
+  it("não trata atualização de PNR em novo upload como duplicidade operacional", () => {
+    const scoped = {
+      hierarchy: [],
+      drivers: [],
+      prefatura: [{ shipmentId: "A", value: 50 }],
+      pnr: [
+        { batchId: "old", shipmentId: "A", purchaseValue: 50, status: "Aguardando comprovante" },
+        { batchId: "new", shipmentId: "A", purchaseValue: 50, status: "Anulado" },
+      ],
+      risk: [],
+    } as unknown as ScopedData;
+    const imports = [
+      { batchId: "old", importedAt: "2026-07-01T10:00:00.000Z" },
+      { batchId: "new", importedAt: "2026-07-02T10:00:00.000Z" },
+    ] as unknown as ImportEntry[];
+    const rows = reconciliation(scoped, imports);
+    expect(rows.find((row) => row.shipmentId === "A")).toMatchObject({
+      pnr: 1,
+      sources: 2,
+      status: "Conciliado",
+    });
+  });
+});
+
+describe("atualização de status PNR", () => {
+  it("usa o status do lote mais recente para o mesmo ID de envio", () => {
+    const pnr = [
+      { batchId: "old", shipmentId: "47086532633", status: "Aguardando comprovante" },
+      { batchId: "new", shipmentId: "47086532633", status: "Anulado" },
+    ] as unknown as PnrRecord[];
+    const imports = [
+      { batchId: "old", importedAt: "2026-07-01T10:00:00.000Z" },
+      { batchId: "new", importedAt: "2026-07-01T11:00:00.000Z" },
+    ] as unknown as ImportEntry[];
+    const rows = latestPnrByShipment(pnr, imports);
+    expect(rows).toHaveLength(1);
+    expect(rows[0].status).toBe("Anulado");
   });
 });
 
