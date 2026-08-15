@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
-import { duplicateGroups, fortnightFromDate, latestPnrByShipment, monthFromFortnight, normalizeFortnight, pnrDecisionRows, reconciliation, sumByUniqueShipment, uniqueByShipment } from "@/lib/metrics";
+import { duplicateGroups, filterOptions, fortnightFromDate, latestPnrByShipment, monthFromFortnight, normalizeFortnight, pnrDecisionRows, reconciliation, scopeData, sumByUniqueShipment, uniqueByShipment } from "@/lib/metrics";
 import type { ScopedData } from "@/lib/metrics";
-import type { ImportEntry, PnrRecord } from "@/lib/types";
+import { EMPTY_FILTERS, type DashboardData, type ImportEntry, type PnrRecord } from "@/lib/types";
 
 describe("grão por ID de pacote", () => {
   it("mantém IDs diferentes na mesma rota como produtos separados", () => {
@@ -79,6 +79,62 @@ describe("atualização de status PNR", () => {
     const rows = latestPnrByShipment(pnr, imports);
     expect(rows).toHaveLength(1);
     expect(rows[0].status).toBe("Anulado");
+  });
+});
+
+describe("atividade operacional de bases e motoristas", () => {
+  it("inativa motorista e base que não aparecem na quinzena mais recente sem apagar histórico", () => {
+    const data = {
+      hierarchy: [
+        { coordinator: "Gestor", supervisor: "Supervisor", sigla: "OLD", base: "Base Antiga", baseKey: "BASE ANTIGA" },
+        { coordinator: "Gestor", supervisor: "Supervisor", sigla: "NEW", base: "Base Nova", baseKey: "BASE NOVA" },
+      ],
+      prefatura: [
+        { batchId: "jan", period: "01Q012026", baseKey: "BASE ANTIGA", sigla: "OLD", driverName: "Motorista Bloqueado", shipmentId: "A", value: 20000 },
+        { batchId: "feb", period: "02Q012026", baseKey: "BASE NOVA", sigla: "NEW", driverName: "Motorista Ativo", shipmentId: "B", value: 200 },
+      ],
+      pnr: [],
+      risk: [
+        { batchId: "jan", failureDate: "2026-01-05", baseKey: "BASE ANTIGA", sigla: "OLD", driverId: "D1", shipmentId: "A", gmvBrl: 20000 },
+        { batchId: "feb", failureDate: "2026-01-20", baseKey: "BASE NOVA", sigla: "NEW", driverId: "D2", shipmentId: "B", gmvBrl: 200 },
+      ],
+      drivers: [
+        { driverId: "D1", name: "Motorista Bloqueado" },
+        { driverId: "D2", name: "Motorista Ativo" },
+      ],
+      imports: [],
+      isDemo: false,
+    } as unknown as DashboardData;
+
+    const current = scopeData(data, EMPTY_FILTERS);
+    expect(current.drivers.map((driver) => driver.driverId)).toEqual(["D2"]);
+    expect(current.risk.map((row) => row.shipmentId)).toEqual(["B"]);
+    expect(current.prefatura.map((row) => row.shipmentId)).toEqual(["B"]);
+    expect(filterOptions(data, EMPTY_FILTERS).bases).toEqual(["Base Nova"]);
+
+    const january = scopeData(data, { ...EMPTY_FILTERS, month: "2026-01", fortnight: "Q1" });
+    expect(january.drivers.map((driver) => driver.driverId)).toEqual(["D1"]);
+    expect(january.risk.map((row) => row.shipmentId)).toEqual(["A"]);
+    expect(january.prefatura.map((row) => row.shipmentId)).toEqual(["A"]);
+  });
+
+  it("reativa o motorista quando o mesmo ID volta em uma quinzena posterior", () => {
+    const data = {
+      hierarchy: [{ coordinator: "Gestor", supervisor: "Supervisor", sigla: "BASE", base: "Base", baseKey: "BASE" }],
+      prefatura: [],
+      pnr: [],
+      risk: [
+        { batchId: "jan", failureDate: "2026-01-05", baseKey: "BASE", sigla: "BASE", driverId: "D1", shipmentId: "A", gmvBrl: 20000 },
+        { batchId: "feb", failureDate: "2026-01-20", baseKey: "BASE", sigla: "BASE", driverId: "D1", shipmentId: "B", gmvBrl: 100 },
+      ],
+      drivers: [{ driverId: "D1", name: "Motorista Reativado" }],
+      imports: [],
+      isDemo: false,
+    } as unknown as DashboardData;
+
+    const current = scopeData(data, EMPTY_FILTERS);
+    expect(current.drivers.map((driver) => driver.driverId)).toEqual(["D1"]);
+    expect(current.risk.map((row) => row.shipmentId)).toEqual(["A", "B"]);
   });
 });
 

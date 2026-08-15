@@ -18,6 +18,13 @@ export interface ScopedData {
   drivers: DriverRecord[];
 }
 
+interface OperationalActivity {
+  latestOrder: number;
+  activeBases: Set<string>;
+  activeDrivers: Set<string>;
+  idByDriverName: Map<string, string>;
+}
+
 export function fortnightFromDate(date: string | null) {
   if (!date) return "";
   const match = /^(\d{4})-(\d{2})-(\d{2})/.exec(date);
@@ -55,6 +62,13 @@ export function formatFortnightLabel(value: string) {
 
 function rowFortnight(period: string | null | undefined, date: string | null) {
   return normalizeFortnight(period) || fortnightFromDate(date);
+}
+
+function fortnightOrder(value: string) {
+  const match = /^(0[12])Q(\d{2})(\d{4})$/.exec(value);
+  if (!match) return Number.NEGATIVE_INFINITY;
+  const [, half, month, year] = match;
+  return Number(year) * 24 + (Number(month) - 1) * 2 + (half === "02" ? 1 : 0);
 }
 
 function inFortnight(period: string | null | undefined, date: string | null, filters: DashboardFilters) {
@@ -110,12 +124,100 @@ function driverIdMap(drivers: DriverRecord[]) {
   return new Map(drivers.map((driver) => [normalizeText(driver.name), driver.driverId]));
 }
 
+function baseKeys(record: { baseKey: string; sigla: string }) {
+  return [normalizeText(record.baseKey), normalizeText(record.sigla)].filter(Boolean);
+}
+
+function driverKey(id: string) {
+  return id ? `ID:${id}` : "";
+}
+
+function driverNameKey(name: string) {
+  const normalized = normalizeText(name);
+  return normalized ? `NAME:${normalized}` : "";
+}
+
+function touchEntity(target: Map<string, number>, keys: string[], order: number) {
+  if (order === Number.NEGATIVE_INFINITY) return;
+  keys.filter(Boolean).forEach((key) => target.set(key, Math.max(target.get(key) ?? Number.NEGATIVE_INFINITY, order)));
+}
+
+function activeKeys(lastSeen: Map<string, number>, latestOrder: number) {
+  if (latestOrder === Number.NEGATIVE_INFINITY) return new Set<string>();
+  return new Set([...lastSeen.entries()].filter(([, order]) => order === latestOrder).map(([key]) => key));
+}
+
+function operationalActivity(data: DashboardData): OperationalActivity {
+  const baseLastSeen = new Map<string, number>();
+  const driverLastSeen = new Map<string, number>();
+  const idByDriverName = driverIdMap(data.drivers);
+  let latestOrder = Number.NEGATIVE_INFINITY;
+
+  const touchBase = (record: { baseKey: string; sigla: string }, order: number) => {
+    latestOrder = Math.max(latestOrder, order);
+    touchEntity(baseLastSeen, baseKeys(record), order);
+  };
+  const touchDriver = (keys: string[], order: number) => {
+    latestOrder = Math.max(latestOrder, order);
+    touchEntity(driverLastSeen, keys, order);
+  };
+
+  for (const row of data.prefatura) {
+    const order = fortnightOrder(rowFortnight(row.period, row.routeDate));
+    touchBase(row, order);
+    const knownId = idByDriverName.get(normalizeText(row.driverName));
+    touchDriver([knownId ? driverKey(knownId) : "", driverNameKey(row.driverName)], order);
+  }
+  for (const row of data.pnr) {
+    const order = fortnightOrder(rowFortnight(row.billingPeriod, row.caseDate));
+    touchBase(row, order);
+    touchDriver([driverKey(row.driverId)], order);
+  }
+  for (const row of data.risk) {
+    const order = fortnightOrder(rowFortnight(undefined, row.failureDate));
+    touchBase(row, order);
+    touchDriver([driverKey(row.driverId)], order);
+  }
+
+  return {
+    latestOrder,
+    activeBases: activeKeys(baseLastSeen, latestOrder),
+    activeDrivers: activeKeys(driverLastSeen, latestOrder),
+    idByDriverName,
+  };
+}
+
+function activeOperationalScope(filters: DashboardFilters) {
+  return filters.month === "Todos" && filters.fortnight === "Todas";
+}
+
+function isActiveBase(activity: OperationalActivity, record: { baseKey: string; sigla: string }) {
+  if (activity.latestOrder === Number.NEGATIVE_INFINITY) return true;
+  const keys = baseKeys(record);
+  return keys.length === 0 || keys.some((key) => activity.activeBases.has(key));
+}
+
+function isActiveDriverName(activity: OperationalActivity, name: string) {
+  const normalized = normalizeText(name);
+  if (!normalized || activity.latestOrder === Number.NEGATIVE_INFINITY) return true;
+  const knownId = activity.idByDriverName.get(normalized);
+  return Boolean((knownId && activity.activeDrivers.has(driverKey(knownId))) || activity.activeDrivers.has(driverNameKey(name)));
+}
+
+function isActiveDriverId(activity: OperationalActivity, id: string) {
+  if (!id || activity.latestOrder === Number.NEGATIVE_INFINITY) return true;
+  return activity.activeDrivers.has(driverKey(id));
+}
+
 export function scopeData(data: DashboardData, filters: DashboardFilters): ScopedData {
+  const activity = operationalActivity(data);
+  const activeScope = activeOperationalScope(filters);
   const hierarchy = data.hierarchy.filter((row) => {
     if (filters.coordinator !== "Todos" && row.coordinator !== filters.coordinator) return false;
     if (filters.sigla !== "Todas" && row.sigla !== filters.sigla) return false;
     if (filters.base !== "Todas" && row.base !== filters.base) return false;
     if (filters.supervisor !== "Todos" && row.supervisor !== filters.supervisor) return false;
+    if (activeScope && !isActiveBase(activity, row)) return false;
     return true;
   });
   const scopeActive = filters.coordinator !== "Todos" || filters.sigla !== "Todas" || filters.base !== "Todas" || filters.supervisor !== "Todos";
@@ -127,6 +229,7 @@ export function scopeData(data: DashboardData, filters: DashboardFilters): Scope
   const prefatura = data.prefatura.filter((row) => {
     if (!inFortnight(row.period, row.routeDate, filters)) return false;
     if (!matchesScope(row, allowedBases, allowedSiglas, scopeActive)) return false;
+    if (activeScope && (!isActiveBase(activity, row) || !isActiveDriverName(activity, row.driverName))) return false;
     if (filters.operation !== "Todas" && row.operation !== filters.operation) return false;
     if (filters.driver !== "Todos" && normalizeText(row.driverName) !== normalizeText(filters.driver)) return false;
     return true;
@@ -134,6 +237,7 @@ export function scopeData(data: DashboardData, filters: DashboardFilters): Scope
   const pnr = data.pnr.filter((row) => {
     if (!inFortnight(row.billingPeriod, row.caseDate, filters)) return false;
     if (!matchesScope(row, allowedBases, allowedSiglas, scopeActive)) return false;
+    if (activeScope && (!isActiveBase(activity, row) || !isActiveDriverId(activity, row.driverId))) return false;
     if (filters.operation !== "Todas" && filters.operation !== "PNR") return false;
     if (selectedDriverId && row.driverId !== selectedDriverId) return false;
     return true;
@@ -141,6 +245,7 @@ export function scopeData(data: DashboardData, filters: DashboardFilters): Scope
   const risk = data.risk.filter((row) => {
     if (!inFortnight(undefined, row.failureDate, filters)) return false;
     if (!matchesScope(row, allowedBases, allowedSiglas, scopeActive)) return false;
+    if (activeScope && (!isActiveBase(activity, row) || !isActiveDriverId(activity, row.driverId))) return false;
     if (selectedDriverId && row.driverId !== selectedDriverId) return false;
     return true;
   });
@@ -150,6 +255,7 @@ export function scopeData(data: DashboardData, filters: DashboardFilters): Scope
   const operationalScopeActive = scopeActive || filters.operation !== "Todas" || filters.month !== "Todos" || filters.fortnight !== "Todas";
   const drivers = data.drivers.filter((driver) => {
     if (filters.driver !== "Todos" && normalizeText(driver.name) !== normalizeText(filters.driver)) return false;
+    if (activeScope && !isActiveDriverId(activity, driver.driverId)) return false;
     if (!operationalScopeActive) return true;
     return visibleDriverNames.has(normalizeText(driver.name)) || visibleDriverIds.has(driver.driverId);
   });
@@ -158,8 +264,11 @@ export function scopeData(data: DashboardData, filters: DashboardFilters): Scope
 }
 
 export function filterOptions(data: DashboardData, filters: DashboardFilters) {
+  const activity = operationalActivity(data);
+  const activeScope = activeOperationalScope(filters);
   const afterCoordinator = data.hierarchy.filter((row) => filters.coordinator === "Todos" || row.coordinator === filters.coordinator);
-  const afterSigla = afterCoordinator.filter((row) => filters.sigla === "Todas" || row.sigla === filters.sigla);
+  const activeHierarchy = afterCoordinator.filter((row) => !activeScope || isActiveBase(activity, row));
+  const afterSigla = activeHierarchy.filter((row) => filters.sigla === "Todas" || row.sigla === filters.sigla);
   const afterBase = afterSigla.filter((row) => filters.base === "Todas" || row.base === filters.base);
   const scoped = scopeData(data, { ...filters, driver: "Todos" });
   const namesFromIds = new Map(data.drivers.map((driver) => [driver.driverId, driver.name]));
@@ -181,8 +290,8 @@ export function filterOptions(data: DashboardData, filters: DashboardFilters) {
   return {
     months,
     fortnights,
-    coordinators: unique(data.hierarchy.map((row) => row.coordinator)).sort((a, b) => a.localeCompare(b, "pt-BR")),
-    siglas: unique(afterCoordinator.map((row) => row.sigla)).sort(),
+    coordinators: unique((activeScope ? data.hierarchy.filter((row) => isActiveBase(activity, row)) : data.hierarchy).map((row) => row.coordinator)).sort((a, b) => a.localeCompare(b, "pt-BR")),
+    siglas: unique(activeHierarchy.map((row) => row.sigla)).sort(),
     bases: unique(afterSigla.map((row) => row.base)).sort((a, b) => a.localeCompare(b, "pt-BR")),
     supervisors: unique(afterBase.map((row) => row.supervisor)).sort((a, b) => a.localeCompare(b, "pt-BR")),
     drivers: driverNames,
