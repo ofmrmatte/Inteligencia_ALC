@@ -7,6 +7,7 @@ export interface AuthProfile {
   email: string;
   fullName: string;
   role: UserRole;
+  globalAccess: boolean;
   baseScope: string[];
   siglaScope: string[];
 }
@@ -22,6 +23,10 @@ export function isUserRole(value: unknown): value is UserRole {
   return typeof value === "string" && USER_ROLES.includes(value as UserRole);
 }
 
-export function canManageImports(role: UserRole) {
-  return role === "admin" || role === "director";
+export function hasFullAccess(profile: Pick<AuthProfile, "role" | "globalAccess">) {
+  return profile.globalAccess || profile.role === "admin" || profile.role === "director";
+}
+
+export function canManageImports(profile: Pick<AuthProfile, "role" | "globalAccess">) {
+  return hasFullAccess(profile);
 }

@@ -12,7 +12,7 @@ export async function getCurrentProfile(): Promise<AuthProfile | null> {
 
   const { data: profile } = await supabase
     .from("profiles")
-    .select("id,email,full_name,role,base_scope,sigla_scope")
+    .select("id,email,full_name,role,global_access,base_scope,sigla_scope")
     .eq("id", userData.user.id)
     .maybeSingle();
 
@@ -23,6 +23,7 @@ export async function getCurrentProfile(): Promise<AuthProfile | null> {
     email: profile?.email ?? userData.user.email ?? "",
     fullName: profile?.full_name ?? userData.user.email ?? "Usuário ALC",
     role,
+    globalAccess: Boolean(profile?.global_access),
     baseScope: Array.isArray(profile?.base_scope) ? profile.base_scope : [],
     siglaScope: Array.isArray(profile?.sigla_scope) ? profile.sigla_scope : [],
   };

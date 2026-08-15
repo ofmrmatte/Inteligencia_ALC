@@ -43,7 +43,7 @@ export function DashboardApp({ section, profile }: { section: SectionId; profile
   const [mobileMenu, setMobileMenu] = useState(false);
   const [importOpen, setImportOpen] = useState(false);
   const meta = SECTION_META[section];
-  const canImport = canManageImports(profile.role);
+  const canImport = canManageImports(profile);
   const showEmptyState = data.imports.length === 0 && !ADMIN_SECTIONS.includes(section);
   const showGlobalFilters = data.imports.length > 0 && !ADMIN_SECTIONS.includes(section);
 
