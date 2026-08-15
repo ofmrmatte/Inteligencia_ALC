@@ -10,7 +10,7 @@ function SubmitButton() {
   return (
     <button className="primary-button login-submit" disabled={pending}>
       <LockKeyhole size={18} />
-      {pending ? "Entrando..." : "Entrar"}
+      {pending ? "Entrando..." : "Entrar no sistema"}
     </button>
   );
 }

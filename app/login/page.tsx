@@ -1,6 +1,5 @@
 import { redirect } from "next/navigation";
 import Image from "next/image";
-import { Brand } from "@/components/brand";
 import { getCurrentProfile } from "@/lib/auth-server";
 import { isSupabaseConfigured } from "@/lib/supabase/config";
 import { LoginForm } from "./login-form";
@@ -12,19 +11,22 @@ export default async function LoginPage() {
   return (
     <main className="login-page">
       <section className="login-card" aria-labelledby="login-title">
-        <Brand />
+        <div className="login-brand" aria-label="Inteligência ALC">
+          <strong>Inteligência <b>ALC</b></strong>
+          <span>PNR • PRÉ-FATURAMENTO • GESTÃO DE MOTORISTAS</span>
+        </div>
         <div className="login-copy">
-          <span>Painel operacional ALC</span>
-          <h1 id="login-title">Inteligência ALC</h1>
-          <p>Monitoramento de PNR, pré-faturamento, pacotes, risco logístico e decisões por base.</p>
+          <span>PLATAFORMA OPERACIONAL ALC</span>
+          <h1 id="login-title">Acesso Administrativo</h1>
+          <p>Gestão integrada de PNR, pré-faturamento, pacotes e atendimento aos motoristas por base.</p>
         </div>
         <LoginForm supabaseReady={isSupabaseConfigured()} />
       </section>
       <aside className="login-aside" aria-label="Inteligência ALC">
         <Image className="login-aside__logo" src="/brand/alc-logo.png" alt="ALC Pereira Filho & Transportes" width={380} height={380} priority />
-        <div><strong>Controle por quinzena</strong><span>Acompanhamento operacional por mês, Q1/Q2, base, motorista e status.</span></div>
-        <div><strong>Decisão orientada por dados</strong><span>Prioridades de cobrança, revisão, documentação, faturamento e encerramento.</span></div>
-        <div><strong>Acesso por perfil</strong><span>Coordenador, Supervisor, Diretor e ADM com escopo protegido no banco.</span></div>
+        <div><strong>Operação por base</strong><span>Acompanhamento de PNR, pacotes, pagamentos e contestações.</span></div>
+        <div><strong>Gestão de Motoristas</strong><span>Documentos, pendências e atendimentos centralizados.</span></div>
+        <div><strong>Acesso por perfil</strong><span>Gestor, Administrativo e Motorista com permissões protegidas.</span></div>
       </aside>
     </main>
   );
