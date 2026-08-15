@@ -20,11 +20,12 @@ export function ImportPanel({ open, onClose }: { open: boolean; onClose: () => v
     setProgress(accepted.map((file) => `Lendo ${file.name}…`));
     try {
       const batches = await parseFiles(accepted);
-      await addBatches(batches);
+      setProgress(batches.map((batch) => `Enviando ${batch.entry.name} para o Supabase…`));
+      await addBatches(batches, accepted);
       const rows = batches.reduce((sum, batch) => sum + batch.entry.rowCount, 0);
       const alerts = batches.reduce((sum, batch) => sum + batch.entry.issues.length, 0);
       setProgress(batches.map((batch) => `${batch.entry.name}: ${batch.entry.rowCount.toLocaleString("pt-BR")} linhas`));
-      toast.success(`${rows.toLocaleString("pt-BR")} linhas processadas${alerts ? ` com ${alerts} alerta(s)` : ""}.`);
+      toast.success(`${rows.toLocaleString("pt-BR")} linhas salvas online${alerts ? ` com ${alerts} alerta(s)` : ""}.`);
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "Falha ao processar os arquivos.");
     } finally {
@@ -57,8 +58,8 @@ export function ImportPanel({ open, onClose }: { open: boolean; onClose: () => v
         <div {...getRootProps({ className: isDragActive ? "dropzone is-active" : "dropzone" })}>
           <input {...getInputProps()} />
           <div className="dropzone__icon">{importing ? <LoaderCircle className="spin" size={28} /> : <FileArchive size={28} />}</div>
-          <h3>{importing ? "Processando no navegador…" : isDragActive ? "Solte os arquivos aqui" : "Arraste ZIPs ou planilhas"}</h3>
-          <p>Você pode selecionar vários lotes de uma vez. Cada ZIP continua independente.</p>
+          <h3>{importing ? "Processando e salvando online…" : isDragActive ? "Solte os arquivos aqui" : "Arraste ZIPs ou planilhas"}</h3>
+          <p>Você pode selecionar vários lotes de uma vez. Cada ZIP fica rastreável no Supabase.</p>
           <button className="primary-button" type="button" disabled={importing}><FileSpreadsheet size={17} />Selecionar arquivos</button>
           <small>XLSX, XLSM, XLS, CSV ou ZIP · até 80 MB por arquivo</small>
         </div>
@@ -76,7 +77,7 @@ export function ImportPanel({ open, onClose }: { open: boolean; onClose: () => v
           </div>
         </div>
 
-        <div className="privacy-note"><LockKeyhole size={18} /><div><strong>Processamento local</strong><p>Os arquivos e os dados operacionais ficam no navegador deste dispositivo. Nenhuma macro VBA é executada.</p></div></div>
+        <div className="privacy-note"><LockKeyhole size={18} /><div><strong>Armazenamento protegido</strong><p>Os arquivos originais vão para o Storage privado e os registros processados ficam no banco Supabase. Nenhuma macro VBA é executada.</p></div></div>
         <div className="warning-note"><TriangleAlert size={17} /><p>Importe também a planilha de coordenadores para habilitar os filtros Coordenador → Base/Sigla → Supervisor. <a href="/modelos/coordenadores.csv" download>Baixar modelo CSV</a></p></div>
       </section>
     </div>

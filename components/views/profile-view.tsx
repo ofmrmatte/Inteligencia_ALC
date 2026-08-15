@@ -21,7 +21,7 @@ export function ProfileView({ profile }: { profile: AuthProfile }) {
         <KpiCard label="Permissão" value={ROLE_LABELS[profile.role]} detail={fullAccess ? "Acesso total ao painel" : "Escopo por base/sigla"} icon={<ShieldCheck size={19} />} tone={fullAccess ? "red" : "neutral"} />
         <KpiCard label="Siglas" value={formatNumber(profile.siglaScope.length)} detail="Escopo direto no banco" icon={<Building2 size={19} />} />
         <KpiCard label="Bases" value={formatNumber(profile.baseScope.length)} detail="Bases autorizadas" icon={<Building2 size={19} />} />
-        <KpiCard label="Lotes locais" value={formatNumber(data.imports.length)} detail="Carregados neste navegador" icon={<UserRound size={19} />} />
+        <KpiCard label="Lotes online" value={formatNumber(data.imports.length)} detail="Disponíveis no Supabase" icon={<UserRound size={19} />} />
       </div>
       <Panel title="Dados da conta" subtitle="Informações de sessão e autorização">
         <TableWrap>

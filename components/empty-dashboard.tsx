@@ -15,7 +15,7 @@ export function EmptyDashboard({ onImport, canImport }: { onImport: () => void; 
           <button className="primary-button" onClick={onImport} disabled={!canImport} title={canImport ? "Importar dados reais" : "Importação restrita a Diretor/ADM"}><FileSpreadsheet size={18} />Importar dados reais</button>
           <button className="secondary-button" onClick={() => void loadDemo()}><FlaskConical size={18} />Ver demonstração</button>
         </div>
-        <div className="local-pill"><LockKeyhole size={15} />Arquivos processados somente neste navegador</div>
+        <div className="local-pill"><LockKeyhole size={15} />Arquivos salvos no Supabase privado</div>
       </div>
       <div className="source-stack" aria-label="Fontes suportadas">
         <div><i>01</i><span><strong>Hierarquia</strong><small>Coordenador, supervisor, sigla e base</small></span><em>XLSX</em></div>

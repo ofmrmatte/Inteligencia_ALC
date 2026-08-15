@@ -20,7 +20,7 @@ export function Topbar({ section, profile, canImport, onImport, onMobileMenu }: 
         <h1>{meta.title}</h1>
       </div>
       <div className="topbar__actions">
-        <div className="data-state" title="Dados processados localmente no navegador">
+        <div className="data-state" title="Dados sincronizados no Supabase">
           <Database size={16} />
           <span>{last ? `Atualizado ${format(new Date(last.importedAt), "dd MMM, HH:mm", { locale: ptBR })}` : "Nenhum dado importado"}</span>
           <i className={last ? "status-dot status-dot--ok" : "status-dot"} />

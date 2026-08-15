@@ -4,10 +4,10 @@ Aplicação web para análise operacional de PNR, pré-faturamento, risco LM e d
 
 ## Princípios
 
-- Importação local de `.xlsx`, `.xls`, `.xlsm`, `.csv` e `.zip`.
+- Importação online de `.xlsx`, `.xls`, `.xlsm`, `.csv` e `.zip`, com arquivos originais no Supabase Storage.
 - Login real por Supabase Auth, com perfis de Coordenador, Supervisor, Diretor e ADM.
 - As importações oficiais ficam restritas a Diretor/ADM.
-- O processamento atual ainda acontece no navegador; a pasta `supabase/` prepara a persistência, RLS e histórico para os próximos arquivos.
+- Os registros processados ficam persistidos no Supabase, com RLS por perfil e escopo de base/sigla.
 - Cada ZIP é tratado como um lote independente; cruzamentos entre lotes usam apenas chaves explícitas.
 - Cada ID de pacote representa um produto. IDs repetidos são conciliados e sinalizados, nunca somados silenciosamente.
 

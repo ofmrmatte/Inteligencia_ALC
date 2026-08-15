@@ -61,7 +61,7 @@ export function DashboardApp({ section, profile }: { section: SectionId; profile
     window.dispatchEvent(new Event(SIDEBAR_EVENT));
   };
 
-  if (!hydrated) return <main className="boot-screen"><div className="boot-mark">ALC</div><p>Restaurando dados locais…</p></main>;
+  if (!hydrated) return <main className="boot-screen"><div className="boot-mark">ALC</div><p>Carregando dados online…</p></main>;
 
   return (
     <div className={collapsed ? "app-shell app-shell--collapsed" : "app-shell"}>

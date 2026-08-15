@@ -23,7 +23,7 @@ export function SettingsView({ profile }: { profile: AuthProfile }) {
       <div className="kpi-grid kpi-grid--four">
         <KpiCard label="Perfil atual" value={ROLE_LABELS[profile.role]} detail={fullAccess ? "Sem restrição por escopo" : "Permissão da sessão"} icon={<ShieldCheck size={19} />} tone={fullAccess ? "red" : "neutral"} />
         <KpiCard label="Importações" value={canImport ? "Ativas" : "Restritas"} detail="Diretor/ADM" icon={<FileArchive size={19} />} tone={canImport ? "green" : "amber"} />
-        <KpiCard label="Lotes locais" value={formatNumber(data.imports.length)} detail="IndexedDB no navegador" icon={<Database size={19} />} />
+        <KpiCard label="Lotes online" value={formatNumber(data.imports.length)} detail="Supabase" icon={<Database size={19} />} />
         <KpiCard label="RLS" value="Ativo" detail="Migração Supabase" icon={<LockKeyhole size={19} />} tone="green" />
       </div>
       <Panel title="Controles administrativos" subtitle="Situação dos blocos de configuração">

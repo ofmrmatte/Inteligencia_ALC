@@ -16,12 +16,12 @@ export function ImportsView() {
 
   const remove = async (batchId: string, name: string) => {
     await removeBatch(batchId);
-    toast.success(`${name} removido do navegador.`);
+    toast.success(`${name} removido do Supabase.`);
   };
 
   return (
     <div className="view-stack">
-      <PageIntro description="Cada arquivo ZIP é registrado como um lote independente. A exclusão remove somente os registros originados daquele lote." chips={["Persistência local via IndexedDB", "Sem upload para servidor"]} />
+      <PageIntro description="Cada arquivo ZIP é registrado como um lote independente. A exclusão remove os registros e o arquivo original do Supabase." chips={["Supabase Storage", "Banco operacional online"]} />
       <div className="kpi-grid kpi-grid--four">
         <KpiCard label="Lotes importados" value={formatNumber(rows.length)} detail="Arquivos independentes" icon={<FileArchive size={19} />} />
         <KpiCard label="Linhas processadas" value={formatNumber(rows.reduce((sum, row) => sum + row.rowCount, 0))} detail="Todas as estruturas" icon={<FileCheck2 size={19} />} tone="green" />
