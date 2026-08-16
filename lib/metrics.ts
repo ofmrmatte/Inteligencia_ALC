@@ -1,4 +1,5 @@
 import { normalizeText } from "@/lib/normalize";
+import { fortnightFromDate, monthFromFortnight, normalizeFortnight } from "@/lib/competence";
 import type {
   DashboardData,
   DashboardFilters,
@@ -9,6 +10,8 @@ import type {
   PrefaturaRecord,
   RiskRecord,
 } from "@/lib/types";
+
+export { fortnightFromDate, monthFromFortnight, normalizeFortnight } from "@/lib/competence";
 
 export interface ScopedData {
   hierarchy: HierarchyRecord[];
@@ -27,29 +30,6 @@ interface OperationalActivity {
   activeBases: Set<string>;
   activeDrivers: Set<string>;
   idByDriverName: Map<string, string>;
-}
-
-export function fortnightFromDate(date: string | null) {
-  if (!date) return "";
-  const match = /^(\d{4})-(\d{2})-(\d{2})/.exec(date);
-  if (!match) return "";
-  const [, year, month, day] = match;
-  return `${Number(day) <= 15 ? "01" : "02"}Q${month}${year}`;
-}
-
-export function normalizeFortnight(value: string | null | undefined) {
-  const normalized = normalizeText(value ?? "").replace(/\s+/g, "");
-  if (!normalized) return "";
-  const yearFirstMatch = /(\d{4})(\d{2})Q?([12])/.exec(normalized);
-  if (yearFirstMatch) return `0${yearFirstMatch[3]}Q${yearFirstMatch[2]}${yearFirstMatch[1]}`;
-  const compactMatch = /0?([12])Q?(\d{2})(\d{4})/.exec(normalized);
-  if (compactMatch) return `0${compactMatch[1]}Q${compactMatch[2]}${compactMatch[3]}`;
-  return normalized;
-}
-
-export function monthFromFortnight(value: string) {
-  const match = /^(0[12])Q(\d{2})(\d{4})$/.exec(value);
-  return match ? `${match[3]}-${match[2]}` : "";
 }
 
 export function formatMonthLabel(value: string) {
@@ -76,7 +56,7 @@ function rowFortnight(period: string | null | undefined, date: string | null) {
 function importFortnightByBatch(imports: ImportEntry[]) {
   const entries = new Map<string, string>();
   for (const entry of imports) {
-    const fortnight = validFortnight(entry.fortnight);
+    const fortnight = validFortnight(entry.fortnight) || (entry.fortnights?.length === 1 ? validFortnight(entry.fortnights[0]) : "");
     if (entry.batchId && fortnight) entries.set(entry.batchId, fortnight);
   }
   return entries;

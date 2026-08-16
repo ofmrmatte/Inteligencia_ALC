@@ -1,6 +1,8 @@
 import { NextResponse } from "next/server";
 import { hasFullAccess, isUserRole, type AuthProfile } from "@/lib/auth";
-import { fortnightFromDate, monthFromFortnight, normalizeFortnight } from "@/lib/metrics";
+import { fortnightFromDate, monthFromFortnight, normalizeFortnight } from "@/lib/competence";
+import { duplicateFileImportError, findDuplicateFileHash } from "@/lib/import-dedupe";
+import { readPaged } from "@/lib/pagination";
 import { createClient } from "@/lib/supabase/server";
 import type {
   DashboardData,
@@ -76,13 +78,16 @@ function rowFortnight(period: string | null | undefined, date: string | null) {
   return monthFromFortnight(normalized) ? normalized : fortnightFromDate(date);
 }
 
-function firstBatchFortnight(batch: ParsedBatch) {
-  const candidates = [
+function uniqueSorted(values: string[]) {
+  return [...new Set(values.filter(Boolean))].sort();
+}
+
+function batchFortnights(batch: ParsedBatch) {
+  return uniqueSorted([
     ...batch.prefatura.map((row) => rowFortnight(row.period, row.routeDate)),
     ...batch.pnr.map((row) => rowFortnight(row.billingPeriod, row.caseDate)),
     ...batch.risk.map((row) => rowFortnight(undefined, row.failureDate)),
-  ].filter((fortnight) => Boolean(fortnight && monthFromFortnight(fortnight)));
-  return candidates[0] ?? null;
+  ].filter((fortnight) => Boolean(fortnight && monthFromFortnight(fortnight))));
 }
 
 function isSourceKindArray(value: unknown): value is SourceKind[] {
@@ -108,6 +113,10 @@ function mapImportEntry(row: DbRow): ImportEntry {
     importedAt: toStringValue(entry.importedAt || row.finished_at || row.started_at || new Date().toISOString()),
     fortnight: toStringValue(entry.fortnight || row.fortnight),
     month: toStringValue(entry.month || row.month || row.competence),
+    fortnights: toStringArray(row.fortnights || entry.fortnights),
+    months: toStringArray(row.months || entry.months),
+    analysisExcluded: Boolean(row.analysis_excluded || entry.analysisExcluded),
+    duplicateOf: toStringValue(row.duplicate_of || entry.duplicateOf) || null,
     size: toNumberValue(entry.size),
     status,
     kinds,
@@ -238,10 +247,30 @@ async function requireProfile(supabase: ServerClient): Promise<AuthProfile> {
   };
 }
 
-async function readTable(supabase: ServerClient, table: string, select = "*", orderColumn = "created_at") {
-  const { data, error } = await supabase.from(table).select(select).order(orderColumn, { ascending: false });
-  if (error) throw new Error(`${table}: ${error.message}`);
-  return (data ?? []) as unknown as DbRow[];
+async function readTable(supabase: ServerClient, table: string, select = "*", orderColumn = "created_at", pageSize = 1000) {
+  return readPaged<DbRow>(async (offset, size) => {
+    const { data, error, count } = await supabase
+      .from(table)
+      .select(select, { count: "exact" })
+      .order(orderColumn, { ascending: false })
+      .order("id", { ascending: false })
+      .range(offset, offset + size - 1);
+    if (error) throw new Error(`${table}: ${error.message}`);
+    return { rows: (data ?? []) as unknown as DbRow[], count: count ?? null };
+  }, pageSize);
+}
+
+async function readImportedFiles(supabase: ServerClient, batchId: string | null) {
+  return readPaged<DbRow>(async (offset, size) => {
+    let query = supabase
+      .from("imported_files")
+      .select("storage_path", { count: "exact" })
+      .order("id", { ascending: false });
+    if (batchId) query = query.eq("batch_id", batchId);
+    const { data, error, count } = await query.range(offset, offset + size - 1);
+    if (error) throw new Error(`imported_files: ${error.message}`);
+    return { rows: (data ?? []) as unknown as DbRow[], count: count ?? null };
+  });
 }
 
 async function loadDashboardData(supabase: ServerClient): Promise<DashboardData> {
@@ -254,13 +283,16 @@ async function loadDashboardData(supabase: ServerClient): Promise<DashboardData>
     readTable(supabase, "driver_records"),
   ]);
 
+  const mappedImports = imports.map(mapImportEntry);
+  const activeBatchIds = new Set(mappedImports.filter((entry) => !entry.analysisExcluded).map((entry) => entry.batchId));
+
   return {
-    hierarchy: hierarchy.map(mapHierarchy),
-    prefatura: prefatura.map(mapPrefatura),
-    pnr: pnr.map(mapPnr),
-    risk: risk.map(mapRisk),
-    drivers: drivers.map(mapDriver),
-    imports: imports.map(mapImportEntry),
+    hierarchy: hierarchy.filter((row) => activeBatchIds.has(toStringValue(row.batch_id))).map(mapHierarchy),
+    prefatura: prefatura.filter((row) => activeBatchIds.has(toStringValue(row.batch_id))).map(mapPrefatura),
+    pnr: pnr.filter((row) => activeBatchIds.has(toStringValue(row.batch_id))).map(mapPnr),
+    risk: risk.filter((row) => activeBatchIds.has(toStringValue(row.batch_id))).map(mapRisk),
+    drivers: drivers.filter((row) => activeBatchIds.has(toStringValue(row.batch_id))).map(mapDriver),
+    imports: mappedImports,
     isDemo: false,
   };
 }
@@ -284,8 +316,10 @@ function traceColumns(row: { sourceFile: string; sourceSheet: string; rowNumber:
 
 async function persistBatch(supabase: ServerClient, profile: AuthProfile, batch: ParsedBatch, files: UploadedFilePayload[]) {
   const batchId = batch.entry.batchId;
-  const fortnight = firstBatchFortnight(batch);
-  const month = fortnight ? monthFromFortnight(fortnight) : null;
+  const fortnights = batchFortnights(batch);
+  const months = uniqueSorted(fortnights.map(monthFromFortnight));
+  const fortnight = fortnights.length === 1 ? fortnights[0] : null;
+  const month = months.length === 1 ? months[0] : null;
   const fileHash = files.map((file) => file.fileHash).join(",");
 
   for (const table of CHILD_TABLES) {
@@ -303,6 +337,10 @@ async function persistBatch(supabase: ServerClient, profile: AuthProfile, batch:
     competence: month,
     fortnight,
     month,
+    fortnights,
+    months,
+    analysis_excluded: false,
+    duplicate_of: null,
     status: batch.entry.status,
     file_hash: fileHash || null,
     row_count: batch.entry.rowCount,
@@ -312,7 +350,7 @@ async function persistBatch(supabase: ServerClient, profile: AuthProfile, batch:
     error_count: batch.entry.issues.length,
     started_at: batch.entry.importedAt,
     finished_at: new Date().toISOString(),
-    metadata: { entry: batch.entry },
+    metadata: { entry: { ...batch.entry, fortnight, month, fortnights, months } },
   });
   if (batchError) throw new Error(`import_batches: ${batchError.message}`);
 
@@ -482,6 +520,23 @@ export async function POST(request: Request) {
 
     for (const batch of batches) {
       const batchFiles = files.filter((file) => file.batchId === batch.entry.batchId);
+      for (const file of batchFiles) {
+        const { data: duplicate, error: duplicateError } = await supabase
+          .from("imported_files")
+          .select("batch_id,original_name,file_hash")
+          .eq("file_hash", file.fileHash)
+          .neq("batch_id", batch.entry.batchId)
+          .limit(1)
+          .maybeSingle();
+        if (duplicateError) throw new Error(`imported_files: ${duplicateError.message}`);
+        const duplicateFile = duplicate
+          ? findDuplicateFileHash(
+            { batchId: batch.entry.batchId, fileHash: file.fileHash },
+            [{ batchId: toStringValue((duplicate as DbRow).batch_id), fileHash: toStringValue((duplicate as DbRow).file_hash) }],
+          )
+          : null;
+        if (duplicateFile) throw new Error(duplicateFileImportError(file.originalName, duplicateFile.batchId));
+      }
       await persistBatch(supabase, profile, batch, batchFiles);
     }
 
@@ -499,13 +554,8 @@ export async function DELETE(request: Request) {
 
     const url = new URL(request.url);
     const batchId = url.searchParams.get("batchId");
-    const filesQuery = batchId
-      ? supabase.from("imported_files").select("storage_path").eq("batch_id", batchId)
-      : supabase.from("imported_files").select("storage_path");
-    const { data: fileRows, error: fileError } = await filesQuery;
-    if (fileError) throw new Error(`imported_files: ${fileError.message}`);
-
-    const paths = ((fileRows ?? []) as DbRow[]).map((row) => toStringValue(row.storage_path)).filter(Boolean);
+    const fileRows = await readImportedFiles(supabase, batchId);
+    const paths = fileRows.map((row) => toStringValue(row.storage_path)).filter(Boolean);
     if (paths.length > 0) await supabase.storage.from(IMPORT_BUCKET).remove(paths);
 
     const deleteQuery = batchId

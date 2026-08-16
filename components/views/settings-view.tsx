@@ -74,17 +74,24 @@ function UserManagementPanel({ currentUserId }: { currentUserId: string }) {
   const [saving, setSaving] = useState("");
   const [message, setMessage] = useState("");
 
-  async function requestUsers() {
-    setLoading(true);
-    setMessage("");
-    const response = await fetch("/api/users", { cache: "no-store" });
-    const payload = await response.json();
-    if (!response.ok) throw new Error(payload.error ?? "Falha ao carregar usuários.");
-    setUsers(payload.users ?? []);
-  }
-
   useEffect(() => {
-    requestUsers().catch((error) => setMessage(error instanceof Error ? error.message : "Falha ao carregar usuários.")).finally(() => setLoading(false));
+    let active = true;
+    async function loadUsers() {
+      try {
+        const response = await fetch("/api/users", { cache: "no-store" });
+        const payload = await response.json();
+        if (!response.ok) throw new Error(payload.error ?? "Falha ao carregar usuários.");
+        if (active) setUsers(payload.users ?? []);
+      } catch (error) {
+        if (active) setMessage(error instanceof Error ? error.message : "Falha ao carregar usuários.");
+      } finally {
+        if (active) setLoading(false);
+      }
+    }
+    void loadUsers();
+    return () => {
+      active = false;
+    };
   }, []);
 
   function patchLocal(id: string, changes: Partial<ManagedUser>) {

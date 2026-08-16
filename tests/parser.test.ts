@@ -55,4 +55,16 @@ describe("detecção de planilhas", () => {
     expect(parsed.pnr[0].custom).toBe("Cobrar comprovante");
     expect(parsed.pnr[0].sigla).toBe("SMG5");
   });
+
+  it("mantém Q1 e Q2 por arquivo interno no mesmo ZIP", async () => {
+    const headers = ["Quinzena", "BASE", "MOTORISTA", "PLACA", "DESCRIÇÃO", "DATA DA ROTA", "ID DO PACOTE", "Nº ROTA", "VALOR"];
+    const q1 = workbookBytes({ "PERDIDOS SVC": [headers, ["", "BASE - JUL", "Motorista", "AAA1A11", "SVC", "06/06/2026", 1, 10, 100]] });
+    const q2 = workbookBytes({ "PERDIDOS SVC": [headers, ["", "BASE - JUL", "Motorista", "AAA1A11", "SVC", "06/18/2026", 2, 20, 203]] });
+    const zip = zipSync({
+      "PRE-FATURA 1Q JULHO 26.xlsx": q1,
+      "PRE-FATURA 2Q JULHO 26.xlsx": q2,
+    });
+    const parsed = await parseFile(new File([zip], "PREFATURAS JULHO 26.zip"));
+    expect(parsed.prefatura.map((row) => row.period)).toEqual(["01Q072026", "02Q072026"]);
+  });
 });

@@ -95,6 +95,10 @@ export interface ImportEntry {
   importedAt: string;
   fortnight?: string | null;
   month?: string | null;
+  fortnights?: string[];
+  months?: string[];
+  analysisExcluded?: boolean;
+  duplicateOf?: string | null;
   size: number;
   status: "concluído" | "com-alertas" | "erro" | "demonstração";
   kinds: SourceKind[];

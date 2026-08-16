@@ -22,6 +22,16 @@ describe("grão por ID de pacote", () => {
     expect(sumByUniqueShipment(rows, (row) => row.value)).toBe(30);
     expect(duplicateGroups(rows)[0][0]).toBe("100");
   });
+
+  it("consolida o mesmo ID presente em SVC e XPT no KPI financeiro", () => {
+    const rows = [
+      { shipmentId: "100", operation: "SVC", value: 80 },
+      { shipmentId: "100", operation: "XPT", value: 80 },
+    ];
+    expect(uniqueByShipment(rows)).toHaveLength(1);
+    expect(sumByUniqueShipment(rows, (row) => row.value)).toBe(80);
+    expect(duplicateGroups(rows)[0][1]).toHaveLength(2);
+  });
 });
 
 describe("conciliação entre fontes", () => {
@@ -208,5 +218,27 @@ describe("filtro por quinzena", () => {
     expect(normalizeFortnight("202608Q1")).toBe("01Q082026");
     expect(normalizeFortnight("LOGISTICS_PNR - 202608Q2")).toBe("02Q082026");
     expect(monthFromFortnight("01Q082026")).toBe("2026-08");
+  });
+
+  it("filtra julho completo, julho Q1, julho Q2 e quinzenas anuais", () => {
+    const data = {
+      hierarchy: [{ coordinator: "Gestor", supervisor: "Supervisor", sigla: "JUL", base: "Base", baseKey: "BASE" }],
+      prefatura: [
+        { batchId: "jan1", period: "01Q012026", baseKey: "BASE", sigla: "JUL", driverName: "A", shipmentId: "JAN1", value: 10 },
+        { batchId: "jul1", period: "01Q072026", baseKey: "BASE", sigla: "JUL", driverName: "A", shipmentId: "JUL1", value: 10 },
+        { batchId: "jul2", period: "02Q072026", baseKey: "BASE", sigla: "JUL", driverName: "A", shipmentId: "JUL2", value: 10 },
+      ],
+      pnr: [],
+      risk: [],
+      drivers: [],
+      imports: [],
+      isDemo: false,
+    } as unknown as DashboardData;
+
+    expect(scopeData(data, { ...EMPTY_FILTERS, month: "2026-07" }).prefatura).toHaveLength(2);
+    expect(scopeData(data, { ...EMPTY_FILTERS, month: "2026-07", fortnight: "Q1" }).prefatura.map((row) => row.shipmentId)).toEqual(["JUL1"]);
+    expect(scopeData(data, { ...EMPTY_FILTERS, month: "2026-07", fortnight: "Q2" }).prefatura.map((row) => row.shipmentId)).toEqual(["JUL2"]);
+    expect(scopeData(data, { ...EMPTY_FILTERS, fortnight: "Q1" }).prefatura.map((row) => row.shipmentId)).toEqual(["JAN1", "JUL1"]);
+    expect(scopeData(data, { ...EMPTY_FILTERS, fortnight: "Q2" }).prefatura.map((row) => row.shipmentId)).toEqual(["JUL2"]);
   });
 });

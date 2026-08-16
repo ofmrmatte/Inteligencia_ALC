@@ -1,7 +1,7 @@
 import { unzipSync } from "fflate";
 import * as XLSX from "xlsx";
 import { asDate, asId, asNumber, cleanText, headerKey, normalizeText, parseBase } from "@/lib/normalize";
-import { monthFromFortnight, normalizeFortnight } from "@/lib/metrics";
+import { parseCompetence } from "@/lib/competence";
 import type {
   DriverRecord,
   HierarchyRecord,
@@ -78,13 +78,11 @@ function operationFromSheet(sheetName: string): Operation | null {
   return null;
 }
 
-function periodFromSource(sheetName: string, value: unknown) {
-  const valuePeriod = normalizeFortnight(cleanText(value));
-  const sheetPeriod = normalizeFortnight(sheetName);
-  return monthFromFortnight(valuePeriod) ? valuePeriod : monthFromFortnight(sheetPeriod) ? sheetPeriod : "";
+function periodFromSource(sourceFile: string, sheetName: string, batchName: string, value: unknown, routeDate: string | null) {
+  return parseCompetence({ value, sourceFile, sourceSheet: sheetName, batchName, routeDate })?.fortnight ?? "";
 }
 
-function parseWorkbook(bytes: Uint8Array, sourceFile: string, batchId: string) {
+function parseWorkbook(bytes: Uint8Array, sourceFile: string, batchName: string, batchId: string) {
   const workbook = XLSX.read(bytes, { type: "array", cellDates: true });
   const hierarchy: HierarchyRecord[] = [];
   const prefatura: PrefaturaRecord[] = [];
@@ -126,9 +124,12 @@ function parseWorkbook(bytes: Uint8Array, sourceFile: string, batchId: string) {
         const shipmentId = asId(row.values["ID DO PACOTE"]);
         if (!shipmentId) continue;
         const base = parseBase(row.values.BASE);
+        const routeDate = asDate(row.values["DATA DA ROTA"]);
+        const period = periodFromSource(sourceFile, sheetName, batchName, row.values.QUINZENA, routeDate);
+        if (!period) issues.push(`${sourceFile}/${sheetName}: competência não identificada na linha ${row.rowNumber}.`);
         prefatura.push({
           ...trace(batchId, sourceFile, sheetName, row.rowNumber),
-          period: periodFromSource(sheetName, row.values.QUINZENA),
+          period,
           baseLabel: base.label,
           baseName: base.name,
           baseKey: base.baseKey,
@@ -136,7 +137,7 @@ function parseWorkbook(bytes: Uint8Array, sourceFile: string, batchId: string) {
           driverName: cleanText(row.values.MOTORISTA),
           plate: cleanText(row.values.PLACA),
           description: cleanText(row.values.DESCRICAO),
-          routeDate: asDate(row.values["DATA DA ROTA"]),
+          routeDate,
           shipmentId,
           routeId: asId(row.values["N ROTA"]),
           value: asNumber(row.values.VALOR),
@@ -153,11 +154,12 @@ function parseWorkbook(bytes: Uint8Array, sourceFile: string, batchId: string) {
         const shipmentId = asId(row.values["ID DE ENVIO"]);
         if (!shipmentId) continue;
         const station = parseBase(row.values["ESTACAO DE ORIGEM"]);
+        const caseDate = asDate(row.values["DATA DO CASO"]);
         pnr.push({
           ...trace(batchId, sourceFile, sheetName, row.rowNumber),
-          caseDate: asDate(row.values["DATA DO CASO"]),
+          caseDate,
           status: cleanText(row.values.STATUS),
-          billingPeriod: periodFromSource(sheetName, row.values["PERIODO DE FATURAMENTO"]),
+          billingPeriod: periodFromSource(sourceFile, sheetName, batchName, row.values["PERIODO DE FATURAMENTO"], caseDate),
           shipmentId,
           products: cleanText(row.values.PRODUTOS),
           purchaseValue: asNumber(row.values["VALOR DA COMPRA"]),
@@ -276,7 +278,7 @@ export async function parseFile(file: File): Promise<ParsedBatch> {
 
   for (const workbook of workbooks) {
     try {
-      const parsed = parseWorkbook(workbook.bytes, workbook.name, batchId);
+      const parsed = parseWorkbook(workbook.bytes, workbook.name, file.name, batchId);
       merged.hierarchy.push(...parsed.hierarchy);
       merged.prefatura.push(...parsed.prefatura);
       merged.pnr.push(...parsed.pnr);
