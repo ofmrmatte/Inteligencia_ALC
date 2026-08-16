@@ -24,6 +24,8 @@ const ROLE_DETAILS: Record<UserRole, string> = {
   director: "Visão completa e gestão",
   supervisor: "Escopo supervisionado",
   coordinator: "Bases e motoristas vinculados",
+  super_admin: "Gestão total do painel e portal",
+  driver: "Portal externo individual",
 };
 
 export function SettingsView({ profile }: { profile: AuthProfile }) {

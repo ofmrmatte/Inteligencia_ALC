@@ -16,7 +16,7 @@ import { useDashboardStore } from "@/lib/store";
 const ImportPanel = dynamic(() => import("@/components/import-panel").then((module) => module.ImportPanel), { ssr: false });
 const SIDEBAR_KEY = "alc-inteligencia:sidebar-collapsed";
 const SIDEBAR_EVENT = "alc-inteligencia:sidebar-change";
-const ADMIN_SECTIONS: SectionId[] = ["configuracoes", "perfil"];
+const ADMIN_SECTIONS: SectionId[] = ["gestao-motoristas", "configuracoes", "perfil"];
 
 function subscribeSidebarChange(callback: () => void) {
   window.addEventListener("storage", callback);

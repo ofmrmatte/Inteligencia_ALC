@@ -10,6 +10,7 @@ const PnrView = dynamic(() => import("./pnr-view").then((module) => module.PnrVi
 const PrefaturaView = dynamic(() => import("./prefatura-view").then((module) => module.PrefaturaView), { loading });
 const RiskView = dynamic(() => import("./risk-view").then((module) => module.RiskView), { loading });
 const DriversView = dynamic(() => import("./drivers-view").then((module) => module.DriversView), { loading });
+const DriverManagementView = dynamic(() => import("./driver-management-view").then((module) => module.DriverManagementView), { loading });
 const ReconciliationView = dynamic(() => import("./reconciliation-view").then((module) => module.ReconciliationView), { loading });
 const QualityView = dynamic(() => import("./quality-view").then((module) => module.QualityView), { loading });
 const ImportsView = dynamic(() => import("./imports-view").then((module) => module.ImportsView), { loading });
@@ -22,6 +23,7 @@ export function ViewRouter({ section, profile }: { section: SectionId; profile: 
     case "pre-faturamento": return <PrefaturaView />;
     case "risco-lm": return <RiskView />;
     case "motoristas": return <DriversView />;
+    case "gestao-motoristas": return <DriverManagementView profile={profile} />;
     case "conciliacao-ids": return <ReconciliationView />;
     case "qualidade-dados": return <QualityView />;
     case "importacoes": return <ImportsView />;
