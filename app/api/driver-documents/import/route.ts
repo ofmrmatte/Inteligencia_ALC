@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { classifyPaymentArchive, extractArchiveFiles, MAX_ARCHIVE_COMPRESSED_SIZE, safeStorageName } from "@/lib/driver-portal";
+import { classifyPaymentArchive, extractArchiveFiles, MAX_ARCHIVE_COMPRESSED_SIZE, paymentArchiveContext, safeStorageName, type PaymentBaseReference } from "@/lib/driver-portal";
 import { adminBaseScope, assertBaseAccess, isSuperAdminProfile, jsonError, loadKnownDrivers, requirePortalProfile, textValue } from "@/lib/driver-portal-server";
 import { createAdminClient } from "@/lib/supabase/admin";
 
@@ -30,12 +30,25 @@ export async function POST(request: Request) {
     });
     if (uploadArchive.error) throw new Error(uploadArchive.error.message);
 
+    let baseQuery = admin.from("operational_bases").select("base_key,base_name,sigla").eq("active", true);
+    if (allowedBases) baseQuery = baseQuery.in("base_key", allowedBases.length ? allowedBases : ["__none__"]);
+    const baseResult = await baseQuery.order("base_name", { ascending: true });
+    if (baseResult.error) throw new Error(baseResult.error.message);
+    const operationalBases: PaymentBaseReference[] = (baseResult.data ?? []).map((row) => ({
+      baseKey: textValue(row.base_key),
+      baseName: textValue(row.base_name) || textValue(row.base_key),
+      sigla: textValue(row.sigla),
+    }));
+
+    const archiveContext = paymentArchiveContext(file.name, operationalBases);
+    if (archiveContext?.baseKey) assertBaseAccess(archiveContext.baseKey, allowedBases);
+
     const knownDrivers = await loadKnownDrivers(allowedBases);
     const hashes = await admin.from("driver_payment_document_versions").select("file_hash");
     if (hashes.error) throw new Error(hashes.error.message);
     const knownHashes = new Set((hashes.data ?? []).map((row) => textValue(row.file_hash)));
     const extracted = await extractArchiveFiles(file.name, archiveBytes);
-    const classified = await classifyPaymentArchive(extracted, knownDrivers, knownHashes);
+    const classified = await classifyPaymentArchive(extracted, knownDrivers, knownHashes, { archiveName: file.name, bases: operationalBases });
 
     for (const item of classified) if (item.baseKey) assertBaseAccess(item.baseKey, allowedBases);
 
@@ -51,6 +64,7 @@ export async function POST(request: Request) {
       safeName: item.safeName,
       baseKey: item.baseKey,
       baseName: item.baseName,
+      sigla: item.sigla,
       driverCode: item.driverCode,
       driverName: item.driverName,
       period: item.period,
@@ -72,25 +86,31 @@ export async function POST(request: Request) {
       unidentified_count: counts.unidentified,
       duplicate_count: counts.duplicate,
       error_count: counts.error,
-      metadata: { files: metadataFiles },
+      metadata: { files: metadataFiles, archiveContext },
     });
     if (batchInsert.error) throw new Error(batchInsert.error.message);
 
     const created = [];
     for (const item of classified) {
+      if (item.status === "invalid") continue;
       const storagePath = `payment-documents/${batchId}/${item.safeName}`;
       if (item.status === "identified") {
         const upload = await admin.storage.from("driver-payments").upload(storagePath, item.bytes, { contentType: "application/pdf", upsert: false });
         if (upload.error) throw new Error(upload.error.message);
       }
       const driver = knownDrivers.find((candidate) => candidate.driverCode === item.driverCode);
+      const databaseStatus = item.status === "identified"
+        ? "draft"
+        : item.status === "conflict"
+          ? "error"
+          : item.status;
       const document = await admin.from("driver_payment_documents").insert({
         batch_id: batchId,
         driver_id: item.status === "identified" ? driver?.id : null,
         base_key: item.baseKey || null,
         period: item.period || null,
         document_date: item.documentDate,
-        status: item.status === "identified" ? "draft" : item.status,
+        status: databaseStatus,
         title: item.originalName,
         issue: item.issue || null,
       }).select().single();
@@ -110,11 +130,11 @@ export async function POST(request: Request) {
         if (versionInsert.error) throw new Error(versionInsert.error.message);
         version = versionInsert.data;
       }
-      created.push({ ...document.data, version, classification: item.status, issue: item.issue, driverName: item.driverName, driverCode: item.driverCode });
+      created.push({ ...document.data, version, classification: item.status, issue: item.issue, driverName: item.driverName, driverCode: item.driverCode, sigla: item.sigla });
     }
 
-    await admin.from("driver_portal_audit_events").insert({ actor_profile_id: profile.id, action: "payment_batch_review_created", entity_table: "driver_payment_batches", entity_id: batchId, after_data: { counts, originalName: file.name } });
-    return NextResponse.json({ batchId, counts, documents: created });
+    await admin.from("driver_portal_audit_events").insert({ actor_profile_id: profile.id, action: "payment_batch_review_created", entity_table: "driver_payment_batches", entity_id: batchId, after_data: { counts, originalName: file.name, archiveContext } });
+    return NextResponse.json({ batchId, counts, archiveContext, documents: created });
   } catch (error) {
     return jsonError(error instanceof Error ? error.message : "Falha ao importar documentos.", 400);
   }
