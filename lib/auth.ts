@@ -30,8 +30,8 @@ export interface AuthProfile {
   globalAccess: boolean;
   baseScope: string[];
   siglaScope: string[];
-  moduleScope: string[];
-  driverManagementScope: string[];
+  moduleScope?: string[];
+  driverManagementScope?: string[];
 }
 
 export const ROLE_LABELS: Record<UserRole, string> = {
