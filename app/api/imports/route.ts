@@ -72,7 +72,8 @@ function sourceTrace(row: DbRow) {
 }
 
 function rowFortnight(period: string | null | undefined, date: string | null) {
-  return normalizeFortnight(period) || fortnightFromDate(date);
+  const normalized = normalizeFortnight(period);
+  return monthFromFortnight(normalized) ? normalized : fortnightFromDate(date);
 }
 
 function firstBatchFortnight(batch: ParsedBatch) {
@@ -80,7 +81,7 @@ function firstBatchFortnight(batch: ParsedBatch) {
     ...batch.prefatura.map((row) => rowFortnight(row.period, row.routeDate)),
     ...batch.pnr.map((row) => rowFortnight(row.billingPeriod, row.caseDate)),
     ...batch.risk.map((row) => rowFortnight(undefined, row.failureDate)),
-  ].filter(Boolean);
+  ].filter((fortnight) => Boolean(fortnight && monthFromFortnight(fortnight)));
   return candidates[0] ?? null;
 }
 
@@ -105,6 +106,8 @@ function mapImportEntry(row: DbRow): ImportEntry {
     batchId: toStringValue(entry.batchId || row.id),
     name: toStringValue(entry.name || row.name),
     importedAt: toStringValue(entry.importedAt || row.finished_at || row.started_at || new Date().toISOString()),
+    fortnight: toStringValue(entry.fortnight || row.fortnight),
+    month: toStringValue(entry.month || row.month || row.competence),
     size: toNumberValue(entry.size),
     status,
     kinds,
@@ -470,7 +473,7 @@ export async function POST(request: Request) {
   try {
     const supabase = await createClient();
     const profile = await requireProfile(supabase);
-    if (!hasFullAccess(profile)) return jsonError("Importação restrita a Diretor ou ADM.", 403);
+    if (!hasFullAccess(profile)) return jsonError("Importação restrita a Diretor, ADM ou Desenvolvedor.", 403);
 
     const payload = (await request.json()) as Partial<PersistRequest>;
     const batches = Array.isArray(payload.batches) ? payload.batches : [];
@@ -492,7 +495,7 @@ export async function DELETE(request: Request) {
   try {
     const supabase = await createClient();
     const profile = await requireProfile(supabase);
-    if (!hasFullAccess(profile)) return jsonError("Exclusão restrita a Diretor ou ADM.", 403);
+    if (!hasFullAccess(profile)) return jsonError("Exclusão restrita a Diretor, ADM ou Desenvolvedor.", 403);
 
     const url = new URL(request.url);
     const batchId = url.searchParams.get("batchId");

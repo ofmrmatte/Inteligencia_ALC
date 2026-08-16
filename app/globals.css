@@ -392,11 +392,34 @@ a { color: inherit; text-decoration: none; }
 .settings-role-grid svg { color: var(--red); }
 .settings-role-grid strong { font: 650 13px/1.2 var(--font-heading); }
 .settings-role-grid span { color: var(--gray-700); font-size: 10px; line-height: 1.55; }
+.user-admin-form { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)) auto auto; gap: 9px; align-items: end; margin-bottom: 14px; }
+.user-admin-form label { min-width: 0; display: grid; gap: 5px; }
+.user-admin-form label > span { color: var(--gray-500); font-size: 8px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; }
+.user-admin-form input, .user-admin-form select, .inline-select {
+  width: 100%;
+  height: 34px;
+  min-width: 0;
+  padding: 0 10px;
+  color: var(--gray-900);
+  background: #fafafa;
+  border: 1px solid var(--gray-200);
+  border-radius: 6px;
+  outline: 0;
+  font-size: 10px;
+}
+.user-admin-form input:focus, .user-admin-form select:focus, .inline-select:focus { border-color: var(--red); background: #fff; box-shadow: 0 0 0 2px rgba(227, 6, 19, .08); }
+.check-control, .mini-check { display: inline-flex !important; align-items: center; gap: 7px; color: var(--gray-700); font-size: 10px; font-weight: 600; }
+.check-control { height: 34px; padding-inline: 10px; background: #fafafa; border: 1px solid var(--gray-200); border-radius: 6px; }
+.check-control input, .mini-check input { width: 14px; height: 14px; accent-color: var(--red); }
+.admin-message { margin: 0 0 10px; color: var(--gray-700); font-size: 10px; }
+.row-actions { display: inline-flex; gap: 5px; }
+.row-actions .table-action:disabled { opacity: .45; cursor: not-allowed; }
 
 @media (max-width: 1280px) {
   .kpi-grid--six { grid-template-columns: repeat(3, minmax(0, 1fr)); }
   .content-grid--wide { grid-template-columns: minmax(0, 1.3fr) minmax(300px, .8fr); }
   .filter-control select { max-width: 126px; }
+  .user-admin-form { grid-template-columns: repeat(3, minmax(0, 1fr)); }
 }
 
 @media (max-width: 980px) {
@@ -417,6 +440,7 @@ a { color: inherit; text-decoration: none; }
   .content-grid--wide { grid-template-columns: 1fr; }
   .empty-dashboard { grid-template-columns: 1fr; gap: 45px; padding: 8vw; }
   .settings-role-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .user-admin-form { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }
 
 @media (max-height: 760px) and (min-width: 621px) {
@@ -456,6 +480,7 @@ a { color: inherit; text-decoration: none; }
   .login-form label > div { height: 43px; }
   .login-aside { display: none; }
   .settings-role-grid { grid-template-columns: 1fr; }
+  .user-admin-form { grid-template-columns: 1fr; }
 }
 
 @media (max-width: 380px), (max-height: 610px) {

@@ -1,4 +1,4 @@
-export const USER_ROLES = ["coordinator", "supervisor", "director", "admin"] as const;
+export const USER_ROLES = ["coordinator", "supervisor", "director", "admin", "developer"] as const;
 
 export type UserRole = (typeof USER_ROLES)[number];
 
@@ -17,6 +17,7 @@ export const ROLE_LABELS: Record<UserRole, string> = {
   supervisor: "Supervisor",
   director: "Diretor",
   admin: "ADM",
+  developer: "Desenvolvedor",
 };
 
 export function isUserRole(value: unknown): value is UserRole {
@@ -24,9 +25,13 @@ export function isUserRole(value: unknown): value is UserRole {
 }
 
 export function hasFullAccess(profile: Pick<AuthProfile, "role" | "globalAccess">) {
-  return profile.globalAccess || profile.role === "admin" || profile.role === "director";
+  return profile.globalAccess || profile.role === "admin" || profile.role === "director" || profile.role === "developer";
 }
 
 export function canManageImports(profile: Pick<AuthProfile, "role" | "globalAccess">) {
   return hasFullAccess(profile);
+}
+
+export function canManageUsers(profile: Pick<AuthProfile, "role" | "globalAccess">) {
+  return profile.globalAccess || profile.role === "admin" || profile.role === "director" || profile.role === "developer";
 }

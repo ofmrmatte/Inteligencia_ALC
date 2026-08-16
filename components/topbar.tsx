@@ -30,7 +30,7 @@ export function Topbar({ section, profile, canImport, onImport, onMobileMenu }: 
           <span>{ROLE_LABELS[profile.role]}</span>
         </div>
         <button className="icon-button" aria-label="Notificações"><Bell size={19} /><i className="notification-dot" /></button>
-        <button className="primary-button primary-button--small" onClick={onImport} disabled={!canImport} title={canImport ? "Importar dados" : "Importação restrita a Diretor/ADM"}><HardDriveUpload size={17} />Importar</button>
+        <button className="primary-button primary-button--small" onClick={onImport} disabled={!canImport} title={canImport ? "Importar dados" : "Importação restrita a Diretor/ADM/Desenvolvedor"}><HardDriveUpload size={17} />Importar</button>
         <form action={signOutAction}>
           <button className="icon-button" aria-label="Sair" title="Sair"><LogOut size={18} /></button>
         </form>

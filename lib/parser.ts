@@ -1,7 +1,7 @@
 import { unzipSync } from "fflate";
 import * as XLSX from "xlsx";
 import { asDate, asId, asNumber, cleanText, headerKey, normalizeText, parseBase } from "@/lib/normalize";
-import { normalizeFortnight } from "@/lib/metrics";
+import { monthFromFortnight, normalizeFortnight } from "@/lib/metrics";
 import type {
   DriverRecord,
   HierarchyRecord,
@@ -48,12 +48,22 @@ function rowsFrom(matrix: Matrix, headerIndex: number): Array<{ values: RowMap; 
 }
 
 function sheetMatrix(sheet: XLSX.WorkSheet): Matrix {
-  return XLSX.utils.sheet_to_json<unknown[]>(sheet, {
-    header: 1,
-    defval: null,
-    raw: true,
-    blankrows: false,
-  });
+  if (!sheet["!ref"]) return [];
+  const range = XLSX.utils.decode_range(sheet["!ref"]);
+  const matrix: Matrix = [];
+  for (let rowIndex = range.s.r; rowIndex <= range.e.r; rowIndex += 1) {
+    const row: unknown[] = [];
+    for (let columnIndex = range.s.c; columnIndex <= range.e.c; columnIndex += 1) {
+      const cell = sheet[XLSX.utils.encode_cell({ r: rowIndex, c: columnIndex })];
+      if (!cell) {
+        row.push(null);
+        continue;
+      }
+      row.push(cell.t === "d" && typeof cell.w === "string" ? cell.w : cell.v ?? null);
+    }
+    matrix.push(row);
+  }
+  return matrix;
 }
 
 function trace(batchId: string, sourceFile: string, sourceSheet: string, rowNumber: number) {
@@ -69,11 +79,13 @@ function operationFromSheet(sheetName: string): Operation | null {
 }
 
 function periodFromSource(sheetName: string, value: unknown) {
-  return normalizeFortnight(cleanText(value)) || normalizeFortnight(sheetName);
+  const valuePeriod = normalizeFortnight(cleanText(value));
+  const sheetPeriod = normalizeFortnight(sheetName);
+  return monthFromFortnight(valuePeriod) ? valuePeriod : monthFromFortnight(sheetPeriod) ? sheetPeriod : "";
 }
 
 function parseWorkbook(bytes: Uint8Array, sourceFile: string, batchId: string) {
-  const workbook = XLSX.read(bytes, { type: "array", cellDates: true, dense: true });
+  const workbook = XLSX.read(bytes, { type: "array", cellDates: true });
   const hierarchy: HierarchyRecord[] = [];
   const prefatura: PrefaturaRecord[] = [];
   const pnr: PnrRecord[] = [];

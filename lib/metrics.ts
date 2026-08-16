@@ -60,8 +60,31 @@ export function formatFortnightLabel(value: string) {
   return value;
 }
 
+function validFortnight(value: string | null | undefined) {
+  const normalized = normalizeFortnight(value);
+  return monthFromFortnight(normalized) ? normalized : "";
+}
+
 function rowFortnight(period: string | null | undefined, date: string | null) {
-  return normalizeFortnight(period) || fortnightFromDate(date);
+  return validFortnight(period) || fortnightFromDate(date);
+}
+
+function importFortnightByBatch(imports: ImportEntry[]) {
+  const entries = new Map<string, string>();
+  for (const entry of imports) {
+    const fortnight = validFortnight(entry.fortnight);
+    if (entry.batchId && fortnight) entries.set(entry.batchId, fortnight);
+  }
+  return entries;
+}
+
+function recordFortnight(
+  importFortnights: Map<string, string>,
+  record: { batchId: string },
+  period: string | null | undefined,
+  date: string | null,
+) {
+  return rowFortnight(period, date) || importFortnights.get(record.batchId) || "";
 }
 
 function fortnightOrder(value: string) {
@@ -71,8 +94,7 @@ function fortnightOrder(value: string) {
   return Number(year) * 24 + (Number(month) - 1) * 2 + (half === "02" ? 1 : 0);
 }
 
-function inFortnight(period: string | null | undefined, date: string | null, filters: DashboardFilters) {
-  const fortnight = rowFortnight(period, date);
+function inFortnight(fortnight: string, filters: DashboardFilters) {
   if (filters.month !== "Todos" && monthFromFortnight(fortnight) !== filters.month) return false;
   if (filters.fortnight === "Todas") return true;
   return fortnight.startsWith(filters.fortnight === "Q1" ? "01Q" : "02Q");
@@ -151,6 +173,7 @@ function operationalActivity(data: DashboardData): OperationalActivity {
   const baseLastSeen = new Map<string, number>();
   const driverLastSeen = new Map<string, number>();
   const idByDriverName = driverIdMap(data.drivers);
+  const importFortnights = importFortnightByBatch(data.imports);
   let latestOrder = Number.NEGATIVE_INFINITY;
 
   const touchBase = (record: { baseKey: string; sigla: string }, order: number) => {
@@ -163,18 +186,18 @@ function operationalActivity(data: DashboardData): OperationalActivity {
   };
 
   for (const row of data.prefatura) {
-    const order = fortnightOrder(rowFortnight(row.period, row.routeDate));
+    const order = fortnightOrder(recordFortnight(importFortnights, row, row.period, row.routeDate));
     touchBase(row, order);
     const knownId = idByDriverName.get(normalizeText(row.driverName));
     touchDriver([knownId ? driverKey(knownId) : "", driverNameKey(row.driverName)], order);
   }
   for (const row of data.pnr) {
-    const order = fortnightOrder(rowFortnight(row.billingPeriod, row.caseDate));
+    const order = fortnightOrder(recordFortnight(importFortnights, row, row.billingPeriod, row.caseDate));
     touchBase(row, order);
     touchDriver([driverKey(row.driverId)], order);
   }
   for (const row of data.risk) {
-    const order = fortnightOrder(rowFortnight(undefined, row.failureDate));
+    const order = fortnightOrder(recordFortnight(importFortnights, row, undefined, row.failureDate));
     touchBase(row, order);
     touchDriver([driverKey(row.driverId)], order);
   }
@@ -211,6 +234,7 @@ function isActiveDriverId(activity: OperationalActivity, id: string) {
 
 export function scopeData(data: DashboardData, filters: DashboardFilters): ScopedData {
   const activity = operationalActivity(data);
+  const importFortnights = importFortnightByBatch(data.imports);
   const activeScope = activeOperationalScope(filters);
   const hierarchy = data.hierarchy.filter((row) => {
     if (filters.coordinator !== "Todos" && row.coordinator !== filters.coordinator) return false;
@@ -227,7 +251,7 @@ export function scopeData(data: DashboardData, filters: DashboardFilters): Scope
   const selectedDriverId = filters.driver === "Todos" ? "" : idByName.get(normalizeText(filters.driver)) ?? filters.driver;
 
   const prefatura = data.prefatura.filter((row) => {
-    if (!inFortnight(row.period, row.routeDate, filters)) return false;
+    if (!inFortnight(recordFortnight(importFortnights, row, row.period, row.routeDate), filters)) return false;
     if (!matchesScope(row, allowedBases, allowedSiglas, scopeActive)) return false;
     if (activeScope && (!isActiveBase(activity, row) || !isActiveDriverName(activity, row.driverName))) return false;
     if (filters.operation !== "Todas" && row.operation !== filters.operation) return false;
@@ -235,7 +259,7 @@ export function scopeData(data: DashboardData, filters: DashboardFilters): Scope
     return true;
   });
   const pnr = data.pnr.filter((row) => {
-    if (!inFortnight(row.billingPeriod, row.caseDate, filters)) return false;
+    if (!inFortnight(recordFortnight(importFortnights, row, row.billingPeriod, row.caseDate), filters)) return false;
     if (!matchesScope(row, allowedBases, allowedSiglas, scopeActive)) return false;
     if (activeScope && (!isActiveBase(activity, row) || !isActiveDriverId(activity, row.driverId))) return false;
     if (filters.operation !== "Todas" && filters.operation !== "PNR") return false;
@@ -243,7 +267,7 @@ export function scopeData(data: DashboardData, filters: DashboardFilters): Scope
     return true;
   });
   const risk = data.risk.filter((row) => {
-    if (!inFortnight(undefined, row.failureDate, filters)) return false;
+    if (!inFortnight(recordFortnight(importFortnights, row, undefined, row.failureDate), filters)) return false;
     if (!matchesScope(row, allowedBases, allowedSiglas, scopeActive)) return false;
     if (activeScope && (!isActiveBase(activity, row) || !isActiveDriverId(activity, row.driverId))) return false;
     if (selectedDriverId && row.driverId !== selectedDriverId) return false;
@@ -265,6 +289,7 @@ export function scopeData(data: DashboardData, filters: DashboardFilters): Scope
 
 export function filterOptions(data: DashboardData, filters: DashboardFilters) {
   const activity = operationalActivity(data);
+  const importFortnights = importFortnightByBatch(data.imports);
   const activeScope = activeOperationalScope(filters);
   const afterCoordinator = data.hierarchy.filter((row) => filters.coordinator === "Todos" || row.coordinator === filters.coordinator);
   const activeHierarchy = afterCoordinator.filter((row) => !activeScope || isActiveBase(activity, row));
@@ -277,15 +302,16 @@ export function filterOptions(data: DashboardData, filters: DashboardFilters) {
     ...scoped.pnr.map((row) => namesFromIds.get(row.driverId) ?? row.driverId),
     ...scoped.risk.map((row) => namesFromIds.get(row.driverId) ?? row.driverId),
   ].filter(Boolean)).sort((a, b) => a.localeCompare(b, "pt-BR"));
+  const availableFortnights = [
+    ...data.prefatura.map((row) => recordFortnight(importFortnights, row, row.period, row.routeDate)),
+    ...data.pnr.map((row) => recordFortnight(importFortnights, row, row.billingPeriod, row.caseDate)),
+    ...data.risk.map((row) => recordFortnight(importFortnights, row, undefined, row.failureDate)),
+  ].filter(Boolean);
   const fortnights = [
-    ...(data.prefatura.some((row) => rowFortnight(row.period, row.routeDate).startsWith("01Q")) || data.pnr.some((row) => rowFortnight(row.billingPeriod, row.caseDate).startsWith("01Q")) || data.risk.some((row) => rowFortnight(undefined, row.failureDate).startsWith("01Q")) ? ["Q1"] : []),
-    ...(data.prefatura.some((row) => rowFortnight(row.period, row.routeDate).startsWith("02Q")) || data.pnr.some((row) => rowFortnight(row.billingPeriod, row.caseDate).startsWith("02Q")) || data.risk.some((row) => rowFortnight(undefined, row.failureDate).startsWith("02Q")) ? ["Q2"] : []),
+    ...(availableFortnights.some((value) => value.startsWith("01Q")) ? ["Q1"] : []),
+    ...(availableFortnights.some((value) => value.startsWith("02Q")) ? ["Q2"] : []),
   ];
-  const months = unique([
-    ...data.prefatura.map((row) => rowFortnight(row.period, row.routeDate)),
-    ...data.pnr.map((row) => rowFortnight(row.billingPeriod, row.caseDate)),
-    ...data.risk.map((row) => rowFortnight(undefined, row.failureDate)),
-  ].map(monthFromFortnight).filter(Boolean)).sort();
+  const months = unique(availableFortnights.map(monthFromFortnight).filter(Boolean)).sort();
 
   return {
     months,
@@ -379,15 +405,16 @@ export function prefaturaByOperation(records: PrefaturaRecord[]) {
 }
 
 export function monthlyMovement(scoped: ScopedData, imports: ImportEntry[] = []) {
+  const importFortnights = importFortnightByBatch(imports);
   const months = new Map<string, { month: string; prefatura: number; pnr: number; risco: number }>();
-  const touch = (date: string | null) => {
-    const month = date?.slice(0, 7) || "Sem data";
+  const touch = (record: { batchId: string }, period: string | null | undefined, date: string | null) => {
+    const month = monthFromFortnight(recordFortnight(importFortnights, record, period, date)) || date?.slice(0, 7) || "Sem data";
     if (!months.has(month)) months.set(month, { month, prefatura: 0, pnr: 0, risco: 0 });
     return months.get(month)!;
   };
-  for (const row of uniqueByShipment(scoped.prefatura)) touch(row.routeDate).prefatura += row.value;
-  for (const row of latestPnrByShipment(scoped.pnr, imports)) touch(row.caseDate).pnr += row.purchaseValue;
-  for (const row of uniqueByShipment(scoped.risk)) touch(row.failureDate).risco += row.gmvBrl;
+  for (const row of uniqueByShipment(scoped.prefatura)) touch(row, row.period, row.routeDate).prefatura += row.value;
+  for (const row of latestPnrByShipment(scoped.pnr, imports)) touch(row, row.billingPeriod, row.caseDate).pnr += row.purchaseValue;
+  for (const row of uniqueByShipment(scoped.risk)) touch(row, undefined, row.failureDate).risco += row.gmvBrl;
   return [...months.values()].sort((a, b) => a.month.localeCompare(b.month)).slice(-12);
 }
 

@@ -136,6 +136,26 @@ describe("atividade operacional de bases e motoristas", () => {
     expect(current.drivers.map((driver) => driver.driverId)).toEqual(["D1"]);
     expect(current.risk.map((row) => row.shipmentId)).toEqual(["A", "B"]);
   });
+
+  it("usa o período do lote quando a linha não traz período ou data válida", () => {
+    const data = {
+      hierarchy: [{ coordinator: "Gestor", supervisor: "Supervisor", sigla: "SMG", base: "Base Julho", baseKey: "BASE JULHO" }],
+      prefatura: [{ batchId: "pref", period: "02Q072026", routeDate: "2026-07-31", baseKey: "BASE JULHO", sigla: "SMG", driverName: "Motorista Julho", shipmentId: "PREF", value: 120 }],
+      pnr: [],
+      risk: [{ batchId: "risk", failureDate: null, baseKey: "BASE JULHO", sigla: "SMG", driverId: "D1", shipmentId: "RISK", gmvBrl: 300 }],
+      drivers: [{ driverId: "D1", name: "Motorista Julho" }],
+      imports: [
+        { batchId: "pref", fortnight: "02Q072026", month: "2026-07", importedAt: "2026-08-15T20:00:00.000Z" },
+        { batchId: "risk", fortnight: "02Q072026", month: "2026-07", importedAt: "2026-08-15T21:00:00.000Z" },
+      ],
+      isDemo: false,
+    } as unknown as DashboardData;
+
+    expect(filterOptions(data, EMPTY_FILTERS).months).toEqual(["2026-07"]);
+    const current = scopeData(data, EMPTY_FILTERS);
+    expect(current.prefatura.map((row) => row.shipmentId)).toEqual(["PREF"]);
+    expect(current.risk.map((row) => row.shipmentId)).toEqual(["RISK"]);
+  });
 });
 
 describe("quadro de decisão PNR", () => {

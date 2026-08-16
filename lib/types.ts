@@ -93,6 +93,8 @@ export interface ImportEntry {
   batchId: string;
   name: string;
   importedAt: string;
+  fortnight?: string | null;
+  month?: string | null;
   size: number;
   status: "concluído" | "com-alertas" | "erro" | "demonstração";
   kinds: SourceKind[];
