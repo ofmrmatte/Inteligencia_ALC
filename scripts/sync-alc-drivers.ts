@@ -1,5 +1,6 @@
 import pg from "pg";
 import { isBlankIdentityValue, isNumericOnlyName, normalizeDriverId } from "../lib/driver-identity-resolver";
+import { portalEligibilityFromBase } from "../lib/driver-portal-base-access";
 
 const { Client } = pg;
 
@@ -82,14 +83,16 @@ function touch(map: Map<string, DriverAggregate>, row: DbRow, source: string, da
 const client = new Client({ connectionString: process.env.DATABASE_URL, ssl: { rejectUnauthorized: false } });
 await client.connect();
 try {
-  const [drivers, prefatura, pnr, risk, existing] = await Promise.all([
+  const [drivers, prefatura, pnr, risk, existing, baseAccess] = await Promise.all([
     client.query("select driver_id, name, base_key, sigla, last_updated, created_at from public.driver_records"),
     client.query("select driver_id, driver_name, base_key, sigla, route_date, created_at from public.prefatura_records where coalesce(driver_id, '') <> ''"),
     client.query("select driver_id, base_key, sigla, case_date, created_at from public.pnr_records where coalesce(driver_id, '') <> ''"),
     client.query("select driver_id, base_key, sigla, failure_date, created_at from public.risk_lm_records where coalesce(driver_id, '') <> ''"),
-    client.query("select driver_code, portal_eligible, portal_status, status from public.alc_drivers"),
+    client.query("select id, driver_code, portal_eligible, portal_status, status, base_key from public.alc_drivers"),
+    client.query("select base_key, enabled from public.driver_portal_base_access"),
   ]);
   const byCode = new Map<string, DbRow>(existing.rows.map((row) => [text(row.driver_code), row]));
+  const baseEnabled = new Map<string, boolean>(baseAccess.rows.map((row) => [text(row.base_key).trim().toUpperCase(), Boolean(row.enabled)]));
   const aggregate = new Map<string, DriverAggregate>();
 
   for (const row of drivers.rows) touch(aggregate, row, "driver_records", "last_updated", "name");
@@ -99,11 +102,12 @@ try {
 
   const rows = [...aggregate.values()].map((row) => {
     const existingRow = byCode.get(row.driver_code);
+    const portalStatus = text(existingRow?.portal_status) || "not_activated";
     return {
       ...row,
       operational_status: operationalStatus(row.last_operational_seen_at),
-      portal_eligible: Boolean(existingRow?.portal_eligible),
-      portal_status: text(existingRow?.portal_status) || "not_activated",
+      portal_eligible: portalEligibilityFromBase(Boolean(baseEnabled.get(row.base_key.trim().toUpperCase())), portalStatus),
+      portal_status: portalStatus,
       status: text(existingRow?.status) || "pending_activation",
     };
   });
@@ -165,12 +169,26 @@ try {
           full_name = excluded.full_name,
           base_key = excluded.base_key,
           sigla = excluded.sigla,
+          portal_eligible = excluded.portal_eligible,
           operational_status = excluded.operational_status,
           last_operational_seen_at = excluded.last_operational_seen_at,
           source_updated_at = excluded.source_updated_at,
           source_payload = excluded.source_payload,
           updated_at = now()
       `, [JSON.stringify(chunk)]);
+    }
+    const revokedDriverIds = rows
+      .filter((row) => !row.portal_eligible && Boolean(byCode.get(row.driver_code)?.portal_eligible))
+      .map((row) => text(byCode.get(row.driver_code)?.id))
+      .filter(Boolean);
+    for (let index = 0; index < revokedDriverIds.length; index += 500) {
+      const chunk = revokedDriverIds.slice(index, index + 500);
+      await client.query(`
+        update public.driver_portal_sessions
+        set revoked_at = now()
+        where revoked_at is null
+          and driver_id = any($1::uuid[])
+      `, [chunk]);
     }
     await client.query("commit");
   }

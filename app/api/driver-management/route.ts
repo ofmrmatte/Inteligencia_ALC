@@ -1,7 +1,8 @@
 import { NextResponse } from "next/server";
 import { canManageUsers, isUserRole, type UserRole } from "@/lib/auth";
 import { createAdminClient } from "@/lib/supabase/admin";
-import { adminBaseScope, assertBaseAccess, driverPortalPatchForAction, isSuperAdminProfile, jsonError, loadKnownDrivers, loadTickets, requireCanonicalDriverCode, requirePortalProfile, textValue } from "@/lib/driver-portal-server";
+import { portalEligibilityFromBase } from "@/lib/driver-portal-base-access";
+import { adminBaseScope, assertBaseAccess, driverPortalPatchForAction, isSuperAdminProfile, jsonError, loadDriverPortalBaseEnabled, loadKnownDrivers, loadTickets, requireCanonicalDriverCode, requirePortalProfile, textValue } from "@/lib/driver-portal-server";
 
 export const dynamic = "force-dynamic";
 
@@ -67,14 +68,16 @@ export async function POST(request: Request) {
       assertBaseAccess(baseKey, allowedBases);
       const driverCode = requireCanonicalDriverCode(body.driverCode);
       if (!textValue(body.fullName)) throw new Error("Informe motorista e ID.");
+      const portalStatus = textValue(body.portalStatus) || "not_activated";
+      const baseEnabled = await loadDriverPortalBaseEnabled(baseKey);
       const { data, error } = await admin.from("alc_drivers").upsert({
         driver_code: driverCode,
         full_name: textValue(body.fullName),
         base_key: baseKey,
         sigla: textValue(body.sigla),
         status: textValue(body.status) || "pending_activation",
-        portal_status: textValue(body.portalStatus) || "not_activated",
-        portal_eligible: body.portalEligible !== false,
+        portal_status: portalStatus,
+        portal_eligible: portalEligibilityFromBase(baseEnabled, portalStatus),
         operational_status: textValue(body.operationalStatus) || "unknown",
       }, { onConflict: "driver_code" }).select().single();
       if (error) throw new Error(error.message);
@@ -156,6 +159,10 @@ export async function PATCH(request: Request) {
       const credential = await admin.from("driver_portal_credentials").select("driver_id").eq("driver_id", id).maybeSingle();
       if (credential.error) throw new Error(credential.error.message);
       const patch = driverPortalPatchForAction(portalAction, Boolean(credential.data), now);
+      if (["allow", "reactivate", "reset_pin"].includes(portalAction)) {
+        const baseEnabled = await loadDriverPortalBaseEnabled(textValue(current.data.base_key));
+        if (!baseEnabled) throw new Error("Base bloqueada no controle central do Portal do Motorista.");
+      }
 
       if (portalAction !== "revoke_sessions") {
         const updated = await admin.from("alc_drivers").update(patch).eq("id", id).select().single();

@@ -2,6 +2,7 @@ import { hasFullAccess, type AuthProfile } from "@/lib/auth";
 import { getAllowedBaseIds } from "@/lib/access-scope";
 import { getUserAccessScope } from "@/lib/access-scope-server";
 import { createAdminClient } from "@/lib/supabase/admin";
+import { portalEligibilityFromBase } from "@/lib/driver-portal-base-access";
 import { getCurrentProfile } from "@/lib/auth-server";
 import { normalizeDriverKey, pnrStatusToTicket, type DriverTicket } from "@/lib/driver-portal";
 import { normalizeText } from "@/lib/normalize";
@@ -90,9 +91,35 @@ export function assertBaseAccess(baseKey: string, allowedBases: string[] | null)
   if (allowedBases && !allowedBases.includes(normalizeText(baseKey))) throw new Error("Acesso negado para a base solicitada.");
 }
 
+export async function loadDriverPortalBaseEnabled(baseKey: string) {
+  const normalized = textValue(baseKey).trim().toUpperCase();
+  if (!normalized) return false;
+  const admin = createAdminClient();
+  const { data, error } = await admin
+    .from("driver_portal_base_access")
+    .select("enabled")
+    .eq("base_key", normalized)
+    .maybeSingle();
+  if (error) throw new Error(error.message);
+  return Boolean(data?.enabled);
+}
+
+async function loadDriverPortalBaseAccessMap() {
+  const admin = createAdminClient();
+  const rows = await readPaged<DbRow>(async (offset, pageSize) => {
+    const { data, error, count } = await admin
+      .from("driver_portal_base_access")
+      .select("base_key,enabled", { count: "exact" })
+      .range(offset, offset + pageSize - 1);
+    if (error) throw new Error(error.message);
+    return { rows: (data ?? []) as DbRow[], count };
+  });
+  return new Map(rows.map((row) => [textValue(row.base_key).trim().toUpperCase(), Boolean(row.enabled)]));
+}
+
 export async function syncOperationalBasesAndDrivers() {
   const admin = createAdminClient();
-  const [hierarchy, driverRows, prefRows, pnrRows, riskRows, existingDrivers] = await Promise.all([
+  const [hierarchy, driverRows, prefRows, pnrRows, riskRows, existingDrivers, baseAccess] = await Promise.all([
     readPaged<DbRow>(async (offset, pageSize) => {
       const { data, error, count } = await admin.from("hierarchy_scopes").select("base_key,base_name,sigla", { count: "exact" }).range(offset, offset + pageSize - 1);
       if (error) throw new Error(error.message);
@@ -119,10 +146,11 @@ export async function syncOperationalBasesAndDrivers() {
       return { rows: (data ?? []) as DbRow[], count };
     }),
     readPaged<DbRow>(async (offset, pageSize) => {
-      const { data, error, count } = await admin.from("alc_drivers").select("driver_code,portal_eligible,portal_status,status", { count: "exact" }).range(offset, offset + pageSize - 1);
+      const { data, error, count } = await admin.from("alc_drivers").select("id,driver_code,portal_eligible,portal_status,status,base_key", { count: "exact" }).range(offset, offset + pageSize - 1);
       if (error) throw new Error(error.message);
       return { rows: (data ?? []) as DbRow[], count };
     }),
+    loadDriverPortalBaseAccessMap(),
   ]);
   const existingByCode = new Map(existingDrivers.map((row) => [textValue(row.driver_code), row]));
 
@@ -153,7 +181,7 @@ export async function syncOperationalBasesAndDrivers() {
       base_key: textValue(row.base_key),
       sigla: textValue(row.sigla),
       operational_status: operationalStatusFor(lastActivity),
-      portal_eligible: Boolean(existing?.portal_eligible),
+      portal_eligible: portalEligibilityFromBase(Boolean(baseAccess.get(textValue(row.base_key).trim().toUpperCase())), textValue(existing?.portal_status) || "not_activated"),
       portal_status: textValue(existing?.portal_status) || "not_activated",
       status: textValue(existing?.status) || "pending_activation",
       last_operational_seen_at: lastActivity || undefined,
@@ -175,7 +203,7 @@ export async function syncOperationalBasesAndDrivers() {
       base_key: current?.base_key || textValue(row.base_key),
       sigla: current?.sigla || textValue(row.sigla),
       operational_status: operationalStatusFor(lastActivity),
-      portal_eligible: Boolean(existing?.portal_eligible ?? current?.portal_eligible),
+      portal_eligible: portalEligibilityFromBase(Boolean(baseAccess.get(textValue(current?.base_key || row.base_key).trim().toUpperCase())), textValue(existing?.portal_status ?? current?.portal_status) || "not_activated"),
       portal_status: textValue(existing?.portal_status ?? current?.portal_status) || "not_activated",
       status: textValue(existing?.status ?? current?.status) || "pending_activation",
       last_operational_seen_at: lastActivity || undefined,
@@ -191,6 +219,18 @@ export async function syncOperationalBasesAndDrivers() {
     if (rows.length) {
       const { error } = await admin.from("alc_drivers").upsert(rows, { onConflict: "driver_code" });
       if (error) throw new Error(error.message);
+      const driverIdsToRevoke = rows
+        .filter((row) => !row.portal_eligible && Boolean(existingByCode.get(row.driver_code)?.portal_eligible))
+        .map((row) => textValue(existingByCode.get(row.driver_code)?.id))
+        .filter(Boolean);
+      if (driverIdsToRevoke.length) {
+        const { error: sessionError } = await admin
+          .from("driver_portal_sessions")
+          .update({ revoked_at: new Date().toISOString() })
+          .in("driver_id", driverIdsToRevoke)
+          .is("revoked_at", null);
+        if (sessionError) throw new Error(sessionError.message);
+      }
     }
   }
 }
