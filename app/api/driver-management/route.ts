@@ -69,7 +69,7 @@ export async function POST(request: Request) {
       const driverCode = requireCanonicalDriverCode(body.driverCode);
       if (!textValue(body.fullName)) throw new Error("Informe motorista e ID.");
       const portalStatus = textValue(body.portalStatus) || "not_activated";
-      const baseEnabled = await loadDriverPortalBaseEnabled(baseKey);
+      const baseEnabled = await loadDriverPortalBaseEnabled(baseKey, textValue(body.sigla));
       const { data, error } = await admin.from("alc_drivers").upsert({
         driver_code: driverCode,
         full_name: textValue(body.fullName),
@@ -160,7 +160,7 @@ export async function PATCH(request: Request) {
       if (credential.error) throw new Error(credential.error.message);
       const patch = driverPortalPatchForAction(portalAction, Boolean(credential.data), now);
       if (["allow", "reactivate", "reset_pin"].includes(portalAction)) {
-        const baseEnabled = await loadDriverPortalBaseEnabled(textValue(current.data.base_key));
+        const baseEnabled = await loadDriverPortalBaseEnabled(textValue(current.data.base_key), textValue(current.data.sigla));
         if (!baseEnabled) throw new Error("Base bloqueada no controle central do Portal do Motorista.");
       }
 

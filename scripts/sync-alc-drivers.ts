@@ -1,6 +1,6 @@
 import pg from "pg";
 import { isBlankIdentityValue, isNumericOnlyName, normalizeDriverId } from "../lib/driver-identity-resolver";
-import { portalEligibilityFromBase } from "../lib/driver-portal-base-access";
+import { driverPortalBaseAccessKey, portalEligibilityFromBase } from "../lib/driver-portal-base-access";
 
 const { Client } = pg;
 
@@ -106,7 +106,7 @@ try {
     return {
       ...row,
       operational_status: operationalStatus(row.last_operational_seen_at),
-      portal_eligible: portalEligibilityFromBase(Boolean(baseEnabled.get(row.base_key.trim().toUpperCase())), portalStatus),
+      portal_eligible: portalEligibilityFromBase(Boolean(baseEnabled.get(driverPortalBaseAccessKey(row.base_key, row.sigla))), portalStatus),
       portal_status: portalStatus,
       status: text(existingRow?.status) || "pending_activation",
     };

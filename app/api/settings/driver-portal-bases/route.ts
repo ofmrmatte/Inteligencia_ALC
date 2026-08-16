@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { canManageDriverPortalBaseSettings, normalizePortalBaseKey } from "@/lib/driver-portal-base-access";
+import { canManageDriverPortalBaseSettings, driverPortalBaseAccessKey, normalizePortalBaseKey } from "@/lib/driver-portal-base-access";
 import { getCurrentProfile } from "@/lib/auth-server";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { readPaged } from "@/lib/pagination";
@@ -57,7 +57,7 @@ async function loadPayload() {
     readPaged<DbRow>(async (offset, pageSize) => {
       const { data, error, count } = await admin
         .from("alc_drivers")
-        .select("base_key,portal_eligible,portal_status", { count: "exact" })
+        .select("base_key,sigla,portal_eligible,portal_status", { count: "exact" })
         .range(offset, offset + pageSize - 1);
       if (error) throw new Error(error.message);
       return { rows: (data ?? []) as DbRow[], count };
@@ -65,7 +65,7 @@ async function loadPayload() {
     readPaged<DbRow>(async (offset, pageSize) => {
       const { data, error, count } = await admin
         .from("driver_portal_sessions")
-        .select("driver_id,alc_drivers(base_key)", { count: "exact" })
+        .select("driver_id,alc_drivers(base_key,sigla)", { count: "exact" })
         .is("revoked_at", null)
         .gt("expires_at", new Date().toISOString())
         .range(offset, offset + pageSize - 1);
@@ -85,11 +85,11 @@ async function loadPayload() {
   const configByBase = new Map(configs.map((row) => [normalizePortalBaseKey(row.base_key), row]));
   const baseByKey = new Map<string, DbRow>();
   for (const base of bases) {
-    const key = normalizePortalBaseKey(base.base_key);
+    const key = driverPortalBaseAccessKey(base.base_key, base.sigla);
     if (key) baseByKey.set(key, base);
   }
   for (const row of drivers) {
-    const key = normalizePortalBaseKey(row.base_key);
+    const key = driverPortalBaseAccessKey(row.base_key, row.sigla);
     if (key && !baseByKey.has(key)) baseByKey.set(key, { base_key: key, base_name: key, sigla: key, active: true });
   }
 
@@ -101,7 +101,7 @@ async function loadPayload() {
     return current;
   };
   for (const driver of drivers) {
-    const item = ensureCounts(textValue(driver.base_key));
+    const item = ensureCounts(driverPortalBaseAccessKey(driver.base_key, driver.sigla));
     const status = textValue(driver.portal_status);
     item.total += 1;
     if (driver.portal_eligible) item.eligible += 1;
@@ -110,7 +110,7 @@ async function loadPayload() {
   }
   for (const session of sessions) {
     const driver = session.alc_drivers as DbRow | null;
-    ensureCounts(textValue(driver?.base_key)).activeSessions += 1;
+    ensureCounts(driverPortalBaseAccessKey(driver?.base_key, driver?.sigla)).activeSessions += 1;
   }
 
   const rows = [...baseByKey.entries()].sort(([a], [b]) => a.localeCompare(b, "pt-BR")).map(([baseKey, base]) => {

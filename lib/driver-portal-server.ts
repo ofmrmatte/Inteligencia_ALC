@@ -2,7 +2,7 @@ import { hasFullAccess, type AuthProfile } from "@/lib/auth";
 import { getAllowedBaseIds } from "@/lib/access-scope";
 import { getUserAccessScope } from "@/lib/access-scope-server";
 import { createAdminClient } from "@/lib/supabase/admin";
-import { portalEligibilityFromBase } from "@/lib/driver-portal-base-access";
+import { driverPortalBaseAccessKey, portalEligibilityFromBase } from "@/lib/driver-portal-base-access";
 import { getCurrentProfile } from "@/lib/auth-server";
 import { normalizeDriverKey, pnrStatusToTicket, type DriverTicket } from "@/lib/driver-portal";
 import { normalizeText } from "@/lib/normalize";
@@ -91,8 +91,8 @@ export function assertBaseAccess(baseKey: string, allowedBases: string[] | null)
   if (allowedBases && !allowedBases.includes(normalizeText(baseKey))) throw new Error("Acesso negado para a base solicitada.");
 }
 
-export async function loadDriverPortalBaseEnabled(baseKey: string) {
-  const normalized = textValue(baseKey).trim().toUpperCase();
+export async function loadDriverPortalBaseEnabled(baseKey: string, sigla?: string) {
+  const normalized = driverPortalBaseAccessKey(baseKey, sigla);
   if (!normalized) return false;
   const admin = createAdminClient();
   const { data, error } = await admin
@@ -181,7 +181,7 @@ export async function syncOperationalBasesAndDrivers() {
       base_key: textValue(row.base_key),
       sigla: textValue(row.sigla),
       operational_status: operationalStatusFor(lastActivity),
-      portal_eligible: portalEligibilityFromBase(Boolean(baseAccess.get(textValue(row.base_key).trim().toUpperCase())), textValue(existing?.portal_status) || "not_activated"),
+      portal_eligible: portalEligibilityFromBase(Boolean(baseAccess.get(driverPortalBaseAccessKey(row.base_key, row.sigla))), textValue(existing?.portal_status) || "not_activated"),
       portal_status: textValue(existing?.portal_status) || "not_activated",
       status: textValue(existing?.status) || "pending_activation",
       last_operational_seen_at: lastActivity || undefined,
@@ -203,7 +203,7 @@ export async function syncOperationalBasesAndDrivers() {
       base_key: current?.base_key || textValue(row.base_key),
       sigla: current?.sigla || textValue(row.sigla),
       operational_status: operationalStatusFor(lastActivity),
-      portal_eligible: portalEligibilityFromBase(Boolean(baseAccess.get(textValue(current?.base_key || row.base_key).trim().toUpperCase())), textValue(existing?.portal_status ?? current?.portal_status) || "not_activated"),
+      portal_eligible: portalEligibilityFromBase(Boolean(baseAccess.get(driverPortalBaseAccessKey(current?.base_key || row.base_key, current?.sigla || row.sigla))), textValue(existing?.portal_status ?? current?.portal_status) || "not_activated"),
       portal_status: textValue(existing?.portal_status ?? current?.portal_status) || "not_activated",
       status: textValue(existing?.status ?? current?.status) || "pending_activation",
       last_operational_seen_at: lastActivity || undefined,
