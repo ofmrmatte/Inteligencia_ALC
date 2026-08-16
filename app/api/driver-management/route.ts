@@ -74,10 +74,11 @@ export async function POST(request: Request) {
         full_name: textValue(body.fullName),
         base_key: baseKey,
         sigla: textValue(body.sigla),
-        cpf_last4: textValue(body.cpfLast4).slice(-4),
-        activation_code_hash: textValue(body.activationCodeHash),
         portal_login: `${normalizeDriverKey(driverCode).toLowerCase()}@motorista.alc.local`,
         status: textValue(body.status) || "pending_activation",
+        portal_status: textValue(body.portalStatus) || "not_activated",
+        portal_eligible: body.portalEligible !== false,
+        operational_status: textValue(body.operationalStatus) || "unknown",
       }, { onConflict: "driver_code" }).select().single();
       if (error) throw new Error(error.message);
       await admin.from("driver_portal_audit_events").insert({ actor_profile_id: profile.id, action: "driver_upsert", entity_table: "alc_drivers", entity_id: data.id, after_data: data });
@@ -144,6 +145,44 @@ export async function PATCH(request: Request) {
       const { data, error } = await admin.from("admin_base_assignments").update({ active, updated_at: new Date().toISOString() }).eq("id", id).select().single();
       if (error) throw new Error(error.message);
       await admin.from("admin_base_assignment_history").insert({ assignment_id: id, admin_id: data.admin_id, base_key: data.base_key, action: active ? "reactivated" : "removed", actor_id: profile.id, before_data: before, after_data: data });
+      return GET();
+    }
+    if (textValue(body.action) === "driver_portal") {
+      const id = textValue(body.id);
+      const portalAction = textValue(body.portalAction);
+      const current = await admin.from("alc_drivers").select("*").eq("id", id).single();
+      if (current.error) throw new Error(current.error.message);
+      const allowedBases = await adminBaseScope(profile);
+      assertBaseAccess(textValue(current.data.base_key), allowedBases);
+
+      const now = new Date().toISOString();
+      let patch: DbRow = { updated_at: now };
+      if (portalAction === "allow") patch = { ...patch, portal_eligible: true, portal_status: "not_activated", status: "pending_activation" };
+      else if (portalAction === "block") patch = { ...patch, portal_eligible: false, portal_status: "blocked", status: "blocked" };
+      else if (portalAction === "reset_pin") patch = { ...patch, portal_eligible: true, portal_status: "reset_required", status: "pending_activation" };
+      else if (portalAction === "reactivate") patch = { ...patch, portal_eligible: true, portal_status: "active", status: "active" };
+      else if (portalAction !== "revoke_sessions") throw new Error("Ação do portal não reconhecida.");
+
+      if (portalAction !== "revoke_sessions") {
+        const updated = await admin.from("alc_drivers").update(patch).eq("id", id).select().single();
+        if (updated.error) throw new Error(updated.error.message);
+      }
+      if (portalAction === "reset_pin") {
+        const credentials = await admin.from("driver_portal_credentials").delete().eq("driver_id", id);
+        if (credentials.error) throw new Error(credentials.error.message);
+      }
+      if (portalAction === "reset_pin" || portalAction === "revoke_sessions" || portalAction === "block") {
+        const sessions = await admin.from("driver_portal_sessions").update({ revoked_at: now }).eq("driver_id", id).is("revoked_at", null);
+        if (sessions.error) throw new Error(sessions.error.message);
+      }
+      await admin.from("driver_portal_audit_events").insert({
+        actor_profile_id: profile.id,
+        action: `driver_portal_${portalAction}`,
+        entity_table: "alc_drivers",
+        entity_id: id,
+        before_data: current.data,
+        after_data: { ...patch, portalAction },
+      });
       return GET();
     }
     throw new Error("Ação não reconhecida.");

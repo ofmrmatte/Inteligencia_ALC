@@ -49,8 +49,10 @@ export interface ClassifiedPaymentPdf {
   bytes: Uint8Array;
 }
 
-const MAX_ARCHIVE_FILES = 500;
-const MAX_PDF_SIZE = 25 * 1024 * 1024;
+export const MAX_ARCHIVE_COMPRESSED_SIZE = 200 * 1024 * 1024;
+export const MAX_ARCHIVE_UNCOMPRESSED_SIZE = 600 * 1024 * 1024;
+export const MAX_ARCHIVE_FILES = 500;
+export const MAX_PDF_SIZE = 25 * 1024 * 1024;
 const EXECUTABLE_PATTERN = /\.(exe|bat|cmd|msi|ps1|sh|js|vbs|scr|com)$/i;
 
 export function roleForDriverPortal(value: string) {
@@ -85,27 +87,37 @@ export function pdfLooksValid(bytes: Uint8Array) {
 }
 
 export async function extractArchiveFiles(fileName: string, bytes: Uint8Array): Promise<ArchiveFile[]> {
-  const lower = fileName.toLowerCase();
-  if (lower.endsWith(".zip")) {
-    const entries = unzipSync(bytes);
-    return Object.entries(entries).map(([path, content]) => ({ path: assertSafeArchivePath(path), bytes: content, size: content.byteLength }));
+  if (bytes.byteLength > MAX_ARCHIVE_COMPRESSED_SIZE) {
+    throw new Error(`Arquivo compactado acima do limite de ${Math.round(MAX_ARCHIVE_COMPRESSED_SIZE / 1024 / 1024)} MB.`);
   }
 
-  if (lower.endsWith(".rar")) {
+  const lower = fileName.toLowerCase();
+  let files: ArchiveFile[];
+  if (lower.endsWith(".zip")) {
+    const entries = unzipSync(bytes);
+    files = Object.entries(entries).map(([path, content]) => ({ path: assertSafeArchivePath(path), bytes: content, size: content.byteLength }));
+  } else if (lower.endsWith(".rar")) {
     const { createExtractorFromData } = await import("node-unrar-js");
     const data = new Uint8Array(bytes);
     const extractor = await createExtractorFromData({ data: data.buffer });
     const extracted = extractor.extract();
-    return [...extracted.files]
+    files = [...extracted.files]
       .filter((entry) => !entry.fileHeader.flags.directory && entry.extraction)
       .map((entry) => ({
         path: assertSafeArchivePath(entry.fileHeader.name),
         bytes: entry.extraction as Uint8Array,
         size: entry.fileHeader.unpSize,
       }));
+  } else {
+    throw new Error("Envie um arquivo ZIP ou RAR.");
   }
 
-  throw new Error("Envie um arquivo ZIP ou RAR.");
+  if (files.length > MAX_ARCHIVE_FILES) throw new Error(`Arquivo com ${files.length} itens. Limite operacional: ${MAX_ARCHIVE_FILES}.`);
+  const totalSize = files.reduce((sum, file) => sum + file.size, 0);
+  if (totalSize > MAX_ARCHIVE_UNCOMPRESSED_SIZE) {
+    throw new Error(`Conteúdo descompactado acima do limite de ${Math.round(MAX_ARCHIVE_UNCOMPRESSED_SIZE / 1024 / 1024)} MB.`);
+  }
+  return files;
 }
 
 function matchPeriod(text: string) {
@@ -128,7 +140,16 @@ function matchDate(text: string) {
 export async function classifyPaymentArchive(files: ArchiveFile[], knownDrivers: Array<{ id: string; driverCode: string; fullName: string; baseKey: string; baseName?: string }>, knownHashes: Set<string>) {
   if (files.length > MAX_ARCHIVE_FILES) throw new Error(`Arquivo com ${files.length} itens. Limite operacional: ${MAX_ARCHIVE_FILES}.`);
   const driverByCode = new Map(knownDrivers.map((driver) => [normalizeDriverKey(driver.driverCode), driver]));
-  const driverByName = new Map(knownDrivers.map((driver) => [normalizeDriverKey(driver.fullName), driver]));
+  const nameCounts = new Map<string, number>();
+  for (const driver of knownDrivers) {
+    const key = normalizeDriverKey(driver.fullName);
+    if (key) nameCounts.set(key, (nameCounts.get(key) ?? 0) + 1);
+  }
+  const driverByName = new Map(
+    knownDrivers
+      .filter((driver) => nameCounts.get(normalizeDriverKey(driver.fullName)) === 1)
+      .map((driver) => [normalizeDriverKey(driver.fullName), driver]),
+  );
   const seen = new Set<string>();
   const output: ClassifiedPaymentPdf[] = [];
 
@@ -140,8 +161,10 @@ export async function classifyPaymentArchive(files: ArchiveFile[], knownDrivers:
     const pdf = path.toLowerCase().endsWith(".pdf");
     const parts = path.split("/").map((part) => part.replace(/\.[^.]+$/, ""));
     const text = normalizeText(parts.join(" "));
-    const driver = [...driverByCode.values()].find((candidate) => text.includes(normalizeDriverKey(candidate.driverCode)))
-      ?? [...driverByName.values()].find((candidate) => text.includes(normalizeDriverKey(candidate.fullName)));
+    const codeMatches = [...driverByCode.values()].filter((candidate) => text.includes(normalizeDriverKey(candidate.driverCode)));
+    const nameMatches = [...driverByName.values()].filter((candidate) => text.includes(normalizeDriverKey(candidate.fullName)));
+    const matchedIds = new Set([...codeMatches, ...nameMatches].map((candidate) => candidate.id));
+    const driver = codeMatches[0] ?? (matchedIds.size === 1 ? nameMatches[0] : undefined);
     const period = matchPeriod(path);
     const documentDate = matchDate(path);
     let status: ClassifiedPaymentPdf["status"] = "identified";
@@ -150,9 +173,12 @@ export async function classifyPaymentArchive(files: ArchiveFile[], knownDrivers:
     if (!pdf || !pdfLooksValid(file.bytes) || file.size > MAX_PDF_SIZE) {
       status = "invalid";
       issue = !pdf ? "Arquivo não é PDF." : file.size > MAX_PDF_SIZE ? "PDF acima do limite." : "Assinatura PDF inválida.";
+    } else if (matchedIds.size > 1) {
+      status = "conflict";
+      issue = "Mais de um motorista possível no caminho/nome do arquivo.";
     } else if (!driver || !period) {
       status = "unidentified";
-      issue = !driver ? "Motorista não identificado pelo caminho/nome do arquivo." : "Período não identificado.";
+      issue = !driver ? "ID do motorista não identificado com confiança no caminho/nome do arquivo." : "Período não identificado.";
     } else if (knownHashes.has(hash) || seen.has(hash)) {
       status = "duplicate";
       issue = "PDF já existe no histórico ou no mesmo lote.";

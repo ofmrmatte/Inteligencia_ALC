@@ -1,8 +1,8 @@
 import { NextResponse } from "next/server";
 import { DRIVER_DISPUTE_STATUSES, type DriverDisputeStatus } from "@/lib/driver-portal";
 import { createAdminClient } from "@/lib/supabase/admin";
-import { createClient } from "@/lib/supabase/server";
-import { adminBaseScope, assertBaseAccess, jsonError, loadDriverByAuthUser, requirePortalProfile, textValue } from "@/lib/driver-portal-server";
+import { driverPortalUrl } from "@/lib/driver-portal-url";
+import { adminBaseScope, assertBaseAccess, jsonError, requirePortalProfile, textValue } from "@/lib/driver-portal-server";
 
 export const dynamic = "force-dynamic";
 
@@ -12,43 +12,14 @@ function isStatus(value: unknown): value is DriverDisputeStatus {
   return typeof value === "string" && DRIVER_DISPUTE_STATUSES.includes(value as DriverDisputeStatus);
 }
 
-async function currentDriver() {
-  const supabase = await createClient();
-  const { data } = await supabase.auth.getUser();
-  return data.user ? loadDriverByAuthUser(data.user.id) : null;
-}
-
-export async function POST(request: Request) {
-  try {
-    const driver = await currentDriver();
-    if (!driver) throw new Error("Conta de motorista não vinculada.");
-    const body = (await request.json()) as DbRow;
-    const documentId = textValue(body.documentId);
-    const admin = createAdminClient();
-    const doc = await admin.from("driver_payment_documents").select("*").eq("id", documentId).maybeSingle();
-    if (doc.error) throw new Error(doc.error.message);
-    if (!doc.data || textValue(doc.data.driver_id) !== textValue(driver.id)) throw new Error("Documento não autorizado para contestação.");
-    const admins = await admin.from("admin_base_assignments").select("admin_id").eq("base_key", textValue(doc.data.base_key)).eq("active", true).limit(1);
-    if (admins.error) throw new Error(admins.error.message);
-    const dispute = await admin.from("driver_disputes").insert({
-      document_id: documentId,
-      document_version_id: textValue(doc.data.active_version_id) || null,
-      driver_id: textValue(driver.id),
-      assigned_admin_id: textValue(admins.data?.[0]?.admin_id) || null,
-      base_key: textValue(doc.data.base_key),
-      reason: textValue(body.reason),
-      description: textValue(body.description),
-      reference: textValue(body.reference),
-      amount: Number(body.amount || 0) || null,
-      status: "aberta",
-    }).select().single();
-    if (dispute.error) throw new Error(dispute.error.message);
-    await admin.from("driver_dispute_messages").insert({ dispute_id: dispute.data.id, author_driver_id: textValue(driver.id), body: textValue(body.description) });
-    await admin.from("driver_portal_audit_events").insert({ actor_driver_id: textValue(driver.id), action: "dispute_opened", entity_table: "driver_disputes", entity_id: dispute.data.id, after_data: dispute.data });
-    return NextResponse.json({ dispute: dispute.data });
-  } catch (error) {
-    return jsonError(error instanceof Error ? error.message : "Falha ao abrir contestação.", 400);
-  }
+export async function POST() {
+  return NextResponse.json(
+    {
+      error: "A abertura de contestação pelo motorista foi movida para o Portal do Motorista externo.",
+      portalUrl: driverPortalUrl(),
+    },
+    { status: 410 },
+  );
 }
 
 export async function PATCH(request: Request) {

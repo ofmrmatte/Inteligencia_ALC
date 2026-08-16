@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { classifyPaymentArchive, extractArchiveFiles, safeStorageName } from "@/lib/driver-portal";
+import { classifyPaymentArchive, extractArchiveFiles, MAX_ARCHIVE_COMPRESSED_SIZE, safeStorageName } from "@/lib/driver-portal";
 import { adminBaseScope, assertBaseAccess, isSuperAdminProfile, jsonError, loadKnownDrivers, requirePortalProfile, textValue } from "@/lib/driver-portal-server";
 import { createAdminClient } from "@/lib/supabase/admin";
 
@@ -17,7 +17,7 @@ export async function POST(request: Request) {
     if (!(file instanceof File)) throw new Error("Arquivo não enviado.");
     const lower = file.name.toLowerCase();
     if (!lower.endsWith(".zip") && !lower.endsWith(".rar")) throw new Error("Envie ZIP ou RAR.");
-    if (file.size > 50 * 1024 * 1024) throw new Error("Arquivo acima do limite de 50MB.");
+    if (file.size > MAX_ARCHIVE_COMPRESSED_SIZE) throw new Error(`Arquivo acima do limite de ${Math.round(MAX_ARCHIVE_COMPRESSED_SIZE / 1024 / 1024)}MB.`);
 
     const admin = createAdminClient();
     const archiveBytes = new Uint8Array(await file.arrayBuffer());

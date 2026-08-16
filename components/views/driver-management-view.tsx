@@ -1,14 +1,27 @@
 "use client";
 
 import { useEffect, useMemo, useState, type ChangeEvent } from "react";
-import { CheckCircle2, FileArchive, FileUp, IdCard, MessageSquareWarning, RefreshCw, ShieldCheck, UploadCloud, UsersRound } from "lucide-react";
+import { Ban, CheckCircle2, ExternalLink, FileArchive, FileUp, IdCard, KeyRound, MessageSquareWarning, RefreshCw, RotateCcwKey, ShieldCheck, UploadCloud, UsersRound } from "lucide-react";
 import { ROLE_LABELS, type AuthProfile } from "@/lib/auth";
 import { formatCurrency, formatNumber, KpiCard, Panel, PageIntro, StatusBadge } from "@/components/ui";
 import { TableWrap } from "./shared";
 
 type Tab = "overview" | "drivers" | "tickets" | "payments" | "disputes" | "admins";
 interface BaseRow { base_key: string; base_name?: string }
-interface DriverRow { id: string; driverCode: string; fullName: string; baseKey: string; baseName?: string; status: string; authUserId?: string }
+interface DriverRow {
+  id: string;
+  driverCode: string;
+  fullName: string;
+  baseKey: string;
+  baseName?: string;
+  status: string;
+  portalStatus?: string;
+  portalEligible?: boolean;
+  operationalStatus?: string;
+  lastSeenAt?: string;
+  lastOperationalSeenAt?: string;
+  authUserId?: string;
+}
 interface TicketRow { id: string; type: string; operationalId: string; driverName: string; driverCode: string; baseKey: string; baseName: string; date?: string; value: number; status: string }
 interface DocumentRow { id: string; title: string; issue?: string; base_key?: string; period?: string; status: string; alc_drivers?: { full_name?: string }; driver_payment_document_versions?: unknown[] }
 interface DisputeRow { id: string; driver_id: string; document_id: string; base_key?: string; reason: string; reference?: string; status: string; decision?: string; alc_drivers?: { full_name?: string }; driver_payment_documents?: { title?: string } }
@@ -157,6 +170,21 @@ export function DriverManagementView({ profile }: { profile: AuthProfile }) {
     await load();
   }
 
+  async function updateDriverPortal(id: string, portalAction: string) {
+    const response = await fetch("/api/driver-management", {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ action: "driver_portal", id, portalAction }),
+    });
+    if (!response.ok) {
+      setMessage(await readError(response, "Falha ao alterar acesso do motorista."));
+      return;
+    }
+    await load();
+  }
+
+  const portalUrl = process.env.NEXT_PUBLIC_DRIVER_PORTAL_URL;
+
   return (
     <div className="view-stack">
       <PageIntro description="Gestão operacional do canal de motoristas, PDFs de pagamento, pendências e contestações vinculadas por base." chips={[`Perfil: ${ROLE_LABELS[profile.role]}`, data?.access?.superAdmin ? "Gestor geral" : "Escopo por base"]} />
@@ -193,8 +221,11 @@ export function DriverManagementView({ profile }: { profile: AuthProfile }) {
 
       {tab === "drivers" ? (
         <Panel title="Motoristas" subtitle="Cadastro operacional e ativação do portal">
-          <TableWrap><thead><tr><th>Motorista</th><th>ID</th><th>Base</th><th>Status</th><th>Conta</th></tr></thead><tbody>
-            {drivers.map((driver) => <tr key={driver.id}><td><strong>{driver.fullName}</strong></td><td className="mono">{driver.driverCode}</td><td>{driver.baseName || driver.baseKey}</td><td><StatusBadge tone={badgeTone(driver.status)}>{driver.status}</StatusBadge></td><td>{driver.authUserId ? "Vinculada" : "Pendente"}</td></tr>)}
+          <div className="panel-actions-row">
+            {portalUrl ? <button className="secondary-button primary-button--small" onClick={() => window.open(portalUrl, "_blank", "noopener,noreferrer")}><ExternalLink size={14} />Abrir Portal do Motorista</button> : null}
+          </div>
+          <TableWrap><thead><tr><th>Motorista</th><th>ID</th><th>Base</th><th>Operação</th><th>Portal</th><th>Último acesso</th><th className="align-right">Ações</th></tr></thead><tbody>
+            {drivers.map((driver) => <tr key={driver.id}><td><strong>{driver.fullName}</strong></td><td className="mono">{driver.driverCode}</td><td>{driver.baseName || driver.baseKey}</td><td><StatusBadge tone={badgeTone(driver.operationalStatus || driver.status)}>{driver.operationalStatus || driver.status}</StatusBadge></td><td><StatusBadge tone={badgeTone(driver.portalStatus || "not_activated")}>{driver.portalStatus || "not_activated"}</StatusBadge><small className="cell-subtitle">{driver.portalEligible ? "Elegível" : "Não elegível"}</small></td><td>{driver.lastSeenAt ? new Date(driver.lastSeenAt).toLocaleString("pt-BR") : "-"}<small className="cell-subtitle">{driver.lastOperationalSeenAt ? `Operação: ${new Date(driver.lastOperationalSeenAt).toLocaleDateString("pt-BR")}` : ""}</small></td><td className="align-right"><div className="row-actions"><button className="table-action" title="Permitir portal" onClick={() => void updateDriverPortal(driver.id, "allow")}><KeyRound size={14} /></button><button className="table-action" title="Bloquear portal" onClick={() => void updateDriverPortal(driver.id, "block")}><Ban size={14} /></button><button className="table-action" title="Redefinir PIN" onClick={() => void updateDriverPortal(driver.id, "reset_pin")}><RotateCcwKey size={14} /></button><button className="table-action" title="Revogar sessões" onClick={() => void updateDriverPortal(driver.id, "revoke_sessions")}><ShieldCheck size={14} /></button></div></td></tr>)}
           </tbody></TableWrap>
         </Panel>
       ) : null}
