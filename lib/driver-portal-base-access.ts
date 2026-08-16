@@ -1,6 +1,6 @@
 import type { AuthProfile } from "@/lib/auth";
 
-export const DRIVER_PORTAL_BASE_MANAGER_ROLES = ["director", "super_admin", "developer"] as const;
+export const DRIVER_PORTAL_BASE_MANAGER_ROLES = ["director", "super_admin", "developer", "loss_supervisor"] as const;
 
 type DriverAccessShape = {
   portal_status?: unknown;
