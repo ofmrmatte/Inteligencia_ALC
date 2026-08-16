@@ -33,10 +33,10 @@ export async function GET() {
         : admin.from("driver_disputes").select("*,alc_drivers(driver_code,full_name),driver_payment_documents(title)")
       ).order("created_at", { ascending: false }).limit(1000),
       isSuperAdminProfile(profile)
-        ? admin.from("admin_base_assignments").select("*,profiles(email,full_name),operational_bases(base_name)").order("created_at", { ascending: false })
+        ? admin.from("admin_base_assignments").select("*,profiles:profiles!admin_base_assignments_admin_id_fkey(email,full_name),operational_bases(base_name)").order("created_at", { ascending: false })
         : Promise.resolve({ data: [], error: null }),
       isSuperAdminProfile(profile)
-        ? admin.from("admin_base_assignment_history").select("*,profiles(email,full_name)").order("created_at", { ascending: false }).limit(200)
+        ? admin.from("admin_base_assignment_history").select("*,profiles:profiles!admin_base_assignment_history_admin_id_fkey(email,full_name)").order("created_at", { ascending: false }).limit(200)
         : Promise.resolve({ data: [], error: null }),
     ]);
     for (const result of [bases, documents, disputes, assignments, history]) if (result.error) throw new Error(result.error.message);
