@@ -12,10 +12,11 @@ export async function getCurrentProfile(): Promise<AuthProfile | null> {
 
   const { data: profile } = await supabase
     .from("profiles")
-    .select("id,email,full_name,role,global_access,base_scope,sigla_scope")
+    .select("id,email,full_name,role,global_access,base_scope,sigla_scope,module_scope,driver_management_scope,active")
     .eq("id", userData.user.id)
     .maybeSingle();
 
+  if (profile?.active === false) return null;
   const role = isUserRole(profile?.role) ? profile.role : "coordinator";
 
   return {
@@ -26,6 +27,8 @@ export async function getCurrentProfile(): Promise<AuthProfile | null> {
     globalAccess: Boolean(profile?.global_access),
     baseScope: Array.isArray(profile?.base_scope) ? profile.base_scope : [],
     siglaScope: Array.isArray(profile?.sigla_scope) ? profile.sigla_scope : [],
+    moduleScope: Array.isArray(profile?.module_scope) ? profile.module_scope : [],
+    driverManagementScope: Array.isArray(profile?.driver_management_scope) ? profile.driver_management_scope : [],
   };
 }
 
