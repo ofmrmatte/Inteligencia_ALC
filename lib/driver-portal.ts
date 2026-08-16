@@ -140,16 +140,6 @@ function matchDate(text: string) {
 export async function classifyPaymentArchive(files: ArchiveFile[], knownDrivers: Array<{ id: string; driverCode: string; fullName: string; baseKey: string; baseName?: string }>, knownHashes: Set<string>) {
   if (files.length > MAX_ARCHIVE_FILES) throw new Error(`Arquivo com ${files.length} itens. Limite operacional: ${MAX_ARCHIVE_FILES}.`);
   const driverByCode = new Map(knownDrivers.map((driver) => [normalizeDriverKey(driver.driverCode), driver]));
-  const nameCounts = new Map<string, number>();
-  for (const driver of knownDrivers) {
-    const key = normalizeDriverKey(driver.fullName);
-    if (key) nameCounts.set(key, (nameCounts.get(key) ?? 0) + 1);
-  }
-  const driverByName = new Map(
-    knownDrivers
-      .filter((driver) => nameCounts.get(normalizeDriverKey(driver.fullName)) === 1)
-      .map((driver) => [normalizeDriverKey(driver.fullName), driver]),
-  );
   const seen = new Set<string>();
   const output: ClassifiedPaymentPdf[] = [];
 
@@ -162,9 +152,8 @@ export async function classifyPaymentArchive(files: ArchiveFile[], knownDrivers:
     const parts = path.split("/").map((part) => part.replace(/\.[^.]+$/, ""));
     const text = normalizeText(parts.join(" "));
     const codeMatches = [...driverByCode.values()].filter((candidate) => text.includes(normalizeDriverKey(candidate.driverCode)));
-    const nameMatches = [...driverByName.values()].filter((candidate) => text.includes(normalizeDriverKey(candidate.fullName)));
-    const matchedIds = new Set([...codeMatches, ...nameMatches].map((candidate) => candidate.id));
-    const driver = codeMatches[0] ?? (matchedIds.size === 1 ? nameMatches[0] : undefined);
+    const matchedIds = new Set(codeMatches.map((candidate) => candidate.id));
+    const driver = matchedIds.size === 1 ? codeMatches[0] : undefined;
     const period = matchPeriod(path);
     const documentDate = matchDate(path);
     let status: ClassifiedPaymentPdf["status"] = "identified";
@@ -175,7 +164,7 @@ export async function classifyPaymentArchive(files: ArchiveFile[], knownDrivers:
       issue = !pdf ? "Arquivo não é PDF." : file.size > MAX_PDF_SIZE ? "PDF acima do limite." : "Assinatura PDF inválida.";
     } else if (matchedIds.size > 1) {
       status = "conflict";
-      issue = "Mais de um motorista possível no caminho/nome do arquivo.";
+      issue = "Mais de um ID de motorista possível no caminho/nome do arquivo.";
     } else if (!driver || !period) {
       status = "unidentified";
       issue = !driver ? "ID do motorista não identificado com confiança no caminho/nome do arquivo." : "Período não identificado.";

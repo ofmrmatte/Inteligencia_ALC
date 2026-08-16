@@ -22,6 +22,13 @@ describe("portal do motorista", () => {
     expect(duplicated[0].status).toBe("duplicate");
   });
 
+  it("não identifica PDF usando apenas nome do motorista", async () => {
+    const drivers = [{ id: "d1", driverCode: "MOT123", fullName: "João Silva", baseKey: "BASE1", baseName: "Base 1" }];
+    const [result] = await classifyPaymentArchive([{ path: "BASE1/JULHO 2026/Joao Silva pagamento.pdf", bytes: pdfBytes, size: pdfBytes.length }], drivers, new Set());
+    expect(result.status).toBe("unidentified");
+    expect(result.driverCode).toBe("");
+  });
+
   it("mapeia status PNR para categorias do portal", () => {
     expect(pnrStatusToTicket("Aguardando comprovante")).toBe("aguardando_comprovante");
     expect(pnrStatusToTicket("Enviado para faturamento")).toBe("enviado_faturamento");

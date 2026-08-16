@@ -1,8 +1,7 @@
 import { NextResponse } from "next/server";
 import { canManageUsers, isUserRole, type UserRole } from "@/lib/auth";
 import { createAdminClient } from "@/lib/supabase/admin";
-import { adminBaseScope, assertBaseAccess, isSuperAdminProfile, jsonError, loadKnownDrivers, loadTickets, requirePortalProfile, syncOperationalBasesAndDrivers, textValue } from "@/lib/driver-portal-server";
-import { normalizeDriverKey } from "@/lib/driver-portal";
+import { adminBaseScope, assertBaseAccess, driverPortalPatchForAction, isSuperAdminProfile, jsonError, loadKnownDrivers, loadTickets, requireCanonicalDriverCode, requirePortalProfile, syncOperationalBasesAndDrivers, textValue } from "@/lib/driver-portal-server";
 
 export const dynamic = "force-dynamic";
 
@@ -67,14 +66,13 @@ export async function POST(request: Request) {
     if (action === "driver") {
       const baseKey = textValue(body.baseKey);
       assertBaseAccess(baseKey, allowedBases);
-      const driverCode = textValue(body.driverCode) || normalizeDriverKey(body.fullName);
-      if (!driverCode || !textValue(body.fullName)) throw new Error("Informe motorista e ID.");
+      const driverCode = requireCanonicalDriverCode(body.driverCode);
+      if (!textValue(body.fullName)) throw new Error("Informe motorista e ID.");
       const { data, error } = await admin.from("alc_drivers").upsert({
         driver_code: driverCode,
         full_name: textValue(body.fullName),
         base_key: baseKey,
         sigla: textValue(body.sigla),
-        portal_login: `${normalizeDriverKey(driverCode).toLowerCase()}@motorista.alc.local`,
         status: textValue(body.status) || "pending_activation",
         portal_status: textValue(body.portalStatus) || "not_activated",
         portal_eligible: body.portalEligible !== false,
@@ -156,12 +154,9 @@ export async function PATCH(request: Request) {
       assertBaseAccess(textValue(current.data.base_key), allowedBases);
 
       const now = new Date().toISOString();
-      let patch: DbRow = { updated_at: now };
-      if (portalAction === "allow") patch = { ...patch, portal_eligible: true, portal_status: "not_activated", status: "pending_activation" };
-      else if (portalAction === "block") patch = { ...patch, portal_eligible: false, portal_status: "blocked", status: "blocked" };
-      else if (portalAction === "reset_pin") patch = { ...patch, portal_eligible: true, portal_status: "reset_required", status: "pending_activation" };
-      else if (portalAction === "reactivate") patch = { ...patch, portal_eligible: true, portal_status: "active", status: "active" };
-      else if (portalAction !== "revoke_sessions") throw new Error("Ação do portal não reconhecida.");
+      const credential = await admin.from("driver_portal_credentials").select("driver_id").eq("driver_id", id).maybeSingle();
+      if (credential.error) throw new Error(credential.error.message);
+      const patch = driverPortalPatchForAction(portalAction, Boolean(credential.data), now);
 
       if (portalAction !== "revoke_sessions") {
         const updated = await admin.from("alc_drivers").update(patch).eq("id", id).select().single();

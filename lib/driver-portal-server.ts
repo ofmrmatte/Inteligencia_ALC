@@ -5,6 +5,7 @@ import { createAdminClient } from "@/lib/supabase/admin";
 import { getCurrentProfile } from "@/lib/auth-server";
 import { normalizeDriverKey, pnrStatusToTicket, type DriverTicket } from "@/lib/driver-portal";
 import { normalizeText } from "@/lib/normalize";
+import { readPaged } from "@/lib/pagination";
 
 type DbRow = Record<string, unknown>;
 
@@ -29,6 +30,26 @@ function isReliableDriverName(name: string, driverCode: string) {
   const normalizedName = normalizeDriverKey(name);
   const normalizedCode = normalizeDriverKey(driverCode);
   return Boolean(name.trim() && normalizedName && normalizedName !== normalizedCode && !/^\d+$/.test(normalizedName));
+}
+
+export function requireCanonicalDriverCode(value: unknown) {
+  const code = normalizeDriverKey(value);
+  if (!code) throw new Error("Informe o ID do motorista.");
+  return code;
+}
+
+export function driverPortalPatchForAction(portalAction: string, hasCredential: boolean, now = new Date().toISOString()) {
+  const patch: DbRow = { updated_at: now };
+  if (portalAction === "allow") return { ...patch, portal_eligible: true, portal_status: hasCredential ? "reset_required" : "not_activated", status: "pending_activation" };
+  if (portalAction === "block") return { ...patch, portal_eligible: false, portal_status: "blocked", status: "blocked" };
+  if (portalAction === "reset_pin") return { ...patch, portal_eligible: true, portal_status: "reset_required", status: "pending_activation" };
+  if (portalAction === "reactivate") {
+    return hasCredential
+      ? { ...patch, portal_eligible: true, portal_status: "active", status: "active" }
+      : { ...patch, portal_eligible: true, portal_status: "not_activated", status: "pending_activation" };
+  }
+  if (portalAction === "revoke_sessions") return patch;
+  throw new Error("Ação do portal não reconhecida.");
 }
 
 export function isSuperAdminProfile(profile: Pick<AuthProfile, "role" | "globalAccess">) {
@@ -73,7 +94,7 @@ export async function syncOperationalBasesAndDrivers() {
     if (error) throw new Error(error.message);
   }
 
-  const drivers = new Map<string, { driver_code: string; full_name: string; base_key: string; sigla: string; portal_login: string; operational_status: string; portal_eligible: boolean; last_operational_seen_at?: string; source_updated_at?: string; source_payload: DbRow }>();
+  const drivers = new Map<string, { driver_code: string; full_name: string; base_key: string; sigla: string; operational_status: string; portal_eligible: boolean; last_operational_seen_at?: string; source_updated_at?: string; source_payload: DbRow }>();
   for (const row of (driverRows ?? []) as DbRow[]) {
     const code = textValue(row.driver_id);
     const name = textValue(row.name);
@@ -83,7 +104,6 @@ export async function syncOperationalBasesAndDrivers() {
       full_name: isReliableDriverName(name, code) ? name : code,
       base_key: "",
       sigla: "",
-      portal_login: `${normalizeDriverKey(code).toLowerCase()}@motorista.alc.local`,
       operational_status: "unknown",
       portal_eligible: false,
       source_updated_at: textValue(row.last_updated) || undefined,
@@ -100,7 +120,6 @@ export async function syncOperationalBasesAndDrivers() {
       full_name: current && isReliableDriverName(current.full_name, code) ? current.full_name : isReliableDriverName(name, code) ? name : code,
       base_key: current?.base_key || textValue(row.base_key),
       sigla: current?.sigla || textValue(row.sigla),
-      portal_login: `${code.toLowerCase()}@motorista.alc.local`,
       operational_status: "active",
       portal_eligible: true,
       last_operational_seen_at: textValue(row.created_at) || undefined,
@@ -157,22 +176,46 @@ export async function loadTickets(options: { allowedBases?: string[] | null; dri
   const admin = createAdminClient();
   const driverCode = options.driverCode ? normalizeDriverKey(options.driverCode) : "";
   const allowedBases = options.allowedBases ?? null;
-  const [prefatura, pnr, risk] = await Promise.all([
-    admin.from("prefatura_records").select("id,shipment_id,route_id,operation,route_date,base_key,base_name,sigla,driver_id,driver_name,value,created_at").limit(5000),
-    admin.from("pnr_records").select("id,shipment_id,route_id,status,case_date,base_key,sigla,driver_id,purchase_value,created_at").limit(5000),
-    admin.from("risk_lm_records").select("id,shipment_id,route_id,failure_date,base_key,sigla,driver_id,gmv_brl,failure_reason,created_at").limit(5000),
+  const baseFilter = allowedBases ? (allowedBases.length ? allowedBases : ["__none__"]) : null;
+  const [prefaturaRows, pnrRows, riskRows] = await Promise.all([
+    readPaged<DbRow>(async (offset, pageSize) => {
+      let query = admin
+        .from("prefatura_records")
+        .select("id,shipment_id,route_id,operation,route_date,base_key,base_name,sigla,driver_id,driver_name,value,created_at", { count: "exact" });
+      if (driverCode) query = query.eq("driver_id", driverCode);
+      if (baseFilter) query = query.in("base_key", baseFilter);
+      const { data, error, count } = await query.order("created_at", { ascending: false }).range(offset, offset + pageSize - 1);
+      if (error) throw new Error(error.message);
+      return { rows: (data ?? []) as DbRow[], count };
+    }),
+    readPaged<DbRow>(async (offset, pageSize) => {
+      let query = admin
+        .from("pnr_records")
+        .select("id,shipment_id,route_id,status,case_date,base_key,sigla,driver_id,purchase_value,created_at", { count: "exact" });
+      if (driverCode) query = query.eq("driver_id", driverCode);
+      if (baseFilter) query = query.in("base_key", baseFilter);
+      const { data, error, count } = await query.order("created_at", { ascending: false }).range(offset, offset + pageSize - 1);
+      if (error) throw new Error(error.message);
+      return { rows: (data ?? []) as DbRow[], count };
+    }),
+    readPaged<DbRow>(async (offset, pageSize) => {
+      let query = admin
+        .from("risk_lm_records")
+        .select("id,shipment_id,route_id,failure_date,base_key,sigla,driver_id,gmv_brl,failure_reason,created_at", { count: "exact" });
+      if (driverCode) query = query.eq("driver_id", driverCode);
+      if (baseFilter) query = query.in("base_key", baseFilter);
+      const { data, error, count } = await query.order("created_at", { ascending: false }).range(offset, offset + pageSize - 1);
+      if (error) throw new Error(error.message);
+      return { rows: (data ?? []) as DbRow[], count };
+    }),
   ]);
-  for (const result of [prefatura, pnr, risk]) if (result.error) throw new Error(result.error.message);
 
   const tickets: DriverTicket[] = [];
-  const allowed = (baseKey: string) => !allowedBases || allowedBases.includes(baseKey);
-  const driverMatches = (value: string) => !driverCode || normalizeDriverKey(value) === driverCode;
 
-  for (const row of (prefatura.data ?? []) as DbRow[]) {
+  for (const row of prefaturaRows) {
     const baseKey = textValue(row.base_key);
     const code = textValue(row.driver_id);
     const driverName = textValue(row.driver_name);
-    if (!allowed(baseKey) || !driverMatches(code)) continue;
     const operation = textValue(row.operation);
     const type = operation === "PNR" ? "pnr" : "pacote_perdido";
     const date = textValue(row.route_date) || textValue(row.created_at);
@@ -196,10 +239,9 @@ export async function loadTickets(options: { allowedBases?: string[] | null; dri
     });
   }
 
-  for (const row of (pnr.data ?? []) as DbRow[]) {
+  for (const row of pnrRows) {
     const baseKey = textValue(row.base_key);
     const code = textValue(row.driver_id);
-    if (!allowed(baseKey) || !driverMatches(code)) continue;
     const status = pnrStatusToTicket(textValue(row.status));
     const date = textValue(row.case_date) || textValue(row.created_at);
     tickets.push({
@@ -222,10 +264,9 @@ export async function loadTickets(options: { allowedBases?: string[] | null; dri
     });
   }
 
-  for (const row of (risk.data ?? []) as DbRow[]) {
+  for (const row of riskRows) {
     const baseKey = textValue(row.base_key);
     const code = textValue(row.driver_id);
-    if (!allowed(baseKey) || !driverMatches(code)) continue;
     const date = textValue(row.failure_date) || textValue(row.created_at);
     tickets.push({
       id: `risk:${textValue(row.id)}`,
