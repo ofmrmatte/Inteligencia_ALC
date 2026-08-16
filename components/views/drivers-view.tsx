@@ -10,7 +10,7 @@ import { ChartTooltip, NoResults, TableWrap } from "./shared";
 export function DriversView() {
   const data = useDashboardStore((state) => state.data);
   const filters = useDashboardStore((state) => state.filters);
-  const scoped = scopeData(data, filters);
+  const scoped = scopeData(data, filters, { activeOnly: true });
   const rows = driverPerformance(scoped, data.drivers);
   if (!rows.length) return <NoResults title="Nenhum motorista conciliado neste recorte" />;
   const shipped = rows.reduce((sum, row) => sum + row.shipped, 0);

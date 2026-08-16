@@ -18,6 +18,10 @@ export interface ScopedData {
   drivers: DriverRecord[];
 }
 
+interface ScopeOptions {
+  activeOnly?: boolean;
+}
+
 interface OperationalActivity {
   latestOrder: number;
   activeBases: Set<string>;
@@ -232,10 +236,10 @@ function isActiveDriverId(activity: OperationalActivity, id: string) {
   return activity.activeDrivers.has(driverKey(id));
 }
 
-export function scopeData(data: DashboardData, filters: DashboardFilters): ScopedData {
+export function scopeData(data: DashboardData, filters: DashboardFilters, options: ScopeOptions = {}): ScopedData {
   const activity = operationalActivity(data);
   const importFortnights = importFortnightByBatch(data.imports);
-  const activeScope = activeOperationalScope(filters);
+  const activeScope = Boolean(options.activeOnly) && activeOperationalScope(filters);
   const hierarchy = data.hierarchy.filter((row) => {
     if (filters.coordinator !== "Todos" && row.coordinator !== filters.coordinator) return false;
     if (filters.sigla !== "Todas" && row.sigla !== filters.sigla) return false;
@@ -288,12 +292,9 @@ export function scopeData(data: DashboardData, filters: DashboardFilters): Scope
 }
 
 export function filterOptions(data: DashboardData, filters: DashboardFilters) {
-  const activity = operationalActivity(data);
   const importFortnights = importFortnightByBatch(data.imports);
-  const activeScope = activeOperationalScope(filters);
   const afterCoordinator = data.hierarchy.filter((row) => filters.coordinator === "Todos" || row.coordinator === filters.coordinator);
-  const activeHierarchy = afterCoordinator.filter((row) => !activeScope || isActiveBase(activity, row));
-  const afterSigla = activeHierarchy.filter((row) => filters.sigla === "Todas" || row.sigla === filters.sigla);
+  const afterSigla = afterCoordinator.filter((row) => filters.sigla === "Todas" || row.sigla === filters.sigla);
   const afterBase = afterSigla.filter((row) => filters.base === "Todas" || row.base === filters.base);
   const scoped = scopeData(data, { ...filters, driver: "Todos" });
   const namesFromIds = new Map(data.drivers.map((driver) => [driver.driverId, driver.name]));
@@ -316,8 +317,8 @@ export function filterOptions(data: DashboardData, filters: DashboardFilters) {
   return {
     months,
     fortnights,
-    coordinators: unique((activeScope ? data.hierarchy.filter((row) => isActiveBase(activity, row)) : data.hierarchy).map((row) => row.coordinator)).sort((a, b) => a.localeCompare(b, "pt-BR")),
-    siglas: unique(activeHierarchy.map((row) => row.sigla)).sort(),
+    coordinators: unique(data.hierarchy.map((row) => row.coordinator)).sort((a, b) => a.localeCompare(b, "pt-BR")),
+    siglas: unique(afterCoordinator.map((row) => row.sigla)).sort(),
     bases: unique(afterSigla.map((row) => row.base)).sort((a, b) => a.localeCompare(b, "pt-BR")),
     supervisors: unique(afterBase.map((row) => row.supervisor)).sort((a, b) => a.localeCompare(b, "pt-BR")),
     drivers: driverNames,

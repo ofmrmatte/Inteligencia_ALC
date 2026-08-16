@@ -83,6 +83,27 @@ describe("atualização de status PNR", () => {
 });
 
 describe("atividade operacional de bases e motoristas", () => {
+  it("não usa regra de inativo para cortar lançamentos financeiros de pré-fatura sem filtro", () => {
+    const data = {
+      hierarchy: [
+        { coordinator: "Gestor", supervisor: "Supervisor", sigla: "JUL", base: "Base Julho", baseKey: "BASE JULHO" },
+        { coordinator: "Gestor", supervisor: "Supervisor", sigla: "AGO", base: "Base Agosto", baseKey: "BASE AGOSTO" },
+      ],
+      prefatura: [
+        { batchId: "jul", period: "02Q072026", baseKey: "BASE JULHO", sigla: "JUL", driverName: "Motorista Julho", shipmentId: "A", value: 100 },
+        { batchId: "jul", period: "02Q072026", baseKey: "BASE JULHO", sigla: "JUL", driverName: "Motorista Julho", shipmentId: "B", value: 203 },
+      ],
+      pnr: [],
+      risk: [{ batchId: "ago", failureDate: "2026-08-05", baseKey: "BASE AGOSTO", sigla: "AGO", driverId: "D2", shipmentId: "C", gmvBrl: 50 }],
+      drivers: [{ driverId: "D1", name: "Motorista Julho" }, { driverId: "D2", name: "Motorista Agosto" }],
+      imports: [],
+      isDemo: false,
+    } as unknown as DashboardData;
+
+    expect(scopeData(data, EMPTY_FILTERS).prefatura.map((row) => row.shipmentId)).toEqual(["A", "B"]);
+    expect(scopeData(data, EMPTY_FILTERS, { activeOnly: true }).prefatura).toEqual([]);
+  });
+
   it("inativa motorista e base que não aparecem na quinzena mais recente sem apagar histórico", () => {
     const data = {
       hierarchy: [
@@ -106,11 +127,11 @@ describe("atividade operacional de bases e motoristas", () => {
       isDemo: false,
     } as unknown as DashboardData;
 
-    const current = scopeData(data, EMPTY_FILTERS);
+    const current = scopeData(data, EMPTY_FILTERS, { activeOnly: true });
     expect(current.drivers.map((driver) => driver.driverId)).toEqual(["D2"]);
     expect(current.risk.map((row) => row.shipmentId)).toEqual(["B"]);
     expect(current.prefatura.map((row) => row.shipmentId)).toEqual(["B"]);
-    expect(filterOptions(data, EMPTY_FILTERS).bases).toEqual(["Base Nova"]);
+    expect(filterOptions(data, EMPTY_FILTERS).bases).toEqual(["Base Antiga", "Base Nova"]);
 
     const january = scopeData(data, { ...EMPTY_FILTERS, month: "2026-01", fortnight: "Q1" });
     expect(january.drivers.map((driver) => driver.driverId)).toEqual(["D1"]);
@@ -132,7 +153,7 @@ describe("atividade operacional de bases e motoristas", () => {
       isDemo: false,
     } as unknown as DashboardData;
 
-    const current = scopeData(data, EMPTY_FILTERS);
+    const current = scopeData(data, EMPTY_FILTERS, { activeOnly: true });
     expect(current.drivers.map((driver) => driver.driverId)).toEqual(["D1"]);
     expect(current.risk.map((row) => row.shipmentId)).toEqual(["A", "B"]);
   });
