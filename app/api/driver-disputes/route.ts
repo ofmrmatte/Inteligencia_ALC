@@ -1,8 +1,9 @@
 import { NextResponse } from "next/server";
+import { accessErrorStatus, assertDriverManagementTab, driverManagementBaseScope } from "@/lib/access-control-server";
 import { DRIVER_DISPUTE_STATUSES, type DriverDisputeStatus } from "@/lib/driver-portal";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { driverPortalUrl } from "@/lib/driver-portal-url";
-import { adminBaseScope, assertBaseAccess, jsonError, requirePortalProfile, textValue } from "@/lib/driver-portal-server";
+import { assertBaseAccess, jsonError, requirePortalProfile, textValue } from "@/lib/driver-portal-server";
 
 export const dynamic = "force-dynamic";
 
@@ -25,6 +26,7 @@ export async function POST() {
 export async function PATCH(request: Request) {
   try {
     const profile = await requirePortalProfile();
+    assertDriverManagementTab(profile, "disputes");
     const body = (await request.json()) as DbRow;
     const id = textValue(body.id);
     const nextStatus = isStatus(body.status) ? body.status : null;
@@ -32,7 +34,7 @@ export async function PATCH(request: Request) {
     const admin = createAdminClient();
     const current = await admin.from("driver_disputes").select("*").eq("id", id).single();
     if (current.error) throw new Error(current.error.message);
-    const allowedBases = await adminBaseScope(profile);
+    const allowedBases = await driverManagementBaseScope(profile);
     assertBaseAccess(textValue(current.data.base_key), allowedBases);
     const patch: DbRow = { status: nextStatus, updated_at: new Date().toISOString() };
     if (nextStatus === "deferida") patch.decision = textValue(body.decision) || "Contestação deferida. PDF em correção.";
@@ -62,6 +64,6 @@ export async function PATCH(request: Request) {
     await admin.from("driver_portal_audit_events").insert({ actor_profile_id: profile.id, action: "dispute_status_changed", entity_table: "driver_disputes", entity_id: id, before_data: current.data, after_data: updated.data });
     return NextResponse.json({ dispute: updated.data });
   } catch (error) {
-    return jsonError(error instanceof Error ? error.message : "Falha ao atualizar contestação.", 400);
+    return jsonError(error instanceof Error ? error.message : "Falha ao atualizar contestação.", accessErrorStatus(error, 400));
   }
 }
