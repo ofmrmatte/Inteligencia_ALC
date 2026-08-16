@@ -7,14 +7,15 @@ import { createClient } from "@/lib/supabase/client";
 import type { DashboardData, DashboardFilters, ParsedBatch } from "@/lib/types";
 import { EMPTY_DATA, EMPTY_FILTERS } from "@/lib/types";
 
-const STORAGE_KEY = "alc-inteligencia:v1";
+const STORAGE_KEY_PREFIX = "alc-inteligencia:v2";
 
 interface DashboardStore {
   data: DashboardData;
   filters: DashboardFilters;
   hydrated: boolean;
   importing: boolean;
-  hydrate: () => Promise<void>;
+  cacheOwnerId: string;
+  hydrate: (profileId: string, loadOperationalData?: boolean) => Promise<void>;
   setImporting: (value: boolean) => void;
   addBatches: (batches: ParsedBatch[], files?: File[]) => Promise<void>;
   removeBatch: (batchId: string) => Promise<void>;
@@ -24,8 +25,12 @@ interface DashboardStore {
   resetFilters: () => void;
 }
 
-async function save(data: DashboardData) {
-  if (typeof window !== "undefined") await set(STORAGE_KEY, data);
+function storageKey(profileId: string) {
+  return `${STORAGE_KEY_PREFIX}:${profileId || "anonymous"}`;
+}
+
+async function save(data: DashboardData, profileId: string) {
+  if (typeof window !== "undefined" && profileId) await set(storageKey(profileId), data);
 }
 
 async function readError(response: Response, fallback: string) {
@@ -91,14 +96,20 @@ export const useDashboardStore = create<DashboardStore>((storeSet, getState) => 
   filters: EMPTY_FILTERS,
   hydrated: false,
   importing: false,
-  hydrate: async () => {
+  cacheOwnerId: "",
+  hydrate: async (profileId, loadOperationalData = true) => {
+    storeSet({ hydrated: false, cacheOwnerId: profileId });
+    if (!loadOperationalData) {
+      storeSet({ data: EMPTY_DATA, filters: EMPTY_FILTERS, hydrated: true });
+      return;
+    }
     try {
       const online = await fetchOnlineData();
       storeSet({ data: online });
-      await save(online);
+      await save(online, profileId);
     } catch {
-      const saved = await get<DashboardData>(STORAGE_KEY);
-      if (saved) storeSet({ data: saved });
+      const saved = await get<DashboardData>(storageKey(profileId));
+      storeSet({ data: saved ?? EMPTY_DATA });
     } finally {
       storeSet({ hydrated: true });
     }
@@ -115,7 +126,7 @@ export const useDashboardStore = create<DashboardStore>((storeSet, getState) => 
       if (!response.ok) throw new Error(await readError(response, "Falha ao salvar dados online."));
       const next = (await response.json()) as DashboardData;
       storeSet({ data: next });
-      await save(next);
+      await save(next, getState().cacheOwnerId);
     } catch (error) {
       await removeUploaded(uploaded.map((file) => file.storagePath));
       throw error;
@@ -126,18 +137,19 @@ export const useDashboardStore = create<DashboardStore>((storeSet, getState) => 
     if (!response.ok) throw new Error(await readError(response, "Falha ao remover lote online."));
     const next = (await response.json()) as DashboardData;
     storeSet({ data: next });
-    await save(next);
+    await save(next, getState().cacheOwnerId);
   },
   clearData: async () => {
     const response = await fetch("/api/imports", { method: "DELETE" });
     if (!response.ok) throw new Error(await readError(response, "Falha ao limpar dados online."));
     storeSet({ data: EMPTY_DATA, filters: EMPTY_FILTERS });
-    await del(STORAGE_KEY);
+    const owner = getState().cacheOwnerId;
+    if (owner) await del(storageKey(owner));
   },
   loadDemo: async () => {
     const data = createDemoData();
     storeSet({ data, filters: EMPTY_FILTERS });
-    await save(data);
+    await save(data, getState().cacheOwnerId);
   },
   setFilter: (key, value) => {
     const current = getState().filters;
