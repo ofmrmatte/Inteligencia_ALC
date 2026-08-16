@@ -12,7 +12,7 @@ export async function GET(_request: Request, context: { params: Promise<{ id: st
     const admin = createAdminClient();
     const { data, error } = await admin
       .from("driver_payment_documents")
-      .select("*,driver_payment_document_versions(*)")
+      .select("*,driver_payment_document_versions:driver_payment_document_versions!driver_payment_document_versions_document_id_fkey(*)")
       .eq("id", id)
       .maybeSingle();
     if (error) throw new Error(error.message);

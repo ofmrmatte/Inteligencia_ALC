@@ -18,7 +18,7 @@ export async function POST(request: Request) {
     if (!file.name.toLowerCase().endsWith(".pdf") || !pdfLooksValid(bytes)) throw new Error("Arquivo PDF inválido.");
 
     const admin = createAdminClient();
-    const doc = await admin.from("driver_payment_documents").select("*,driver_payment_document_versions(*)").eq("id", documentId).single();
+    const doc = await admin.from("driver_payment_documents").select("*,driver_payment_document_versions:driver_payment_document_versions!driver_payment_document_versions_document_id_fkey(*)").eq("id", documentId).single();
     if (doc.error) throw new Error(doc.error.message);
     const allowedBases = await adminBaseScope(profile);
     assertBaseAccess(textValue(doc.data.base_key), allowedBases);

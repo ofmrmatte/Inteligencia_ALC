@@ -25,8 +25,8 @@ export async function GET() {
         : admin.from("operational_bases").select("*")
       ).order("base_name", { ascending: true }),
       (allowedBases
-        ? admin.from("driver_payment_documents").select("*,alc_drivers(driver_code,full_name),driver_payment_document_versions(*)").in("base_key", allowedBases.length ? allowedBases : ["__none__"])
-        : admin.from("driver_payment_documents").select("*,alc_drivers(driver_code,full_name),driver_payment_document_versions(*)")
+        ? admin.from("driver_payment_documents").select("*,alc_drivers(driver_code,full_name),driver_payment_document_versions:driver_payment_document_versions!driver_payment_document_versions_document_id_fkey(*)").in("base_key", allowedBases.length ? allowedBases : ["__none__"])
+        : admin.from("driver_payment_documents").select("*,alc_drivers(driver_code,full_name),driver_payment_document_versions:driver_payment_document_versions!driver_payment_document_versions_document_id_fkey(*)")
       ).order("created_at", { ascending: false }).limit(1000),
       (allowedBases
         ? admin.from("driver_disputes").select("*,alc_drivers(driver_code,full_name),driver_payment_documents(title)").in("base_key", allowedBases.length ? allowedBases : ["__none__"])

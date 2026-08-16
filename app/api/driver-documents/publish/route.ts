@@ -18,7 +18,7 @@ export async function POST(request: Request) {
     const admin = createAdminClient();
     let query = admin
       .from("driver_payment_documents")
-      .select("*,driver_payment_document_versions(*)")
+      .select("*,driver_payment_document_versions:driver_payment_document_versions!driver_payment_document_versions_document_id_fkey(*)")
       .eq("status", "draft");
     if (documentIds.length) query = query.in("id", documentIds);
     if (batchId) query = query.eq("batch_id", batchId);
