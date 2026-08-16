@@ -2,7 +2,7 @@ import { createServerClient } from "@supabase/ssr";
 import { NextResponse, type NextRequest } from "next/server";
 import { isSupabaseConfigured, supabasePublishableKey, supabaseUrl } from "@/lib/supabase/config";
 
-const PUBLIC_PATHS = new Set(["/login"]);
+const PUBLIC_PATHS = new Set(["/login", "/manifest.webmanifest"]);
 const LEGACY_DRIVER_PORTAL_PATHS = new Set(["/motorista", "/motorista/login"]);
 
 function isPublicPath(pathname: string) {
@@ -60,6 +60,7 @@ export async function updateSession(request: NextRequest) {
 
   const { data, error } = await supabase.auth.getClaims();
   const isAuthenticated = Boolean(data?.claims && !error);
+
   if (!isAuthenticated && !isPublicPath(pathname)) {
     if (isApiPath(pathname)) {
       return NextResponse.json({ error: "Sessão expirada. Entre novamente." }, { status: 401 });
@@ -70,12 +71,8 @@ export async function updateSession(request: NextRequest) {
     return NextResponse.redirect(redirectUrl);
   }
 
-  if (isAuthenticated && isPublicPath(pathname)) {
-    const redirectUrl = request.nextUrl.clone();
-    redirectUrl.pathname = "/";
-    redirectUrl.search = "";
-    return NextResponse.redirect(redirectUrl);
-  }
-
+  // /login permanece público no proxy. A própria página usa getCurrentProfile()
+  // para redirecionar sessões realmente válidas. Isso evita o ciclo em que
+  // getClaims() aceita um token enquanto getUser() ainda rejeita/renova a sessão.
   return response;
 }

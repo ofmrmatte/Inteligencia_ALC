@@ -98,20 +98,37 @@ export const useDashboardStore = create<DashboardStore>((storeSet, getState) => 
   importing: false,
   cacheOwnerId: "",
   hydrate: async (profileId, loadOperationalData = true) => {
-    storeSet({ hydrated: false, cacheOwnerId: profileId });
+    const current = getState();
+    const sameOwner = current.cacheOwnerId === profileId;
+    const needsBlockingLoad = !current.hydrated || !sameOwner;
+
+    // O loading de tela inteira deve existir só no primeiro carregamento real
+    // da sessão/usuário. Navegações internas mantêm a UI e atualizam os dados
+    // em segundo plano, evitando o flash de boot a cada remount do DashboardApp.
+    if (needsBlockingLoad) {
+      storeSet({ hydrated: false, cacheOwnerId: profileId });
+    } else if (!sameOwner) {
+      storeSet({ cacheOwnerId: profileId });
+    }
+
     if (!loadOperationalData) {
-      storeSet({ data: EMPTY_DATA, filters: EMPTY_FILTERS, hydrated: true });
+      storeSet({ data: EMPTY_DATA, filters: EMPTY_FILTERS, hydrated: true, cacheOwnerId: profileId });
       return;
     }
+
     try {
       const online = await fetchOnlineData();
-      storeSet({ data: online });
+      storeSet({ data: online, cacheOwnerId: profileId });
       await save(online, profileId);
     } catch {
-      const saved = await get<DashboardData>(storageKey(profileId));
-      storeSet({ data: saved ?? EMPTY_DATA });
+      // Em um primeiro carregamento ainda tentamos o cache local. Em uma
+      // navegação interna, preservamos os dados já visíveis se o refresh falhar.
+      if (needsBlockingLoad) {
+        const saved = await get<DashboardData>(storageKey(profileId));
+        storeSet({ data: saved ?? EMPTY_DATA });
+      }
     } finally {
-      storeSet({ hydrated: true });
+      storeSet({ hydrated: true, cacheOwnerId: profileId });
     }
   },
   setImporting: (importing) => storeSet({ importing }),
