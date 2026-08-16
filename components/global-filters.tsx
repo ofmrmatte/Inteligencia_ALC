@@ -24,13 +24,45 @@ export function GlobalFilters() {
   const options = filterOptions(data, filters);
   const active = Object.entries(filters).some(([key, value]) => value !== (key === "base" || key === "sigla" || key === "operation" || key === "fortnight" ? "Todas" : "Todos"));
 
+  const baseOptions = [...new Map(
+    data.hierarchy
+      .filter((row) => filters.coordinator === "Todos" || row.coordinator === filters.coordinator)
+      .filter((row) => row.base)
+      .map((row) => {
+        const value = `${row.sigla || "SEM_SIGLA"}|||${row.base}`;
+        const label = row.sigla ? `${row.sigla} - ${row.base}` : row.base;
+        return [value, { value, label, sigla: row.sigla || "Todas", base: row.base }] as const;
+      }),
+  ).values()].sort((a, b) => a.label.localeCompare(b.label, "pt-BR"));
+
+  const selectedBase = filters.base !== "Todas" && filters.sigla !== "Todas"
+    ? `${filters.sigla}|||${filters.base}`
+    : "Todas";
+
+  const changeBase = (value: string) => {
+    if (value === "Todas") {
+      setFilter("sigla", "Todas");
+      setFilter("base", "Todas");
+      return;
+    }
+    const option = baseOptions.find((item) => item.value === value);
+    if (!option) return;
+    setFilter("sigla", option.sigla);
+    setFilter("base", option.base);
+  };
+
   return (
     <section className="filters-bar" aria-label="Filtros globais">
       <SelectFilter label="Mês" value={filters.month} options={options.months} allLabel="Todos" onChange={(value) => setFilter("month", value)} formatOption={formatMonthLabel} />
       <SelectFilter label="Quinzena" value={filters.fortnight} options={options.fortnights} allLabel="Todas" onChange={(value) => setFilter("fortnight", value)} formatOption={formatFortnightLabel} />
       <SelectFilter label="Coordenador" value={filters.coordinator} options={options.coordinators} allLabel="Todos" onChange={(value) => setFilter("coordinator", value)} />
-      <SelectFilter label="Sigla" value={filters.sigla} options={options.siglas} allLabel="Todas" onChange={(value) => setFilter("sigla", value)} />
-      <SelectFilter label="Base" value={filters.base} options={options.bases} allLabel="Todas" onChange={(value) => setFilter("base", value)} />
+      <label className="filter-control">
+        <span>Base</span>
+        <select value={selectedBase} onChange={(event) => changeBase(event.target.value)}>
+          <option value="Todas">Todas</option>
+          {baseOptions.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
+        </select>
+      </label>
       <SelectFilter label="Operação" value={filters.operation} options={["SVC", "XPT", "PNR"]} allLabel="Todas" onChange={(value) => setFilter("operation", value)} />
       <SelectFilter label="Supervisor" value={filters.supervisor} options={options.supervisors} allLabel="Todos" onChange={(value) => setFilter("supervisor", value)} />
       <SelectFilter label="Motorista" value={filters.driver} options={options.drivers} allLabel="Todos" onChange={(value) => setFilter("driver", value)} />
