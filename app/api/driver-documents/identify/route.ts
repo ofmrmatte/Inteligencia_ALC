@@ -1,6 +1,12 @@
 import { NextResponse } from "next/server";
-import { assertDriverManagementTab, driverManagementBaseScope, accessErrorStatus } from "@/lib/access-control-server";
-import { extractArchiveFiles, safeStorageName, sha256Bytes } from "@/lib/driver-portal";
+import { accessErrorStatus, assertDriverManagementTab, driverManagementBaseScope } from "@/lib/access-control-server";
+import {
+  ensurePaymentDocumentDraftVersion,
+  paymentDriverMatchesBase,
+  paymentDriverNameKeyFromTitle,
+  paymentNameKey,
+  type PaymentBaseRef,
+} from "@/lib/payment-document-server";
 import { assertBaseAccess, jsonError, requirePortalProfile, textValue } from "@/lib/driver-portal-server";
 import { createAdminClient } from "@/lib/supabase/admin";
 
@@ -8,10 +14,6 @@ export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
 
 type DbRow = Record<string, unknown>;
-
-function basename(path: string) {
-  return path.replace(/\\/g, "/").split("/").filter(Boolean).at(-1) ?? path;
-}
 
 export async function POST(request: Request) {
   try {
@@ -31,60 +33,48 @@ export async function POST(request: Request) {
       .single();
     if (documentError) throw new Error(documentError.message);
     const doc = document as DbRow;
-    if (!["unidentified", "error"].includes(textValue(doc.status))) throw new Error("Este documento não está pendente de identificação.");
+    if (!["unidentified", "error"].includes(textValue(doc.status))) {
+      throw new Error("Este documento não está pendente de identificação.");
+    }
+
     const baseKey = textValue(doc.base_key);
     assertBaseAccess(baseKey, allowedBases);
 
-    const { data: driver, error: driverError } = await admin
-      .from("alc_drivers")
-      .select("id,driver_code,full_name,base_key,sigla")
-      .eq("id", driverId)
-      .single();
+    const [{ data: driver, error: driverError }, { data: baseRows, error: basesError }] = await Promise.all([
+      admin.from("alc_drivers").select("id,driver_code,full_name,base_key,sigla").eq("id", driverId).single(),
+      admin.from("operational_bases").select("base_key,base_name,sigla").eq("active", true),
+    ]);
     if (driverError) throw new Error(driverError.message);
+    if (basesError) throw new Error(basesError.message);
+
     const driverCode = textValue(driver.driver_code);
     if (!/^\d+$/.test(driverCode)) throw new Error("O motorista selecionado não possui ID numérico canônico.");
-    if (baseKey && textValue(driver.base_key) !== baseKey) throw new Error("O motorista selecionado pertence a outra base.");
 
-    let versions = (doc.driver_payment_document_versions as DbRow[] | null) ?? [];
-    if (!versions.length) {
-      const batchId = textValue(doc.batch_id);
-      if (!batchId) throw new Error("Lote original não encontrado para recuperar o PDF.");
-      const { data: batch, error: batchError } = await admin.from("driver_payment_batches").select("original_name,storage_path,metadata").eq("id", batchId).single();
-      if (batchError) throw new Error(batchError.message);
-      const archivePath = textValue(batch.storage_path);
-      const download = await admin.storage.from("driver-payments").download(archivePath);
-      if (download.error) throw new Error(download.error.message);
-      const archiveBytes = new Uint8Array(await download.data.arrayBuffer());
-      const extracted = await extractArchiveFiles(textValue(batch.original_name), archiveBytes);
-      const metadata = (batch.metadata ?? {}) as DbRow;
-      const files = Array.isArray(metadata.files) ? metadata.files as DbRow[] : [];
-      const metadataMatch = files.find((item) => textValue(item.originalName) === textValue(doc.title));
-      const wantedPath = textValue(metadataMatch?.path);
-      const candidates = extracted.filter((item) => wantedPath ? item.path === wantedPath : basename(item.path) === textValue(doc.title));
-      if (candidates.length !== 1) throw new Error("Não foi possível localizar com segurança o PDF dentro do lote original.");
-      const file = candidates[0];
-      const storagePath = `payment-documents/${batchId}/${documentId}-${safeStorageName(textValue(doc.title))}`;
-      const upload = await admin.storage.from("driver-payments").upload(storagePath, file.bytes, { contentType: "application/pdf", upsert: false });
-      if (upload.error) throw new Error(upload.error.message);
-      const fileHash = await sha256Bytes(file.bytes);
-      const versionInsert = await admin.from("driver_payment_document_versions").insert({
-        document_id: documentId,
-        version_number: 1,
-        storage_path: storagePath,
-        file_hash: fileHash,
-        file_size: file.size,
-        original_name: textValue(doc.title),
-        published_by: profile.id,
-        status: "draft",
-        notes: "PDF recuperado do lote para identificação manual.",
-      }).select().single();
-      if (versionInsert.error) throw new Error(versionInsert.error.message);
-      versions = [versionInsert.data as DbRow];
+    const bases: PaymentBaseRef[] = (baseRows ?? []).map((row) => ({
+      baseKey: textValue(row.base_key),
+      baseName: textValue(row.base_name),
+      sigla: textValue(row.sigla),
+    }));
+    const driverRef = {
+      baseKey: textValue(driver.base_key),
+      sigla: textValue(driver.sigla),
+    };
+
+    const baseCompatible = paymentDriverMatchesBase(baseKey, driverRef, bases, true);
+    if (!baseCompatible) throw new Error("O motorista selecionado pertence a outra base/operação.");
+
+    if (!driverRef.baseKey && !driverRef.sigla) {
+      const expected = paymentDriverNameKeyFromTitle(textValue(doc.title));
+      if (!expected || paymentNameKey(driver.full_name) !== expected) {
+        throw new Error("Motorista sem base só pode ser vinculado quando o nome do PDF corresponde exatamente ao cadastro canônico.");
+      }
     }
+
+    const version = await ensurePaymentDocumentDraftVersion(admin, doc, profile.id);
 
     const { data: updated, error: updateError } = await admin.from("driver_payment_documents").update({
       driver_id: driverId,
-      base_key: textValue(driver.base_key) || baseKey,
+      base_key: baseKey || textValue(driver.base_key) || null,
       status: "draft",
       issue: null,
     }).eq("id", documentId).select().single();
@@ -92,16 +82,21 @@ export async function POST(request: Request) {
 
     const batchId = textValue(doc.batch_id);
     if (batchId) {
-      const { data: batchDocs, error: batchDocsError } = await admin.from("driver_payment_documents").select("status").eq("batch_id", batchId);
+      const { data: batchDocs, error: batchDocsError } = await admin
+        .from("driver_payment_documents")
+        .select("status")
+        .eq("batch_id", batchId);
       if (batchDocsError) throw new Error(batchDocsError.message);
       const rows = (batchDocs ?? []) as DbRow[];
-      await admin.from("driver_payment_batches").update({
-        identified_count: rows.filter((row) => textValue(row.status) === "draft" || textValue(row.status) === "published").length,
+      const remainingReview = rows.some((row) => ["draft", "unidentified", "error"].includes(textValue(row.status)));
+      const { error: batchUpdateError } = await admin.from("driver_payment_batches").update({
+        identified_count: rows.filter((row) => ["draft", "published"].includes(textValue(row.status))).length,
         unidentified_count: rows.filter((row) => textValue(row.status) === "unidentified").length,
         duplicate_count: rows.filter((row) => textValue(row.status) === "duplicate").length,
         error_count: rows.filter((row) => textValue(row.status) === "error").length,
-        status: rows.some((row) => ["draft", "unidentified", "error"].includes(textValue(row.status))) ? "review" : "published",
+        status: remainingReview ? "review" : "published",
       }).eq("id", batchId);
+      if (batchUpdateError) throw new Error(batchUpdateError.message);
     }
 
     await admin.from("driver_portal_audit_events").insert({
@@ -110,10 +105,26 @@ export async function POST(request: Request) {
       entity_table: "driver_payment_documents",
       entity_id: documentId,
       before_data: { driver_id: doc.driver_id, status: doc.status, issue: doc.issue },
-      after_data: { driver_id: driverId, driver_code: driverCode, driver_name: textValue(driver.full_name), status: "draft", version_id: textValue(versions[0]?.id) },
+      after_data: {
+        driver_id: driverId,
+        driver_code: driverCode,
+        driver_name: textValue(driver.full_name),
+        status: "draft",
+        version_id: textValue((version as DbRow)?.id),
+      },
     });
 
-    return NextResponse.json({ ok: true, document: updated, driver: { id: driverId, driverCode, fullName: textValue(driver.full_name), baseKey: textValue(driver.base_key), sigla: textValue(driver.sigla) } });
+    return NextResponse.json({
+      ok: true,
+      document: updated,
+      driver: {
+        id: driverId,
+        driverCode,
+        fullName: textValue(driver.full_name),
+        baseKey: textValue(driver.base_key),
+        sigla: textValue(driver.sigla),
+      },
+    });
   } catch (error) {
     return jsonError(error instanceof Error ? error.message : "Falha ao identificar motorista.", accessErrorStatus(error, 400));
   }

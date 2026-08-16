@@ -1,8 +1,20 @@
 import { NextResponse } from "next/server";
 import { DRIVER_MANAGEMENT_TABS, driverManagementTabsForProfile, type DriverManagementTab } from "@/lib/access-control";
 import { accessErrorStatus, assertDriverManagementTab, driverManagementBaseScope } from "@/lib/access-control-server";
+import {
+  paymentDriverMatchesBase,
+  paymentDriverNameKeyFromTitle,
+  paymentNameKey,
+  type PaymentBaseRef,
+} from "@/lib/payment-document-server";
 import { createAdminClient } from "@/lib/supabase/admin";
-import { driverPortalPatchForAction, loadDriverPortalBaseEnabled, loadTickets, requirePortalProfile, textValue } from "@/lib/driver-portal-server";
+import {
+  driverPortalPatchForAction,
+  loadDriverPortalBaseEnabled,
+  loadTickets,
+  requirePortalProfile,
+  textValue,
+} from "@/lib/driver-portal-server";
 import { readPaged } from "@/lib/pagination";
 
 export const dynamic = "force-dynamic";
@@ -47,6 +59,7 @@ async function loadDrivers(baseFilter: string[] | null) {
     if (error) throw new Error(error.message);
     return { rows: (data ?? []) as DbRow[], count };
   });
+
   return rows.map((row) => {
     const code = textValue(row.driver_code);
     const name = textValue(row.full_name);
@@ -88,6 +101,39 @@ async function loadDocuments(baseFilter: string[] | null) {
   });
 }
 
+async function loadPaymentDrivers(baseFilter: string[] | null, documents: DbRow[], bases: DbRow[]) {
+  if (baseFilter === null) return loadDrivers(null);
+
+  const allDrivers = await loadDrivers(null);
+  const baseRefs: PaymentBaseRef[] = bases.map((base) => ({
+    baseKey: textValue(base.base_key),
+    baseName: textValue(base.base_name),
+    sigla: textValue(base.sigla),
+  }));
+  const unresolvedNameKeys = new Set(
+    documents
+      .filter((doc) => ["unidentified", "error"].includes(textValue(doc.status)))
+      .map((doc) => paymentDriverNameKeyFromTitle(textValue(doc.title)))
+      .filter(Boolean),
+  );
+
+  return allDrivers.filter((driver) => {
+    if (!/^\d+$/.test(driver.driverCode)) return false;
+    const matchesAllowedOperation = baseFilter.some((allowedBase) => paymentDriverMatchesBase(
+      allowedBase,
+      { baseKey: driver.baseKey, sigla: driver.sigla },
+      baseRefs,
+      false,
+    ));
+    if (matchesAllowedOperation) return true;
+
+    if (!driver.baseKey && !driver.sigla) {
+      return unresolvedNameKeys.has(paymentNameKey(driver.fullName));
+    }
+    return false;
+  });
+}
+
 async function loadDisputes(baseFilter: string[] | null) {
   const admin = createAdminClient();
   return readPaged<DbRow>(async (offset, pageSize) => {
@@ -118,6 +164,7 @@ export async function GET(request: Request) {
     const requested = new URL(request.url).searchParams.get("tab") || allowedTabs[0] || "";
     if (!validTab(requested)) return jsonError("Aba inválida.", 400);
     assertDriverManagementTab(profile, requested);
+
     const baseFilter = await driverManagementBaseScope(profile);
     const bases = await loadBases(baseFilter);
     const payload: Record<string, unknown> = {
@@ -134,18 +181,25 @@ export async function GET(request: Request) {
       ]);
       Object.assign(payload, { drivers, tickets, documents, disputes });
     }
+
     if (requested === "pilot" || requested === "drivers") payload.drivers = await loadDrivers(baseFilter);
     if (requested === "tickets") payload.tickets = await loadTickets({ allowedBases: baseFilter });
+
     if (requested === "payments") {
-      const [documents, drivers] = await Promise.all([loadDocuments(baseFilter), loadDrivers(baseFilter)]);
+      const documents = await loadDocuments(baseFilter);
+      const drivers = await loadPaymentDrivers(baseFilter, documents, bases);
       Object.assign(payload, { documents, drivers });
     }
+
     if (requested === "disputes") payload.disputes = await loadDisputes(baseFilter);
     if (requested === "admins") payload.assignments = await loadAssignments();
 
     return NextResponse.json(payload);
   } catch (error) {
-    return jsonError(error instanceof Error ? error.message : "Falha ao carregar gestão de motoristas.", accessErrorStatus(error, 500));
+    return jsonError(
+      error instanceof Error ? error.message : "Falha ao carregar gestão de motoristas.",
+      accessErrorStatus(error, 500),
+    );
   }
 }
 
@@ -156,11 +210,13 @@ export async function POST(request: Request) {
     if (!["director", "developer", "loss_supervisor", "super_admin", "administration_supervisor"].includes(profile.role)) {
       return jsonError("Ação restrita à supervisão administrativa ou perfis de acesso total.", 403);
     }
+
     const body = (await request.json()) as DbRow;
     if (textValue(body.action) !== "assignment") throw new Error("Ação não reconhecida.");
     const adminId = textValue(body.adminId);
     const baseKeys = arrayValue(body.baseKeys);
     if (!adminId || !baseKeys.length) throw new Error("Informe administrativo e bases.");
+
     const admin = createAdminClient();
     for (const baseKey of baseKeys) {
       const { data, error } = await admin.from("admin_base_assignments").upsert({
@@ -171,11 +227,21 @@ export async function POST(request: Request) {
         updated_at: new Date().toISOString(),
       }, { onConflict: "admin_id,base_key" }).select().single();
       if (error) throw new Error(error.message);
-      await admin.from("admin_base_assignment_history").insert({ assignment_id: data.id, admin_id: adminId, base_key: baseKey, action: "assigned", actor_id: profile.id, after_data: data });
+      await admin.from("admin_base_assignment_history").insert({
+        assignment_id: data.id,
+        admin_id: adminId,
+        base_key: baseKey,
+        action: "assigned",
+        actor_id: profile.id,
+        after_data: data,
+      });
     }
     return GET(new Request(new URL("/api/driver-management?tab=admins", request.url)));
   } catch (error) {
-    return jsonError(error instanceof Error ? error.message : "Falha ao salvar gestão de motoristas.", accessErrorStatus(error, 400));
+    return jsonError(
+      error instanceof Error ? error.message : "Falha ao salvar gestão de motoristas.",
+      accessErrorStatus(error, 400),
+    );
   }
 }
 
@@ -188,13 +254,27 @@ export async function PATCH(request: Request) {
 
     if (action === "assignment") {
       assertDriverManagementTab(profile, "admins");
-      if (!["director", "developer", "loss_supervisor", "super_admin", "administration_supervisor"].includes(profile.role)) return jsonError("Acesso negado.", 403);
+      if (!["director", "developer", "loss_supervisor", "super_admin", "administration_supervisor"].includes(profile.role)) {
+        return jsonError("Acesso negado.", 403);
+      }
       const id = textValue(body.id);
       const active = body.active !== false;
       const { data: before } = await admin.from("admin_base_assignments").select("*").eq("id", id).single();
-      const { data, error } = await admin.from("admin_base_assignments").update({ active, updated_at: new Date().toISOString() }).eq("id", id).select().single();
+      const { data, error } = await admin.from("admin_base_assignments")
+        .update({ active, updated_at: new Date().toISOString() })
+        .eq("id", id)
+        .select()
+        .single();
       if (error) throw new Error(error.message);
-      await admin.from("admin_base_assignment_history").insert({ assignment_id: id, admin_id: data.admin_id, base_key: data.base_key, action: active ? "reactivated" : "removed", actor_id: profile.id, before_data: before, after_data: data });
+      await admin.from("admin_base_assignment_history").insert({
+        assignment_id: id,
+        admin_id: data.admin_id,
+        base_key: data.base_key,
+        action: active ? "reactivated" : "removed",
+        actor_id: profile.id,
+        before_data: before,
+        after_data: data,
+      });
       return GET(new Request(new URL("/api/driver-management?tab=admins", request.url)));
     }
 
@@ -204,34 +284,56 @@ export async function PATCH(request: Request) {
       const portalAction = textValue(body.portalAction);
       const current = await admin.from("alc_drivers").select("*").eq("id", id).single();
       if (current.error) throw new Error(current.error.message);
+
       const baseFilter = await driverManagementBaseScope(profile);
-      if (baseFilter && !baseFilter.includes(textValue(current.data.base_key))) return jsonError("Acesso negado para a base solicitada.", 403);
+      if (baseFilter && !baseFilter.includes(textValue(current.data.base_key))) {
+        return jsonError("Acesso negado para a base solicitada.", 403);
+      }
+
       const now = new Date().toISOString();
       const credential = await admin.from("driver_portal_credentials").select("driver_id").eq("driver_id", id).maybeSingle();
       if (credential.error) throw new Error(credential.error.message);
       const patch = driverPortalPatchForAction(portalAction, Boolean(credential.data), now);
+
       if (["allow", "reactivate", "reset_pin"].includes(portalAction)) {
         const baseEnabled = await loadDriverPortalBaseEnabled(textValue(current.data.base_key), textValue(current.data.sigla));
         if (!baseEnabled) throw new Error("Base bloqueada no controle central do Portal do Motorista.");
       }
+
       if (portalAction !== "revoke_sessions") {
         const updated = await admin.from("alc_drivers").update(patch).eq("id", id).select().single();
         if (updated.error) throw new Error(updated.error.message);
       }
+
       if (portalAction === "reset_pin") {
         const credentials = await admin.from("driver_portal_credentials").delete().eq("driver_id", id);
         if (credentials.error) throw new Error(credentials.error.message);
       }
+
       if (["reset_pin", "revoke_sessions", "block"].includes(portalAction)) {
-        const sessions = await admin.from("driver_portal_sessions").update({ revoked_at: now }).eq("driver_id", id).is("revoked_at", null);
+        const sessions = await admin.from("driver_portal_sessions")
+          .update({ revoked_at: now })
+          .eq("driver_id", id)
+          .is("revoked_at", null);
         if (sessions.error) throw new Error(sessions.error.message);
       }
-      await admin.from("driver_portal_audit_events").insert({ actor_profile_id: profile.id, action: `driver_portal_${portalAction}`, entity_table: "alc_drivers", entity_id: id, before_data: current.data, after_data: patch });
+
+      await admin.from("driver_portal_audit_events").insert({
+        actor_profile_id: profile.id,
+        action: `driver_portal_${portalAction}`,
+        entity_table: "alc_drivers",
+        entity_id: id,
+        before_data: current.data,
+        after_data: patch,
+      });
       return GET(new Request(new URL("/api/driver-management?tab=drivers", request.url)));
     }
 
     throw new Error("Ação não reconhecida.");
   } catch (error) {
-    return jsonError(error instanceof Error ? error.message : "Falha ao atualizar gestão de motoristas.", accessErrorStatus(error, 400));
+    return jsonError(
+      error instanceof Error ? error.message : "Falha ao atualizar gestão de motoristas.",
+      accessErrorStatus(error, 400),
+    );
   }
 }

@@ -2,11 +2,13 @@ import { NextResponse } from "next/server";
 import { DRIVER_MANAGEMENT_TABS, roleDriverManagementCap, roleModuleCap } from "@/lib/access-control";
 import { canManageUsers, isUserRole, MANAGED_USER_ROLES, type UserRole } from "@/lib/auth";
 import { getCurrentProfile } from "@/lib/auth-server";
+import { normalizeText } from "@/lib/normalize";
 import { createAdminClient } from "@/lib/supabase/admin";
 
 export const dynamic = "force-dynamic";
 
 type DbRow = Record<string, unknown>;
+type AdminClient = ReturnType<typeof createAdminClient>;
 
 function jsonError(message: string, status = 400) {
   return NextResponse.json({ error: message }, { status });
@@ -38,33 +40,17 @@ function fullRole(role: UserRole) {
   return ["director", "developer", "loss_supervisor"].includes(role);
 }
 
+function needsAssignedBases(role: UserRole) {
+  return ["admin", "coordinator", "supervisor"].includes(role);
+}
+
 function allowedSubset(values: string[], allowed: readonly string[]) {
   const allowedSet = new Set(allowed);
-  return values.filter((value) => allowedSet.has(value));
+  return [...new Set(values.filter((value) => allowedSet.has(value)))];
 }
 
-function mapManagedUser(row: DbRow) {
-  const role = parseRole(row.role);
-  return {
-    id: toStringValue(row.id),
-    email: toStringValue(row.email),
-    fullName: toStringValue(row.full_name),
-    role,
-    globalAccess: fullRole(role),
-    active: row.active !== false,
-    baseScope: toStringArray(row.base_scope),
-    moduleScope: toStringArray(row.module_scope),
-    driverManagementScope: toStringArray(row.driver_management_scope),
-    createdAt: toStringValue(row.created_at),
-    updatedAt: toStringValue(row.updated_at),
-  };
-}
-
-async function requireUserManager() {
-  const profile = await getCurrentProfile();
-  if (!profile) throw new Error("Sessão expirada. Entre novamente.");
-  if (!canManageUsers(profile)) throw new Error("Gestão de usuários restrita à Diretoria, Desenvolvedor e Supervisor Loss.");
-  return profile;
+function hasPayloadField(payload: DbRow, camel: string, snake: string) {
+  return Object.prototype.hasOwnProperty.call(payload, camel) || Object.prototype.hasOwnProperty.call(payload, snake);
 }
 
 function parseUserPayload(payload: DbRow, requirePassword: boolean) {
@@ -77,10 +63,28 @@ function parseUserPayload(payload: DbRow, requirePassword: boolean) {
 
   const moduleCap = roleModuleCap(role);
   const tabCap = roleDriverManagementCap(role);
+  const hasModules = hasPayloadField(payload, "moduleScope", "module_scope");
+  const hasTabs = hasPayloadField(payload, "driverManagementScope", "driver_management_scope");
   const requestedModules = toStringArray(payload.moduleScope ?? payload.module_scope);
   const requestedTabs = toStringArray(payload.driverManagementScope ?? payload.driver_management_scope);
-  const moduleScope = fullRole(role) ? moduleCap : allowedSubset(requestedModules.length ? requestedModules : moduleCap, moduleCap);
-  const driverManagementScope = fullRole(role) ? tabCap : allowedSubset(requestedTabs.length ? requestedTabs : tabCap, tabCap);
+
+  const moduleScope = fullRole(role)
+    ? moduleCap
+    : allowedSubset(hasModules ? requestedModules : moduleCap, moduleCap);
+
+  if (!fullRole(role) && moduleScope.length === 0) {
+    throw new Error("Selecione ao menos um módulo permitido para o usuário.");
+  }
+
+  const driverManagementScope = fullRole(role)
+    ? tabCap
+    : moduleScope.includes("gestao-motoristas")
+      ? allowedSubset(hasTabs ? requestedTabs : tabCap, tabCap)
+      : [];
+
+  if (!fullRole(role) && moduleScope.includes("gestao-motoristas") && tabCap.length > 0 && driverManagementScope.length === 0) {
+    throw new Error("Selecione ao menos uma aba da Gestão de Motoristas.");
+  }
 
   return {
     email,
@@ -95,29 +99,160 @@ function parseUserPayload(payload: DbRow, requirePassword: boolean) {
   };
 }
 
-async function resolveBaseScopes(admin: ReturnType<typeof createAdminClient>, baseScope: string[]) {
-  if (!baseScope.length) return { baseScope: [], siglaScope: [] };
-  const { data, error } = await admin.from("operational_bases").select("base_key,sigla").in("base_key", baseScope);
+async function loadBaseRows(admin: AdminClient) {
+  const { data, error } = await admin
+    .from("operational_bases")
+    .select("base_key,base_name,sigla,active")
+    .eq("active", true)
+    .order("sigla", { ascending: true })
+    .order("base_name", { ascending: true });
   if (error) throw new Error(error.message);
-  const rows = (data ?? []) as DbRow[];
-  const validBaseScope = [...new Set(rows.map((row) => toStringValue(row.base_key)).filter(Boolean))];
-  const siglaScope = [...new Set(rows.map((row) => toStringValue(row.sigla)).filter(Boolean))];
-  return { baseScope: validBaseScope, siglaScope };
+  return (data ?? []) as DbRow[];
+}
+
+function canonicalBaseFor(requested: string, bases: DbRow[]) {
+  const normalized = normalizeText(requested);
+  if (!normalized) return null;
+  const exactBase = bases.filter((row) => normalizeText(row.base_key) === normalized);
+  if (exactBase.length === 1) return exactBase[0];
+  const exactSigla = bases.filter((row) => normalizeText(row.sigla) === normalized);
+  return exactSigla.length === 1 ? exactSigla[0] : null;
+}
+
+async function resolveBaseScopes(admin: AdminClient, requested: string[], preloadedBases?: DbRow[]) {
+  if (!requested.length) return { baseScope: [] as string[], siglaScope: [] as string[] };
+  const bases = preloadedBases ?? await loadBaseRows(admin);
+  const resolved = requested.map((value) => canonicalBaseFor(value, bases));
+  const unresolved = requested.filter((_, index) => !resolved[index]);
+  if (unresolved.length) throw new Error(`Base(s) não reconhecida(s): ${unresolved.join(", ")}.`);
+  const rows = resolved.filter((row): row is DbRow => Boolean(row));
+  return {
+    baseScope: [...new Set(rows.map((row) => toStringValue(row.base_key)).filter(Boolean))],
+    siglaScope: [...new Set(rows.map((row) => toStringValue(row.sigla)).filter(Boolean))],
+  };
+}
+
+function canonicalizeStoredBaseScope(values: string[], bases: DbRow[]) {
+  return [...new Set(values.map((value) => toStringValue(canonicalBaseFor(value, bases)?.base_key) || value).filter(Boolean))];
+}
+
+function mapManagedUser(row: DbRow, bases: DbRow[]) {
+  const role = parseRole(row.role);
+  return {
+    id: toStringValue(row.id),
+    email: toStringValue(row.email),
+    fullName: toStringValue(row.full_name),
+    role,
+    globalAccess: fullRole(role),
+    active: row.active !== false,
+    baseScope: canonicalizeStoredBaseScope(toStringArray(row.base_scope), bases),
+    moduleScope: toStringArray(row.module_scope),
+    driverManagementScope: toStringArray(row.driver_management_scope),
+    createdAt: toStringValue(row.created_at),
+    updatedAt: toStringValue(row.updated_at),
+  };
+}
+
+async function requireUserManager() {
+  const profile = await getCurrentProfile();
+  if (!profile) throw new Error("Sessão expirada. Entre novamente.");
+  if (!canManageUsers(profile)) throw new Error("Gestão de usuários restrita à Diretoria, Desenvolvedor e Supervisor Loss.");
+  return profile;
+}
+
+async function syncAdministrationAssignments(
+  admin: AdminClient,
+  actorId: string,
+  userId: string,
+  role: UserRole,
+  selectedBases: string[],
+) {
+  const desired = new Set(role === "admin" ? selectedBases : []);
+  const { data, error } = await admin
+    .from("admin_base_assignments")
+    .select("*")
+    .eq("admin_id", userId);
+  if (error) throw new Error(error.message);
+
+  const existing = (data ?? []) as DbRow[];
+  const byBase = new Map(existing.map((row) => [toStringValue(row.base_key), row]));
+  const historyRows: DbRow[] = [];
+
+  for (const row of existing) {
+    const baseKey = toStringValue(row.base_key);
+    const shouldBeActive = desired.has(baseKey);
+    const isActive = row.active !== false;
+    if (shouldBeActive === isActive) {
+      desired.delete(baseKey);
+      continue;
+    }
+
+    const { data: updated, error: updateError } = await admin
+      .from("admin_base_assignments")
+      .update({
+        active: shouldBeActive,
+        assigned_by: actorId,
+        updated_at: new Date().toISOString(),
+      })
+      .eq("id", toStringValue(row.id))
+      .select()
+      .single();
+    if (updateError) throw new Error(updateError.message);
+    historyRows.push({
+      assignment_id: updated.id,
+      admin_id: userId,
+      base_key: baseKey,
+      action: shouldBeActive ? "reactivated" : "removed",
+      actor_id: actorId,
+      before_data: row,
+      after_data: updated,
+    });
+    desired.delete(baseKey);
+  }
+
+  for (const baseKey of desired) {
+    const previous = byBase.get(baseKey);
+    const { data: assignment, error: assignmentError } = await admin
+      .from("admin_base_assignments")
+      .upsert({
+        admin_id: userId,
+        base_key: baseKey,
+        assigned_by: actorId,
+        active: true,
+        updated_at: new Date().toISOString(),
+      }, { onConflict: "admin_id,base_key" })
+      .select()
+      .single();
+    if (assignmentError) throw new Error(assignmentError.message);
+    historyRows.push({
+      assignment_id: assignment.id,
+      admin_id: userId,
+      base_key: baseKey,
+      action: previous ? "reactivated" : "assigned",
+      actor_id: actorId,
+      before_data: previous ?? null,
+      after_data: assignment,
+    });
+  }
+
+  if (historyRows.length) {
+    const { error: historyError } = await admin.from("admin_base_assignment_history").insert(historyRows);
+    if (historyError) throw new Error(historyError.message);
+  }
 }
 
 async function responsePayload() {
   const admin = createAdminClient();
-  const [{ data: users, error: usersError }, { data: bases, error: basesError }] = await Promise.all([
-    admin.from("profiles").select("*").neq("role", "driver").order("email", { ascending: true }),
-    admin.from("operational_bases").select("base_key,base_name,sigla,active").eq("active", true).order("sigla", { ascending: true }),
+  const [usersResult, bases] = await Promise.all([
+    admin.from("profiles").select("*").in("role", [...MANAGED_USER_ROLES]).order("email", { ascending: true }),
+    loadBaseRows(admin),
   ]);
-  if (usersError) throw new Error(usersError.message);
-  if (basesError) throw new Error(basesError.message);
+  if (usersResult.error) throw new Error(usersResult.error.message);
   return NextResponse.json({
     roles: MANAGED_USER_ROLES,
     driverManagementTabs: DRIVER_MANAGEMENT_TABS,
-    users: ((users ?? []) as DbRow[]).map(mapManagedUser),
-    bases: ((bases ?? []) as DbRow[]).map((row) => ({
+    users: ((usersResult.data ?? []) as DbRow[]).map((row) => mapManagedUser(row, bases)),
+    bases: bases.map((row) => ({
       baseKey: toStringValue(row.base_key),
       baseName: toStringValue(row.base_name) || toStringValue(row.base_key),
       sigla: toStringValue(row.sigla),
@@ -139,11 +274,11 @@ export async function GET() {
 
 export async function POST(request: Request) {
   try {
-    await requireUserManager();
+    const manager = await requireUserManager();
     const admin = createAdminClient();
     const payload = parseUserPayload((await request.json()) as DbRow, true);
     const scopes = await resolveBaseScopes(admin, payload.baseScope);
-    if (!["director", "developer", "loss_supervisor", "administration_supervisor"].includes(payload.role) && scopes.baseScope.length === 0) {
+    if (needsAssignedBases(payload.role) && scopes.baseScope.length === 0) {
       throw new Error("Selecione ao menos uma base responsável para este cargo.");
     }
 
@@ -171,10 +306,11 @@ export async function POST(request: Request) {
     });
     if (profileError) throw new Error(profileError.message);
 
+    await syncAdministrationAssignments(admin, manager.id, created.user.id, payload.role, scopes.baseScope);
     return await responsePayload();
   } catch (error) {
     const message = error instanceof Error ? error.message : "Falha ao cadastrar usuário.";
-    return jsonError(message, message.includes("SERVICE_ROLE") ? 503 : 400);
+    return jsonError(message, message.includes("restrita") ? 403 : message.includes("SERVICE_ROLE") ? 503 : 400);
   }
 }
 
@@ -188,7 +324,7 @@ export async function PATCH(request: Request) {
     const payload = parseUserPayload(body, false);
     if (id === manager.id && payload.active === false) throw new Error("Você não pode desativar sua própria conta.");
     const scopes = await resolveBaseScopes(admin, payload.baseScope);
-    if (!["director", "developer", "loss_supervisor", "administration_supervisor"].includes(payload.role) && scopes.baseScope.length === 0) {
+    if (needsAssignedBases(payload.role) && scopes.baseScope.length === 0) {
       throw new Error("Selecione ao menos uma base responsável para este cargo.");
     }
 
@@ -205,6 +341,8 @@ export async function PATCH(request: Request) {
       updated_at: new Date().toISOString(),
     }).eq("id", id);
     if (profileError) throw new Error(profileError.message);
+
+    await syncAdministrationAssignments(admin, manager.id, id, payload.role, scopes.baseScope);
 
     const updateAuth: { email?: string; password?: string; user_metadata?: { full_name: string } } = {
       email: payload.email,

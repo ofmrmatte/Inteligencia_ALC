@@ -59,6 +59,12 @@ function normalizeList<T extends string>(values: unknown, allowed: readonly T[])
   return [...new Set(values.filter((value): value is T => typeof value === "string" && allowedSet.has(value)))];
 }
 
+function configuredScope<T extends string>(values: unknown, cap: readonly T[]): T[] {
+  // Undefined means an old profile created before module scopes existed.
+  // An explicit empty array is intentional and must never silently restore the role maximum.
+  return values === undefined || values === null ? [...cap] : normalizeList(values, cap);
+}
+
 export function isFullPanelRole(role: UserRole) {
   return FULL_PANEL_ROLES.has(role);
 }
@@ -66,8 +72,7 @@ export function isFullPanelRole(role: UserRole) {
 export function modulesForProfile(profile: Pick<AuthProfile, "role" | "moduleScope">): SectionId[] {
   const cap = ROLE_MODULE_CAP[profile.role] ?? [];
   if (isFullPanelRole(profile.role)) return [...cap];
-  const explicit = normalizeList(profile.moduleScope, cap);
-  return explicit.length ? explicit : [...cap];
+  return configuredScope(profile.moduleScope, cap);
 }
 
 export function canAccessSection(profile: Pick<AuthProfile, "role" | "moduleScope">, section: SectionId) {
@@ -85,8 +90,7 @@ export function canAccessOperationalData(profile: Pick<AuthProfile, "role" | "mo
 export function driverManagementTabsForProfile(profile: Pick<AuthProfile, "role" | "driverManagementScope">): DriverManagementTab[] {
   const cap = ROLE_DRIVER_MANAGEMENT_CAP[profile.role] ?? [];
   if (isFullPanelRole(profile.role)) return [...cap];
-  const explicit = normalizeList(profile.driverManagementScope, cap);
-  return explicit.length ? explicit : [...cap];
+  return configuredScope(profile.driverManagementScope, cap);
 }
 
 export function canAccessDriverManagementTab(profile: Pick<AuthProfile, "role" | "driverManagementScope">, tab: DriverManagementTab) {
