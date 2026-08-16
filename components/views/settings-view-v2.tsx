@@ -1,8 +1,21 @@
 "use client";
 
 import { useEffect, useMemo, useState, type FormEvent } from "react";
-import { CheckCircle2, Edit3, Save, Search, ShieldCheck, ToggleLeft, ToggleRight, Trash2, UserPlus, X } from "lucide-react";
-import { driverManagementTabsForProfile, roleDriverManagementCap, roleModuleCap, type DriverManagementTab } from "@/lib/access-control";
+import {
+  CheckCircle2,
+  Edit3,
+  Save,
+  Search,
+  ShieldCheck,
+  Smartphone,
+  ToggleLeft,
+  ToggleRight,
+  Trash2,
+  UserPlus,
+  UsersRound,
+  X,
+} from "lucide-react";
+import { roleDriverManagementCap, roleModuleCap, type DriverManagementTab } from "@/lib/access-control";
 import { MANAGED_USER_ROLES, ROLE_LABELS, canManageUsers, type AuthProfile, type UserRole } from "@/lib/auth";
 import { canManageDriverPortalBaseSettings } from "@/lib/driver-portal-base-access";
 import { NAVIGATION, type SectionId } from "@/lib/navigation";
@@ -49,6 +62,8 @@ interface PortalPayload {
   rows: PortalBaseRow[];
 }
 
+type SettingsSection = "users" | "portal" | "hierarchy";
+
 const MODULE_LABELS = new Map(NAVIGATION.map((item) => [item.id, item.label]));
 const TAB_LABELS: Record<DriverManagementTab, string> = {
   overview: "Visão geral",
@@ -61,9 +76,9 @@ const TAB_LABELS: Record<DriverManagementTab, string> = {
 };
 
 const ROLE_DETAILS: Partial<Record<UserRole, string>> = {
-  director: "Visão total do painel.",
-  developer: "Acesso total técnico e administrativo.",
-  loss_supervisor: "Acesso total operacional e administrativo.",
+  director: "Visão total do painel e de todas as bases.",
+  developer: "Acesso técnico e administrativo total.",
+  loss_supervisor: "Visão operacional total, sem Gestão de Motoristas.",
   administration_supervisor: "Toda a Gestão de Motoristas e todas as bases administrativas.",
   admin: "Somente Pagamentos e Contestações das bases atribuídas.",
   coordinator: "Somente módulos operacionais e bases coordenadas.",
@@ -71,7 +86,7 @@ const ROLE_DETAILS: Partial<Record<UserRole, string>> = {
 };
 
 function isFullRole(role: UserRole) {
-  return ["director", "developer", "loss_supervisor"].includes(role);
+  return ["director", "developer"].includes(role);
 }
 
 function blankDraft(): UserDraft {
@@ -92,7 +107,7 @@ function roleChanged(draft: UserDraft, role: UserRole): UserDraft {
   return {
     ...draft,
     role,
-    baseScope: isFullRole(role) || role === "administration_supervisor" ? [] : draft.baseScope,
+    baseScope: isFullRole(role) || role === "loss_supervisor" || role === "administration_supervisor" ? [] : draft.baseScope,
     moduleScope: roleModuleCap(role),
     driverManagementScope: roleDriverManagementCap(role),
   };
@@ -109,25 +124,67 @@ async function readJson(response: Response, fallback: string) {
 }
 
 export function SettingsViewV2({ profile }: { profile: AuthProfile }) {
+  const sections = useMemo(() => {
+    const next: Array<{ id: SettingsSection; title: string; description: string }> = [];
+    if (canManageUsers(profile)) next.push({ id: "users", title: "Usuários e permissões", description: "Cargos, módulos e bases responsáveis" });
+    if (canManageDriverPortalBaseSettings(profile)) next.push({ id: "portal", title: "Portal dos Motoristas", description: "Liberação e bloqueio por base" });
+    next.push({ id: "hierarchy", title: "Hierarquia e regras", description: "Limites máximos de cada função" });
+    return next;
+  }, [profile]);
+
+  const [activeSection, setActiveSection] = useState<SettingsSection>(() => sections[0]?.id ?? "hierarchy");
+
+  useEffect(() => {
+    if (!sections.some((section) => section.id === activeSection)) setActiveSection(sections[0]?.id ?? "hierarchy");
+  }, [activeSection, sections]);
+
   return (
     <div className={styles.stack}>
       <PageIntro
-        description="Permissões por função, módulos e bases em uma única matriz de acesso."
+        description="Permissões, bases e recursos administrativos organizados por categoria."
         chips={[`Perfil: ${ROLE_LABELS[profile.role]}`, "Controle de acesso centralizado"]}
       />
-      {canManageUsers(profile) ? <UserManagementPanel currentUserId={profile.id} /> : null}
-      {canManageDriverPortalBaseSettings(profile) ? <PortalBaseAccessPanel /> : null}
-      <Panel title="Hierarquia de acesso" subtitle="Regras máximas por função">
-        <div className={styles.roleCards}>
-          {MANAGED_USER_ROLES.map((role) => (
-            <div className={styles.roleCard} key={role}>
-              <strong>{ROLE_LABELS[role]}</strong>
-              <span>{ROLE_DETAILS[role] ?? "Escopo definido pela matriz de permissões."}</span>
-            </div>
-          ))}
-        </div>
-      </Panel>
+
+      <nav className={styles.settingsNav} aria-label="Categorias de configurações">
+        {sections.map((section) => (
+          <button
+            key={section.id}
+            type="button"
+            className={`${styles.navCard} ${activeSection === section.id ? styles.navCardActive : ""}`}
+            onClick={() => setActiveSection(section.id)}
+            aria-current={activeSection === section.id ? "page" : undefined}
+          >
+            <span className={styles.navIcon}>
+              {section.id === "users" ? <UsersRound size={18} /> : section.id === "portal" ? <Smartphone size={18} /> : <ShieldCheck size={18} />}
+            </span>
+            <span className={styles.navText}><strong>{section.title}</strong><small>{section.description}</small></span>
+          </button>
+        ))}
+      </nav>
+
+      {activeSection === "users" && canManageUsers(profile) ? <UserManagementPanel currentUserId={profile.id} /> : null}
+      {activeSection === "portal" && canManageDriverPortalBaseSettings(profile) ? <PortalBaseAccessPanel /> : null}
+      {activeSection === "hierarchy" ? <HierarchyPanel /> : null}
     </div>
+  );
+}
+
+function HierarchyPanel() {
+  return (
+    <Panel title="Hierarquia de acesso" subtitle="Regras máximas por função; permissões específicas nunca podem ultrapassar estes limites">
+      <div className={styles.roleCards}>
+        {MANAGED_USER_ROLES.map((role) => (
+          <div className={styles.roleCard} key={role}>
+            <div className={styles.roleCardHead}><ShieldCheck size={15} /><strong>{ROLE_LABELS[role]}</strong></div>
+            <span>{ROLE_DETAILS[role] ?? "Escopo definido pela matriz de permissões."}</span>
+            <div className={styles.roleMeta}>
+              <span>{roleModuleCap(role).length} módulo(s)</span>
+              {roleDriverManagementCap(role).length ? <span>{roleDriverManagementCap(role).length} aba(s) de motoristas</span> : <span>Sem Gestão de Motoristas</span>}
+            </div>
+          </div>
+        ))}
+      </div>
+    </Panel>
   );
 }
 
@@ -165,7 +222,7 @@ function UserManagementPanel({ currentUserId }: { currentUserId: string }) {
       }), "Falha ao cadastrar usuário.");
       setPayload({ users: body.users ?? [], bases: body.bases ?? [] });
       setDraft(blankDraft());
-      setMessage("Usuário cadastrado com a nova matriz de acesso.");
+      setMessage("Usuário cadastrado com a matriz de acesso definida.");
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "Falha ao cadastrar usuário.");
     } finally {
@@ -209,7 +266,7 @@ function UserManagementPanel({ currentUserId }: { currentUserId: string }) {
   }
 
   return (
-    <Panel title="Gestão de usuários" subtitle="Cargo, módulos permitidos e bases responsáveis">
+    <Panel title="Usuários e permissões" subtitle="Cadastre pessoas, selecione módulos e delimite as bases de responsabilidade">
       <form className={styles.stack} onSubmit={createUser}>
         <div className={styles.formGrid}>
           <label className={styles.field}><span>E-mail</span><input required type="email" value={draft.email} onChange={(event) => setDraft({ ...draft, email: event.target.value })} placeholder="usuario@alc.com.br" /></label>
@@ -217,13 +274,23 @@ function UserManagementPanel({ currentUserId }: { currentUserId: string }) {
           <label className={styles.field}><span>Senha inicial</span><input required minLength={6} type="password" value={draft.password} onChange={(event) => setDraft({ ...draft, password: event.target.value })} placeholder="mín. 6 caracteres" /></label>
           <label className={styles.field}><span>Cargo</span><select value={draft.role} onChange={(event) => setDraft(roleChanged(draft, event.target.value as UserRole))}>{MANAGED_USER_ROLES.map((role) => <option key={role} value={role}>{ROLE_LABELS[role]}</option>)}</select></label>
         </div>
+
+        <div className={styles.roleSummary}>
+          <span className={styles.roleSummaryIcon}><ShieldCheck size={18} /></span>
+          <div><strong>{ROLE_LABELS[draft.role]}</strong><span>{ROLE_DETAILS[draft.role] ?? "Escopo definido pela matriz de permissões."}</span></div>
+          <StatusBadge tone={isFullRole(draft.role) ? "green" : "neutral"}>{isFullRole(draft.role) ? "Acesso total" : "Acesso controlado"}</StatusBadge>
+        </div>
+
         <AccessEditor draft={draft} setDraft={setDraft} bases={payload.bases} />
-        <div className={styles.toolbar}>
-          <StatusBadge tone={isFullRole(draft.role) ? "green" : "neutral"}>{isFullRole(draft.role) ? "Acesso total pela função" : "Acesso controlado"}</StatusBadge>
+        <div className={styles.formActions}>
+          <span>{draft.moduleScope.length} módulo(s) · {(isFullRole(draft.role) || draft.role === "loss_supervisor" || draft.role === "administration_supervisor") ? "todas as bases permitidas pela função" : `${draft.baseScope.length} base(s)`}</span>
           <button className="primary-button primary-button--small" disabled={saving} type="submit"><UserPlus size={15} />Cadastrar usuário</button>
         </div>
       </form>
+
       {message ? <p className="admin-message">{message}</p> : null}
+
+      <div className={styles.tableHeader}><div><strong>Usuários cadastrados</strong><span>{payload.users.length} conta(s) interna(s)</span></div></div>
       <TableWrap>
         <thead><tr><th>Usuário</th><th>Cargo</th><th>Módulos</th><th>Bases</th><th>Status</th><th className="align-right">Ações</th></tr></thead>
         <tbody>
@@ -232,13 +299,14 @@ function UserManagementPanel({ currentUserId }: { currentUserId: string }) {
               <td><strong>{user.fullName || user.email}</strong><span className="cell-subtitle">{user.email}</span></td>
               <td>{ROLE_LABELS[user.role]}</td>
               <td><div className={styles.badges}>{(isFullRole(user.role) ? ["Acesso total"] : user.moduleScope.map((id) => MODULE_LABELS.get(id as SectionId) ?? id)).slice(0, 3).map((label) => <span className={styles.badge} key={label}>{label}</span>)}{!isFullRole(user.role) && user.moduleScope.length > 3 ? <span className={styles.badge}>+{user.moduleScope.length - 3}</span> : null}</div></td>
-              <td><div className={styles.badges}>{user.baseScope.slice(0, 2).map((baseKey) => <span className={styles.badge} key={baseKey}>{payload.bases.find((base) => base.baseKey === baseKey)?.label ?? baseKey}</span>)}{user.baseScope.length > 2 ? <span className={styles.badge}>+{user.baseScope.length - 2}</span> : null}{(isFullRole(user.role) || user.role === "administration_supervisor") ? <span className={styles.badge}>Todas</span> : null}</div></td>
+              <td><div className={styles.badges}>{user.baseScope.slice(0, 2).map((baseKey) => <span className={styles.badge} key={baseKey}>{payload.bases.find((base) => base.baseKey === baseKey)?.label ?? baseKey}</span>)}{user.baseScope.length > 2 ? <span className={styles.badge}>+{user.baseScope.length - 2}</span> : null}{(isFullRole(user.role) || user.role === "loss_supervisor" || user.role === "administration_supervisor") ? <span className={styles.badge}>Todas</span> : null}</div></td>
               <td><StatusBadge tone={user.active ? "green" : "amber"}>{user.active ? "Ativo" : "Inativo"}</StatusBadge></td>
               <td className="align-right"><div className={styles.actions}><button className="table-action" type="button" title="Editar" onClick={() => setEditing({ ...user, password: "" })}><Edit3 size={14} /></button><button className="table-action" disabled={user.id === currentUserId || saving} type="button" title="Remover" onClick={() => void removeUser(user)}><Trash2 size={14} /></button></div></td>
             </tr>
           ))}
         </tbody>
       </TableWrap>
+
       {editing ? (
         <div className={styles.modalBackdrop} role="dialog" aria-modal="true">
           <div className={styles.modal}>
@@ -249,6 +317,7 @@ function UserManagementPanel({ currentUserId }: { currentUserId: string }) {
               <label className={styles.field}><span>Nova senha</span><input type="password" value={editing.password} onChange={(event) => setEditing({ ...editing, password: event.target.value })} placeholder="deixe em branco para manter" /></label>
               <label className={styles.field}><span>Cargo</span><select value={editing.role} onChange={(event) => setEditing(roleChanged(editing, event.target.value as UserRole))}>{MANAGED_USER_ROLES.map((role) => <option key={role} value={role}>{ROLE_LABELS[role]}</option>)}</select></label>
             </div>
+            <div className={styles.roleSummary}><span className={styles.roleSummaryIcon}><ShieldCheck size={18} /></span><div><strong>{ROLE_LABELS[editing.role]}</strong><span>{ROLE_DETAILS[editing.role] ?? "Escopo definido pela matriz de permissões."}</span></div></div>
             <AccessEditor draft={editing} setDraft={setEditing} bases={payload.bases} />
             <label className={styles.checkItem}><input type="checkbox" checked={editing.active} onChange={(event) => setEditing({ ...editing, active: event.target.checked })} />Conta ativa</label>
             <div className={styles.modalActions}><button className="secondary-button" type="button" onClick={() => setEditing(null)}>Cancelar</button><button className="primary-button" disabled={saving} type="button" onClick={() => void saveEdit()}><Save size={15} />Salvar alterações</button></div>
@@ -263,35 +332,60 @@ function AccessEditor({ draft, setDraft, bases }: { draft: UserDraft; setDraft: 
   const moduleCap = roleModuleCap(draft.role);
   const tabCap = roleDriverManagementCap(draft.role);
   const full = isFullRole(draft.role);
-  const allBases = full || draft.role === "administration_supervisor";
+  const allBases = full || draft.role === "loss_supervisor" || draft.role === "administration_supervisor";
   const [baseSearch, setBaseSearch] = useState("");
   const visibleBases = bases.filter((base) => `${base.sigla} ${base.baseName} ${base.baseKey}`.toLowerCase().includes(baseSearch.toLowerCase()));
+
+  const setAllModules = () => setDraft({ ...draft, moduleScope: [...moduleCap], driverManagementScope: [...tabCap] });
+  const clearModules = () => setDraft({ ...draft, moduleScope: [], driverManagementScope: [] });
+  const setAllBases = () => setDraft({ ...draft, baseScope: bases.map((base) => base.baseKey) });
+  const clearBases = () => setDraft({ ...draft, baseScope: [] });
 
   return (
     <div className={styles.sectionGrid}>
       <div className={styles.checkPanel}>
-        <span className={styles.legend}>Módulos permitidos</span>
-        <div className={styles.checkGrid}>
-          {moduleCap.map((moduleId) => (
-            <label className={styles.checkItem} key={moduleId}>
-              <input disabled={full} type="checkbox" checked={full || draft.moduleScope.includes(moduleId)} onChange={() => setDraft({ ...draft, moduleScope: toggleValue(draft.moduleScope, moduleId) })} />
-              <span>{MODULE_LABELS.get(moduleId) ?? moduleId}</span>
-            </label>
-          ))}
+        <div className={styles.panelHeader}>
+          <div><span className={styles.legend}>Módulos permitidos</span><small>{full ? "Definidos pela função" : `${draft.moduleScope.length} de ${moduleCap.length} selecionados`}</small></div>
+          {!full ? <div className={styles.compactActions}><button type="button" onClick={setAllModules}>Selecionar todos</button><button type="button" onClick={clearModules}>Limpar</button></div> : null}
         </div>
+        <div className={styles.checkGrid}>
+          {moduleCap.map((moduleId) => {
+            const checked = full || draft.moduleScope.includes(moduleId);
+            return (
+              <label className={`${styles.checkItem} ${checked ? styles.checkItemActive : ""}`} key={moduleId}>
+                <input disabled={full} type="checkbox" checked={checked} onChange={() => setDraft({ ...draft, moduleScope: toggleValue(draft.moduleScope, moduleId) })} />
+                <span>{MODULE_LABELS.get(moduleId) ?? moduleId}</span>
+              </label>
+            );
+          })}
+        </div>
+
         {draft.moduleScope.includes("gestao-motoristas") && tabCap.length ? (
-          <>
-            <span className={styles.legend}>Abas da Gestão de Motoristas</span>
-            <div className={styles.checkGrid}>{tabCap.map((tab) => <label className={styles.checkItem} key={tab}><input disabled={full} type="checkbox" checked={full || draft.driverManagementScope.includes(tab)} onChange={() => setDraft({ ...draft, driverManagementScope: toggleValue(draft.driverManagementScope, tab) })} /><span>{TAB_LABELS[tab]}</span></label>)}</div>
-          </>
+          <div className={styles.subAccess}>
+            <div className={styles.panelHeader}><div><span className={styles.legend}>Gestão de Motoristas</span><small>Abas disponíveis para esta função</small></div></div>
+            <div className={styles.checkGrid}>{tabCap.map((tab) => {
+              const checked = full || draft.driverManagementScope.includes(tab);
+              return <label className={`${styles.checkItem} ${checked ? styles.checkItemActive : ""}`} key={tab}><input disabled={full} type="checkbox" checked={checked} onChange={() => setDraft({ ...draft, driverManagementScope: toggleValue(draft.driverManagementScope, tab) })} /><span>{TAB_LABELS[tab]}</span></label>;
+            })}</div>
+          </div>
         ) : null}
       </div>
+
       <div className={styles.checkPanel}>
-        <span className={styles.legend}>Bases responsáveis</span>
-        {allBases ? <p className={styles.muted}>Esta função possui abrangência em todas as bases dentro dos módulos permitidos.</p> : (
+        <div className={styles.panelHeader}>
+          <div><span className={styles.legend}>Bases responsáveis</span><small>{allBases ? "Abrangência definida pela função" : `${draft.baseScope.length} selecionada(s)`}</small></div>
+          {!allBases ? <div className={styles.compactActions}><button type="button" onClick={setAllBases}>Selecionar todas</button><button type="button" onClick={clearBases}>Limpar</button></div> : null}
+        </div>
+        {allBases ? (
+          <div className={styles.allBasesState}><ShieldCheck size={22} /><div><strong>Todas as bases permitidas</strong><span>Esta função possui abrangência global dentro dos módulos autorizados.</span></div></div>
+        ) : (
           <>
-            <input className={styles.search} value={baseSearch} onChange={(event) => setBaseSearch(event.target.value)} placeholder="Buscar sigla ou base" />
-            <div className={styles.baseGrid}>{visibleBases.map((base) => <label className={styles.checkItem} key={base.baseKey}><input type="checkbox" checked={draft.baseScope.includes(base.baseKey)} onChange={() => setDraft({ ...draft, baseScope: toggleValue(draft.baseScope, base.baseKey) })} /><span>{base.label}</span></label>)}</div>
+            <label className={styles.searchBox}><Search size={15} /><input value={baseSearch} onChange={(event) => setBaseSearch(event.target.value)} placeholder="Buscar sigla ou base" /></label>
+            <div className={styles.baseGrid}>{visibleBases.map((base) => {
+              const checked = draft.baseScope.includes(base.baseKey);
+              return <label className={`${styles.checkItem} ${checked ? styles.checkItemActive : ""}`} key={base.baseKey}><input type="checkbox" checked={checked} onChange={() => setDraft({ ...draft, baseScope: toggleValue(draft.baseScope, base.baseKey) })} /><span>{base.label}</span></label>;
+            })}</div>
+            {!visibleBases.length ? <p className={styles.emptyState}>Nenhuma base encontrada para esta busca.</p> : null}
           </>
         )}
       </div>
@@ -341,7 +435,7 @@ function PortalBaseAccessPanel() {
 
   const summary = payload?.summary;
   return (
-    <Panel title="Portal dos Motoristas" subtitle="Master control de liberação por base operacional">
+    <Panel title="Portal dos Motoristas" subtitle="Controle central de liberação por base operacional">
       <div className={styles.summaryRow}>
         <KpiCard label="Bases" value={formatNumber(summary?.bases ?? 0)} detail="cadastradas" icon={<ShieldCheck size={17} />} />
         <KpiCard label="Liberadas" value={formatNumber(summary?.enabled ?? 0)} detail="portal ativo" icon={<ToggleRight size={17} />} tone="green" />
