@@ -10,11 +10,11 @@ const PnrView = dynamic(() => import("./pnr-view").then((module) => module.PnrVi
 const PrefaturaView = dynamic(() => import("./prefatura-view").then((module) => module.PrefaturaView), { loading });
 const RiskView = dynamic(() => import("./risk-view").then((module) => module.RiskView), { loading });
 const DriversView = dynamic(() => import("./drivers-view").then((module) => module.DriversView), { loading });
-const DriverManagementView = dynamic(() => import("./driver-management-view").then((module) => module.DriverManagementView), { loading });
+const DriverManagementView = dynamic(() => import("./driver-management-view-v2").then((module) => module.DriverManagementViewV2), { loading });
 const ReconciliationView = dynamic(() => import("./reconciliation-view").then((module) => module.ReconciliationView), { loading });
 const QualityView = dynamic(() => import("./quality-view").then((module) => module.QualityView), { loading });
 const ImportsView = dynamic(() => import("./imports-view").then((module) => module.ImportsView), { loading });
-const SettingsView = dynamic(() => import("./settings-view").then((module) => module.SettingsView), { loading });
+const SettingsView = dynamic(() => import("./settings-view-v2").then((module) => module.SettingsViewV2), { loading });
 const ProfileView = dynamic(() => import("./profile-view").then((module) => module.ProfileView), { loading });
 
 export function ViewRouter({ section, profile }: { section: SectionId; profile: AuthProfile }) {
