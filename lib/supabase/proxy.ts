@@ -4,6 +4,7 @@ import { isSupabaseConfigured, supabasePublishableKey, supabaseUrl } from "@/lib
 
 const PUBLIC_PATHS = new Set(["/login", "/manifest.webmanifest"]);
 const LEGACY_DRIVER_PORTAL_PATHS = new Set(["/motorista", "/motorista/login"]);
+const HANDLER_AUTH_PATHS = new Set(["/api/imports"]);
 
 function isPublicPath(pathname: string) {
   return PUBLIC_PATHS.has(pathname);
@@ -43,6 +44,13 @@ export async function updateSession(request: NextRequest) {
     return NextResponse.next({ request });
   }
 
+  // /api/imports faz autenticação/autorização no próprio handler. Evitamos uma
+  // segunda decisão de sessão no middleware, que estava devolvendo 401 antes da
+  // rota conseguir usar o mesmo JWT que já abriu o painel.
+  if (HANDLER_AUTH_PATHS.has(pathname)) {
+    return NextResponse.next({ request });
+  }
+
   let response = NextResponse.next({ request });
 
   const supabase = createServerClient(supabaseUrl, supabasePublishableKey, {
@@ -71,8 +79,5 @@ export async function updateSession(request: NextRequest) {
     return NextResponse.redirect(redirectUrl);
   }
 
-  // /login permanece público no proxy. A própria página usa getCurrentProfile()
-  // para redirecionar sessões realmente válidas. Isso evita o ciclo em que
-  // getClaims() aceita um token enquanto getUser() ainda rejeita/renova a sessão.
   return response;
 }
