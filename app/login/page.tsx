@@ -1,13 +1,8 @@
-import { redirect } from "next/navigation";
 import Image from "next/image";
-import { getCurrentProfile } from "@/lib/auth-server";
 import { isSupabaseConfigured } from "@/lib/supabase/config";
 import { LoginForm } from "./login-form";
 
-export default async function LoginPage() {
-  const profile = await getCurrentProfile();
-  if (profile) redirect("/");
-
+export default function LoginPage() {
   return (
     <main className="login-page">
       <section className="login-card" aria-labelledby="login-title">
