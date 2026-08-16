@@ -55,7 +55,7 @@ export function hasFullAccess(profile: Pick<AuthProfile, "role" | "globalAccess"
 }
 
 export function hasDriverManagementAccess(profile: Pick<AuthProfile, "role">) {
-  return ["director", "developer", "loss_supervisor", "super_admin", "administration_supervisor", "admin"].includes(profile.role);
+  return ["director", "developer", "super_admin", "administration_supervisor", "admin"].includes(profile.role);
 }
 
 export function isDriverProfile(profile: Pick<AuthProfile, "role">) {

@@ -39,6 +39,7 @@ function getServerSidebarSnapshot() {
 export function DashboardApp({ section, profile }: { section: SectionId; profile: AuthProfile }) {
   const hydrate = useDashboardStore((state) => state.hydrate);
   const hydrated = useDashboardStore((state) => state.hydrated);
+  const loadError = useDashboardStore((state) => state.loadError);
   const data = useDashboardStore((state) => state.data);
   const collapsed = useSyncExternalStore(subscribeSidebarChange, getSidebarSnapshot, getServerSidebarSnapshot);
   const [mobileMenu, setMobileMenu] = useState(false);
@@ -46,8 +47,16 @@ export function DashboardApp({ section, profile }: { section: SectionId; profile
   const meta = SECTION_META[section];
   const canImport = canManageImports(profile);
   const canLoadOperationalData = canAccessOperationalData(profile);
-  const showEmptyState = canLoadOperationalData && data.imports.length === 0 && !ADMIN_SECTIONS.includes(section);
-  const showGlobalFilters = canLoadOperationalData && data.imports.length > 0 && !ADMIN_SECTIONS.includes(section);
+  const cacheOwnerId = [
+    profile.id,
+    profile.role,
+    profile.globalAccess ? "global" : "scoped",
+    [...profile.baseScope].sort().join(","),
+    [...profile.siglaScope].sort().join(","),
+  ].join("::");
+  const initialDataLoad = canLoadOperationalData && !hydrated;
+  const showEmptyState = canLoadOperationalData && hydrated && !loadError && data.imports.length === 0 && !ADMIN_SECTIONS.includes(section);
+  const showGlobalFilters = canLoadOperationalData && hydrated && data.imports.length > 0 && !ADMIN_SECTIONS.includes(section);
 
   const requestImport = () => {
     if (!canImport) {
@@ -57,13 +66,12 @@ export function DashboardApp({ section, profile }: { section: SectionId; profile
     setImportOpen(true);
   };
 
-  useEffect(() => { void hydrate(profile.id, canLoadOperationalData); }, [hydrate, profile.id, canLoadOperationalData]);
+  useEffect(() => { void hydrate(cacheOwnerId, canLoadOperationalData); }, [hydrate, cacheOwnerId, canLoadOperationalData]);
+
   const toggleCollapsed = () => {
     window.localStorage.setItem(SIDEBAR_KEY, String(!collapsed));
     window.dispatchEvent(new Event(SIDEBAR_EVENT));
   };
-
-  if (!hydrated) return <main className="boot-screen"><div className="boot-mark">ALC</div><p>Carregando seu acesso…</p></main>;
 
   return (
     <div className={collapsed ? "app-shell app-shell--collapsed" : "app-shell"}>
@@ -79,7 +87,17 @@ export function DashboardApp({ section, profile }: { section: SectionId; profile
             <div><p>{meta.description}</p></div>
             {data.isDemo && <span className="demo-badge"><FlaskConical size={14} />Dados de demonstração</span>}
           </div>
-          {showEmptyState ? <EmptyDashboard onImport={requestImport} canImport={canImport} /> : <ViewRouter section={section} profile={profile} />}
+          {initialDataLoad ? (
+            <div className="view-loading" role="status" aria-live="polite" aria-label="Carregando dados do painel">
+              <span /><span /><span />
+            </div>
+          ) : loadError && data.imports.length === 0 && canLoadOperationalData ? (
+            <div className="page-intro"><p>Não foi possível sincronizar os dados agora. Recarregue a página para tentar novamente. Detalhe: {loadError}</p></div>
+          ) : showEmptyState ? (
+            <EmptyDashboard onImport={requestImport} canImport={canImport} />
+          ) : (
+            <ViewRouter section={section} profile={profile} />
+          )}
         </main>
       </div>
       {importOpen ? <ImportPanel open onClose={() => setImportOpen(false)} /> : null}

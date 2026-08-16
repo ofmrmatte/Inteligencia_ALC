@@ -17,13 +17,24 @@ describe("matriz de acesso do painel", () => {
     expect(canAccessDriverManagementTab(admin, "overview")).toBe(false);
   });
 
-  it("mantém Diretoria, Desenvolvedor e Supervisor Loss com visão total", () => {
-    for (const role of ["director", "developer", "loss_supervisor"] as const) {
+  it("mantém Diretoria e Desenvolvedor com visão total", () => {
+    for (const role of ["director", "developer"] as const) {
       const current = profile(role);
       expect(canAccessSection(current, "visao-geral")).toBe(true);
       expect(canAccessSection(current, "configuracoes")).toBe(true);
+      expect(canAccessSection(current, "gestao-motoristas")).toBe(true);
       expect(canAccessDriverManagementTab(current, "admins")).toBe(true);
     }
+  });
+
+  it("mantém Supervisor Loss global no painel, mas sem Gestão de Motoristas", () => {
+    const current = profile("loss_supervisor");
+    expect(canAccessSection(current, "visao-geral")).toBe(true);
+    expect(canAccessSection(current, "gestao-pnr")).toBe(true);
+    expect(canAccessSection(current, "pre-faturamento")).toBe(true);
+    expect(canAccessSection(current, "configuracoes")).toBe(true);
+    expect(canAccessSection(current, "gestao-motoristas")).toBe(false);
+    expect(driverManagementTabsForProfile(current)).toEqual([]);
   });
 
   it("limita Supervisor de Administração ao módulo Gestão de Motoristas", () => {

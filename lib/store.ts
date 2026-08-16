@@ -7,15 +7,25 @@ import { createClient } from "@/lib/supabase/client";
 import type { DashboardData, DashboardFilters, ParsedBatch } from "@/lib/types";
 import { EMPTY_DATA, EMPTY_FILTERS } from "@/lib/types";
 
-const STORAGE_KEY_PREFIX = "alc-inteligencia:v2";
+const STORAGE_KEY_PREFIX = "alc-inteligencia:v3";
+const DATA_STALE_AFTER_MS = 2 * 60 * 1000;
+const hydrationTasks = new Map<string, Promise<void>>();
+
+interface DashboardCache {
+  data: DashboardData;
+  savedAt: number;
+}
 
 interface DashboardStore {
   data: DashboardData;
   filters: DashboardFilters;
   hydrated: boolean;
+  refreshing: boolean;
   importing: boolean;
   cacheOwnerId: string;
-  hydrate: (profileId: string, loadOperationalData?: boolean) => Promise<void>;
+  lastSyncedAt: number | null;
+  loadError: string;
+  hydrate: (cacheOwnerId: string, loadOperationalData?: boolean) => Promise<void>;
   setImporting: (value: boolean) => void;
   addBatches: (batches: ParsedBatch[], files?: File[]) => Promise<void>;
   removeBatch: (batchId: string) => Promise<void>;
@@ -25,12 +35,14 @@ interface DashboardStore {
   resetFilters: () => void;
 }
 
-function storageKey(profileId: string) {
-  return `${STORAGE_KEY_PREFIX}:${profileId || "anonymous"}`;
+function storageKey(cacheOwnerId: string) {
+  return `${STORAGE_KEY_PREFIX}:${cacheOwnerId || "anonymous"}`;
 }
 
-async function save(data: DashboardData, profileId: string) {
-  if (typeof window !== "undefined" && profileId) await set(storageKey(profileId), data);
+async function save(data: DashboardData, cacheOwnerId: string, savedAt = Date.now()) {
+  if (typeof window !== "undefined" && cacheOwnerId) {
+    await set(storageKey(cacheOwnerId), { data, savedAt } satisfies DashboardCache);
+  }
 }
 
 async function readError(response: Response, fallback: string) {
@@ -95,41 +107,105 @@ export const useDashboardStore = create<DashboardStore>((storeSet, getState) => 
   data: EMPTY_DATA,
   filters: EMPTY_FILTERS,
   hydrated: false,
+  refreshing: false,
   importing: false,
   cacheOwnerId: "",
-  hydrate: async (profileId, loadOperationalData = true) => {
-    const current = getState();
-    const sameOwner = current.cacheOwnerId === profileId;
-    const needsBlockingLoad = !current.hydrated || !sameOwner;
-
-    // O loading de tela inteira deve existir só no primeiro carregamento real
-    // da sessão/usuário. Navegações internas mantêm a UI e atualizam os dados
-    // em segundo plano, evitando o flash de boot a cada remount do DashboardApp.
-    if (needsBlockingLoad) {
-      storeSet({ hydrated: false, cacheOwnerId: profileId });
-    } else if (!sameOwner) {
-      storeSet({ cacheOwnerId: profileId });
-    }
-
+  lastSyncedAt: null,
+  loadError: "",
+  hydrate: async (cacheOwnerId, loadOperationalData = true) => {
     if (!loadOperationalData) {
-      storeSet({ data: EMPTY_DATA, filters: EMPTY_FILTERS, hydrated: true, cacheOwnerId: profileId });
+      storeSet({
+        data: EMPTY_DATA,
+        filters: EMPTY_FILTERS,
+        hydrated: true,
+        refreshing: false,
+        cacheOwnerId,
+        lastSyncedAt: null,
+        loadError: "",
+      });
       return;
     }
 
-    try {
-      const online = await fetchOnlineData();
-      storeSet({ data: online, cacheOwnerId: profileId });
-      await save(online, profileId);
-    } catch {
-      // Em um primeiro carregamento ainda tentamos o cache local. Em uma
-      // navegação interna, preservamos os dados já visíveis se o refresh falhar.
-      if (needsBlockingLoad) {
-        const saved = await get<DashboardData>(storageKey(profileId));
-        storeSet({ data: saved ?? EMPTY_DATA });
-      }
-    } finally {
-      storeSet({ hydrated: true, cacheOwnerId: profileId });
+    const running = hydrationTasks.get(cacheOwnerId);
+    if (running) return running;
+
+    const current = getState();
+    const sameOwner = current.cacheOwnerId === cacheOwnerId;
+    if (
+      sameOwner
+      && current.hydrated
+      && !current.refreshing
+      && current.lastSyncedAt
+      && Date.now() - current.lastSyncedAt < DATA_STALE_AFTER_MS
+    ) {
+      return;
     }
+
+    const task = (async () => {
+      let cacheWasLoaded = sameOwner && current.hydrated;
+
+      if (!sameOwner) {
+        storeSet({
+          data: EMPTY_DATA,
+          filters: EMPTY_FILTERS,
+          hydrated: false,
+          refreshing: false,
+          cacheOwnerId,
+          lastSyncedAt: null,
+          loadError: "",
+        });
+      }
+
+      if (!cacheWasLoaded) {
+        try {
+          const cached = await get<DashboardCache>(storageKey(cacheOwnerId));
+          if (cached?.data) {
+            cacheWasLoaded = true;
+            const cacheIsFresh = Date.now() - cached.savedAt < DATA_STALE_AFTER_MS;
+            storeSet({
+              data: cached.data,
+              hydrated: true,
+              refreshing: !cacheIsFresh,
+              cacheOwnerId,
+              lastSyncedAt: cached.savedAt,
+              loadError: "",
+            });
+            if (cacheIsFresh) return;
+          }
+        } catch {
+          // Cache local é apenas acelerador. Falhas nele não bloqueiam o painel.
+        }
+      }
+
+      storeSet({ refreshing: true, loadError: "" });
+
+      try {
+        const online = await fetchOnlineData();
+        const syncedAt = Date.now();
+        if (getState().cacheOwnerId !== cacheOwnerId) return;
+        storeSet({
+          data: online,
+          hydrated: true,
+          refreshing: false,
+          cacheOwnerId,
+          lastSyncedAt: syncedAt,
+          loadError: "",
+        });
+        await save(online, cacheOwnerId, syncedAt);
+      } catch (error) {
+        if (getState().cacheOwnerId !== cacheOwnerId) return;
+        storeSet({
+          hydrated: true,
+          refreshing: false,
+          loadError: error instanceof Error ? error.message : "Falha ao sincronizar dados.",
+        });
+      }
+    })().finally(() => {
+      hydrationTasks.delete(cacheOwnerId);
+    });
+
+    hydrationTasks.set(cacheOwnerId, task);
+    return task;
   },
   setImporting: (importing) => storeSet({ importing }),
   addBatches: async (batches, files = []) => {
@@ -142,8 +218,9 @@ export const useDashboardStore = create<DashboardStore>((storeSet, getState) => 
       });
       if (!response.ok) throw new Error(await readError(response, "Falha ao salvar dados online."));
       const next = (await response.json()) as DashboardData;
-      storeSet({ data: next });
-      await save(next, getState().cacheOwnerId);
+      const syncedAt = Date.now();
+      storeSet({ data: next, hydrated: true, refreshing: false, lastSyncedAt: syncedAt, loadError: "" });
+      await save(next, getState().cacheOwnerId, syncedAt);
     } catch (error) {
       await removeUploaded(uploaded.map((file) => file.storagePath));
       throw error;
@@ -153,24 +230,26 @@ export const useDashboardStore = create<DashboardStore>((storeSet, getState) => 
     const response = await fetch(`/api/imports?batchId=${encodeURIComponent(batchId)}`, { method: "DELETE" });
     if (!response.ok) throw new Error(await readError(response, "Falha ao remover lote online."));
     const next = (await response.json()) as DashboardData;
-    storeSet({ data: next });
-    await save(next, getState().cacheOwnerId);
+    const syncedAt = Date.now();
+    storeSet({ data: next, hydrated: true, refreshing: false, lastSyncedAt: syncedAt, loadError: "" });
+    await save(next, getState().cacheOwnerId, syncedAt);
   },
   clearData: async () => {
     const response = await fetch("/api/imports", { method: "DELETE" });
     if (!response.ok) throw new Error(await readError(response, "Falha ao limpar dados online."));
-    storeSet({ data: EMPTY_DATA, filters: EMPTY_FILTERS });
+    storeSet({ data: EMPTY_DATA, filters: EMPTY_FILTERS, hydrated: true, refreshing: false, lastSyncedAt: Date.now(), loadError: "" });
     const owner = getState().cacheOwnerId;
     if (owner) await del(storageKey(owner));
   },
   loadDemo: async () => {
     const data = createDemoData();
-    storeSet({ data, filters: EMPTY_FILTERS });
-    await save(data, getState().cacheOwnerId);
+    const syncedAt = Date.now();
+    storeSet({ data, filters: EMPTY_FILTERS, hydrated: true, refreshing: false, lastSyncedAt: syncedAt, loadError: "" });
+    await save(data, getState().cacheOwnerId, syncedAt);
   },
   setFilter: (key, value) => {
-    const current = getState().filters;
-    const next = { ...current, [key]: value };
+    const currentFilters = getState().filters;
+    const next = { ...currentFilters, [key]: value };
     if (key === "coordinator") Object.assign(next, { base: "Todas", sigla: "Todas", supervisor: "Todos", driver: "Todos" });
     if (key === "sigla") Object.assign(next, { base: "Todas", supervisor: "Todos", driver: "Todos" });
     if (key === "base") Object.assign(next, { supervisor: "Todos", driver: "Todos" });

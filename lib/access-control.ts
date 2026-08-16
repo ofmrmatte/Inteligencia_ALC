@@ -27,12 +27,13 @@ const OPERATIONAL_MODULES: SectionId[] = [
   "perfil",
 ];
 
+const LOSS_MODULES: SectionId[] = ALL_MODULES.filter((section) => section !== "gestao-motoristas");
 const FULL_PANEL_ROLES = new Set<UserRole>(["director", "developer", "loss_supervisor", "super_admin"]);
 
 const ROLE_MODULE_CAP: Record<UserRole, SectionId[]> = {
   director: ALL_MODULES,
   developer: ALL_MODULES,
-  loss_supervisor: ALL_MODULES,
+  loss_supervisor: LOSS_MODULES,
   super_admin: ALL_MODULES,
   administration_supervisor: ["gestao-motoristas"],
   admin: ["gestao-motoristas"],
@@ -44,7 +45,7 @@ const ROLE_MODULE_CAP: Record<UserRole, SectionId[]> = {
 const ROLE_DRIVER_MANAGEMENT_CAP: Record<UserRole, DriverManagementTab[]> = {
   director: [...DRIVER_MANAGEMENT_TABS],
   developer: [...DRIVER_MANAGEMENT_TABS],
-  loss_supervisor: [...DRIVER_MANAGEMENT_TABS],
+  loss_supervisor: [],
   super_admin: [...DRIVER_MANAGEMENT_TABS],
   administration_supervisor: [...DRIVER_MANAGEMENT_TABS],
   admin: ["payments", "disputes"],
@@ -60,8 +61,6 @@ function normalizeList<T extends string>(values: unknown, allowed: readonly T[])
 }
 
 function configuredScope<T extends string>(values: unknown, cap: readonly T[]): T[] {
-  // Undefined means an old profile created before module scopes existed.
-  // An explicit empty array is intentional and must never silently restore the role maximum.
   return values === undefined || values === null ? [...cap] : normalizeList(values, cap);
 }
 

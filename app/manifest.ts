@@ -2,10 +2,11 @@ import type { MetadataRoute } from "next";
 
 export default function manifest(): MetadataRoute.Manifest {
   return {
-    name: "Portal do Motorista ALC",
-    short_name: "Motorista ALC",
-    description: "Pendências, pagamentos e contestações dos motoristas ALC.",
-    start_url: "/motorista",
+    name: "Inteligência ALC",
+    short_name: "Inteligência ALC",
+    description: "Painel de inteligência operacional, pré-faturamento, PNR, risco e gestão logística ALC.",
+    start_url: "/",
+    scope: "/",
     display: "standalone",
     background_color: "#ffffff",
     theme_color: "#e30613",

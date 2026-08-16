@@ -8,7 +8,14 @@ const poppins = Poppins({ subsets: ["latin"], weight: ["400", "500", "600"], var
 
 export const metadata: Metadata = {
   title: "Inteligência ALC",
+  applicationName: "Inteligência ALC",
   description: "Painel de inteligência operacional, pré-faturamento e risco logístico.",
+  manifest: "/manifest.webmanifest",
+  appleWebApp: {
+    capable: true,
+    title: "Inteligência ALC",
+    statusBarStyle: "default",
+  },
 };
 
 export default function RootLayout({ children }: Readonly<{ children: React.ReactNode }>) {
