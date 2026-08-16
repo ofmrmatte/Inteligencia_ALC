@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { canManageDriverPortalBaseSettings, driverPortalBaseAccessKey, normalizePortalBaseKey } from "@/lib/driver-portal-base-access";
+import { canManageDriverPortalBaseSettings, driverPortalBaseAccessKey, driverPortalBaseAccessKeyFromMap, normalizePortalBaseKey } from "@/lib/driver-portal-base-access";
 import { getCurrentProfile } from "@/lib/auth-server";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { readPaged } from "@/lib/pagination";
@@ -84,12 +84,14 @@ async function loadPayload() {
 
   const configByBase = new Map(configs.map((row) => [normalizePortalBaseKey(row.base_key), row]));
   const baseByKey = new Map<string, DbRow>();
+  const operationalBaseSiglas = new Map<string, string>();
   for (const base of bases) {
     const key = driverPortalBaseAccessKey(base.base_key, base.sigla);
+    operationalBaseSiglas.set(normalizePortalBaseKey(base.base_key), key);
     if (key) baseByKey.set(key, base);
   }
   for (const row of drivers) {
-    const key = driverPortalBaseAccessKey(row.base_key, row.sigla);
+    const key = driverPortalBaseAccessKeyFromMap(row.base_key, row.sigla, operationalBaseSiglas);
     if (key && !baseByKey.has(key)) baseByKey.set(key, { base_key: key, base_name: key, sigla: key, active: true });
   }
 
@@ -101,7 +103,7 @@ async function loadPayload() {
     return current;
   };
   for (const driver of drivers) {
-    const item = ensureCounts(driverPortalBaseAccessKey(driver.base_key, driver.sigla));
+    const item = ensureCounts(driverPortalBaseAccessKeyFromMap(driver.base_key, driver.sigla, operationalBaseSiglas));
     const status = textValue(driver.portal_status);
     item.total += 1;
     if (driver.portal_eligible) item.eligible += 1;
@@ -110,7 +112,7 @@ async function loadPayload() {
   }
   for (const session of sessions) {
     const driver = session.alc_drivers as DbRow | null;
-    ensureCounts(driverPortalBaseAccessKey(driver?.base_key, driver?.sigla)).activeSessions += 1;
+    ensureCounts(driverPortalBaseAccessKeyFromMap(driver?.base_key, driver?.sigla, operationalBaseSiglas)).activeSessions += 1;
   }
 
   const rows = [...baseByKey.entries()].sort(([a], [b]) => a.localeCompare(b, "pt-BR")).map(([baseKey, base]) => {

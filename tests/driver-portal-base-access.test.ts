@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { canManageDriverPortalBaseSettings, driverPortalBaseAccessKey, getEffectiveDriverPortalAccess, portalEligibilityFromBase } from "@/lib/driver-portal-base-access";
+import { canManageDriverPortalBaseSettings, driverPortalBaseAccessKey, driverPortalBaseAccessKeyFromMap, getEffectiveDriverPortalAccess, portalEligibilityFromBase } from "@/lib/driver-portal-base-access";
 import type { UserRole } from "@/lib/auth";
 
 function profile(role: UserRole) {
@@ -48,5 +48,10 @@ describe("controle de liberacao do portal por base", () => {
   it("usa sigla como chave do controle central quando base_key contem nome operacional", () => {
     expect(driverPortalBaseAccessKey("GUAXUPE", "EMG7")).toBe("EMG7");
     expect(driverPortalBaseAccessKey("SMG5", "")).toBe("SMG5");
+  });
+
+  it("prioriza a sigla oficial da tabela operational_bases sobre sigla divergente do motorista", () => {
+    const map = new Map([["GUAXUPE", "SMG5"]]);
+    expect(driverPortalBaseAccessKeyFromMap("GUAXUPE", "EMG7", map)).toBe("SMG5");
   });
 });

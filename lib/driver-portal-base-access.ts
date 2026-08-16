@@ -25,6 +25,11 @@ export function driverPortalBaseAccessKey(baseKey: unknown, sigla?: unknown) {
   return normalizePortalBaseKey(sigla) || normalizePortalBaseKey(baseKey);
 }
 
+export function driverPortalBaseAccessKeyFromMap(baseKey: unknown, sigla: unknown, operationalBaseSiglas: Map<string, string>) {
+  const normalizedBaseKey = normalizePortalBaseKey(baseKey);
+  return normalizePortalBaseKey(operationalBaseSiglas.get(normalizedBaseKey)) || driverPortalBaseAccessKey(baseKey, sigla);
+}
+
 export function isDriverPortalBlockingStatus(status: unknown) {
   const normalized = textValue(status).trim().toLowerCase();
   return normalized === "blocked" || normalized === "inactive";

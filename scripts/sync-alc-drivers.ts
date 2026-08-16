@@ -1,6 +1,6 @@
 import pg from "pg";
 import { isBlankIdentityValue, isNumericOnlyName, normalizeDriverId } from "../lib/driver-identity-resolver";
-import { driverPortalBaseAccessKey, portalEligibilityFromBase } from "../lib/driver-portal-base-access";
+import { driverPortalBaseAccessKey, driverPortalBaseAccessKeyFromMap, normalizePortalBaseKey, portalEligibilityFromBase } from "../lib/driver-portal-base-access";
 
 const { Client } = pg;
 
@@ -83,16 +83,18 @@ function touch(map: Map<string, DriverAggregate>, row: DbRow, source: string, da
 const client = new Client({ connectionString: process.env.DATABASE_URL, ssl: { rejectUnauthorized: false } });
 await client.connect();
 try {
-  const [drivers, prefatura, pnr, risk, existing, baseAccess] = await Promise.all([
+  const [drivers, prefatura, pnr, risk, existing, baseAccess, operationalBases] = await Promise.all([
     client.query("select driver_id, name, base_key, sigla, last_updated, created_at from public.driver_records"),
     client.query("select driver_id, driver_name, base_key, sigla, route_date, created_at from public.prefatura_records where coalesce(driver_id, '') <> ''"),
     client.query("select driver_id, base_key, sigla, case_date, created_at from public.pnr_records where coalesce(driver_id, '') <> ''"),
     client.query("select driver_id, base_key, sigla, failure_date, created_at from public.risk_lm_records where coalesce(driver_id, '') <> ''"),
     client.query("select id, driver_code, portal_eligible, portal_status, status, base_key from public.alc_drivers"),
     client.query("select base_key, enabled from public.driver_portal_base_access"),
+    client.query("select base_key, sigla from public.operational_bases"),
   ]);
   const byCode = new Map<string, DbRow>(existing.rows.map((row) => [text(row.driver_code), row]));
   const baseEnabled = new Map<string, boolean>(baseAccess.rows.map((row) => [text(row.base_key).trim().toUpperCase(), Boolean(row.enabled)]));
+  const operationalBaseSiglas = new Map<string, string>(operationalBases.rows.map((row) => [normalizePortalBaseKey(row.base_key), driverPortalBaseAccessKey(row.base_key, row.sigla)]));
   const aggregate = new Map<string, DriverAggregate>();
 
   for (const row of drivers.rows) touch(aggregate, row, "driver_records", "last_updated", "name");
@@ -106,7 +108,7 @@ try {
     return {
       ...row,
       operational_status: operationalStatus(row.last_operational_seen_at),
-      portal_eligible: portalEligibilityFromBase(Boolean(baseEnabled.get(driverPortalBaseAccessKey(row.base_key, row.sigla))), portalStatus),
+      portal_eligible: portalEligibilityFromBase(Boolean(baseEnabled.get(driverPortalBaseAccessKeyFromMap(row.base_key, row.sigla, operationalBaseSiglas))), portalStatus),
       portal_status: portalStatus,
       status: text(existingRow?.status) || "pending_activation",
     };

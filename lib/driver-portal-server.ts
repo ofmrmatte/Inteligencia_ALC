@@ -2,7 +2,7 @@ import { hasFullAccess, type AuthProfile } from "@/lib/auth";
 import { getAllowedBaseIds } from "@/lib/access-scope";
 import { getUserAccessScope } from "@/lib/access-scope-server";
 import { createAdminClient } from "@/lib/supabase/admin";
-import { driverPortalBaseAccessKey, portalEligibilityFromBase } from "@/lib/driver-portal-base-access";
+import { driverPortalBaseAccessKey, driverPortalBaseAccessKeyFromMap, normalizePortalBaseKey, portalEligibilityFromBase } from "@/lib/driver-portal-base-access";
 import { getCurrentProfile } from "@/lib/auth-server";
 import { normalizeDriverKey, pnrStatusToTicket, type DriverTicket } from "@/lib/driver-portal";
 import { normalizeText } from "@/lib/normalize";
@@ -92,9 +92,15 @@ export function assertBaseAccess(baseKey: string, allowedBases: string[] | null)
 }
 
 export async function loadDriverPortalBaseEnabled(baseKey: string, sigla?: string) {
-  const normalized = driverPortalBaseAccessKey(baseKey, sigla);
-  if (!normalized) return false;
   const admin = createAdminClient();
+  let mappedSigla = "";
+  if (baseKey) {
+    const { data, error } = await admin.from("operational_bases").select("sigla").eq("base_key", baseKey).maybeSingle();
+    if (error) throw new Error(error.message);
+    mappedSigla = textValue(data?.sigla);
+  }
+  const normalized = driverPortalBaseAccessKey(baseKey, mappedSigla || sigla);
+  if (!normalized) return false;
   const { data, error } = await admin
     .from("driver_portal_base_access")
     .select("enabled")
@@ -167,6 +173,7 @@ export async function syncOperationalBasesAndDrivers() {
     const { error } = await admin.from("operational_bases").upsert([...bases.values()], { onConflict: "base_key" });
     if (error) throw new Error(error.message);
   }
+  const operationalBaseSiglas = new Map([...bases.values()].map((base) => [normalizePortalBaseKey(base.base_key), driverPortalBaseAccessKey(base.base_key, base.sigla)]));
 
   const drivers = new Map<string, { driver_code: string; full_name: string; base_key: string; sigla: string; operational_status: string; portal_eligible: boolean; portal_status: string; status: string; last_operational_seen_at?: string; source_updated_at?: string; source_payload: DbRow }>();
   for (const row of driverRows) {
@@ -181,7 +188,7 @@ export async function syncOperationalBasesAndDrivers() {
       base_key: textValue(row.base_key),
       sigla: textValue(row.sigla),
       operational_status: operationalStatusFor(lastActivity),
-      portal_eligible: portalEligibilityFromBase(Boolean(baseAccess.get(driverPortalBaseAccessKey(row.base_key, row.sigla))), textValue(existing?.portal_status) || "not_activated"),
+      portal_eligible: portalEligibilityFromBase(Boolean(baseAccess.get(driverPortalBaseAccessKeyFromMap(row.base_key, row.sigla, operationalBaseSiglas))), textValue(existing?.portal_status) || "not_activated"),
       portal_status: textValue(existing?.portal_status) || "not_activated",
       status: textValue(existing?.status) || "pending_activation",
       last_operational_seen_at: lastActivity || undefined,
@@ -203,7 +210,7 @@ export async function syncOperationalBasesAndDrivers() {
       base_key: current?.base_key || textValue(row.base_key),
       sigla: current?.sigla || textValue(row.sigla),
       operational_status: operationalStatusFor(lastActivity),
-      portal_eligible: portalEligibilityFromBase(Boolean(baseAccess.get(driverPortalBaseAccessKey(current?.base_key || row.base_key, current?.sigla || row.sigla))), textValue(existing?.portal_status ?? current?.portal_status) || "not_activated"),
+      portal_eligible: portalEligibilityFromBase(Boolean(baseAccess.get(driverPortalBaseAccessKeyFromMap(current?.base_key || row.base_key, current?.sigla || row.sigla, operationalBaseSiglas))), textValue(existing?.portal_status ?? current?.portal_status) || "not_activated"),
       portal_status: textValue(existing?.portal_status ?? current?.portal_status) || "not_activated",
       status: textValue(existing?.status ?? current?.status) || "pending_activation",
       last_operational_seen_at: lastActivity || undefined,
