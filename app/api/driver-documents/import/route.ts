@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
+import { assertDriverManagementTab, driverManagementBaseScope, accessErrorStatus } from "@/lib/access-control-server";
 import { classifyPaymentArchive, extractArchiveFiles, MAX_ARCHIVE_COMPRESSED_SIZE, paymentArchiveContext, safeStorageName, type PaymentBaseReference } from "@/lib/driver-portal";
-import { adminBaseScope, assertBaseAccess, isSuperAdminProfile, jsonError, loadKnownDrivers, requirePortalProfile, textValue } from "@/lib/driver-portal-server";
+import { assertBaseAccess, jsonError, loadKnownDrivers, requirePortalProfile, textValue } from "@/lib/driver-portal-server";
 import { createAdminClient } from "@/lib/supabase/admin";
 
 export const dynamic = "force-dynamic";
@@ -9,8 +10,9 @@ export const runtime = "nodejs";
 export async function POST(request: Request) {
   try {
     const profile = await requirePortalProfile();
-    const allowedBases = await adminBaseScope(profile);
-    if (!isSuperAdminProfile(profile) && (!allowedBases || allowedBases.length === 0)) throw new Error("Seu usuário não possui bases designadas.");
+    assertDriverManagementTab(profile, "payments");
+    const allowedBases = await driverManagementBaseScope(profile);
+    if (allowedBases && allowedBases.length === 0) throw new Error("Seu usuário não possui bases designadas.");
 
     const form = await request.formData();
     const file = form.get("file");
@@ -43,7 +45,8 @@ export async function POST(request: Request) {
     const archiveContext = paymentArchiveContext(file.name, operationalBases);
     if (archiveContext?.baseKey) assertBaseAccess(archiveContext.baseKey, allowedBases);
 
-    const knownDrivers = await loadKnownDrivers(allowedBases);
+    const driverScope = archiveContext?.baseKey ? [archiveContext.baseKey] : allowedBases;
+    const knownDrivers = await loadKnownDrivers(driverScope);
     const hashes = await admin.from("driver_payment_document_versions").select("file_hash");
     if (hashes.error) throw new Error(hashes.error.message);
     const knownHashes = new Set((hashes.data ?? []).map((row) => textValue(row.file_hash)));
@@ -93,17 +96,8 @@ export async function POST(request: Request) {
     const created = [];
     for (const item of classified) {
       if (item.status === "invalid") continue;
-      const storagePath = `payment-documents/${batchId}/${item.safeName}`;
-      if (item.status === "identified") {
-        const upload = await admin.storage.from("driver-payments").upload(storagePath, item.bytes, { contentType: "application/pdf", upsert: false });
-        if (upload.error) throw new Error(upload.error.message);
-      }
+      const databaseStatus = item.status === "identified" ? "draft" : item.status === "conflict" ? "error" : item.status;
       const driver = knownDrivers.find((candidate) => candidate.driverCode === item.driverCode);
-      const databaseStatus = item.status === "identified"
-        ? "draft"
-        : item.status === "conflict"
-          ? "error"
-          : item.status;
       const document = await admin.from("driver_payment_documents").insert({
         batch_id: batchId,
         driver_id: item.status === "identified" ? driver?.id : null,
@@ -115,8 +109,12 @@ export async function POST(request: Request) {
         issue: item.issue || null,
       }).select().single();
       if (document.error) throw new Error(document.error.message);
+
       let version = null;
-      if (item.status === "identified") {
+      if (["identified", "unidentified", "conflict"].includes(item.status)) {
+        const storagePath = `payment-documents/${batchId}/${document.data.id}-${safeStorageName(item.originalName)}`;
+        const upload = await admin.storage.from("driver-payments").upload(storagePath, item.bytes, { contentType: "application/pdf", upsert: false });
+        if (upload.error) throw new Error(upload.error.message);
         const versionInsert = await admin.from("driver_payment_document_versions").insert({
           document_id: document.data.id,
           version_number: 1,
@@ -136,6 +134,6 @@ export async function POST(request: Request) {
     await admin.from("driver_portal_audit_events").insert({ actor_profile_id: profile.id, action: "payment_batch_review_created", entity_table: "driver_payment_batches", entity_id: batchId, after_data: { counts, originalName: file.name, archiveContext } });
     return NextResponse.json({ batchId, counts, archiveContext, documents: created });
   } catch (error) {
-    return jsonError(error instanceof Error ? error.message : "Falha ao importar documentos.", 400);
+    return jsonError(error instanceof Error ? error.message : "Falha ao importar documentos.", accessErrorStatus(error, 400));
   }
 }
