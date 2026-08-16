@@ -8,6 +8,7 @@ import { EmptyDashboard } from "@/components/empty-dashboard";
 import { GlobalFilters } from "@/components/global-filters";
 import { Sidebar } from "@/components/sidebar";
 import { Topbar } from "@/components/topbar";
+import { canAccessOperationalData } from "@/lib/access-control";
 import { canManageImports, type AuthProfile } from "@/lib/auth";
 import { ViewRouter } from "@/components/views/view-router";
 import { SECTION_META, type SectionId } from "@/lib/navigation";
@@ -44,31 +45,32 @@ export function DashboardApp({ section, profile }: { section: SectionId; profile
   const [importOpen, setImportOpen] = useState(false);
   const meta = SECTION_META[section];
   const canImport = canManageImports(profile);
-  const showEmptyState = data.imports.length === 0 && !ADMIN_SECTIONS.includes(section);
-  const showGlobalFilters = data.imports.length > 0 && !ADMIN_SECTIONS.includes(section);
+  const canLoadOperationalData = canAccessOperationalData(profile);
+  const showEmptyState = canLoadOperationalData && data.imports.length === 0 && !ADMIN_SECTIONS.includes(section);
+  const showGlobalFilters = canLoadOperationalData && data.imports.length > 0 && !ADMIN_SECTIONS.includes(section);
 
   const requestImport = () => {
     if (!canImport) {
-      toast.error("Seu perfil pode consultar dados, mas importações oficiais exigem Diretor ou ADM.");
+      toast.error("Seu perfil não possui permissão para importações oficiais.");
       return;
     }
     setImportOpen(true);
   };
 
-  useEffect(() => { void hydrate(); }, [hydrate]);
+  useEffect(() => { void hydrate(profile.id, canLoadOperationalData); }, [hydrate, profile.id, canLoadOperationalData]);
   const toggleCollapsed = () => {
     window.localStorage.setItem(SIDEBAR_KEY, String(!collapsed));
     window.dispatchEvent(new Event(SIDEBAR_EVENT));
   };
 
-  if (!hydrated) return <main className="boot-screen"><div className="boot-mark">ALC</div><p>Carregando dados online…</p></main>;
+  if (!hydrated) return <main className="boot-screen"><div className="boot-mark">ALC</div><p>Carregando seu acesso…</p></main>;
 
   return (
     <div className={collapsed ? "app-shell app-shell--collapsed" : "app-shell"}>
       <div className={mobileMenu ? "mobile-sidebar is-open" : "mobile-sidebar"} onClick={() => setMobileMenu(false)}>
-        <div onClick={(event) => event.stopPropagation()}><Sidebar active={section} collapsed={false} onToggle={() => setMobileMenu(false)} onImport={requestImport} canImport={canImport} /></div>
+        <div onClick={(event) => event.stopPropagation()}><Sidebar active={section} collapsed={false} onToggle={() => setMobileMenu(false)} onImport={requestImport} canImport={canImport} profile={profile} /></div>
       </div>
-      <Sidebar active={section} collapsed={collapsed} onToggle={toggleCollapsed} onImport={requestImport} canImport={canImport} />
+      <Sidebar active={section} collapsed={collapsed} onToggle={toggleCollapsed} onImport={requestImport} canImport={canImport} profile={profile} />
       <div className="app-main">
         <Topbar section={section} profile={profile} canImport={canImport} onImport={requestImport} onMobileMenu={() => setMobileMenu(true)} />
         {showGlobalFilters && <GlobalFilters />}
