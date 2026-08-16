@@ -12,6 +12,7 @@ import {
   type DriverMasterRecord,
   type PrefaturaHistoryRecord,
 } from "@/lib/prefatura-enrichment";
+import type { DriverOperationalEvidence } from "@/lib/driver-identity-resolver";
 import { readPaged } from "@/lib/pagination";
 import { createClient } from "@/lib/supabase/server";
 import type {
@@ -446,6 +447,47 @@ async function loadPrefaturaHistory(supabase: ServerClient, batchId: string, row
   return [...unique.values()].map(mapPrefaturaHistory);
 }
 
+async function loadOperationalDriverEvidence(supabase: ServerClient, batch: ParsedBatch): Promise<DriverOperationalEvidence[]> {
+  const pnrSelect = "shipment_id,route_id,driver_id,base_key,sigla,case_date";
+  const riskSelect = "shipment_id,route_id,driver_id,base_key,sigla,failure_date";
+  const shipmentIds = [
+    ...batch.prefatura.map((row) => row.shipmentId),
+    ...batch.pnr.map((row) => row.shipmentId),
+    ...batch.risk.map((row) => row.shipmentId),
+  ];
+  const routeIds = [
+    ...batch.prefatura.map((row) => row.routeId),
+    ...batch.pnr.map((row) => row.routeId),
+    ...batch.risk.map((row) => row.routeId),
+  ];
+  const [pnrByShipment, pnrByRoute, riskByShipment, riskByRoute] = await Promise.all([
+    readRowsByIn(supabase, "pnr_records", pnrSelect, "shipment_id", shipmentIds),
+    readRowsByIn(supabase, "pnr_records", pnrSelect, "route_id", routeIds),
+    readRowsByIn(supabase, "risk_lm_records", riskSelect, "shipment_id", shipmentIds),
+    readRowsByIn(supabase, "risk_lm_records", riskSelect, "route_id", routeIds),
+  ]);
+  const rows = new Map<string, DriverOperationalEvidence>();
+  const add = (source: string, row: DbRow) => {
+    const driverId = normalizeDriverCode(toStringValue(row.driver_id));
+    if (!driverId) return;
+    const key = `${source}|${toStringValue(row.shipment_id)}|${toStringValue(row.route_id)}|${driverId}`;
+    rows.set(key, {
+      source,
+      driverId,
+      shipmentId: toStringValue(row.shipment_id),
+      routeId: toStringValue(row.route_id),
+      baseKey: toStringValue(row.base_key),
+      sigla: toStringValue(row.sigla),
+      activityDate: toStringValue(row.case_date || row.failure_date),
+    });
+  };
+  for (const row of [...pnrByShipment, ...pnrByRoute]) add("pnr_records", row);
+  for (const row of [...riskByShipment, ...riskByRoute]) add("risk_lm_records", row);
+  for (const row of batch.pnr) add("pnr_import", { shipment_id: row.shipmentId, route_id: row.routeId, driver_id: row.driverId, base_key: row.baseKey, sigla: row.sigla, case_date: row.caseDate });
+  for (const row of batch.risk) add("risk_import", { shipment_id: row.shipmentId, route_id: row.routeId, driver_id: row.driverId, base_key: row.baseKey, sigla: row.sigla, failure_date: row.failureDate });
+  return [...rows.values()];
+}
+
 function prefaturaInsertRow(batchId: string, row: PrefaturaRecord) {
   const rowFt = rowFortnight(row.period, row.routeDate);
   return {
@@ -466,7 +508,7 @@ function prefaturaInsertRow(batchId: string, row: PrefaturaRecord) {
     plate: row.plate,
     description: row.description,
     value: row.value,
-    quality_status: row.qualityStatus ?? "PENDING",
+    quality_status: row.qualityStatus ?? "needs_review",
     enrichment_source: row.enrichmentSource || null,
     base_source: row.baseSource || null,
     driver_name_source: row.driverNameSource || null,
@@ -524,6 +566,7 @@ async function persistBatch(supabase: ServerClient, profile: AuthProfile, batch:
   const prefaturaRows = enrichPrefaturaRows(batch.prefatura, {
     drivers: await loadDriverMaster(supabase),
     history: prefaturaHistory,
+    operationalEvidence: await loadOperationalDriverEvidence(supabase, batch),
   });
   const fortnights = batchFortnights(batch);
   const months = uniqueSorted(fortnights.map(monthFromFortnight));

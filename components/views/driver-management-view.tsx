@@ -6,7 +6,7 @@ import { ROLE_LABELS, type AuthProfile } from "@/lib/auth";
 import { formatCurrency, formatNumber, KpiCard, Panel, PageIntro, StatusBadge } from "@/components/ui";
 import { TableWrap } from "./shared";
 
-type Tab = "overview" | "drivers" | "tickets" | "payments" | "disputes" | "admins";
+type Tab = "overview" | "pilot" | "drivers" | "tickets" | "payments" | "disputes" | "admins";
 interface BaseRow { base_key: string; base_name?: string }
 interface DriverRow {
   id: string;
@@ -14,6 +14,7 @@ interface DriverRow {
   fullName: string;
   baseKey: string;
   baseName?: string;
+  sigla?: string;
   status: string;
   portalStatus?: string;
   portalEligible?: boolean;
@@ -21,6 +22,9 @@ interface DriverRow {
   lastSeenAt?: string;
   lastOperationalSeenAt?: string;
   authUserId?: string;
+  quality?: string;
+  lastActivitySource?: string;
+  pilotCandidate?: boolean;
 }
 interface TicketRow { id: string; type: string; operationalId: string; driverName: string; driverCode: string; baseKey: string; baseName: string; date?: string; value: number; status: string }
 interface DocumentRow { id: string; title: string; issue?: string; base_key?: string; period?: string; status: string; alc_drivers?: { full_name?: string }; driver_payment_document_versions?: unknown[] }
@@ -39,6 +43,7 @@ interface ReviewBatch { batchId: string; counts: { identified: number; unidentif
 
 const TABS: Array<{ id: Tab; label: string }> = [
   { id: "overview", label: "Visão geral" },
+  { id: "pilot", label: "Piloto do Portal" },
   { id: "drivers", label: "Motoristas" },
   { id: "tickets", label: "Pendências" },
   { id: "payments", label: "Pagamentos" },
@@ -51,9 +56,9 @@ function readError(response: Response, fallback: string) {
 }
 
 function badgeTone(status: string) {
-  if (["published", "active", "concluida", "resolvido", "active"].includes(status)) return "green";
-  if (["draft", "review", "aberta", "em_analise", "pending_activation"].includes(status)) return "amber";
-  if (["error", "invalid", "blocked", "indeferida"].includes(status)) return "red";
+  if (["published", "active", "concluida", "resolvido", "resolved"].includes(status)) return "green";
+  if (["draft", "review", "aberta", "em_analise", "pending_activation", "partial", "needs_review"].includes(status)) return "amber";
+  if (["error", "invalid", "blocked", "indeferida", "conflict"].includes(status)) return "red";
   return "neutral";
 }
 
@@ -105,6 +110,7 @@ export function DriverManagementView({ profile }: { profile: AuthProfile }) {
 
   const bases = useMemo(() => data?.bases ?? [], [data]);
   const drivers = useMemo(() => data?.drivers ?? [], [data]);
+  const pilotCandidates = useMemo(() => drivers.filter((driver) => driver.pilotCandidate), [drivers]);
   const tickets = useMemo(() => data?.tickets ?? [], [data]);
   const documents = useMemo(() => data?.documents ?? [], [data]);
   const disputes = useMemo(() => data?.disputes ?? [], [data]);
@@ -195,6 +201,7 @@ export function DriverManagementView({ profile }: { profile: AuthProfile }) {
       </div>
       <div className="kpi-grid kpi-grid--four">
         <KpiCard label="Motoristas" value={formatNumber(drivers.length)} detail="com cadastro ou vínculo operacional" icon={<UsersRound size={19} />} />
+        <KpiCard label="Candidatos piloto" value={formatNumber(pilotCandidates.length)} detail="ativos, base e nome confiáveis" icon={<KeyRound size={19} />} tone="green" />
         <KpiCard label="Pendências" value={formatNumber(tickets.length)} detail="tickets operacionais projetados" icon={<IdCard size={19} />} tone="amber" />
         <KpiCard label="PDFs" value={formatNumber(documents.length)} detail="documentos de pagamento" icon={<FileArchive size={19} />} />
         <KpiCard label="Contestações" value={formatNumber(disputes.length)} detail="abertas e históricas" icon={<MessageSquareWarning size={19} />} tone={disputes.length ? "red" : "green"} />
@@ -217,6 +224,15 @@ export function DriverManagementView({ profile }: { profile: AuthProfile }) {
             {lastBatch ? <div className="review-box"><strong>Lote em conferência</strong><span>{lastBatch.counts.identified} identificados, {lastBatch.counts.unidentified} não identificados, {lastBatch.counts.duplicate} duplicados, {lastBatch.counts.error} inválidos.</span><button className="primary-button primary-button--small" onClick={() => void publishBatch(lastBatch.batchId)}><CheckCircle2 size={15} />Publicar identificados</button></div> : null}
           </Panel>
         </div>
+      ) : null}
+
+      {tab === "pilot" ? (
+        <Panel title="Piloto do Portal" subtitle="Candidatos seguros para liberação manual pelo administrativo">
+          <TableWrap><thead><tr><th>Motorista</th><th>ID</th><th>Base</th><th>Última atividade</th><th>Fonte</th><th>Qualidade</th><th>Portal</th><th className="align-right">Ações</th></tr></thead><tbody>
+            {pilotCandidates.map((driver) => <tr key={driver.id}><td><strong>{driver.fullName}</strong></td><td className="mono">{driver.driverCode}</td><td>{driver.baseName || driver.baseKey}<span className="cell-subtitle">{driver.sigla || driver.baseKey}</span></td><td>{driver.lastOperationalSeenAt ? new Date(driver.lastOperationalSeenAt).toLocaleDateString("pt-BR") : "-"}</td><td>{driver.lastActivitySource || "-"}</td><td><StatusBadge tone={badgeTone(driver.quality || "needs_review")}>{driver.quality || "needs_review"}</StatusBadge></td><td><StatusBadge tone={badgeTone(driver.portalStatus || "not_activated")}>{driver.portalStatus || "not_activated"}</StatusBadge></td><td className="align-right"><div className="row-actions"><button className="table-action" title="Permitir portal" onClick={() => void updateDriverPortal(driver.id, "allow")}><KeyRound size={14} /></button><button className="table-action" title="Bloquear portal" onClick={() => void updateDriverPortal(driver.id, "block")}><Ban size={14} /></button><button className="table-action" title="Revogar sessões" onClick={() => void updateDriverPortal(driver.id, "revoke_sessions")}><ShieldCheck size={14} /></button></div></td></tr>)}
+            {pilotCandidates.length === 0 ? <tr><td colSpan={8}>Nenhum candidato seguro no escopo atual.</td></tr> : null}
+          </tbody></TableWrap>
+        </Panel>
       ) : null}
 
       {tab === "drivers" ? (

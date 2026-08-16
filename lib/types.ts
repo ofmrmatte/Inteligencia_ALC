@@ -38,7 +38,7 @@ export interface PrefaturaRecord extends SourceTrace {
   driverIdSource?: string;
 }
 
-export type PrefaturaQualityStatus = "COMPLETE" | "ENRICHED" | "PENDING" | "UPDATED";
+export type PrefaturaQualityStatus = "resolved" | "partial" | "needs_review" | "conflict";
 
 export interface PnrRecord extends SourceTrace {
   caseDate: string | null;

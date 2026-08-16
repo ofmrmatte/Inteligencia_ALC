@@ -1,4 +1,12 @@
 import { normalizeText } from "@/lib/normalize";
+import {
+  DriverIdentityResolver,
+  isBlankIdentityValue,
+  isNumericOnlyName,
+  normalizeDriverId,
+  type DriverIdentityRecord,
+  type DriverOperationalEvidence,
+} from "@/lib/driver-identity-resolver";
 import type { Operation, PrefaturaQualityStatus, PrefaturaRecord } from "@/lib/types";
 
 export interface DriverMasterRecord {
@@ -31,13 +39,11 @@ export interface PrefaturaHistoryRecord {
 export interface PrefaturaEnrichmentContext {
   drivers: DriverMasterRecord[];
   history: PrefaturaHistoryRecord[];
+  operationalEvidence?: DriverOperationalEvidence[];
 }
 
-const EMPTY_MARKERS = new Set(["NULL", "N/A", "NA", "NAN", "NONE", "UNDEFINED", "-"]);
-
 function isBlank(value: unknown) {
-  const text = String(value ?? "").trim();
-  return !text || EMPTY_MARKERS.has(normalizeText(text));
+  return isBlankIdentityValue(value);
 }
 
 function firstFilled(...values: Array<string | null | undefined>) {
@@ -45,26 +51,7 @@ function firstFilled(...values: Array<string | null | undefined>) {
 }
 
 function driverKey(value: string) {
-  return String(value ?? "").trim().replace(/\.0$/, "");
-}
-
-function addUnique<T>(map: Map<string, T[]>, key: string, value: T) {
-  if (!key) return;
-  const list = map.get(key) ?? [];
-  list.push(value);
-  map.set(key, list);
-}
-
-function consistentCandidate(candidates: PrefaturaHistoryRecord[]) {
-  if (candidates.length === 0) return null;
-  const values = {
-    driverId: new Set(candidates.map((row) => driverKey(row.driverId)).filter(Boolean)),
-    driverName: new Set(candidates.map((row) => normalizeText(row.driverName)).filter(Boolean)),
-    baseKey: new Set(candidates.map((row) => normalizeText(row.baseKey)).filter(Boolean)),
-    sigla: new Set(candidates.map((row) => normalizeText(row.sigla)).filter(Boolean)),
-  };
-  if ([...Object.values(values)].some((set) => set.size > 1)) return null;
-  return candidates.find((row) => row.baseKey || row.driverId || row.driverName) ?? null;
+  return normalizeDriverId(value);
 }
 
 function fill(row: PrefaturaRecord, field: keyof PrefaturaRecord, value: string | null | undefined) {
@@ -73,59 +60,45 @@ function fill(row: PrefaturaRecord, field: keyof PrefaturaRecord, value: string 
   return true;
 }
 
-function setSource(row: PrefaturaRecord, key: "baseSource" | "driverNameSource" | "driverIdSource", source: string) {
-  if (!row[key]) row[key] = source;
+function canReplaceDriverName(row: PrefaturaRecord, candidate: DriverIdentityRecord | null | undefined) {
+  if (!candidate?.name || isBlank(candidate.name) || isNumericOnlyName(candidate.name)) return false;
+  return isBlank(row.driverName) || isNumericOnlyName(row.driverName);
 }
 
-function applyDriver(row: PrefaturaRecord, driver: DriverMasterRecord | null, source: string) {
-  if (!driver) return false;
-  let changed = false;
-  if (driver.driverIdReliable !== false && fill(row, "driverId", driver.driverId)) {
-    setSource(row, "driverIdSource", source);
-    changed = true;
-  }
-  if (fill(row, "driverName", driver.name)) {
-    setSource(row, "driverNameSource", source);
-    changed = true;
-  }
-  if (fill(row, "baseName", driver.baseName || driver.baseKey)) {
-    setSource(row, "baseSource", source);
-    changed = true;
-  }
-  if (fill(row, "baseKey", driver.baseKey)) {
-    setSource(row, "baseSource", source);
-    changed = true;
-  }
-  if (fill(row, "sigla", driver.sigla)) changed = true;
-  if (fill(row, "baseLabel", firstFilled(driver.baseName, driver.baseKey))) changed = true;
-  return changed;
+function setResolvedDriverName(row: PrefaturaRecord, candidate: DriverIdentityRecord | null | undefined, source: string) {
+  if (!canReplaceDriverName(row, candidate)) return false;
+  row.driverName = candidate?.name ?? "";
+  row.driverNameSource = source;
+  return true;
 }
 
-function applyHistory(row: PrefaturaRecord, history: PrefaturaHistoryRecord | null, source: string) {
-  if (!history) return false;
-  let changed = false;
-  if (fill(row, "driverId", history.driverId)) {
-    setSource(row, "driverIdSource", source);
-    changed = true;
-  }
-  if (fill(row, "driverName", history.driverName)) {
-    setSource(row, "driverNameSource", source);
-    changed = true;
-  }
-  for (const field of ["baseLabel", "baseName", "baseKey", "sigla", "plate", "description"] as const) {
-    if (fill(row, field, history[field])) {
-      if (field === "baseLabel" || field === "baseName" || field === "baseKey") setSource(row, "baseSource", source);
-      changed = true;
-    }
-  }
-  return changed;
+function canonicalDrivers(context: PrefaturaEnrichmentContext): DriverIdentityRecord[] {
+  return context.drivers
+    .filter((driver) => driver.driverIdReliable !== false)
+    .map((driver) => ({
+      driverId: driver.driverId,
+      name: driver.name,
+      baseKey: driver.baseKey,
+      baseName: driver.baseName,
+      sigla: driver.sigla,
+      source: "driver_records",
+    }));
 }
 
-function classify(row: PrefaturaRecord, changed: boolean): PrefaturaQualityStatus {
-  const hasBase = !isBlank(row.baseKey) || !isBlank(row.sigla);
-  const hasDriver = !isBlank(row.driverId) || !isBlank(row.driverName);
-  if (!hasBase || !hasDriver) return "PENDING";
-  return changed ? "ENRICHED" : "COMPLETE";
+function historyEvidence(context: PrefaturaEnrichmentContext): DriverOperationalEvidence[] {
+  return context.history
+    .filter((row) => !isBlank(row.driverId))
+    .map((row) => ({
+      driverId: row.driverId,
+      driverName: row.driverName,
+      baseKey: row.baseKey,
+      sigla: row.sigla,
+      shipmentId: row.shipmentId,
+      routeId: row.routeId,
+      plate: row.plate,
+      activityDate: row.routeDate,
+      source: "prefatura_records",
+    }));
 }
 
 export function prefaturaIdentityKey(row: Pick<PrefaturaRecord, "shipmentId" | "operation" | "routeId" | "period">) {
@@ -135,53 +108,42 @@ export function prefaturaIdentityKey(row: Pick<PrefaturaRecord, "shipmentId" | "
 }
 
 export function enrichPrefaturaRows(rows: PrefaturaRecord[], context: PrefaturaEnrichmentContext) {
-  const driversById = new Map<string, DriverMasterRecord>();
-  const driversByName = new Map<string, DriverMasterRecord>();
-  const nameCounts = new Map<string, number>();
-  for (const driver of context.drivers) {
-    const id = driverKey(driver.driverId);
-    const name = normalizeText(driver.name);
-    if (id && !driversById.has(id)) driversById.set(id, driver);
-    if (name) nameCounts.set(name, (nameCounts.get(name) ?? 0) + 1);
-  }
-  for (const driver of context.drivers) {
-    const name = normalizeText(driver.name);
-    if (name && nameCounts.get(name) === 1) driversByName.set(name, driver);
-  }
-
-  const historyByShipment = new Map<string, PrefaturaHistoryRecord[]>();
-  const historyByRouteDriver = new Map<string, PrefaturaHistoryRecord[]>();
-  const historyByShipmentRoute = new Map<string, PrefaturaHistoryRecord[]>();
-  const historyByRouteNameDate = new Map<string, PrefaturaHistoryRecord[]>();
-  for (const item of context.history) {
-    addUnique(historyByShipment, driverKey(item.shipmentId), item);
-    addUnique(historyByRouteDriver, `${driverKey(item.routeId)}|${driverKey(item.driverId)}`, item);
-    addUnique(historyByShipmentRoute, `${driverKey(item.shipmentId)}|${driverKey(item.routeId)}`, item);
-    addUnique(historyByRouteNameDate, `${driverKey(item.routeId)}|${normalizeText(item.driverName)}|${item.routeDate ?? ""}`, item);
-  }
+  const resolver = new DriverIdentityResolver({
+    drivers: canonicalDrivers(context),
+    operationalEvidence: [...historyEvidence(context), ...(context.operationalEvidence ?? [])],
+  });
 
   return rows.map((input) => {
     const row: PrefaturaRecord = { ...input };
-    if (!row.driverIdSource && !isBlank(row.driverId)) row.driverIdSource = "UPLOAD";
-    if (!row.driverNameSource && !isBlank(row.driverName)) row.driverNameSource = "UPLOAD";
-    if (!row.baseSource && (!isBlank(row.baseKey) || !isBlank(row.sigla))) row.baseSource = "UPLOAD";
-
-    let changed = false;
-    const byId = driversById.get(driverKey(row.driverId)) ?? null;
-    if (byId) changed = applyDriver(row, byId, "DRIVER_MASTER") || changed;
-
-    const byName = driversByName.get(normalizeText(row.driverName)) ?? null;
-    if (!byId && byName) changed = applyDriver(row, byName, "DRIVER_MASTER_NAME") || changed;
-
-    const historyCandidate =
-      consistentCandidate(historyByShipment.get(driverKey(row.shipmentId)) ?? []) ??
-      consistentCandidate(historyByRouteDriver.get(`${driverKey(row.routeId)}|${driverKey(row.driverId)}`) ?? []) ??
-      consistentCandidate(historyByShipmentRoute.get(`${driverKey(row.shipmentId)}|${driverKey(row.routeId)}`) ?? []) ??
-      consistentCandidate(historyByRouteNameDate.get(`${driverKey(row.routeId)}|${normalizeText(row.driverName)}|${row.routeDate ?? ""}`) ?? []);
-    if (historyCandidate) changed = applyHistory(row, historyCandidate, "HISTORICAL_MATCH") || changed;
-
-    row.qualityStatus = classify(row, changed);
-    row.enrichmentSource = changed ? row.enrichmentSource || "AUTO_ENRICHMENT" : row.enrichmentSource;
+    if (!row.driverNameSource && !isBlank(row.driverName)) row.driverNameSource = "import";
+    if (!row.baseSource && (!isBlank(row.baseKey) || !isBlank(row.sigla))) row.baseSource = "import";
+    const resolution = resolver.resolveDriverIdentity({
+      driverId: row.driverId,
+      driverName: row.driverName,
+      baseKey: row.baseKey,
+      sigla: row.sigla,
+      shipmentId: row.shipmentId,
+      routeId: row.routeId,
+      plate: row.plate,
+      routeDate: row.routeDate,
+      source: "prefatura",
+    });
+    if (resolution.canAutoApply && resolution.driverId) {
+      fill(row, "driverId", resolution.driverId);
+      row.driverIdSource = resolution.matchedBy ?? "direct";
+      row.enrichmentSource = resolution.source ?? "driver_database";
+      setResolvedDriverName(row, resolution.candidate, "driver_records");
+      if (fill(row, "baseKey", resolution.candidate?.baseKey)) {
+        row.baseSource = "driver_database";
+      }
+      fill(row, "baseName", resolution.candidate?.baseName || resolution.candidate?.baseKey);
+      fill(row, "baseLabel", firstFilled(resolution.candidate?.baseName, resolution.candidate?.baseKey));
+      fill(row, "sigla", resolution.candidate?.sigla);
+      row.qualityStatus = "resolved";
+    } else {
+      row.qualityStatus = resolution.qualityStatus as PrefaturaQualityStatus;
+      if (resolution.conflicts.length) row.enrichmentSource = "manual_review";
+    }
     return row;
   });
 }
@@ -208,7 +170,7 @@ export function prefaturaMergePatch(existing: PrefaturaHistoryRecord, incoming: 
   }
   if (!existing.routeDate && incoming.routeDate) patch.route_date = incoming.routeDate;
   if (Object.keys(patch).length > 0) {
-    patch.quality_status = "UPDATED";
+    patch.quality_status = patch.driver_id || existing.driverId ? "resolved" : "partial";
     patch.enrichment_source = incoming.enrichmentSource || "REUPLOAD";
     patch.enriched_at = new Date().toISOString();
     if (patch.base_key || patch.base_name || patch.base_label) patch.base_source = incoming.baseSource || "REUPLOAD";

@@ -10,6 +10,8 @@
     "lint": "eslint .",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
+    "prefatura:backfill": "tsx scripts/backfill-prefatura-enrichment.ts",
+    "drivers:sync": "tsx scripts/sync-alc-drivers.ts",
     "test:watch": "vitest"
   },
   "engines": {
@@ -43,6 +45,7 @@
     "@vitest/coverage-v8": "^4.1.10",
     "eslint": "^9.39.5",
     "eslint-config-next": "^16.3.1",
+    "tsx": "^4.23.12",
     "typescript": "^6.0.3",
     "vitest": "^4.1.10"
   }

@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { canManageUsers, isUserRole, type UserRole } from "@/lib/auth";
 import { createAdminClient } from "@/lib/supabase/admin";
-import { adminBaseScope, assertBaseAccess, driverPortalPatchForAction, isSuperAdminProfile, jsonError, loadKnownDrivers, loadTickets, requireCanonicalDriverCode, requirePortalProfile, syncOperationalBasesAndDrivers, textValue } from "@/lib/driver-portal-server";
+import { adminBaseScope, assertBaseAccess, driverPortalPatchForAction, isSuperAdminProfile, jsonError, loadKnownDrivers, loadTickets, requireCanonicalDriverCode, requirePortalProfile, textValue } from "@/lib/driver-portal-server";
 
 export const dynamic = "force-dynamic";
 
@@ -15,7 +15,6 @@ export async function GET() {
   try {
     const profile = await requirePortalProfile();
     const allowedBases = await adminBaseScope(profile);
-    await syncOperationalBasesAndDrivers();
     const admin = createAdminClient();
     const [drivers, tickets, bases, documents, disputes, assignments, history] = await Promise.all([
       loadKnownDrivers(allowedBases),

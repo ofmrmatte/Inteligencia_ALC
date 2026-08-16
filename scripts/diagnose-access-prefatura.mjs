@@ -53,7 +53,7 @@ try {
     prefatura_records: await scalar("select count(*) from public.prefatura_records"),
     prefatura_without_base: await scalar("select count(*) from public.prefatura_records where coalesce(base_key, '') = '' and coalesce(sigla, '') = ''"),
     prefatura_without_driver: await scalar("select count(*) from public.prefatura_records where coalesce(driver_id, '') = '' and coalesce(driver_name, '') = ''"),
-    prefatura_pending: await scalar("select count(*) from public.prefatura_records where quality_status = 'PENDING'"),
+    prefatura_pending: await scalar("select count(*) from public.prefatura_records where quality_status in ('PENDING', 'needs_review')"),
     prefatura_enrichable_by_driver_id: await scalar(`
       select count(*)
       from public.prefatura_records p

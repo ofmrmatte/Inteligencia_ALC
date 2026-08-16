@@ -32,6 +32,24 @@ function isReliableDriverName(name: string, driverCode: string) {
   return Boolean(name.trim() && normalizedName && normalizedName !== normalizedCode && !/^\d+$/.test(normalizedName));
 }
 
+function activityWindowDays() {
+  const value = Number(process.env.DRIVER_ACTIVITY_WINDOW_DAYS ?? 90);
+  return Number.isFinite(value) && value > 0 ? value : 90;
+}
+
+function activeCutoffDate() {
+  return new Date(Date.now() - activityWindowDays() * 86400000).toISOString().slice(0, 10);
+}
+
+function latestDate(...values: Array<unknown>) {
+  return values.map(textValue).filter(Boolean).sort().at(-1) ?? "";
+}
+
+function operationalStatusFor(lastActivity: string) {
+  if (!lastActivity) return "unknown";
+  return lastActivity.slice(0, 10) >= activeCutoffDate() ? "active" : "inactive";
+}
+
 export function requireCanonicalDriverCode(value: unknown) {
   const code = normalizeDriverKey(value);
   if (!code) throw new Error("Informe o ID do motorista.");
@@ -74,18 +92,46 @@ export function assertBaseAccess(baseKey: string, allowedBases: string[] | null)
 
 export async function syncOperationalBasesAndDrivers() {
   const admin = createAdminClient();
-  const [{ data: hierarchy }, { data: driverRows }, { data: prefRows }] = await Promise.all([
-    admin.from("hierarchy_scopes").select("base_key,base_name,sigla"),
-    admin.from("driver_records").select("driver_id,name,source_file,last_updated"),
-    admin.from("prefatura_records").select("driver_id,driver_name,base_key,base_name,sigla,created_at").not("driver_id", "is", null),
+  const [hierarchy, driverRows, prefRows, pnrRows, riskRows, existingDrivers] = await Promise.all([
+    readPaged<DbRow>(async (offset, pageSize) => {
+      const { data, error, count } = await admin.from("hierarchy_scopes").select("base_key,base_name,sigla", { count: "exact" }).range(offset, offset + pageSize - 1);
+      if (error) throw new Error(error.message);
+      return { rows: (data ?? []) as DbRow[], count };
+    }),
+    readPaged<DbRow>(async (offset, pageSize) => {
+      const { data, error, count } = await admin.from("driver_records").select("driver_id,name,source_file,last_updated,base_key,sigla", { count: "exact" }).range(offset, offset + pageSize - 1);
+      if (error) throw new Error(error.message);
+      return { rows: (data ?? []) as DbRow[], count };
+    }),
+    readPaged<DbRow>(async (offset, pageSize) => {
+      const { data, error, count } = await admin.from("prefatura_records").select("driver_id,driver_name,base_key,base_name,sigla,route_date,created_at", { count: "exact" }).not("driver_id", "is", null).range(offset, offset + pageSize - 1);
+      if (error) throw new Error(error.message);
+      return { rows: (data ?? []) as DbRow[], count };
+    }),
+    readPaged<DbRow>(async (offset, pageSize) => {
+      const { data, error, count } = await admin.from("pnr_records").select("driver_id,base_key,sigla,case_date,created_at", { count: "exact" }).not("driver_id", "is", null).range(offset, offset + pageSize - 1);
+      if (error) throw new Error(error.message);
+      return { rows: (data ?? []) as DbRow[], count };
+    }),
+    readPaged<DbRow>(async (offset, pageSize) => {
+      const { data, error, count } = await admin.from("risk_lm_records").select("driver_id,base_key,sigla,failure_date,created_at", { count: "exact" }).not("driver_id", "is", null).range(offset, offset + pageSize - 1);
+      if (error) throw new Error(error.message);
+      return { rows: (data ?? []) as DbRow[], count };
+    }),
+    readPaged<DbRow>(async (offset, pageSize) => {
+      const { data, error, count } = await admin.from("alc_drivers").select("driver_code,portal_eligible,portal_status,status", { count: "exact" }).range(offset, offset + pageSize - 1);
+      if (error) throw new Error(error.message);
+      return { rows: (data ?? []) as DbRow[], count };
+    }),
   ]);
+  const existingByCode = new Map(existingDrivers.map((row) => [textValue(row.driver_code), row]));
 
   const bases = new Map<string, { base_key: string; base_name: string; sigla: string }>();
-  for (const row of (hierarchy ?? []) as DbRow[]) {
+  for (const row of hierarchy) {
     const baseKey = textValue(row.base_key);
     if (baseKey) bases.set(baseKey, { base_key: baseKey, base_name: textValue(row.base_name) || baseKey, sigla: textValue(row.sigla) });
   }
-  for (const row of (prefRows ?? []) as DbRow[]) {
+  for (const row of prefRows) {
     const baseKey = textValue(row.base_key);
     if (baseKey && !bases.has(baseKey)) bases.set(baseKey, { base_key: baseKey, base_name: textValue(row.base_name) || baseKey, sigla: textValue(row.sigla) });
   }
@@ -94,39 +140,52 @@ export async function syncOperationalBasesAndDrivers() {
     if (error) throw new Error(error.message);
   }
 
-  const drivers = new Map<string, { driver_code: string; full_name: string; base_key: string; sigla: string; operational_status: string; portal_eligible: boolean; last_operational_seen_at?: string; source_updated_at?: string; source_payload: DbRow }>();
-  for (const row of (driverRows ?? []) as DbRow[]) {
+  const drivers = new Map<string, { driver_code: string; full_name: string; base_key: string; sigla: string; operational_status: string; portal_eligible: boolean; portal_status: string; status: string; last_operational_seen_at?: string; source_updated_at?: string; source_payload: DbRow }>();
+  for (const row of driverRows) {
     const code = textValue(row.driver_id);
     const name = textValue(row.name);
     if (!code) continue;
+    const existing = existingByCode.get(code);
+    const lastActivity = textValue(row.last_updated);
     drivers.set(code, {
       driver_code: code,
       full_name: isReliableDriverName(name, code) ? name : code,
-      base_key: "",
-      sigla: "",
-      operational_status: "unknown",
-      portal_eligible: false,
+      base_key: textValue(row.base_key),
+      sigla: textValue(row.sigla),
+      operational_status: operationalStatusFor(lastActivity),
+      portal_eligible: Boolean(existing?.portal_eligible),
+      portal_status: textValue(existing?.portal_status) || "not_activated",
+      status: textValue(existing?.status) || "pending_activation",
+      last_operational_seen_at: lastActivity || undefined,
       source_updated_at: textValue(row.last_updated) || undefined,
-      source_payload: { source: "driver_records", source_file: row.source_file },
+      source_payload: { source: "driver_records", source_file: row.source_file, last_activity_source: "driver_records", activity_window_days: activityWindowDays() },
     });
   }
-  for (const row of (prefRows ?? []) as DbRow[]) {
+  const touchDriver = (row: DbRow, source: string, dateField: string, nameField = "driver_name") => {
     const code = textValue(row.driver_id);
-    if (!code) continue;
-    const name = textValue(row.driver_name);
+    if (!code) return;
+    const name = textValue(row[nameField]);
     const current = drivers.get(code);
+    const existing = existingByCode.get(code);
+    const activity = latestDate(row[dateField], row.created_at);
+    const lastActivity = latestDate(current?.last_operational_seen_at, activity);
     drivers.set(code, {
       driver_code: code,
       full_name: current && isReliableDriverName(current.full_name, code) ? current.full_name : isReliableDriverName(name, code) ? name : code,
       base_key: current?.base_key || textValue(row.base_key),
       sigla: current?.sigla || textValue(row.sigla),
-      operational_status: "active",
-      portal_eligible: true,
-      last_operational_seen_at: textValue(row.created_at) || undefined,
+      operational_status: operationalStatusFor(lastActivity),
+      portal_eligible: Boolean(existing?.portal_eligible ?? current?.portal_eligible),
+      portal_status: textValue(existing?.portal_status ?? current?.portal_status) || "not_activated",
+      status: textValue(existing?.status ?? current?.status) || "pending_activation",
+      last_operational_seen_at: lastActivity || undefined,
       source_updated_at: current?.source_updated_at,
-      source_payload: { source: "prefatura_records" },
+      source_payload: { source, last_activity_source: source, activity_window_days: activityWindowDays() },
     });
-  }
+  };
+  for (const row of prefRows) touchDriver(row, "prefatura_records", "route_date");
+  for (const row of pnrRows) touchDriver(row, "pnr_records", "case_date", "driver_id");
+  for (const row of riskRows) touchDriver(row, "risk_lm_records", "failure_date", "driver_id");
   if (drivers.size) {
     const rows = [...drivers.values()].filter((driver) => driver.base_key);
     if (rows.length) {
@@ -140,7 +199,7 @@ export async function loadKnownDrivers(allowedBases: string[] | null = null) {
   const admin = createAdminClient();
   let query = admin
     .from("alc_drivers")
-    .select("id,driver_code,full_name,base_key,sigla,status,portal_status,portal_eligible,operational_status,last_seen_at,last_operational_seen_at,auth_user_id,operational_bases(base_name)");
+    .select("id,driver_code,full_name,base_key,sigla,status,portal_status,portal_eligible,operational_status,last_seen_at,last_operational_seen_at,auth_user_id,source_payload,operational_bases(base_name)");
   if (allowedBases) query = query.in("base_key", allowedBases.length ? allowedBases : ["__none__"]);
   const { data, error } = await query.order("full_name", { ascending: true });
   if (error) throw new Error(error.message);
@@ -158,6 +217,13 @@ export async function loadKnownDrivers(allowedBases: string[] | null = null) {
     lastOperationalSeenAt: textValue(row.last_operational_seen_at),
     authUserId: textValue(row.auth_user_id),
     baseName: textValue((row.operational_bases as DbRow | null)?.base_name) || textValue(row.base_key),
+    quality: isReliableDriverName(textValue(row.full_name), textValue(row.driver_code)) && textValue(row.base_key) && textValue(row.sigla) ? "resolved" : "needs_review",
+    lastActivitySource: textValue((row.source_payload as DbRow | null)?.last_activity_source),
+    pilotCandidate: !Boolean(row.portal_eligible)
+      && textValue(row.portal_status) !== "blocked"
+      && textValue(row.operational_status) === "active"
+      && isReliableDriverName(textValue(row.full_name), textValue(row.driver_code))
+      && Boolean(textValue(row.base_key) && textValue(row.sigla)),
   }));
 }
 

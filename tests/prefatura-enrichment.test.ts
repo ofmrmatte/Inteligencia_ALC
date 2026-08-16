@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { DriverIdentityResolver } from "@/lib/driver-identity-resolver";
 import { enrichPrefaturaRows, prefaturaMergePatch, type DriverMasterRecord, type PrefaturaHistoryRecord } from "@/lib/prefatura-enrichment";
 import type { PrefaturaRecord } from "@/lib/types";
 
@@ -38,9 +39,9 @@ describe("enriquecimento da pré-fatura", () => {
     const [result] = enrichPrefaturaRows([row({ driverId: "123" })], { drivers, history: [] });
     expect(result.driverName).toBe("João da Silva");
     expect(result.baseKey).toBe("RAO01");
-    expect(result.qualityStatus).toBe("ENRICHED");
-    expect(result.driverIdSource).toBe("UPLOAD");
-    expect(result.baseSource).toBe("DRIVER_MASTER");
+    expect(result.qualityStatus).toBe("resolved");
+    expect(result.driverIdSource).toBe("direct");
+    expect(result.baseSource).toBe("driver_database");
   });
 
   it("preenche por nome somente quando o cadastro é único", () => {
@@ -51,34 +52,41 @@ describe("enriquecimento da pré-fatura", () => {
     expect(unique.driverId).toBe("456");
     expect(unique.baseKey).toBe("SMG5");
     expect(duplicated.driverId).toBe("");
-    expect(duplicated.qualityStatus).toBe("PENDING");
+    expect(duplicated.qualityStatus).toBe("needs_review");
   });
 
-  it("usa histórico determinístico por shipment quando o cadastro não resolve", () => {
-    const history: PrefaturaHistoryRecord[] = [{
-      id: "old",
-      shipmentId: "SHIP4",
-      routeId: "R4",
-      period: "01Q062026",
-      routeDate: "2026-06-01",
-      operation: "SVC",
-      driverId: "999",
-      driverName: "Histórico Seguro",
-      baseLabel: "BASE HIST - HIS",
-      baseName: "BASE HIST",
-      baseKey: "BASE HIST",
-      sigla: "HIS",
-    }];
-    const [result] = enrichPrefaturaRows([row({ shipmentId: "SHIP4" })], { drivers: [], history });
+  it("usa route_id único quando o cadastro não resolve", () => {
+    const [result] = enrichPrefaturaRows([row({ routeId: "R4" })], {
+      drivers: [{ driverId: "999", name: "Histórico Seguro", baseKey: "BASE HIST", baseName: "BASE HIST", sigla: "HIS" }],
+      history: [],
+      operationalEvidence: [{ driverId: "999", routeId: "R4", source: "pnr_records", baseKey: "BASE HIST", sigla: "HIS" }],
+    });
     expect(result.driverId).toBe("999");
     expect(result.baseKey).toBe("BASE HIST");
-    expect(result.qualityStatus).toBe("ENRICHED");
+    expect(result.driverIdSource).toBe("route_id_unique");
+    expect(result.qualityStatus).toBe("resolved");
+  });
+
+  it("usa shipment único quando não há match por rota", () => {
+    const [result] = enrichPrefaturaRows([row({ shipmentId: "SHIP4", routeId: "" })], {
+      drivers: [{ driverId: "999", name: "Histórico Seguro", baseKey: "BASE HIST", baseName: "BASE HIST", sigla: "HIS" }],
+      history: [],
+      operationalEvidence: [{ driverId: "999", shipmentId: "SHIP4", source: "risk_lm_records", baseKey: "BASE HIST", sigla: "HIS" }],
+    });
+    expect(result.driverId).toBe("999");
+    expect(result.driverIdSource).toBe("shipment_id");
   });
 
   it("mantém pendente quando não há fonte confiável", () => {
     const [result] = enrichPrefaturaRows([row({ shipmentId: "SHIP5" })], { drivers: [], history: [] });
-    expect(result.qualityStatus).toBe("PENDING");
+    expect(result.qualityStatus).toBe("needs_review");
     expect(result.baseKey).toBe("");
+  });
+
+  it("não transforma nome numérico em driver_id", () => {
+    const [result] = enrichPrefaturaRows([row({ driverName: "1013625" })], { drivers: [], history: [] });
+    expect(result.driverId).toBe("");
+    expect(result.qualityStatus).toBe("needs_review");
   });
 
   it("monta patch de reupload só para campos vazios", () => {
@@ -108,8 +116,63 @@ describe("enriquecimento da pré-fatura", () => {
     expect(patch).toMatchObject({
       driver_id: "456",
       base_key: "GUAXUPE",
-      quality_status: "UPDATED",
+      quality_status: "resolved",
     });
     expect(patch).not.toHaveProperty("driver_name");
+  });
+});
+
+describe("DriverIdentityResolver", () => {
+  const resolver = new DriverIdentityResolver({
+    drivers: [
+      { driverId: "123", name: "João da Silva", baseKey: "RAO01", sigla: "RAO" },
+      { driverId: "456", name: "Carlos Santos", baseKey: "SMG5", sigla: "SMG5" },
+      { driverId: "777", name: "Nome Igual", baseKey: "A", sigla: "A" },
+      { driverId: "778", name: "Nome Igual", baseKey: "B", sigla: "B" },
+    ],
+    operationalEvidence: [
+      { driverId: "456", routeId: "R456", shipmentId: "S456", source: "pnr_records", baseKey: "SMG5", sigla: "SMG5" },
+      { driverId: "777", routeId: "R777", source: "risk_lm_records", baseKey: "A", sigla: "A" },
+      { driverId: "778", routeId: "R778", source: "risk_lm_records", baseKey: "B", sigla: "B" },
+      { driverId: "777", routeId: "RMULTI", source: "pnr_records" },
+      { driverId: "778", routeId: "RMULTI", source: "risk_lm_records" },
+    ],
+  });
+
+  it("nome exato único resolve", () => {
+    const result = resolver.resolveDriverIdentity({ driverName: "joao da silva" });
+    expect(result.driverId).toBe("123");
+    expect(result.matchedBy).toBe("driver_records_name_exact");
+    expect(result.canAutoApply).toBe(true);
+  });
+
+  it("mesmo nome com dois IDs não resolve sem evidência inequívoca", () => {
+    const result = resolver.resolveDriverIdentity({ driverName: "Nome Igual" });
+    expect(result.driverId).toBeNull();
+    expect(result.canAutoApply).toBe(false);
+  });
+
+  it("nome ambíguo mais rota coerente resolve", () => {
+    const result = resolver.resolveDriverIdentity({ driverName: "Nome Igual", routeId: "R777", baseKey: "A" });
+    expect(result.driverId).toBe("777");
+    expect(result.canAutoApply).toBe(true);
+  });
+
+  it("nome e rota conflitantes geram conflict", () => {
+    const result = resolver.resolveDriverIdentity({ driverName: "Carlos Santos", routeId: "R777" });
+    expect(result.qualityStatus).toBe("conflict");
+    expect(result.canAutoApply).toBe(false);
+  });
+
+  it("route_id com vários drivers não resolve", () => {
+    const result = resolver.resolveDriverIdentity({ routeId: "RMULTI" });
+    expect(result.driverId).toBeNull();
+    expect(result.canAutoApply).toBe(false);
+  });
+
+  it("driver_id existente é preservado", () => {
+    const result = resolver.resolveDriverIdentity({ driverId: "123", driverName: "Outro Nome" });
+    expect(result.driverId).toBe("123");
+    expect(result.matchedBy).toBe("direct");
   });
 });
