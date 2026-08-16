@@ -1,7 +1,17 @@
 import { NextResponse } from "next/server";
+import { filterByAccessScope } from "@/lib/access-scope";
+import { getUserAccessScope } from "@/lib/access-scope-server";
 import { hasFullAccess, isUserRole, type AuthProfile } from "@/lib/auth";
 import { fortnightFromDate, monthFromFortnight, normalizeFortnight } from "@/lib/competence";
 import { duplicateFileImportError, findDuplicateFileHash } from "@/lib/import-dedupe";
+import { normalizeText } from "@/lib/normalize";
+import {
+  enrichPrefaturaRows,
+  prefaturaIdentityKey,
+  prefaturaMergePatch,
+  type DriverMasterRecord,
+  type PrefaturaHistoryRecord,
+} from "@/lib/prefatura-enrichment";
 import { readPaged } from "@/lib/pagination";
 import { createClient } from "@/lib/supabase/server";
 import type {
@@ -146,6 +156,7 @@ function mapPrefatura(row: DbRow): PrefaturaRecord {
     baseName: toStringValue(row.base_name),
     baseKey: toStringValue(row.base_key),
     sigla: toStringValue(row.sigla),
+    driverId: toStringValue(row.driver_id),
     driverName: toStringValue(row.driver_name),
     plate: toStringValue(row.plate),
     description: toStringValue(row.description),
@@ -154,6 +165,11 @@ function mapPrefatura(row: DbRow): PrefaturaRecord {
     routeId: toStringValue(row.route_id),
     value: toNumberValue(row.value),
     operation: operation === "XPT" || operation === "PNR" ? operation : "SVC",
+    qualityStatus: toStringValue(row.quality_status) as PrefaturaRecord["qualityStatus"],
+    enrichmentSource: toStringValue(row.enrichment_source),
+    baseSource: toStringValue(row.base_source),
+    driverNameSource: toStringValue(row.driver_name_source),
+    driverIdSource: toStringValue(row.driver_id_source),
   };
 }
 
@@ -273,7 +289,8 @@ async function readImportedFiles(supabase: ServerClient, batchId: string | null)
   });
 }
 
-async function loadDashboardData(supabase: ServerClient): Promise<DashboardData> {
+async function loadDashboardData(supabase: ServerClient, profile: AuthProfile): Promise<DashboardData> {
+  const accessScope = await getUserAccessScope(profile);
   const [imports, hierarchy, prefatura, pnr, risk, drivers] = await Promise.all([
     readTable(supabase, "import_batches", "*", "started_at"),
     readTable(supabase, "hierarchy_scopes"),
@@ -285,14 +302,38 @@ async function loadDashboardData(supabase: ServerClient): Promise<DashboardData>
 
   const mappedImports = imports.map(mapImportEntry);
   const activeBatchIds = new Set(mappedImports.filter((entry) => !entry.analysisExcluded).map((entry) => entry.batchId));
+  const hierarchyRows = hierarchy.filter((row) => activeBatchIds.has(toStringValue(row.batch_id))).map(mapHierarchy);
+  const prefaturaRows = prefatura.filter((row) => activeBatchIds.has(toStringValue(row.batch_id))).map(mapPrefatura);
+  const pnrRows = pnr.filter((row) => activeBatchIds.has(toStringValue(row.batch_id))).map(mapPnr);
+  const riskRows = risk.filter((row) => activeBatchIds.has(toStringValue(row.batch_id))).map(mapRisk);
+
+  const scopedHierarchy = filterByAccessScope(accessScope, hierarchyRows);
+  const scopedPrefatura = filterByAccessScope(accessScope, prefaturaRows);
+  const scopedPnr = filterByAccessScope(accessScope, pnrRows);
+  const scopedRisk = filterByAccessScope(accessScope, riskRows);
+  const visibleBatchIds = new Set([
+    ...scopedHierarchy.map((row) => row.batchId),
+    ...scopedPrefatura.map((row) => row.batchId),
+    ...scopedPnr.map((row) => row.batchId),
+    ...scopedRisk.map((row) => row.batchId),
+  ]);
+  const visibleDriverNames = new Set(scopedPrefatura.map((row) => normalizeText(row.driverName)).filter(Boolean));
+  const visibleDriverIds = new Set([
+    ...scopedPrefatura.map((row) => row.driverId),
+    ...scopedPnr.map((row) => row.driverId),
+    ...scopedRisk.map((row) => row.driverId),
+  ].filter(Boolean));
+  const driverRows = drivers.filter((row) => activeBatchIds.has(toStringValue(row.batch_id))).map(mapDriver);
 
   return {
-    hierarchy: hierarchy.filter((row) => activeBatchIds.has(toStringValue(row.batch_id))).map(mapHierarchy),
-    prefatura: prefatura.filter((row) => activeBatchIds.has(toStringValue(row.batch_id))).map(mapPrefatura),
-    pnr: pnr.filter((row) => activeBatchIds.has(toStringValue(row.batch_id))).map(mapPnr),
-    risk: risk.filter((row) => activeBatchIds.has(toStringValue(row.batch_id))).map(mapRisk),
-    drivers: drivers.filter((row) => activeBatchIds.has(toStringValue(row.batch_id))).map(mapDriver),
-    imports: mappedImports,
+    hierarchy: scopedHierarchy,
+    prefatura: scopedPrefatura,
+    pnr: scopedPnr,
+    risk: scopedRisk,
+    drivers: accessScope.fullAccess
+      ? driverRows
+      : driverRows.filter((row) => visibleDriverIds.has(row.driverId) || visibleDriverNames.has(normalizeText(row.name))),
+    imports: accessScope.fullAccess ? mappedImports : mappedImports.filter((entry) => visibleBatchIds.has(entry.batchId)),
     isDemo: false,
   };
 }
@@ -314,8 +355,176 @@ function traceColumns(row: { sourceFile: string; sourceSheet: string; rowNumber:
   };
 }
 
+function normalizeDriverCode(value: string) {
+  return toStringValue(value).trim().replace(/\.0$/, "");
+}
+
+function normalizeDriverNameKey(value: string) {
+  return normalizeText(value).replace(/[^A-Z0-9]+/g, "");
+}
+
+function reliableOperationalDriverId(driverId: string, name: string) {
+  const normalizedId = normalizeDriverCode(driverId);
+  return /^\d{3,}$/.test(normalizedId) && normalizedId !== normalizeDriverNameKey(name);
+}
+
+function mapPrefaturaHistory(row: DbRow): PrefaturaHistoryRecord {
+  const mapped = mapPrefatura(row);
+  return {
+    id: toStringValue(row.id),
+    shipmentId: mapped.shipmentId,
+    routeId: mapped.routeId,
+    period: mapped.period,
+    routeDate: mapped.routeDate,
+    operation: mapped.operation,
+    driverId: mapped.driverId,
+    driverName: mapped.driverName,
+    baseLabel: mapped.baseLabel,
+    baseName: mapped.baseName,
+    baseKey: mapped.baseKey,
+    sigla: mapped.sigla,
+    plate: mapped.plate,
+    description: mapped.description,
+    qualityStatus: mapped.qualityStatus,
+  };
+}
+
+async function readRowsByIn(supabase: ServerClient, table: string, select: string, column: string, values: string[], excludeBatchId?: string) {
+  const unique = uniqueSorted(values.map(normalizeDriverCode));
+  const rows: DbRow[] = [];
+  for (let index = 0; index < unique.length; index += 500) {
+    const chunk = unique.slice(index, index + 500);
+    if (chunk.length === 0) continue;
+    let query = supabase.from(table).select(select).in(column, chunk);
+    if (excludeBatchId) query = query.neq("batch_id", excludeBatchId);
+    const { data, error } = await query;
+    if (error) throw new Error(`${table}: ${error.message}`);
+    rows.push(...((data ?? []) as unknown as DbRow[]));
+  }
+  return rows;
+}
+
+async function loadDriverMaster(supabase: ServerClient): Promise<DriverMasterRecord[]> {
+  const [bases, alcDrivers, driverRecords] = await Promise.all([
+    readTable(supabase, "operational_bases", "base_key,base_name,sigla", "base_key"),
+    readTable(supabase, "alc_drivers", "driver_code,full_name,base_key,sigla", "full_name"),
+    readTable(supabase, "driver_records", "driver_id,name", "name"),
+  ]);
+  const baseNames = new Map(bases.map((row) => [toStringValue(row.base_key), { name: toStringValue(row.base_name), sigla: toStringValue(row.sigla) }]));
+  const drivers = new Map<string, DriverMasterRecord>();
+  for (const row of alcDrivers) {
+    const driverId = normalizeDriverCode(toStringValue(row.driver_code));
+    if (!driverId) continue;
+    const baseKey = toStringValue(row.base_key);
+    const base = baseNames.get(baseKey);
+    drivers.set(driverId, {
+      driverId,
+      driverIdReliable: reliableOperationalDriverId(driverId, toStringValue(row.full_name)),
+      name: toStringValue(row.full_name),
+      baseKey,
+      baseName: base?.name || baseKey,
+      sigla: toStringValue(row.sigla) || base?.sigla || "",
+    });
+  }
+  for (const row of driverRecords) {
+    const driverId = normalizeDriverCode(toStringValue(row.driver_id));
+    if (!driverId || drivers.has(driverId)) continue;
+    drivers.set(driverId, { driverId, driverIdReliable: reliableOperationalDriverId(driverId, toStringValue(row.name)), name: toStringValue(row.name), baseKey: "", baseName: "", sigla: "" });
+  }
+  return [...drivers.values()];
+}
+
+async function loadPrefaturaHistory(supabase: ServerClient, batchId: string, rows: PrefaturaRecord[]) {
+  const select = "id,batch_id,shipment_id,route_id,operation,period,route_date,base_label,base_name,base_key,sigla,driver_id,driver_name,plate,description,quality_status";
+  const [byShipment, byRoute, byDriver] = await Promise.all([
+    readRowsByIn(supabase, "prefatura_records", select, "shipment_id", rows.map((row) => row.shipmentId), batchId),
+    readRowsByIn(supabase, "prefatura_records", select, "route_id", rows.map((row) => row.routeId), batchId),
+    readRowsByIn(supabase, "prefatura_records", select, "driver_id", rows.map((row) => row.driverId), batchId),
+  ]);
+  const unique = new Map<string, DbRow>();
+  for (const row of [...byShipment, ...byRoute, ...byDriver]) unique.set(toStringValue(row.id), row);
+  return [...unique.values()].map(mapPrefaturaHistory);
+}
+
+function prefaturaInsertRow(batchId: string, row: PrefaturaRecord) {
+  const rowFt = rowFortnight(row.period, row.routeDate);
+  return {
+    batch_id: batchId,
+    shipment_id: row.shipmentId,
+    route_id: row.routeId,
+    operation: row.operation,
+    period: row.period,
+    fortnight: rowFt,
+    month: monthFromFortnight(rowFt),
+    route_date: row.routeDate,
+    base_label: row.baseLabel,
+    base_name: row.baseName,
+    base_key: row.baseKey,
+    sigla: row.sigla,
+    driver_id: row.driverId,
+    driver_name: row.driverName,
+    plate: row.plate,
+    description: row.description,
+    value: row.value,
+    quality_status: row.qualityStatus ?? "PENDING",
+    enrichment_source: row.enrichmentSource || null,
+    base_source: row.baseSource || null,
+    driver_name_source: row.driverNameSource || null,
+    driver_id_source: row.driverIdSource || null,
+    enriched_at: row.enrichmentSource ? new Date().toISOString() : null,
+    original_payload: row,
+    ...traceColumns(row),
+  };
+}
+
+function existingPrefaturaMatch(row: PrefaturaRecord, exact: Map<string, PrefaturaHistoryRecord>, byShipment: Map<string, PrefaturaHistoryRecord[]>) {
+  const exactMatch = exact.get(prefaturaIdentityKey(row));
+  if (exactMatch) return exactMatch;
+  const candidates = (byShipment.get(normalizeDriverCode(row.shipmentId)) ?? []).filter((candidate) => {
+    if (candidate.operation && row.operation && candidate.operation !== row.operation) return false;
+    if (candidate.routeId && row.routeId && candidate.routeId !== row.routeId) return false;
+    if (candidate.period && row.period && candidate.period !== row.period) return false;
+    return true;
+  });
+  return candidates.length === 1 ? candidates[0] : null;
+}
+
+async function persistPrefaturaRows(supabase: ServerClient, batchId: string, rows: PrefaturaRecord[]) {
+  if (rows.length === 0) return { inserted: 0, updated: 0 };
+  const history = await loadPrefaturaHistory(supabase, batchId, rows);
+  const exact = new Map(history.map((row) => [prefaturaIdentityKey(row), row]));
+  const byShipment = new Map<string, PrefaturaHistoryRecord[]>();
+  for (const row of history) {
+    const key = normalizeDriverCode(row.shipmentId);
+    if (!key) continue;
+    byShipment.set(key, [...(byShipment.get(key) ?? []), row]);
+  }
+
+  const inserts: DbRow[] = [];
+  let updated = 0;
+  for (const row of rows) {
+    const existing = existingPrefaturaMatch(row, exact, byShipment);
+    if (!existing?.id) {
+      inserts.push(prefaturaInsertRow(batchId, row));
+      continue;
+    }
+    const patch = prefaturaMergePatch(existing, row);
+    if (Object.keys(patch).length === 0) continue;
+    const { error } = await supabase.from("prefatura_records").update(patch).eq("id", existing.id);
+    if (error) throw new Error(`prefatura_records: ${error.message}`);
+    updated += 1;
+  }
+  await insertRows(supabase, "prefatura_records", inserts);
+  return { inserted: inserts.length, updated };
+}
+
 async function persistBatch(supabase: ServerClient, profile: AuthProfile, batch: ParsedBatch, files: UploadedFilePayload[]) {
   const batchId = batch.entry.batchId;
+  const prefaturaHistory = await loadPrefaturaHistory(supabase, batchId, batch.prefatura);
+  const prefaturaRows = enrichPrefaturaRows(batch.prefatura, {
+    drivers: await loadDriverMaster(supabase),
+    history: prefaturaHistory,
+  });
   const fortnights = batchFortnights(batch);
   const months = uniqueSorted(fortnights.map(monthFromFortnight));
   const fortnight = fortnights.length === 1 ? fortnights[0] : null;
@@ -381,33 +590,7 @@ async function persistBatch(supabase: ServerClient, profile: AuthProfile, batch:
     })),
   );
 
-  await insertRows(
-    supabase,
-    "prefatura_records",
-    batch.prefatura.map((row) => {
-      const rowFt = rowFortnight(row.period, row.routeDate);
-      return {
-        batch_id: batchId,
-        shipment_id: row.shipmentId,
-        route_id: row.routeId,
-        operation: row.operation,
-        period: row.period,
-        fortnight: rowFt,
-        month: monthFromFortnight(rowFt),
-        route_date: row.routeDate,
-        base_label: row.baseLabel,
-        base_name: row.baseName,
-        base_key: row.baseKey,
-        sigla: row.sigla,
-        driver_name: row.driverName,
-        plate: row.plate,
-        description: row.description,
-        value: row.value,
-        original_payload: row,
-        ...traceColumns(row),
-      };
-    }),
-  );
+  await persistPrefaturaRows(supabase, batchId, prefaturaRows);
 
   await insertRows(
     supabase,
@@ -500,8 +683,8 @@ async function persistBatch(supabase: ServerClient, profile: AuthProfile, batch:
 export async function GET() {
   try {
     const supabase = await createClient();
-    await requireProfile(supabase);
-    return NextResponse.json(await loadDashboardData(supabase));
+    const profile = await requireProfile(supabase);
+    return NextResponse.json(await loadDashboardData(supabase, profile));
   } catch (error) {
     return jsonError(error instanceof Error ? error.message : "Falha ao carregar dados online.", 401);
   }
@@ -540,7 +723,7 @@ export async function POST(request: Request) {
       await persistBatch(supabase, profile, batch, batchFiles);
     }
 
-    return NextResponse.json(await loadDashboardData(supabase));
+    return NextResponse.json(await loadDashboardData(supabase, profile));
   } catch (error) {
     return jsonError(error instanceof Error ? error.message : "Falha ao salvar dados online.", 500);
   }
@@ -564,7 +747,7 @@ export async function DELETE(request: Request) {
     const { error: deleteError } = await deleteQuery;
     if (deleteError) throw new Error(`import_batches: ${deleteError.message}`);
 
-    return NextResponse.json(batchId ? await loadDashboardData(supabase) : EMPTY_DATA);
+    return NextResponse.json(batchId ? await loadDashboardData(supabase, profile) : EMPTY_DATA);
   } catch (error) {
     return jsonError(error instanceof Error ? error.message : "Falha ao excluir dados online.", 500);
   }

@@ -82,6 +82,14 @@ function periodFromSource(sourceFile: string, sheetName: string, batchName: stri
   return parseCompetence({ value, sourceFile, sourceSheet: sheetName, batchName, routeDate })?.fortnight ?? "";
 }
 
+function firstId(values: RowMap, headers: string[]) {
+  for (const header of headers) {
+    const id = asId(values[headerKey(header)]);
+    if (id) return id;
+  }
+  return "";
+}
+
 function parseWorkbook(bytes: Uint8Array, sourceFile: string, batchName: string, batchId: string) {
   const workbook = XLSX.read(bytes, { type: "array", cellDates: true });
   const hierarchy: HierarchyRecord[] = [];
@@ -117,7 +125,7 @@ function parseWorkbook(bytes: Uint8Array, sourceFile: string, batchName: string,
       continue;
     }
 
-    headerIndex = findHeader(matrix, ["ID DO PACOTE", "MOTORISTA", "VALOR"]);
+    headerIndex = findHeader(matrix, ["ID DO PACOTE", "VALOR"]);
     const operation = operationFromSheet(sheetName);
     if (headerIndex >= 0 && operation) {
       for (const row of rowsFrom(matrix, headerIndex)) {
@@ -134,6 +142,7 @@ function parseWorkbook(bytes: Uint8Array, sourceFile: string, batchName: string,
           baseName: base.name,
           baseKey: base.baseKey,
           sigla: base.sigla,
+          driverId: firstId(row.values, ["ID DO MOTORISTA", "ID MOTORISTA", "MOTORISTA ID", "DRIVER ID", "ID DO TRANSPORTADOR", "ID TRANSPORTADOR", "SHP LG DRIVER ID"]),
           driverName: cleanText(row.values.MOTORISTA),
           plate: cleanText(row.values.PLACA),
           description: cleanText(row.values.DESCRICAO),

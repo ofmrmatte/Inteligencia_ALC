@@ -1,7 +1,10 @@
 import { hasFullAccess, type AuthProfile } from "@/lib/auth";
+import { getAllowedBaseIds } from "@/lib/access-scope";
+import { getUserAccessScope } from "@/lib/access-scope-server";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { getCurrentProfile } from "@/lib/auth-server";
 import { normalizeDriverKey, pnrStatusToTicket, type DriverTicket } from "@/lib/driver-portal";
+import { normalizeText } from "@/lib/normalize";
 
 type DbRow = Record<string, unknown>;
 
@@ -22,6 +25,12 @@ export function arrayValue(value: unknown): string[] {
   return Array.isArray(value) ? value.map(textValue).filter(Boolean) : [];
 }
 
+function isReliableDriverName(name: string, driverCode: string) {
+  const normalizedName = normalizeDriverKey(name);
+  const normalizedCode = normalizeDriverKey(driverCode);
+  return Boolean(name.trim() && normalizedName && normalizedName !== normalizedCode && !/^\d+$/.test(normalizedName));
+}
+
 export function isSuperAdminProfile(profile: Pick<AuthProfile, "role" | "globalAccess">) {
   return hasFullAccess(profile) || profile.role === "super_admin";
 }
@@ -34,18 +43,12 @@ export async function requirePortalProfile() {
 
 export async function adminBaseScope(profile: AuthProfile) {
   if (isSuperAdminProfile(profile)) return null;
-  const admin = createAdminClient();
-  const { data, error } = await admin
-    .from("admin_base_assignments")
-    .select("base_key")
-    .eq("admin_id", profile.id)
-    .eq("active", true);
-  if (error) throw new Error(error.message);
-  return [...new Set([...profile.baseScope, ...((data ?? []) as DbRow[]).map((row) => textValue(row.base_key))].filter(Boolean))];
+  const scope = await getUserAccessScope(profile);
+  return getAllowedBaseIds(scope) ?? null;
 }
 
 export function assertBaseAccess(baseKey: string, allowedBases: string[] | null) {
-  if (allowedBases && !allowedBases.includes(baseKey)) throw new Error("Acesso negado para a base solicitada.");
+  if (allowedBases && !allowedBases.includes(normalizeText(baseKey))) throw new Error("Acesso negado para a base solicitada.");
 }
 
 export async function syncOperationalBasesAndDrivers() {
@@ -53,7 +56,7 @@ export async function syncOperationalBasesAndDrivers() {
   const [{ data: hierarchy }, { data: driverRows }, { data: prefRows }] = await Promise.all([
     admin.from("hierarchy_scopes").select("base_key,base_name,sigla"),
     admin.from("driver_records").select("driver_id,name,source_file,last_updated"),
-    admin.from("prefatura_records").select("driver_name,base_key,base_name,sigla").not("driver_name", "is", null),
+    admin.from("prefatura_records").select("driver_id,driver_name,base_key,base_name,sigla,created_at").not("driver_id", "is", null),
   ]);
 
   const bases = new Map<string, { base_key: string; base_name: string; sigla: string }>();
@@ -70,23 +73,39 @@ export async function syncOperationalBasesAndDrivers() {
     if (error) throw new Error(error.message);
   }
 
-  const drivers = new Map<string, { driver_code: string; full_name: string; base_key: string; sigla: string; portal_login: string }>();
+  const drivers = new Map<string, { driver_code: string; full_name: string; base_key: string; sigla: string; portal_login: string; operational_status: string; portal_eligible: boolean; last_operational_seen_at?: string; source_updated_at?: string; source_payload: DbRow }>();
   for (const row of (driverRows ?? []) as DbRow[]) {
     const code = textValue(row.driver_id);
     const name = textValue(row.name);
-    if (code && name) drivers.set(code, { driver_code: code, full_name: name, base_key: "", sigla: "", portal_login: `${normalizeDriverKey(code).toLowerCase()}@motorista.alc.local` });
+    if (!code) continue;
+    drivers.set(code, {
+      driver_code: code,
+      full_name: isReliableDriverName(name, code) ? name : code,
+      base_key: "",
+      sigla: "",
+      portal_login: `${normalizeDriverKey(code).toLowerCase()}@motorista.alc.local`,
+      operational_status: "unknown",
+      portal_eligible: false,
+      source_updated_at: textValue(row.last_updated) || undefined,
+      source_payload: { source: "driver_records", source_file: row.source_file },
+    });
   }
   for (const row of (prefRows ?? []) as DbRow[]) {
+    const code = textValue(row.driver_id);
+    if (!code) continue;
     const name = textValue(row.driver_name);
-    const code = normalizeDriverKey(name);
-    if (!name || !code) continue;
     const current = drivers.get(code);
     drivers.set(code, {
       driver_code: code,
-      full_name: current?.full_name || name,
+      full_name: current && isReliableDriverName(current.full_name, code) ? current.full_name : isReliableDriverName(name, code) ? name : code,
       base_key: current?.base_key || textValue(row.base_key),
       sigla: current?.sigla || textValue(row.sigla),
       portal_login: `${code.toLowerCase()}@motorista.alc.local`,
+      operational_status: "active",
+      portal_eligible: true,
+      last_operational_seen_at: textValue(row.created_at) || undefined,
+      source_updated_at: current?.source_updated_at,
+      source_payload: { source: "prefatura_records" },
     });
   }
   if (drivers.size) {
@@ -100,7 +119,9 @@ export async function syncOperationalBasesAndDrivers() {
 
 export async function loadKnownDrivers(allowedBases: string[] | null = null) {
   const admin = createAdminClient();
-  let query = admin.from("alc_drivers").select("id,driver_code,full_name,base_key,sigla,status,auth_user_id,operational_bases(base_name)");
+  let query = admin
+    .from("alc_drivers")
+    .select("id,driver_code,full_name,base_key,sigla,status,portal_status,portal_eligible,operational_status,last_seen_at,last_operational_seen_at,auth_user_id,operational_bases(base_name)");
   if (allowedBases) query = query.in("base_key", allowedBases.length ? allowedBases : ["__none__"]);
   const { data, error } = await query.order("full_name", { ascending: true });
   if (error) throw new Error(error.message);
@@ -111,6 +132,11 @@ export async function loadKnownDrivers(allowedBases: string[] | null = null) {
     baseKey: textValue(row.base_key),
     sigla: textValue(row.sigla),
     status: textValue(row.status),
+    portalStatus: textValue(row.portal_status) || textValue(row.status),
+    portalEligible: Boolean(row.portal_eligible),
+    operationalStatus: textValue(row.operational_status) || "unknown",
+    lastSeenAt: textValue(row.last_seen_at),
+    lastOperationalSeenAt: textValue(row.last_operational_seen_at),
     authUserId: textValue(row.auth_user_id),
     baseName: textValue((row.operational_bases as DbRow | null)?.base_name) || textValue(row.base_key),
   }));
@@ -132,7 +158,7 @@ export async function loadTickets(options: { allowedBases?: string[] | null; dri
   const driverCode = options.driverCode ? normalizeDriverKey(options.driverCode) : "";
   const allowedBases = options.allowedBases ?? null;
   const [prefatura, pnr, risk] = await Promise.all([
-    admin.from("prefatura_records").select("id,shipment_id,route_id,operation,route_date,base_key,base_name,sigla,driver_name,value,created_at").limit(5000),
+    admin.from("prefatura_records").select("id,shipment_id,route_id,operation,route_date,base_key,base_name,sigla,driver_id,driver_name,value,created_at").limit(5000),
     admin.from("pnr_records").select("id,shipment_id,route_id,status,case_date,base_key,sigla,driver_id,purchase_value,created_at").limit(5000),
     admin.from("risk_lm_records").select("id,shipment_id,route_id,failure_date,base_key,sigla,driver_id,gmv_brl,failure_reason,created_at").limit(5000),
   ]);
@@ -144,8 +170,9 @@ export async function loadTickets(options: { allowedBases?: string[] | null; dri
 
   for (const row of (prefatura.data ?? []) as DbRow[]) {
     const baseKey = textValue(row.base_key);
+    const code = textValue(row.driver_id);
     const driverName = textValue(row.driver_name);
-    if (!allowed(baseKey) || !driverMatches(driverName)) continue;
+    if (!allowed(baseKey) || !driverMatches(code)) continue;
     const operation = textValue(row.operation);
     const type = operation === "PNR" ? "pnr" : "pacote_perdido";
     const date = textValue(row.route_date) || textValue(row.created_at);
@@ -157,7 +184,7 @@ export async function loadTickets(options: { allowedBases?: string[] | null; dri
       baseKey,
       baseName: textValue(row.base_name) || baseKey,
       sigla: textValue(row.sigla),
-      driverCode: normalizeDriverKey(driverName),
+      driverCode: code,
       driverName,
       date,
       value: numberValue(row.value),

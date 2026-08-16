@@ -60,6 +60,7 @@ export function createDemoData(): DashboardData {
       baseName: base[1],
       baseKey: base[1],
       sigla: base[2],
+      driverId: driver.driverId,
       driverName: driver.name,
       plate: ["ABC1D23", "EFG4H56", "JKL7M89"][index % 3],
       description: operations[index % 3] === "PNR" ? "DESCONTO PNR" : `DESCONTO PACOTE PERDIDO ${operations[index % 3]}`,

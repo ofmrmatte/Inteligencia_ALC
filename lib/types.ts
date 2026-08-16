@@ -22,6 +22,7 @@ export interface PrefaturaRecord extends SourceTrace {
   baseName: string;
   baseKey: string;
   sigla: string;
+  driverId: string;
   driverName: string;
   plate: string;
   description: string;
@@ -30,7 +31,14 @@ export interface PrefaturaRecord extends SourceTrace {
   routeId: string;
   value: number;
   operation: Operation;
+  qualityStatus?: PrefaturaQualityStatus;
+  enrichmentSource?: string;
+  baseSource?: string;
+  driverNameSource?: string;
+  driverIdSource?: string;
 }
+
+export type PrefaturaQualityStatus = "COMPLETE" | "ENRICHED" | "PENDING" | "UPDATED";
 
 export interface PnrRecord extends SourceTrace {
   caseDate: string | null;
