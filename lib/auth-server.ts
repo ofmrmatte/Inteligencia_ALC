@@ -17,7 +17,7 @@ export async function getCurrentProfile(): Promise<AuthProfile | null> {
   const admin = createAdminClient();
   const { data: profile, error: profileError } = await admin
     .from("profiles")
-    .select("id,email,full_name,role,global_access,base_scope,sigla_scope,module_scope,driver_management_scope,active")
+    .select("id,email,full_name,role,global_access,base_scope,sigla_scope,xpt_scope,module_scope,driver_management_scope,active")
     .eq("id", userId)
     .maybeSingle();
 
@@ -33,6 +33,7 @@ export async function getCurrentProfile(): Promise<AuthProfile | null> {
     globalAccess: Boolean(profile.global_access) || role === "loss_admin",
     baseScope: Array.isArray(profile.base_scope) ? profile.base_scope : [],
     siglaScope: Array.isArray(profile.sigla_scope) ? profile.sigla_scope : [],
+    xptScope: Array.isArray(profile.xpt_scope) ? profile.xpt_scope : [],
     moduleScope: Array.isArray(profile.module_scope) ? profile.module_scope : [],
     driverManagementScope: Array.isArray(profile.driver_management_scope) ? profile.driver_management_scope : [],
   };
