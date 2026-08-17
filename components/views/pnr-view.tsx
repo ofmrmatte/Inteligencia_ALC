@@ -60,7 +60,7 @@ export function PnrView() {
 
   return (
     <div className="view-stack">
-      <PageIntro description="Cada ID de envio conta como um caso. A Estação de origem é conciliada com o cadastro mestre SVC + Base + Filial XPT; em uploads diários repetidos, prevalece o lote mais recente." chips={[`${status.length} status encontrados`, `${formatNumber(scoped.pnr.length - rows.length)} repetições consolidadas`]} />
+      <PageIntro description="Cada ID de envio conta como um caso. A Estação de origem é conciliada com o cadastro mestre SVC + Base; o XPT permanece uma referência regional independente e é exibido separadamente. Em uploads diários repetidos, prevalece o lote mais recente." chips={[`${status.length} status encontrados`, `${formatNumber(scoped.pnr.length - rows.length)} repetições consolidadas`]} />
       <div className="kpi-grid kpi-grid--four">
         <KpiCard label="Casos únicos" value={formatNumber(rows.length)} detail="IDs de envio" icon={<Boxes size={19} />} />
         <KpiCard label="Valor de compra" value={formatCurrency(value)} detail="Base dos casos PNR" icon={<BadgeDollarSign size={19} />} tone="red" />
@@ -98,10 +98,10 @@ export function PnrView() {
                 Status
                 <ColumnSelectFilter ariaLabel="Filtrar casos PNR por status" value={statusFilter} options={statusOptions} onChange={setStatusFilter} allLabel="Todos os status" />
               </th>
-              <th>Data</th><th>Base de origem</th><th>Motorista</th><th>Rota</th><th className="align-right">Valor</th>
+              <th>Data</th><th>Base de origem</th><th>XPT</th><th>Motorista</th><th>Rota</th><th className="align-right">Valor</th>
             </tr>
           </thead>
-          <tbody>{tableRows.slice(0, 50).map((row) => <tr key={`${row.batchId}-${row.shipmentId}`}><td><strong className="mono">{row.shipmentId}</strong><small className="cell-subtitle">{row.sourceFile}</small></td><td><StatusBadge tone={/PROCEDENTE|APROVADO/.test(normalizeText(row.status)) ? "green" : /ANALISE|PENDENTE/.test(normalizeText(row.status)) ? "amber" : "neutral"}>{pnrStatusLabel(row.status)}</StatusBadge></td><td>{row.caseDate ? new Date(`${row.caseDate}T12:00:00`).toLocaleDateString("pt-BR") : "—"}</td><td><strong>{row.originStation || "—"}</strong>{row.xptCode ? <small className="cell-subtitle">Filial XPT {row.xptCode}</small> : null}</td><td className="mono">{row.driverId || "—"}</td><td className="mono">{row.routeId || "—"}</td><td className="align-right"><strong>{formatCurrency(row.purchaseValue)}</strong></td></tr>)}</tbody>
+          <tbody>{tableRows.slice(0, 50).map((row) => <tr key={`${row.batchId}-${row.shipmentId}`}><td><strong className="mono">{row.shipmentId}</strong><small className="cell-subtitle">{row.sourceFile}</small></td><td><StatusBadge tone={/PROCEDENTE|APROVADO/.test(normalizeText(row.status)) ? "green" : /ANALISE|PENDENTE/.test(normalizeText(row.status)) ? "amber" : "neutral"}>{pnrStatusLabel(row.status)}</StatusBadge></td><td>{row.caseDate ? new Date(`${row.caseDate}T12:00:00`).toLocaleDateString("pt-BR") : "—"}</td><td><strong>{row.originStation || "—"}</strong></td><td className="mono">{row.xptCode || "—"}</td><td className="mono">{row.driverId || "—"}</td><td className="mono">{row.routeId || "—"}</td><td className="align-right"><strong>{formatCurrency(row.purchaseValue)}</strong></td></tr>)}</tbody>
         </TableWrap>
       </Panel>
     </div>
