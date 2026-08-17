@@ -90,12 +90,24 @@ function firstId(values: RowMap, headers: string[]) {
   return "";
 }
 
+function decodeCsvText(bytes: Uint8Array) {
+  try {
+    return new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+  } catch {
+    // Alguns exports antigos podem chegar em Windows-1252. O fallback evita
+    // corromper acentos enquanto cleanText ainda trata eventual mojibake legado.
+    return new TextDecoder("windows-1252").decode(bytes);
+  }
+}
+
 function parseWorkbook(bytes: Uint8Array, sourceFile: string, batchName: string, batchId: string) {
   const isCsv = /\.csv$/i.test(sourceFile);
-  // CSVs exportados pelo Mercado Livre usam ponto decimal (ex.: R$ 55.00).
-  // Mantemos o CSV em modo raw para impedir que o SheetJS aplique inferência
-  // regional e transforme 55.00 em 5500 antes da normalização pt-BR.
-  const workbook = XLSX.read(bytes, { type: "array", cellDates: true, raw: isCsv });
+  // CSVs do Mercado Livre precisam preservar tanto o ponto decimal quanto o
+  // UTF-8 original. Decodificar explicitamente antes do SheetJS evita 55.00 ->
+  // 5500 e também evita "revisão" -> "revisÃ£o".
+  const workbook = isCsv
+    ? XLSX.read(decodeCsvText(bytes), { type: "string", cellDates: true, raw: true })
+    : XLSX.read(bytes, { type: "array", cellDates: true });
   const hierarchy: HierarchyRecord[] = [];
   const prefatura: PrefaturaRecord[] = [];
   const pnr: PnrRecord[] = [];
