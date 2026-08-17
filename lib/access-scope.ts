@@ -6,6 +6,8 @@ export interface AccessScope {
   fullAccess: boolean;
   allowedBaseKeys: string[];
   allowedSiglas: string[];
+  allowedPairs: string[];
+  safeSiglaOnly: string[];
 }
 
 export interface ScopedRecord {
@@ -17,15 +19,23 @@ function uniqueNormalized(values: Array<string | null | undefined>) {
   return [...new Set(values.map(normalizeText).filter(Boolean))];
 }
 
+function pair(sigla: string | null | undefined, baseKey: string | null | undefined) {
+  const normalizedSigla = normalizeText(sigla);
+  const normalizedBase = normalizeText(baseKey);
+  return normalizedSigla && normalizedBase ? `${normalizedSigla}|${normalizedBase}` : "";
+}
+
 export function buildAccessScope(
   profile: AuthProfile,
-  extra: { baseKeys?: string[]; siglas?: string[] } = {},
+  extra: { baseKeys?: string[]; siglas?: string[]; pairs?: string[]; safeSiglaOnly?: string[] } = {},
 ): AccessScope {
   return {
     profileId: profile.id,
     fullAccess: hasFullAccess(profile),
     allowedBaseKeys: uniqueNormalized([...(profile.baseScope ?? []), ...(extra.baseKeys ?? [])]),
     allowedSiglas: uniqueNormalized([...(profile.siglaScope ?? []), ...(extra.siglas ?? [])]),
+    allowedPairs: uniqueNormalized(extra.pairs ?? []),
+    safeSiglaOnly: uniqueNormalized(extra.safeSiglaOnly ?? []),
   };
 }
 
@@ -44,7 +54,14 @@ export function canAccessScopedRecord(scope: AccessScope, record: ScopedRecord) 
   const baseKey = normalizeText(record.baseKey);
   const sigla = normalizeText(record.sigla);
   if (!baseKey && !sigla) return false;
-  return Boolean((baseKey && scope.allowedBaseKeys.includes(baseKey)) || (sigla && scope.allowedSiglas.includes(sigla)));
+
+  // Registros antigos de PNR/Risco podem ter BASE_KEY igual à própria SVC.
+  // Só aceitamos esse fallback quando a SVC identifica uma única base no cadastro mestre.
+  if (sigla && (!baseKey || baseKey === sigla)) return scope.safeSiglaOnly.includes(sigla);
+
+  if (baseKey && sigla) return scope.allowedPairs.includes(pair(sigla, baseKey));
+  if (baseKey) return scope.allowedBaseKeys.includes(baseKey);
+  return Boolean(sigla && scope.safeSiglaOnly.includes(sigla));
 }
 
 export function filterByAccessScope<T extends ScopedRecord>(scope: AccessScope, records: T[]) {
