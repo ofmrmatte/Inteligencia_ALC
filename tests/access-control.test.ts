@@ -1,9 +1,9 @@
 import { describe, expect, it } from "vitest";
 import { canAccessDriverManagementTab, canAccessSection, driverManagementTabsForProfile, modulesForProfile } from "@/lib/access-control";
-import type { AuthProfile } from "@/lib/auth";
+import { canManageImports, canManageUsers, hasFullAccess, type AuthProfile } from "@/lib/auth";
 
 function profile(role: AuthProfile["role"], moduleScope?: string[], driverManagementScope?: string[]): AuthProfile {
-  return { id: `${role}-1`, email: `${role}@alc.test`, fullName: role, role, globalAccess: role === "director" || role === "developer" || role === "loss_supervisor", baseScope: [], siglaScope: [], moduleScope, driverManagementScope };
+  return { id: `${role}-1`, email: `${role}@alc.test`, fullName: role, role, globalAccess: role === "director" || role === "developer" || role === "loss_supervisor" || role === "loss_admin", baseScope: [], siglaScope: [], moduleScope, driverManagementScope };
 }
 
 describe("matriz de acesso do painel", () => {
@@ -37,13 +37,16 @@ describe("matriz de acesso do painel", () => {
     expect(driverManagementTabsForProfile(current)).toEqual([]);
   });
 
-  it("mantém Administração Loss restrita aos módulos operacionais e sem acesso global", () => {
+  it("mantém Administração Loss nos módulos operacionais, com todas as bases e permissão de importar", () => {
     const current = profile("loss_admin", ["visao-geral", "gestao-pnr", "risco-lm", "perfil"], []);
     expect(modulesForProfile(current)).toEqual(["visao-geral", "gestao-pnr", "risco-lm", "perfil"]);
     expect(canAccessSection(current, "risco-lm")).toBe(true);
     expect(canAccessSection(current, "configuracoes")).toBe(false);
     expect(canAccessSection(current, "gestao-motoristas")).toBe(false);
     expect(driverManagementTabsForProfile(current)).toEqual([]);
+    expect(hasFullAccess(current)).toBe(true);
+    expect(canManageImports(current)).toBe(true);
+    expect(canManageUsers(current)).toBe(false);
   });
 
   it("limita Supervisor de Administração ao módulo Gestão de Motoristas", () => {
