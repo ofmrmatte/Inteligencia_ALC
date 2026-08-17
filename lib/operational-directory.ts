@@ -86,7 +86,21 @@ function buildDirectory(payload: OperationalDirectoryPayload) {
     return matches.length === 1 ? matches[0] : null;
   };
 
-  return { activeUnits, driverUnit, fromExplicit, fromSigla };
+  const fromSourceSigla = (sigla: string, driverId: string, inferredDrivers: Map<string, OperationalUnit>) => {
+    const siglaKey = key(sigla);
+    if (!siglaKey) return inferredDrivers.get(driverId) ?? null;
+    const matches = bySigla.get(siglaKey) ?? [];
+    if (matches.length === 1) return matches[0];
+    if (matches.length > 1) {
+      const mapped = inferredDrivers.get(driverId);
+      return mapped && key(mapped.sigla) === siglaKey ? mapped : null;
+    }
+    // Quando a planilha informou uma estação/facility que não existe no
+    // cadastro mestre, ela fica pendente. Não trocamos por outra SVC.
+    return null;
+  };
+
+  return { activeUnits, driverUnit, fromExplicit, fromSigla, fromSourceSigla };
 }
 
 function hierarchyRows(units: OperationalUnit[]): HierarchyRecord[] {
@@ -148,27 +162,35 @@ export function applyOperationalDirectory(data: DashboardData, payload: Operatio
   if (!payload.units.length) return data;
   const directory = buildDirectory(payload);
 
-  // Primeiro usamos bases explícitas da pré-fatura para ampliar o mapa motorista → unidade.
   const inferredDrivers = new Map(directory.driverUnit);
   for (const row of data.prefatura) {
     const unit = directory.fromExplicit(row.sigla, row.baseKey, row.unitKey) ?? directory.fromSigla(row.sigla);
     if (unit && row.driverId && !inferredDrivers.has(row.driverId)) inferredDrivers.set(row.driverId, unit);
   }
 
-  const resolvePrefatura = (row: PrefaturaRecord) =>
-    directory.fromExplicit(row.sigla, row.baseKey, row.unitKey)
-    ?? inferredDrivers.get(row.driverId)
-    ?? directory.fromSigla(row.sigla);
+  const resolvePrefatura = (row: PrefaturaRecord) => {
+    const explicit = directory.fromExplicit(row.sigla, row.baseKey, row.unitKey);
+    if (explicit) return explicit;
+    const sourceSigla = key(row.sigla);
+    if (sourceSigla) return directory.fromSourceSigla(sourceSigla, row.driverId, inferredDrivers);
+    return inferredDrivers.get(row.driverId) ?? null;
+  };
 
-  const resolvePnr = (row: PnrRecord) =>
-    inferredDrivers.get(row.driverId)
-    ?? directory.fromExplicit(row.sigla, row.baseKey, row.unitKey)
-    ?? directory.fromSigla(row.sigla || row.originStation);
+  const resolvePnr = (row: PnrRecord) => {
+    const explicit = directory.fromExplicit(row.sigla, row.baseKey, row.unitKey);
+    if (explicit) return explicit;
+    const sourceStation = key(row.originStation);
+    if (sourceStation) return directory.fromSourceSigla(sourceStation, row.driverId, inferredDrivers);
+    return directory.fromSourceSigla(row.sigla, row.driverId, inferredDrivers);
+  };
 
-  const resolveRisk = (row: RiskRecord) =>
-    inferredDrivers.get(row.driverId)
-    ?? directory.fromExplicit(row.sigla, row.baseKey, row.unitKey)
-    ?? directory.fromSigla(row.sigla || row.facilityId);
+  const resolveRisk = (row: RiskRecord) => {
+    const explicit = directory.fromExplicit(row.sigla, row.baseKey, row.unitKey);
+    if (explicit) return explicit;
+    const sourceStation = key(row.facilityId);
+    if (sourceStation) return directory.fromSourceSigla(sourceStation, row.driverId, inferredDrivers);
+    return directory.fromSourceSigla(row.sigla, row.driverId, inferredDrivers);
+  };
 
   const prefatura = data.prefatura.flatMap((row) => {
     const unit = resolvePrefatura(row);
