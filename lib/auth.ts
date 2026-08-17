@@ -32,6 +32,7 @@ export interface AuthProfile {
   globalAccess: boolean;
   baseScope: string[];
   siglaScope: string[];
+  xptScope?: string[];
   moduleScope?: string[];
   driverManagementScope?: string[];
 }
