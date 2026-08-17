@@ -1,7 +1,8 @@
 "use client";
 
 import { RotateCcw } from "lucide-react";
-import { filterOptions, formatFortnightLabel, formatMonthLabel } from "@/lib/metrics";
+import { filterOptions } from "@/lib/dashboard-scope";
+import { formatFortnightLabel, formatMonthLabel } from "@/lib/metrics";
 import { useDashboardStore } from "@/lib/store";
 
 function SelectFilter({ label, value, options, allLabel, onChange, formatOption }: { label: string; value: string; options: string[]; allLabel: string; onChange: (value: string) => void; formatOption?: (value: string) => string }) {
