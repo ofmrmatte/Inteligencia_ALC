@@ -19,7 +19,11 @@ function normalized(value: unknown) {
 
 function stringArray(value: unknown) {
   const values = Array.isArray(value) ? value : typeof value === "string" ? value.split(/[\n,;]+/) : [];
-  return [...new Set(values.map(normalized).filter(Boolean))];
+  return [...new Set(values.map((item) => text(item)).filter(Boolean))];
+}
+
+function normalizedStringArray(value: unknown) {
+  return [...new Set(stringArray(value).map(normalized).filter(Boolean))];
 }
 
 function jsonError(message: string, status = 400) {
@@ -36,7 +40,7 @@ async function requireManager() {
 async function loadPayload() {
   const admin = createAdminClient();
   const [{ data: xptRows, error: xptError }, { data: unitRows, error: unitError }] = await Promise.all([
-    admin.from("operational_xpts").select("xpt_code,active,updated_at").order("xpt_code", { ascending: true }),
+    admin.from("operational_xpts").select("xpt_code,coordinator_name,supervisors,active,updated_at").order("xpt_code", { ascending: true }),
     admin.from("operational_units").select("sigla,xpt_code,active").order("sigla", { ascending: true }),
   ]);
   if (xptError) throw new Error(xptError.message);
@@ -55,6 +59,8 @@ async function loadPayload() {
     const xptCode = normalized(row.xpt_code);
     return {
       xptCode,
+      coordinator: text(row.coordinator_name),
+      supervisors: stringArray(row.supervisors).sort((a, b) => a.localeCompare(b, "pt-BR")),
       svcSiglas: [...(byXpt.get(xptCode) ?? new Set<string>())].sort((a, b) => a.localeCompare(b, "pt-BR")),
       active: row.active !== false,
     };
@@ -82,26 +88,17 @@ async function replaceRegionalLinks(originalXptCode: string | null, xptCode: str
   await validateSvcSiglas(svcSiglas);
 
   if (originalXptCode) {
-    const { error } = await admin
-      .from("operational_units")
-      .update({ xpt_code: null, updated_at: now })
-      .eq("xpt_code", originalXptCode);
+    const { error } = await admin.from("operational_units").update({ xpt_code: null, updated_at: now }).eq("xpt_code", originalXptCode);
     if (error) throw new Error(error.message);
   }
 
   if (originalXptCode !== xptCode) {
-    const { error } = await admin
-      .from("operational_units")
-      .update({ xpt_code: null, updated_at: now })
-      .eq("xpt_code", xptCode);
+    const { error } = await admin.from("operational_units").update({ xpt_code: null, updated_at: now }).eq("xpt_code", xptCode);
     if (error) throw new Error(error.message);
   }
 
   if (svcSiglas.length) {
-    const { error } = await admin
-      .from("operational_units")
-      .update({ xpt_code: xptCode, updated_at: now })
-      .in("sigla", svcSiglas);
+    const { error } = await admin.from("operational_units").update({ xpt_code: xptCode, updated_at: now }).in("sigla", svcSiglas);
     if (error) throw new Error(error.message);
   }
 }
@@ -123,12 +120,16 @@ export async function POST(request: Request) {
     await requireManager();
     const body = (await request.json()) as DbRow;
     const xptCode = normalized(body.xptCode ?? body.xpt_code);
-    const svcSiglas = stringArray(body.svcSiglas ?? body.svc_siglas);
+    const coordinator = text(body.coordinator ?? body.coordinator_name);
+    const supervisors = stringArray(body.supervisors);
+    const svcSiglas = normalizedStringArray(body.svcSiglas ?? body.svc_siglas);
     if (!xptCode) throw new Error("Informe o código do XPT.");
 
     const admin = createAdminClient();
     const { error } = await admin.from("operational_xpts").insert({
       xpt_code: xptCode,
+      coordinator_name: coordinator || null,
+      supervisors,
       active: body.active !== false,
       updated_at: new Date().toISOString(),
     });
@@ -149,14 +150,19 @@ export async function PATCH(request: Request) {
     const body = (await request.json()) as DbRow;
     const originalXptCode = normalized(body.originalXptCode ?? body.original_xpt_code ?? body.xptCode ?? body.xpt_code);
     const xptCode = normalized(body.xptCode ?? body.xpt_code);
-    const svcSiglas = stringArray(body.svcSiglas ?? body.svc_siglas);
+    const coordinator = text(body.coordinator ?? body.coordinator_name);
+    const supervisors = stringArray(body.supervisors);
+    const svcSiglas = normalizedStringArray(body.svcSiglas ?? body.svc_siglas);
     if (!originalXptCode || !xptCode) throw new Error("XPT original ou novo código não informado.");
 
     const admin = createAdminClient();
-    const { error } = await admin
-      .from("operational_xpts")
-      .update({ xpt_code: xptCode, active: body.active !== false, updated_at: new Date().toISOString() })
-      .eq("xpt_code", originalXptCode);
+    const { error } = await admin.from("operational_xpts").update({
+      xpt_code: xptCode,
+      coordinator_name: coordinator || null,
+      supervisors,
+      active: body.active !== false,
+      updated_at: new Date().toISOString(),
+    }).eq("xpt_code", originalXptCode);
     if (error) throw new Error(error.code === "23505" ? "Já existe outro XPT com este código." : error.message);
 
     await replaceRegionalLinks(originalXptCode, xptCode, svcSiglas);
