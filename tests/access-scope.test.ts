@@ -35,6 +35,14 @@ describe("escopo central de acesso", () => {
     expect(canAccessScopedRecord(scope, { baseKey: "BASE 2" })).toBe(false);
   });
 
+  it("mantém Administração Loss restrita às bases atribuídas", () => {
+    const scope = buildAccessScope(profile("loss_admin", ["BASE LOSS 1"]));
+    expect(scope.fullAccess).toBe(false);
+    expect(canAccessBase(scope, "BASE LOSS 1")).toBe(true);
+    expect(canAccessBase(scope, "BASE LOSS 2")).toBe(false);
+    expect(canAccessScopedRecord(scope, { baseKey: null, sigla: null })).toBe(false);
+  });
+
   it("permite diretoria e super admin acessarem dados globais e sem base", () => {
     const director = buildAccessScope(profile("director"));
     const developer = buildAccessScope(profile("developer"));
