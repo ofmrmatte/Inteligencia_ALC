@@ -26,7 +26,6 @@ export function GlobalFilters() {
 
   const baseOptions = [...new Map(
     data.hierarchy
-      .filter((row) => filters.xpt === "Todos" || row.xptCode === filters.xpt)
       .filter((row) => filters.coordinator === "Todos" || row.coordinator === filters.coordinator)
       .filter((row) => row.base && row.sigla)
       .map((row) => {
@@ -56,7 +55,7 @@ export function GlobalFilters() {
     <section className="filters-bar" aria-label="Filtros globais">
       <SelectFilter label="Mês" value={filters.month} options={options.months} allLabel="Todos" onChange={(value) => setFilter("month", value)} formatOption={formatMonthLabel} />
       <SelectFilter label="Quinzena" value={filters.fortnight} options={options.fortnights} allLabel="Todas" onChange={(value) => setFilter("fortnight", value)} formatOption={formatFortnightLabel} />
-      <SelectFilter label="Filial XPT" value={filters.xpt} options={options.xpts} allLabel="Todos" onChange={(value) => setFilter("xpt", value)} />
+      <SelectFilter label="XPT" value={filters.xpt} options={options.xpts} allLabel="Todos" onChange={(value) => setFilter("xpt", value)} />
       <SelectFilter label="Coordenador" value={filters.coordinator} options={options.coordinators} allLabel="Todos" onChange={(value) => setFilter("coordinator", value)} />
       <label className="filter-control">
         <span>Base (SVC)</span>
