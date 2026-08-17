@@ -2,7 +2,8 @@
 
 import { Bar, BarChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
 import { BadgeDollarSign, Boxes, Copy, ReceiptText } from "lucide-react";
-import { duplicateGroups, prefaturaByOperation, scopeData, uniqueByShipment } from "@/lib/metrics";
+import { scopeData } from "@/lib/dashboard-scope";
+import { duplicateGroups, prefaturaByOperation, uniqueByShipment } from "@/lib/metrics";
 import { useDashboardStore } from "@/lib/store";
 import { formatCurrency, formatNumber, KpiCard, Panel, PageIntro, StatusBadge } from "@/components/ui";
 import { ChartTooltip, NoResults, TableWrap } from "./shared";
