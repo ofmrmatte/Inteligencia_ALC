@@ -101,43 +101,62 @@ function parseUserPayload(payload: DbRow, requirePassword: boolean) {
 
 async function loadBaseRows(admin: AdminClient) {
   const { data, error } = await admin
-    .from("operational_bases")
-    .select("base_key,base_name,sigla,active")
+    .from("operational_units")
+    .select("unit_key,base_key,base_name,sigla,xpt_code,coordinator_name,active")
     .eq("active", true)
+    .order("xpt_code", { ascending: true })
     .order("sigla", { ascending: true })
     .order("base_name", { ascending: true });
   if (error) throw new Error(error.message);
   return (data ?? []) as DbRow[];
 }
 
-function canonicalBaseFor(requested: string, bases: DbRow[]) {
+function canonicalBaseFor(requested: string, bases: DbRow[], siglaHints: string[] = []) {
   const normalized = normalizeText(requested);
   if (!normalized) return null;
+
+  const exactUnit = bases.filter((row) => normalizeText(row.unit_key) === normalized);
+  if (exactUnit.length === 1) return exactUnit[0];
+
   const exactBase = bases.filter((row) => normalizeText(row.base_key) === normalized);
   if (exactBase.length === 1) return exactBase[0];
+  if (exactBase.length > 1) {
+    const hints = new Set(siglaHints.map(normalizeText));
+    const hinted = exactBase.filter((row) => hints.has(normalizeText(row.sigla)));
+    if (hinted.length === 1) return hinted[0];
+  }
+
   const exactSigla = bases.filter((row) => normalizeText(row.sigla) === normalized);
   return exactSigla.length === 1 ? exactSigla[0] : null;
 }
 
-async function resolveBaseScopes(admin: AdminClient, requested: string[], preloadedBases?: DbRow[]) {
-  if (!requested.length) return { baseScope: [] as string[], siglaScope: [] as string[] };
+async function resolveBaseScopes(admin: AdminClient, requested: string[], role: UserRole, preloadedBases?: DbRow[]) {
+  if (!requested.length) return { baseScope: [] as string[], siglaScope: [] as string[], adminBaseScope: [] as string[] };
   const bases = preloadedBases ?? await loadBaseRows(admin);
   const resolved = requested.map((value) => canonicalBaseFor(value, bases));
   const unresolved = requested.filter((_, index) => !resolved[index]);
   if (unresolved.length) throw new Error(`Base(s) não reconhecida(s): ${unresolved.join(", ")}.`);
   const rows = resolved.filter((row): row is DbRow => Boolean(row));
+  const useUnitKey = role === "coordinator" || role === "supervisor";
   return {
-    baseScope: [...new Set(rows.map((row) => toStringValue(row.base_key)).filter(Boolean))],
+    baseScope: [...new Set(rows.map((row) => toStringValue(useUnitKey ? row.unit_key : row.base_key)).filter(Boolean))],
     siglaScope: [...new Set(rows.map((row) => toStringValue(row.sigla)).filter(Boolean))],
+    adminBaseScope: [...new Set(rows.map((row) => toStringValue(row.base_key)).filter(Boolean))],
   };
 }
 
-function canonicalizeStoredBaseScope(values: string[], bases: DbRow[]) {
-  return [...new Set(values.map((value) => toStringValue(canonicalBaseFor(value, bases)?.base_key) || value).filter(Boolean))];
+function canonicalizeStoredBaseScope(values: string[], siglaScope: string[], role: UserRole, bases: DbRow[]) {
+  if (!values.length) return [];
+  const result = values.map((value) => canonicalBaseFor(value, bases, siglaScope));
+  return [...new Set(result.map((row, index) => {
+    if (!row) return values[index];
+    return toStringValue(row.unit_key) || values[index];
+  }).filter(Boolean))];
 }
 
 function mapManagedUser(row: DbRow, bases: DbRow[]) {
   const role = parseRole(row.role);
+  const siglaScope = toStringArray(row.sigla_scope);
   return {
     id: toStringValue(row.id),
     email: toStringValue(row.email),
@@ -145,7 +164,7 @@ function mapManagedUser(row: DbRow, bases: DbRow[]) {
     role,
     globalAccess: fullRole(role),
     active: row.active !== false,
-    baseScope: canonicalizeStoredBaseScope(toStringArray(row.base_scope), bases),
+    baseScope: canonicalizeStoredBaseScope(toStringArray(row.base_scope), siglaScope, role, bases),
     moduleScope: toStringArray(row.module_scope),
     driverManagementScope: toStringArray(row.driver_management_scope),
     createdAt: toStringValue(row.created_at),
@@ -189,11 +208,7 @@ async function syncAdministrationAssignments(
 
     const { data: updated, error: updateError } = await admin
       .from("admin_base_assignments")
-      .update({
-        active: shouldBeActive,
-        assigned_by: actorId,
-        updated_at: new Date().toISOString(),
-      })
+      .update({ active: shouldBeActive, assigned_by: actorId, updated_at: new Date().toISOString() })
       .eq("id", toStringValue(row.id))
       .select()
       .single();
@@ -214,13 +229,7 @@ async function syncAdministrationAssignments(
     const previous = byBase.get(baseKey);
     const { data: assignment, error: assignmentError } = await admin
       .from("admin_base_assignments")
-      .upsert({
-        admin_id: userId,
-        base_key: baseKey,
-        assigned_by: actorId,
-        active: true,
-        updated_at: new Date().toISOString(),
-      }, { onConflict: "admin_id,base_key" })
+      .upsert({ admin_id: userId, base_key: baseKey, assigned_by: actorId, active: true, updated_at: new Date().toISOString() }, { onConflict: "admin_id,base_key" })
       .select()
       .single();
     if (assignmentError) throw new Error(assignmentError.message);
@@ -253,10 +262,11 @@ async function responsePayload() {
     driverManagementTabs: DRIVER_MANAGEMENT_TABS,
     users: ((usersResult.data ?? []) as DbRow[]).map((row) => mapManagedUser(row, bases)),
     bases: bases.map((row) => ({
-      baseKey: toStringValue(row.base_key),
+      baseKey: toStringValue(row.unit_key),
       baseName: toStringValue(row.base_name) || toStringValue(row.base_key),
       sigla: toStringValue(row.sigla),
-      label: `${toStringValue(row.sigla) || toStringValue(row.base_key)} - ${toStringValue(row.base_name) || toStringValue(row.base_key)}`,
+      xptCode: toStringValue(row.xpt_code),
+      label: `${toStringValue(row.sigla)} - ${toStringValue(row.base_name) || toStringValue(row.base_key)}${row.xpt_code ? ` · XPT ${toStringValue(row.xpt_code)}` : ""}`,
     })),
   });
 }
@@ -277,7 +287,7 @@ export async function POST(request: Request) {
     const manager = await requireUserManager();
     const admin = createAdminClient();
     const payload = parseUserPayload((await request.json()) as DbRow, true);
-    const scopes = await resolveBaseScopes(admin, payload.baseScope);
+    const scopes = await resolveBaseScopes(admin, payload.baseScope, payload.role);
     if (needsAssignedBases(payload.role) && scopes.baseScope.length === 0) {
       throw new Error("Selecione ao menos uma base responsável para este cargo.");
     }
@@ -306,7 +316,7 @@ export async function POST(request: Request) {
     });
     if (profileError) throw new Error(profileError.message);
 
-    await syncAdministrationAssignments(admin, manager.id, created.user.id, payload.role, scopes.baseScope);
+    await syncAdministrationAssignments(admin, manager.id, created.user.id, payload.role, scopes.adminBaseScope);
     return await responsePayload();
   } catch (error) {
     const message = error instanceof Error ? error.message : "Falha ao cadastrar usuário.";
@@ -323,7 +333,7 @@ export async function PATCH(request: Request) {
     if (!id) throw new Error("Usuário não informado.");
     const payload = parseUserPayload(body, false);
     if (id === manager.id && payload.active === false) throw new Error("Você não pode desativar sua própria conta.");
-    const scopes = await resolveBaseScopes(admin, payload.baseScope);
+    const scopes = await resolveBaseScopes(admin, payload.baseScope, payload.role);
     if (needsAssignedBases(payload.role) && scopes.baseScope.length === 0) {
       throw new Error("Selecione ao menos uma base responsável para este cargo.");
     }
@@ -342,7 +352,7 @@ export async function PATCH(request: Request) {
     }).eq("id", id);
     if (profileError) throw new Error(profileError.message);
 
-    await syncAdministrationAssignments(admin, manager.id, id, payload.role, scopes.baseScope);
+    await syncAdministrationAssignments(admin, manager.id, id, payload.role, scopes.adminBaseScope);
 
     const updateAuth: { email?: string; password?: string; user_metadata?: { full_name: string } } = {
       email: payload.email,
