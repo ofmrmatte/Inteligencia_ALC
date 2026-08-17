@@ -4,27 +4,17 @@ import { useMemo, useState } from "react";
 import { Bar, BarChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
 import { BadgeDollarSign, Boxes, CircleCheckBig, Link2, TimerReset } from "lucide-react";
 import { latestPnrByShipment, pnrDecisionRows, scopeData } from "@/lib/metrics";
-import { normalizeText } from "@/lib/normalize";
+import { cleanText, normalizeText } from "@/lib/normalize";
 import { useDashboardStore } from "@/lib/store";
 import { formatCurrency, formatNumber, formatPercent, KpiCard, Panel, PageIntro, StatusBadge } from "@/components/ui";
-import { ChartTooltip, NoResults, TableWrap } from "./shared";
+import { ChartTooltip, ColumnSelectFilter, NoResults, TableWrap } from "./shared";
 
-const columnFilterStyle = {
-  display: "block",
-  marginTop: 6,
-  width: 156,
-  height: 28,
-  padding: "0 24px 0 8px",
-  color: "#25272b",
-  background: "#fff",
-  border: "1px solid #d7d9dd",
-  borderRadius: 5,
-  outline: "none",
-  fontSize: 10,
-} as const;
+function pnrStatusLabel(status: string) {
+  return cleanText(status) || "Sem status";
+}
 
 function pnrStatusKey(status: string) {
-  return normalizeText(status || "Sem status");
+  return normalizeText(pnrStatusLabel(status));
 }
 
 export function PnrView() {
@@ -39,11 +29,13 @@ export function PnrView() {
   const statusOptions = useMemo(() => {
     const labels = new Map<string, string>();
     rows.forEach((row) => {
-      const label = row.status || "Sem status";
+      const label = pnrStatusLabel(row.status);
       const key = pnrStatusKey(label);
       if (key && !labels.has(key)) labels.set(key, label);
     });
-    return [...labels.entries()].sort((a, b) => a[1].localeCompare(b[1], "pt-BR"));
+    return [...labels.entries()]
+      .map(([value, label]) => ({ value, label }))
+      .sort((a, b) => a.label.localeCompare(b.label, "pt-BR"));
   }, [rows]);
 
   const tableRows = statusFilter === "TODOS"
@@ -55,9 +47,12 @@ export function PnrView() {
   const value = rows.reduce((sum, row) => sum + row.purchaseValue, 0);
   const statusMap = new Map<string, { status: string; cases: number; value: number }>();
   rows.forEach((row) => {
-    const key = row.status || "Sem status";
-    const current = statusMap.get(key) ?? { status: key, cases: 0, value: 0 };
-    current.cases += 1; current.value += row.purchaseValue; statusMap.set(key, current);
+    const label = pnrStatusLabel(row.status);
+    const key = pnrStatusKey(label);
+    const current = statusMap.get(key) ?? { status: label, cases: 0, value: 0 };
+    current.cases += 1;
+    current.value += row.purchaseValue;
+    statusMap.set(key, current);
   });
   const status = [...statusMap.values()].sort((a, b) => b.cases - a.cases);
   const decisions = pnrDecisionRows(rows);
@@ -93,7 +88,7 @@ export function PnrView() {
       <Panel title="Monitoramento e tomada de decisão" subtitle="Status, exposição e próxima ação operacional por recorte">
         <TableWrap>
           <thead><tr><th>Status</th><th>Casos</th><th>% do total</th><th className="align-right">Valor exposto</th><th>Prioridade</th><th>Ação sugerida</th></tr></thead>
-          <tbody>{decisions.map((row) => <tr className={`decision-row decision-row--${row.tone}`} key={row.status}><td><strong>{row.status}</strong></td><td>{formatNumber(row.cases)}</td><td>{formatPercent(row.percentage)}</td><td className="align-right"><strong>{formatCurrency(row.value)}</strong></td><td>{row.priority}</td><td>{row.action}</td></tr>)}</tbody>
+          <tbody>{decisions.map((row) => <tr className={`decision-row decision-row--${row.tone}`} key={row.status}><td><strong>{pnrStatusLabel(row.status)}</strong></td><td>{formatNumber(row.cases)}</td><td>{formatPercent(row.percentage)}</td><td className="align-right"><strong>{formatCurrency(row.value)}</strong></td><td>{row.priority}</td><td>{row.action}</td></tr>)}</tbody>
         </TableWrap>
       </Panel>
       <Panel title="Casos PNR" subtitle="Detalhe rastreável até arquivo, aba e linha" action={<StatusBadge tone="neutral"><TimerReset size={13} /> {tableRows.length} IDs</StatusBadge>}>
@@ -103,20 +98,18 @@ export function PnrView() {
               <th>ID de envio</th>
               <th>
                 Status
-                <select
-                  aria-label="Filtrar casos PNR por status"
+                <ColumnSelectFilter
+                  ariaLabel="Filtrar casos PNR por status"
                   value={statusFilter}
-                  onChange={(event) => setStatusFilter(event.target.value)}
-                  style={columnFilterStyle}
-                >
-                  <option value="TODOS">Todos os status</option>
-                  {statusOptions.map(([key, label]) => <option key={key} value={key}>{label}</option>)}
-                </select>
+                  options={statusOptions}
+                  onChange={setStatusFilter}
+                  allLabel="Todos os status"
+                />
               </th>
               <th>Data</th><th>Base de origem</th><th>Motorista</th><th>Rota</th><th className="align-right">Valor</th>
             </tr>
           </thead>
-          <tbody>{tableRows.slice(0, 50).map((row) => <tr key={`${row.batchId}-${row.shipmentId}`}><td><strong className="mono">{row.shipmentId}</strong><small className="cell-subtitle">{row.sourceFile}</small></td><td><StatusBadge tone={/PROCEDENTE|APROVADO/.test(normalizeText(row.status)) ? "green" : /ANALISE|PENDENTE/.test(normalizeText(row.status)) ? "amber" : "neutral"}>{row.status || "Sem status"}</StatusBadge></td><td>{row.caseDate ? new Date(`${row.caseDate}T12:00:00`).toLocaleDateString("pt-BR") : "—"}</td><td>{row.originStation || "—"}</td><td className="mono">{row.driverId || "—"}</td><td className="mono">{row.routeId || "—"}</td><td className="align-right"><strong>{formatCurrency(row.purchaseValue)}</strong></td></tr>)}</tbody>
+          <tbody>{tableRows.slice(0, 50).map((row) => <tr key={`${row.batchId}-${row.shipmentId}`}><td><strong className="mono">{row.shipmentId}</strong><small className="cell-subtitle">{row.sourceFile}</small></td><td><StatusBadge tone={/PROCEDENTE|APROVADO/.test(normalizeText(row.status)) ? "green" : /ANALISE|PENDENTE/.test(normalizeText(row.status)) ? "amber" : "neutral"}>{pnrStatusLabel(row.status)}</StatusBadge></td><td>{row.caseDate ? new Date(`${row.caseDate}T12:00:00`).toLocaleDateString("pt-BR") : "—"}</td><td>{row.originStation || "—"}</td><td className="mono">{row.driverId || "—"}</td><td className="mono">{row.routeId || "—"}</td><td className="align-right"><strong>{formatCurrency(row.purchaseValue)}</strong></td></tr>)}</tbody>
         </TableWrap>
       </Panel>
     </div>
