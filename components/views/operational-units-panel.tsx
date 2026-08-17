@@ -18,6 +18,8 @@ interface UnitDraft {
 
 interface XptRecord {
   xptCode: string;
+  coordinator: string;
+  supervisors: string[];
   svcSiglas: string[];
   active: boolean;
 }
@@ -30,6 +32,8 @@ interface XptPayload {
 interface XptDraft {
   originalXptCode?: string;
   xptCode: string;
+  coordinator: string;
+  supervisors: string;
   svcSiglas: string;
   active: boolean;
 }
@@ -44,6 +48,8 @@ const EMPTY_DRAFT: UnitDraft = {
 
 const EMPTY_XPT_DRAFT: XptDraft = {
   xptCode: "",
+  coordinator: "",
+  supervisors: "",
   svcSiglas: "",
   active: true,
 };
@@ -69,6 +75,8 @@ function draftFromXpt(xpt: XptRecord): XptDraft {
   return {
     originalXptCode: xpt.xptCode,
     xptCode: xpt.xptCode,
+    coordinator: xpt.coordinator,
+    supervisors: xpt.supervisors.join("\n"),
     svcSiglas: xpt.svcSiglas.join("\n"),
     active: xpt.active,
   };
@@ -107,7 +115,7 @@ export function OperationalUnitsPanel() {
   }).sort((a, b) => `${a.sigla}|${a.baseName}`.localeCompare(`${b.sigla}|${b.baseName}`, "pt-BR")), [payload, search]);
 
   const xpts = useMemo(() => xptPayload.xpts.filter((xpt) => {
-    const haystack = `${xpt.xptCode} ${xpt.svcSiglas.join(" ")}`.toLowerCase();
+    const haystack = `${xpt.xptCode} ${xpt.coordinator} ${xpt.supervisors.join(" ")} ${xpt.svcSiglas.join(" ")}`.toLowerCase();
     return haystack.includes(xptSearch.toLowerCase());
   }).sort((a, b) => a.xptCode.localeCompare(b.xptCode, "pt-BR")), [xptPayload, xptSearch]);
 
@@ -151,12 +159,13 @@ export function OperationalUnitsPanel() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           ...xptDraft,
+          supervisors: xptDraft.supervisors.split(/[\n,;]+/).map((value) => value.trim()).filter(Boolean),
           svcSiglas: xptDraft.svcSiglas.split(/[\n,;]+/).map((value) => value.trim().toUpperCase()).filter(Boolean),
         }),
       }), editing ? "Falha ao atualizar XPT." : "Falha ao cadastrar XPT.");
       setXptPayload(body);
       setXptDraft(EMPTY_XPT_DRAFT);
-      setXptMessage(editing ? "XPT e relações regionais atualizados." : "Novo XPT cadastrado.");
+      setXptMessage(editing ? "XPT e responsáveis atualizados." : "Novo XPT cadastrado.");
       const refreshedUnits = await readJson<OperationalDirectoryPayload>(await fetch("/api/settings/operational-units", { cache: "no-store" }), "Falha ao atualizar estrutura SVC.");
       setPayload(refreshedUnits);
     } catch (error) {
@@ -217,22 +226,25 @@ export function OperationalUnitsPanel() {
         </TableWrap>
       </Panel>
 
-      <Panel title="XPT" subtitle="Cadastro independente; a relação com SVC representa somente a abrangência regional">
+      <Panel title="XPT" subtitle="Cadastro independente de XPT → Coordenador → Supervisor; a relação com SVC é apenas regional">
         <div className={styles.summary}>
           <span><Building2 size={15} /><strong>{xptPayload.xpts.length}</strong> XPTs</span>
           <span><strong>{xptPayload.xpts.filter((xpt) => xpt.active).length}</strong> ativos</span>
+          <span><strong>{new Set(xptPayload.xpts.map((xpt) => xpt.coordinator).filter(Boolean)).size}</strong> coordenadores</span>
           <span className={styles.masterBadge}>Estrutura independente de XPT</span>
         </div>
 
         <form className={styles.form} onSubmit={saveXpt}>
           <div className={styles.formTitle}>
-            <div><strong>{xptDraft.originalXptCode ? "Editar XPT" : "Cadastrar novo XPT"}</strong><span>Associe SVCs apenas para representar a região atendida. O XPT continua sendo uma unidade independente.</span></div>
+            <div><strong>{xptDraft.originalXptCode ? "Editar XPT" : "Cadastrar novo XPT"}</strong><span>Defina responsáveis do próprio XPT. As SVCs relacionadas servem somente como referência regional.</span></div>
             {xptDraft.originalXptCode ? <button className={styles.closeButton} type="button" onClick={() => setXptDraft(EMPTY_XPT_DRAFT)} title="Cancelar edição"><X size={15} /></button> : null}
           </div>
           <div className={styles.xptGrid}>
             <label><span>Código XPT</span><input required value={xptDraft.xptCode} onChange={(event) => setXptDraft({ ...xptDraft, xptCode: event.target.value.toUpperCase() })} placeholder="EGO17" /></label>
-            <label className={styles.xptRelations}><span>SVCs da região</span><textarea value={xptDraft.svcSiglas} onChange={(event) => setXptDraft({ ...xptDraft, svcSiglas: event.target.value })} placeholder="Uma sigla SVC por linha" rows={3} /></label>
+            <label><span>Coordenador responsável</span><input value={xptDraft.coordinator} onChange={(event) => setXptDraft({ ...xptDraft, coordinator: event.target.value })} placeholder="Nome do coordenador" /></label>
             <label className={styles.active}><input type="checkbox" checked={xptDraft.active} onChange={(event) => setXptDraft({ ...xptDraft, active: event.target.checked })} /><span>XPT ativo</span></label>
+            <label className={styles.xptRelations}><span>Supervisor(es)</span><textarea value={xptDraft.supervisors} onChange={(event) => setXptDraft({ ...xptDraft, supervisors: event.target.value })} placeholder="Um supervisor por linha" rows={3} /></label>
+            <label className={styles.xptRelations}><span>SVCs relacionadas à região</span><textarea value={xptDraft.svcSiglas} onChange={(event) => setXptDraft({ ...xptDraft, svcSiglas: event.target.value })} placeholder="Uma sigla SVC por linha" rows={3} /></label>
           </div>
           <div className={styles.actions}>
             <small>SVCs disponíveis: {xptPayload.svcSiglas.join(" · ") || "nenhuma cadastrada"}.</small>
@@ -243,21 +255,22 @@ export function OperationalUnitsPanel() {
         {xptMessage ? <p className={styles.message}>{xptMessage}</p> : null}
 
         <div className={styles.tableTop}>
-          <div><strong>XPTs cadastrados</strong><span>O vínculo regional não transforma XPT em SVC, base ou nível hierárquico.</span></div>
-          <label className={styles.search}><Search size={14} /><input value={xptSearch} onChange={(event) => setXptSearch(event.target.value)} placeholder="Buscar XPT ou SVC relacionada" /></label>
+          <div><strong>XPTs cadastrados</strong><span>Responsáveis do XPT são independentes da estrutura SVC.</span></div>
+          <label className={styles.search}><Search size={14} /><input value={xptSearch} onChange={(event) => setXptSearch(event.target.value)} placeholder="Buscar XPT, coordenador ou supervisor" /></label>
         </div>
         <TableWrap>
-          <thead><tr><th>XPT</th><th>SVCs da região</th><th>Status</th><th className="align-right">Ação</th></tr></thead>
+          <thead><tr><th>XPT</th><th>Coordenador</th><th>Supervisor</th><th>Status</th><th className="align-right">Ação</th></tr></thead>
           <tbody>
             {xpts.map((xpt) => (
               <tr key={xpt.xptCode}>
                 <td><strong>{xpt.xptCode}</strong></td>
-                <td><span className={styles.supervisorText}>{xpt.svcSiglas.length ? xpt.svcSiglas.join(" · ") : "Nenhuma SVC vinculada"}</span></td>
+                <td>{xpt.coordinator || "Não informado"}</td>
+                <td><span className={styles.supervisorText}>{xpt.supervisors.length ? xpt.supervisors.join(" · ") : "Não informado"}</span></td>
                 <td><StatusBadge tone={xpt.active ? "green" : "amber"}>{xpt.active ? "Ativo" : "Inativo"}</StatusBadge></td>
                 <td className="align-right"><button className="table-action" type="button" title="Editar XPT" onClick={() => setXptDraft(draftFromXpt(xpt))}><Edit3 size={14} /></button></td>
               </tr>
             ))}
-            {!xpts.length ? <tr><td colSpan={4}>Nenhum XPT encontrado.</td></tr> : null}
+            {!xpts.length ? <tr><td colSpan={5}>Nenhum XPT encontrado.</td></tr> : null}
           </tbody>
         </TableWrap>
       </Panel>
