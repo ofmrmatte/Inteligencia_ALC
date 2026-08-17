@@ -5,6 +5,7 @@ export const USER_ROLES = [
   "admin",
   "developer",
   "loss_supervisor",
+  "loss_admin",
   "administration_supervisor",
   "super_admin",
   "driver",
@@ -17,6 +18,7 @@ export const MANAGED_USER_ROLES = [
   "admin",
   "developer",
   "loss_supervisor",
+  "loss_admin",
   "administration_supervisor",
 ] as const;
 
@@ -41,6 +43,7 @@ export const ROLE_LABELS: Record<UserRole, string> = {
   admin: "Administração",
   developer: "Desenvolvedor",
   loss_supervisor: "Supervisor Loss",
+  loss_admin: "Administração Loss",
   administration_supervisor: "Supervisor de Administração",
   super_admin: "Super Admin",
   driver: "Motorista",
