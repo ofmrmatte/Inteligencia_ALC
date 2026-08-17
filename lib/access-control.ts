@@ -28,13 +28,14 @@ const OPERATIONAL_MODULES: SectionId[] = [
 ];
 
 const LOSS_MODULES: SectionId[] = ALL_MODULES.filter((section) => section !== "gestao-motoristas");
-const FULL_PANEL_ROLES = new Set<UserRole>(["director", "developer", "loss_supervisor", "super_admin"]);
+const LOSS_ADMIN_MODULES: SectionId[] = [...OPERATIONAL_MODULES, "importacoes"];
+const FULL_PANEL_ROLES = new Set<UserRole>(["director", "developer", "loss_supervisor", "loss_admin", "super_admin"]);
 
 const ROLE_MODULE_CAP: Record<UserRole, SectionId[]> = {
   director: ALL_MODULES,
   developer: ALL_MODULES,
   loss_supervisor: LOSS_MODULES,
-  loss_admin: OPERATIONAL_MODULES,
+  loss_admin: LOSS_ADMIN_MODULES,
   super_admin: ALL_MODULES,
   administration_supervisor: ["gestao-motoristas"],
   admin: ["gestao-motoristas"],
