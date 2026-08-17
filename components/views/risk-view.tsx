@@ -80,7 +80,7 @@ export function RiskView() {
 
   return (
     <div className="view-stack">
-      <PageIntro description="A exposição considera um registro por ID de pacote. Bases são conciliadas pelo cadastro mestre SVC + Base + Filial XPT e, em uploads recorrentes, prevalece o lote mais recente." chips={[`${formatNumber(scoped.risk.length - rows.length)} repetições consolidadas`, `${reasonData.length} motivos principais`]} />
+      <PageIntro description="A exposição considera um registro por ID de pacote. SVC + Base são conciliados pelo cadastro mestre; o XPT permanece independente e é exibido separadamente quando houver relação regional. Em uploads recorrentes, prevalece o lote mais recente." chips={[`${formatNumber(scoped.risk.length - rows.length)} repetições consolidadas`, `${reasonData.length} motivos principais`]} />
       <div className="kpi-grid kpi-grid--four">
         <KpiCard label="GMV exposto" value={formatCurrency(gmv)} detail="IDs únicos em risco" icon={<BadgeDollarSign size={19} />} tone="red" />
         <KpiCard label="Pacotes em risco" value={formatNumber(rows.length)} detail="Unidades identificadas" icon={<ShieldAlert size={19} />} tone="amber" />
@@ -109,7 +109,7 @@ export function RiskView() {
         <TableWrap>
           <thead>
             <tr>
-              <th>ID do pacote</th><th>Base</th><th>Motorista</th>
+              <th>ID do pacote</th><th>Base</th><th>XPT</th><th>Motorista</th>
               <th>
                 Motivo
                 <ColumnSelectFilter ariaLabel="Filtrar Risco LM por motivo" value={reasonFilter} options={reasonOptions} onChange={setReasonFilter} allLabel="Todos os motivos" />
@@ -117,7 +117,7 @@ export function RiskView() {
               <th>Substatus</th><th>Dias</th><th className="align-right">GMV</th>
             </tr>
           </thead>
-          <tbody>{[...tableRows].sort((a, b) => b.stoppedDays - a.stoppedDays || b.gmvBrl - a.gmvBrl).slice(0, 60).map((row) => <tr key={`${row.batchId}-${row.shipmentId}`}><td><strong className="mono">{row.shipmentId}</strong><small className="cell-subtitle">Rota {row.routeId || "—"}</small></td><td><strong>{row.facilityId || "—"}</strong>{row.xptCode ? <small className="cell-subtitle">Filial XPT {row.xptCode}</small> : null}</td><td className="mono">{row.driverId || "—"}</td><td>{reasonLabel(row.failureReason)}</td><td>{cleanText(row.lastSubstatus) || "—"}</td><td><StatusBadge tone={row.stoppedDays >= 4 ? "red" : row.stoppedDays >= 2 ? "amber" : "green"}>{row.stoppedDays} dias</StatusBadge></td><td className="align-right"><strong>{formatCurrency(row.gmvBrl)}</strong></td></tr>)}</tbody>
+          <tbody>{[...tableRows].sort((a, b) => b.stoppedDays - a.stoppedDays || b.gmvBrl - a.gmvBrl).slice(0, 60).map((row) => <tr key={`${row.batchId}-${row.shipmentId}`}><td><strong className="mono">{row.shipmentId}</strong><small className="cell-subtitle">Rota {row.routeId || "—"}</small></td><td><strong>{row.facilityId || "—"}</strong></td><td className="mono">{row.xptCode || "—"}</td><td className="mono">{row.driverId || "—"}</td><td>{reasonLabel(row.failureReason)}</td><td>{cleanText(row.lastSubstatus) || "—"}</td><td><StatusBadge tone={row.stoppedDays >= 4 ? "red" : row.stoppedDays >= 2 ? "amber" : "green"}>{row.stoppedDays} dias</StatusBadge></td><td className="align-right"><strong>{formatCurrency(row.gmvBrl)}</strong></td></tr>)}</tbody>
         </TableWrap>
       </Panel>
     </div>
