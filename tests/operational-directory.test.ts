@@ -16,8 +16,12 @@ const payload: OperationalDirectoryPayload = {
   units: [
     { unitKey: "SMG5|GUAXUPE", sigla: "SMG5", baseName: "GUAXUPÉ", baseKey: "GUAXUPE", xptCode: "EMG7", coordinator: "BRUNO HUNGRIA", supervisors: ["SUP A"], active: true },
     { unitKey: "SMG5|POCOS DE CALDAS", sigla: "SMG5", baseName: "POÇOS DE CALDAS", baseKey: "POCOS DE CALDAS", xptCode: "EMG7", coordinator: "BRUNO HUNGRIA", supervisors: ["SUP B"], active: true },
+    { unitKey: "SSP28|JALES", sigla: "SSP28", baseName: "JALES", baseKey: "JALES", xptCode: "EPR7", coordinator: "VIVIANE PANSANI", supervisors: ["SUP C"], active: true },
   ],
-  driverMappings: [{ driverId: "123", unitKey: "SMG5|GUAXUPE" }],
+  driverMappings: [
+    { driverId: "123", unitKey: "SMG5|GUAXUPE" },
+    { driverId: "321", unitKey: "SSP28|JALES" },
+  ],
   ambiguousSiglas: ["SMG5"],
   ambiguousBaseKeys: [],
   fullAccess: false,
@@ -60,6 +64,23 @@ describe("cadastro mestre de unidades operacionais", () => {
 
     const result = applyOperationalDirectory(data, payload);
     expect(result.pnr).toHaveLength(0);
+  });
+
+  it("nunca troca uma estação informada por outra SVC apenas pelo histórico do motorista", () => {
+    const data = {
+      ...baseData,
+      pnr: [{
+        batchId: "b1", sourceFile: "pnr.csv", sourceSheet: "Sheet1", rowNumber: 2,
+        caseDate: "2026-08-17", status: "Em revisão", billingPeriod: "02Q082026",
+        shipmentId: "PKG3", products: "", purchaseValue: 55, carrier: "",
+        originStation: "SMS1", baseKey: "SMS1", sigla: "SMS1", routeId: "R3", driverId: "321", custom: "",
+      }],
+    } as DashboardData;
+
+    const result = applyOperationalDirectory(data, { ...payload, fullAccess: true });
+    expect(result.pnr).toHaveLength(1);
+    expect(result.pnr[0]).toMatchObject({ originStation: "SMS1", sigla: "SMS1", baseKey: "SMS1" });
+    expect(result.pnr[0].unitKey).toBeUndefined();
   });
 
   it("substitui a hierarquia importada pelo cadastro oficial de coordenadores e supervisores", () => {
