@@ -89,6 +89,10 @@ function isFullRole(role: UserRole) {
   return ["director", "developer"].includes(role);
 }
 
+function baseLabel(base: BaseOption) {
+  return `${base.sigla} - ${base.baseName}`;
+}
+
 function blankDraft(): UserDraft {
   const role: UserRole = "coordinator";
   return {
@@ -126,7 +130,7 @@ async function readJson(response: Response, fallback: string) {
 export function SettingsViewV2({ profile }: { profile: AuthProfile }) {
   const sections = useMemo(() => {
     const next: Array<{ id: SettingsSection; title: string; description: string }> = [];
-    if (canManageUsers(profile)) next.push({ id: "users", title: "Usuários e permissões", description: "Cargos, módulos e bases responsáveis" });
+    if (canManageUsers(profile)) next.push({ id: "users", title: "Usuários e permissões", description: "Cargos, módulos e SVC/bases responsáveis" });
     if (canManageDriverPortalBaseSettings(profile)) next.push({ id: "portal", title: "Portal dos Motoristas", description: "Liberação e bloqueio por base" });
     next.push({ id: "hierarchy", title: "Hierarquia e regras", description: "Limites máximos de cada função" });
     return next;
@@ -266,7 +270,7 @@ function UserManagementPanel({ currentUserId }: { currentUserId: string }) {
   }
 
   return (
-    <Panel title="Usuários e permissões" subtitle="Cadastre pessoas, selecione módulos e delimite as bases de responsabilidade">
+    <Panel title="Usuários e permissões" subtitle="Cadastre pessoas, selecione módulos e delimite as SVCs/bases de responsabilidade; XPT é administrado separadamente">
       <form className={styles.stack} onSubmit={createUser}>
         <div className={styles.formGrid}>
           <label className={styles.field}><span>E-mail</span><input required type="email" value={draft.email} onChange={(event) => setDraft({ ...draft, email: event.target.value })} placeholder="usuario@alc.com.br" /></label>
@@ -283,7 +287,7 @@ function UserManagementPanel({ currentUserId }: { currentUserId: string }) {
 
         <AccessEditor draft={draft} setDraft={setDraft} bases={payload.bases} />
         <div className={styles.formActions}>
-          <span>{draft.moduleScope.length} módulo(s) · {(isFullRole(draft.role) || draft.role === "loss_supervisor" || draft.role === "administration_supervisor") ? "todas as bases permitidas pela função" : `${draft.baseScope.length} base(s)`}</span>
+          <span>{draft.moduleScope.length} módulo(s) · {(isFullRole(draft.role) || draft.role === "loss_supervisor" || draft.role === "administration_supervisor") ? "todas as SVCs/bases permitidas pela função" : `${draft.baseScope.length} base(s)`}</span>
           <button className="primary-button primary-button--small" disabled={saving} type="submit"><UserPlus size={15} />Cadastrar usuário</button>
         </div>
       </form>
@@ -292,14 +296,14 @@ function UserManagementPanel({ currentUserId }: { currentUserId: string }) {
 
       <div className={styles.tableHeader}><div><strong>Usuários cadastrados</strong><span>{payload.users.length} conta(s) interna(s)</span></div></div>
       <TableWrap>
-        <thead><tr><th>Usuário</th><th>Cargo</th><th>Módulos</th><th>Bases</th><th>Status</th><th className="align-right">Ações</th></tr></thead>
+        <thead><tr><th>Usuário</th><th>Cargo</th><th>Módulos</th><th>SVC / Bases</th><th>Status</th><th className="align-right">Ações</th></tr></thead>
         <tbody>
           {loading ? <tr><td colSpan={6}>Carregando usuários...</td></tr> : payload.users.map((user) => (
             <tr key={user.id}>
               <td><strong>{user.fullName || user.email}</strong><span className="cell-subtitle">{user.email}</span></td>
               <td>{ROLE_LABELS[user.role]}</td>
               <td><div className={styles.badges}>{(isFullRole(user.role) ? ["Acesso total"] : user.moduleScope.map((id) => MODULE_LABELS.get(id as SectionId) ?? id)).slice(0, 3).map((label) => <span className={styles.badge} key={label}>{label}</span>)}{!isFullRole(user.role) && user.moduleScope.length > 3 ? <span className={styles.badge}>+{user.moduleScope.length - 3}</span> : null}</div></td>
-              <td><div className={styles.badges}>{user.baseScope.slice(0, 2).map((baseKey) => <span className={styles.badge} key={baseKey}>{payload.bases.find((base) => base.baseKey === baseKey)?.label ?? baseKey}</span>)}{user.baseScope.length > 2 ? <span className={styles.badge}>+{user.baseScope.length - 2}</span> : null}{(isFullRole(user.role) || user.role === "loss_supervisor" || user.role === "administration_supervisor") ? <span className={styles.badge}>Todas</span> : null}</div></td>
+              <td><div className={styles.badges}>{user.baseScope.slice(0, 2).map((baseKey) => { const base = payload.bases.find((item) => item.baseKey === baseKey); return <span className={styles.badge} key={baseKey}>{base ? baseLabel(base) : baseKey}</span>; })}{user.baseScope.length > 2 ? <span className={styles.badge}>+{user.baseScope.length - 2}</span> : null}{(isFullRole(user.role) || user.role === "loss_supervisor" || user.role === "administration_supervisor") ? <span className={styles.badge}>Todas</span> : null}</div></td>
               <td><StatusBadge tone={user.active ? "green" : "amber"}>{user.active ? "Ativo" : "Inativo"}</StatusBadge></td>
               <td className="align-right"><div className={styles.actions}><button className="table-action" type="button" title="Editar" onClick={() => setEditing({ ...user, password: "" })}><Edit3 size={14} /></button><button className="table-action" disabled={user.id === currentUserId || saving} type="button" title="Remover" onClick={() => void removeUser(user)}><Trash2 size={14} /></button></div></td>
             </tr>
@@ -373,19 +377,19 @@ function AccessEditor({ draft, setDraft, bases }: { draft: UserDraft; setDraft: 
 
       <div className={styles.checkPanel}>
         <div className={styles.panelHeader}>
-          <div><span className={styles.legend}>Bases responsáveis</span><small>{allBases ? "Abrangência definida pela função" : `${draft.baseScope.length} selecionada(s)`}</small></div>
+          <div><span className={styles.legend}>SVC / Bases responsáveis</span><small>{allBases ? "Abrangência definida pela função" : `${draft.baseScope.length} selecionada(s)`}</small></div>
           {!allBases ? <div className={styles.compactActions}><button type="button" onClick={setAllBases}>Selecionar todas</button><button type="button" onClick={clearBases}>Limpar</button></div> : null}
         </div>
         {allBases ? (
-          <div className={styles.allBasesState}><ShieldCheck size={22} /><div><strong>Todas as bases permitidas</strong><span>Esta função possui abrangência global dentro dos módulos autorizados.</span></div></div>
+          <div className={styles.allBasesState}><ShieldCheck size={22} /><div><strong>Todas as SVCs/bases permitidas</strong><span>Esta função possui abrangência global dentro dos módulos autorizados. XPT permanece independente.</span></div></div>
         ) : (
           <>
-            <label className={styles.searchBox}><Search size={15} /><input value={baseSearch} onChange={(event) => setBaseSearch(event.target.value)} placeholder="Buscar sigla ou base" /></label>
+            <label className={styles.searchBox}><Search size={15} /><input value={baseSearch} onChange={(event) => setBaseSearch(event.target.value)} placeholder="Buscar SVC ou base" /></label>
             <div className={styles.baseGrid}>{visibleBases.map((base) => {
               const checked = draft.baseScope.includes(base.baseKey);
-              return <label className={`${styles.checkItem} ${checked ? styles.checkItemActive : ""}`} key={base.baseKey}><input type="checkbox" checked={checked} onChange={() => setDraft({ ...draft, baseScope: toggleValue(draft.baseScope, base.baseKey) })} /><span>{base.label}</span></label>;
+              return <label className={`${styles.checkItem} ${checked ? styles.checkItemActive : ""}`} key={base.baseKey}><input type="checkbox" checked={checked} onChange={() => setDraft({ ...draft, baseScope: toggleValue(draft.baseScope, base.baseKey) })} /><span>{baseLabel(base)}</span></label>;
             })}</div>
-            {!visibleBases.length ? <p className={styles.emptyState}>Nenhuma base encontrada para esta busca.</p> : null}
+            {!visibleBases.length ? <p className={styles.emptyState}>Nenhuma SVC/base encontrada para esta busca.</p> : null}
           </>
         )}
       </div>
