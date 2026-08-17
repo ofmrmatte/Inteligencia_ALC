@@ -3,11 +3,12 @@
 import { del, get, set } from "idb-keyval";
 import { create } from "zustand";
 import { createDemoData } from "@/lib/demo";
+import { applyOperationalDirectory, type OperationalDirectoryPayload } from "@/lib/operational-directory";
 import { createClient } from "@/lib/supabase/client";
 import type { DashboardData, DashboardFilters, ParsedBatch } from "@/lib/types";
 import { EMPTY_DATA, EMPTY_FILTERS } from "@/lib/types";
 
-const STORAGE_KEY_PREFIX = "alc-inteligencia:v3";
+const STORAGE_KEY_PREFIX = "alc-inteligencia:v4";
 const DATA_STALE_AFTER_MS = 2 * 60 * 1000;
 const hydrationTasks = new Map<string, Promise<void>>();
 
@@ -54,10 +55,18 @@ async function readError(response: Response, fallback: string) {
   }
 }
 
+async function applyOnlineDirectory(data: DashboardData) {
+  const response = await fetch("/api/settings/operational-units", { cache: "no-store" });
+  if (!response.ok) throw new Error(await readError(response, "Falha ao carregar cadastro de bases."));
+  const directory = (await response.json()) as OperationalDirectoryPayload;
+  return applyOperationalDirectory(data, directory);
+}
+
 async function fetchOnlineData() {
   const response = await fetch("/api/imports", { cache: "no-store" });
   if (!response.ok) throw new Error(await readError(response, "Falha ao carregar dados online."));
-  return (await response.json()) as DashboardData;
+  const data = (await response.json()) as DashboardData;
+  return applyOnlineDirectory(data);
 }
 
 function safeStorageName(name: string) {
@@ -217,7 +226,7 @@ export const useDashboardStore = create<DashboardStore>((storeSet, getState) => 
         body: JSON.stringify({ batches, files: uploaded }),
       });
       if (!response.ok) throw new Error(await readError(response, "Falha ao salvar dados online."));
-      const next = (await response.json()) as DashboardData;
+      const next = await applyOnlineDirectory((await response.json()) as DashboardData);
       const syncedAt = Date.now();
       storeSet({ data: next, hydrated: true, refreshing: false, lastSyncedAt: syncedAt, loadError: "" });
       await save(next, getState().cacheOwnerId, syncedAt);
@@ -229,7 +238,7 @@ export const useDashboardStore = create<DashboardStore>((storeSet, getState) => 
   removeBatch: async (batchId) => {
     const response = await fetch(`/api/imports?batchId=${encodeURIComponent(batchId)}`, { method: "DELETE" });
     if (!response.ok) throw new Error(await readError(response, "Falha ao remover lote online."));
-    const next = (await response.json()) as DashboardData;
+    const next = await applyOnlineDirectory((await response.json()) as DashboardData);
     const syncedAt = Date.now();
     storeSet({ data: next, hydrated: true, refreshing: false, lastSyncedAt: syncedAt, loadError: "" });
     await save(next, getState().cacheOwnerId, syncedAt);
@@ -250,6 +259,7 @@ export const useDashboardStore = create<DashboardStore>((storeSet, getState) => 
   setFilter: (key, value) => {
     const currentFilters = getState().filters;
     const next = { ...currentFilters, [key]: value };
+    if (key === "xpt") Object.assign(next, { coordinator: "Todos", base: "Todas", sigla: "Todas", supervisor: "Todos", driver: "Todos" });
     if (key === "coordinator") Object.assign(next, { base: "Todas", sigla: "Todas", supervisor: "Todos", driver: "Todos" });
     if (key === "sigla") Object.assign(next, { base: "Todas", supervisor: "Todos", driver: "Todos" });
     if (key === "base") Object.assign(next, { supervisor: "Todos", driver: "Todos" });
