@@ -24,6 +24,7 @@ import { TableWrap } from "./shared";
 import styles from "./settings-view-v2.module.css";
 
 interface BaseOption { baseKey: string; baseName: string; sigla: string; label: string }
+interface XptOption { xptCode: string; label: string }
 interface ManagedUser {
   id: string;
   email: string;
@@ -32,10 +33,11 @@ interface ManagedUser {
   globalAccess: boolean;
   active: boolean;
   baseScope: string[];
+  xptScope: string[];
   moduleScope: string[];
   driverManagementScope: string[];
 }
-interface UsersPayload { users: ManagedUser[]; bases: BaseOption[] }
+interface UsersPayload { users: ManagedUser[]; bases: BaseOption[]; xpts: XptOption[] }
 interface UserDraft {
   id?: string;
   email: string;
@@ -44,6 +46,7 @@ interface UserDraft {
   role: UserRole;
   active: boolean;
   baseScope: string[];
+  xptScope: string[];
   moduleScope: string[];
   driverManagementScope: string[];
 }
@@ -76,17 +79,30 @@ const TAB_LABELS: Record<DriverManagementTab, string> = {
 };
 
 const ROLE_DETAILS: Partial<Record<UserRole, string>> = {
-  director: "Visão total do painel e de todas as bases.",
+  director: "Visão total do painel, de todas as SVCs/bases e de todos os XPTs.",
   developer: "Acesso técnico e administrativo total.",
-  loss_supervisor: "Visão operacional total, sem Gestão de Motoristas.",
+  loss_supervisor: "Visão operacional total de SVCs/bases e XPTs, sem Gestão de Motoristas.",
+  loss_admin: "Visão operacional global de SVCs/bases e XPTs, com permissão de importação.",
   administration_supervisor: "Toda a Gestão de Motoristas e todas as bases administrativas.",
-  admin: "Somente Pagamentos e Contestações das bases atribuídas.",
-  coordinator: "Somente módulos operacionais e bases coordenadas.",
-  supervisor: "Somente módulos operacionais e bases supervisionadas.",
+  admin: "Somente Pagamentos e Contestações das SVCs/bases atribuídas.",
+  coordinator: "Somente módulos operacionais e SVCs/bases e/ou XPTs coordenados.",
+  supervisor: "Somente módulos operacionais e SVCs/bases e/ou XPTs supervisionados.",
 };
 
 function isFullRole(role: UserRole) {
   return ["director", "developer"].includes(role);
+}
+
+function isGlobalOperationalRole(role: UserRole) {
+  return ["director", "developer", "loss_supervisor", "loss_admin"].includes(role);
+}
+
+function hasGlobalBaseScope(role: UserRole) {
+  return isGlobalOperationalRole(role) || role === "administration_supervisor";
+}
+
+function supportsXptScope(role: UserRole) {
+  return role === "coordinator" || role === "supervisor";
 }
 
 function baseLabel(base: BaseOption) {
@@ -102,6 +118,7 @@ function blankDraft(): UserDraft {
     role,
     active: true,
     baseScope: [],
+    xptScope: [],
     moduleScope: roleModuleCap(role),
     driverManagementScope: roleDriverManagementCap(role),
   };
@@ -111,7 +128,8 @@ function roleChanged(draft: UserDraft, role: UserRole): UserDraft {
   return {
     ...draft,
     role,
-    baseScope: isFullRole(role) || role === "loss_supervisor" || role === "administration_supervisor" ? [] : draft.baseScope,
+    baseScope: hasGlobalBaseScope(role) ? [] : draft.baseScope,
+    xptScope: supportsXptScope(role) ? draft.xptScope : [],
     moduleScope: roleModuleCap(role),
     driverManagementScope: roleDriverManagementCap(role),
   };
@@ -130,7 +148,7 @@ async function readJson(response: Response, fallback: string) {
 export function SettingsViewV2({ profile }: { profile: AuthProfile }) {
   const sections = useMemo(() => {
     const next: Array<{ id: SettingsSection; title: string; description: string }> = [];
-    if (canManageUsers(profile)) next.push({ id: "users", title: "Usuários e permissões", description: "Cargos, módulos e SVC/bases responsáveis" });
+    if (canManageUsers(profile)) next.push({ id: "users", title: "Usuários e permissões", description: "Cargos, módulos, SVC/bases e XPTs responsáveis" });
     if (canManageDriverPortalBaseSettings(profile)) next.push({ id: "portal", title: "Portal dos Motoristas", description: "Liberação e bloqueio por base" });
     next.push({ id: "hierarchy", title: "Hierarquia e regras", description: "Limites máximos de cada função" });
     return next;
@@ -193,7 +211,7 @@ function HierarchyPanel() {
 }
 
 function UserManagementPanel({ currentUserId }: { currentUserId: string }) {
-  const [payload, setPayload] = useState<UsersPayload>({ users: [], bases: [] });
+  const [payload, setPayload] = useState<UsersPayload>({ users: [], bases: [], xpts: [] });
   const [draft, setDraft] = useState<UserDraft>(blankDraft);
   const [editing, setEditing] = useState<UserDraft | null>(null);
   const [loading, setLoading] = useState(true);
@@ -204,7 +222,7 @@ function UserManagementPanel({ currentUserId }: { currentUserId: string }) {
     setLoading(true);
     try {
       const body = await readJson(await fetch("/api/users", { cache: "no-store" }), "Falha ao carregar usuários.");
-      setPayload({ users: body.users ?? [], bases: body.bases ?? [] });
+      setPayload({ users: body.users ?? [], bases: body.bases ?? [], xpts: body.xpts ?? [] });
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "Falha ao carregar usuários.");
     } finally {
@@ -224,7 +242,7 @@ function UserManagementPanel({ currentUserId }: { currentUserId: string }) {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(draft),
       }), "Falha ao cadastrar usuário.");
-      setPayload({ users: body.users ?? [], bases: body.bases ?? [] });
+      setPayload({ users: body.users ?? [], bases: body.bases ?? [], xpts: body.xpts ?? [] });
       setDraft(blankDraft());
       setMessage("Usuário cadastrado com a matriz de acesso definida.");
     } catch (error) {
@@ -244,7 +262,7 @@ function UserManagementPanel({ currentUserId }: { currentUserId: string }) {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(editing),
       }), "Falha ao atualizar usuário.");
-      setPayload({ users: body.users ?? [], bases: body.bases ?? [] });
+      setPayload({ users: body.users ?? [], bases: body.bases ?? [], xpts: body.xpts ?? [] });
       setEditing(null);
       setMessage("Acesso do usuário atualizado.");
     } catch (error) {
@@ -260,7 +278,7 @@ function UserManagementPanel({ currentUserId }: { currentUserId: string }) {
     setMessage("");
     try {
       const body = await readJson(await fetch(`/api/users?id=${encodeURIComponent(user.id)}`, { method: "DELETE" }), "Falha ao remover usuário.");
-      setPayload({ users: body.users ?? [], bases: body.bases ?? [] });
+      setPayload({ users: body.users ?? [], bases: body.bases ?? [], xpts: body.xpts ?? [] });
       setMessage("Usuário removido.");
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "Falha ao remover usuário.");
@@ -269,8 +287,15 @@ function UserManagementPanel({ currentUserId }: { currentUserId: string }) {
     }
   }
 
+  const scopeSummary = (userDraft: UserDraft) => {
+    if (isGlobalOperationalRole(userDraft.role)) return "todas as SVCs/bases e todos os XPTs";
+    if (userDraft.role === "administration_supervisor") return "todas as bases administrativas";
+    if (userDraft.role === "admin") return `${userDraft.baseScope.length} SVC/base(s)`;
+    return `${userDraft.baseScope.length} SVC/base(s) · ${userDraft.xptScope.length} XPT(s)`;
+  };
+
   return (
-    <Panel title="Usuários e permissões" subtitle="Cadastre pessoas, selecione módulos e delimite as SVCs/bases de responsabilidade; XPT é administrado separadamente">
+    <Panel title="Usuários e permissões" subtitle="Cadastre pessoas e atribua SVC/bases e XPTs em escopos separados">
       <form className={styles.stack} onSubmit={createUser}>
         <div className={styles.formGrid}>
           <label className={styles.field}><span>E-mail</span><input required type="email" value={draft.email} onChange={(event) => setDraft({ ...draft, email: event.target.value })} placeholder="usuario@alc.com.br" /></label>
@@ -285,9 +310,9 @@ function UserManagementPanel({ currentUserId }: { currentUserId: string }) {
           <StatusBadge tone={isFullRole(draft.role) ? "green" : "neutral"}>{isFullRole(draft.role) ? "Acesso total" : "Acesso controlado"}</StatusBadge>
         </div>
 
-        <AccessEditor draft={draft} setDraft={setDraft} bases={payload.bases} />
+        <AccessEditor draft={draft} setDraft={setDraft} bases={payload.bases} xpts={payload.xpts} />
         <div className={styles.formActions}>
-          <span>{draft.moduleScope.length} módulo(s) · {(isFullRole(draft.role) || draft.role === "loss_supervisor" || draft.role === "administration_supervisor") ? "todas as SVCs/bases permitidas pela função" : `${draft.baseScope.length} base(s)`}</span>
+          <span>{draft.moduleScope.length} módulo(s) · {scopeSummary(draft)}</span>
           <button className="primary-button primary-button--small" disabled={saving} type="submit"><UserPlus size={15} />Cadastrar usuário</button>
         </div>
       </form>
@@ -296,14 +321,15 @@ function UserManagementPanel({ currentUserId }: { currentUserId: string }) {
 
       <div className={styles.tableHeader}><div><strong>Usuários cadastrados</strong><span>{payload.users.length} conta(s) interna(s)</span></div></div>
       <TableWrap>
-        <thead><tr><th>Usuário</th><th>Cargo</th><th>Módulos</th><th>SVC / Bases</th><th>Status</th><th className="align-right">Ações</th></tr></thead>
+        <thead><tr><th>Usuário</th><th>Cargo</th><th>Módulos</th><th>SVC / Bases</th><th>XPTs</th><th>Status</th><th className="align-right">Ações</th></tr></thead>
         <tbody>
-          {loading ? <tr><td colSpan={6}>Carregando usuários...</td></tr> : payload.users.map((user) => (
+          {loading ? <tr><td colSpan={7}>Carregando usuários...</td></tr> : payload.users.map((user) => (
             <tr key={user.id}>
               <td><strong>{user.fullName || user.email}</strong><span className="cell-subtitle">{user.email}</span></td>
               <td>{ROLE_LABELS[user.role]}</td>
               <td><div className={styles.badges}>{(isFullRole(user.role) ? ["Acesso total"] : user.moduleScope.map((id) => MODULE_LABELS.get(id as SectionId) ?? id)).slice(0, 3).map((label) => <span className={styles.badge} key={label}>{label}</span>)}{!isFullRole(user.role) && user.moduleScope.length > 3 ? <span className={styles.badge}>+{user.moduleScope.length - 3}</span> : null}</div></td>
-              <td><div className={styles.badges}>{user.baseScope.slice(0, 2).map((baseKey) => { const base = payload.bases.find((item) => item.baseKey === baseKey); return <span className={styles.badge} key={baseKey}>{base ? baseLabel(base) : baseKey}</span>; })}{user.baseScope.length > 2 ? <span className={styles.badge}>+{user.baseScope.length - 2}</span> : null}{(isFullRole(user.role) || user.role === "loss_supervisor" || user.role === "administration_supervisor") ? <span className={styles.badge}>Todas</span> : null}</div></td>
+              <td><div className={styles.badges}>{user.baseScope.slice(0, 2).map((baseKey) => { const base = payload.bases.find((item) => item.baseKey === baseKey); return <span className={styles.badge} key={baseKey}>{base ? baseLabel(base) : baseKey}</span>; })}{user.baseScope.length > 2 ? <span className={styles.badge}>+{user.baseScope.length - 2}</span> : null}{hasGlobalBaseScope(user.role) ? <span className={styles.badge}>Todas</span> : null}</div></td>
+              <td><div className={styles.badges}>{isGlobalOperationalRole(user.role) ? <span className={styles.badge}>Todos</span> : supportsXptScope(user.role) ? <>{user.xptScope.slice(0, 2).map((xptCode) => <span className={styles.badge} key={xptCode}>{xptCode}</span>)}{user.xptScope.length > 2 ? <span className={styles.badge}>+{user.xptScope.length - 2}</span> : null}{!user.xptScope.length ? <span className={styles.badge}>Nenhum</span> : null}</> : <span className={styles.badge}>Não se aplica</span>}</div></td>
               <td><StatusBadge tone={user.active ? "green" : "amber"}>{user.active ? "Ativo" : "Inativo"}</StatusBadge></td>
               <td className="align-right"><div className={styles.actions}><button className="table-action" type="button" title="Editar" onClick={() => setEditing({ ...user, password: "" })}><Edit3 size={14} /></button><button className="table-action" disabled={user.id === currentUserId || saving} type="button" title="Remover" onClick={() => void removeUser(user)}><Trash2 size={14} /></button></div></td>
             </tr>
@@ -322,7 +348,7 @@ function UserManagementPanel({ currentUserId }: { currentUserId: string }) {
               <label className={styles.field}><span>Cargo</span><select value={editing.role} onChange={(event) => setEditing(roleChanged(editing, event.target.value as UserRole))}>{MANAGED_USER_ROLES.map((role) => <option key={role} value={role}>{ROLE_LABELS[role]}</option>)}</select></label>
             </div>
             <div className={styles.roleSummary}><span className={styles.roleSummaryIcon}><ShieldCheck size={18} /></span><div><strong>{ROLE_LABELS[editing.role]}</strong><span>{ROLE_DETAILS[editing.role] ?? "Escopo definido pela matriz de permissões."}</span></div></div>
-            <AccessEditor draft={editing} setDraft={setEditing} bases={payload.bases} />
+            <AccessEditor draft={editing} setDraft={setEditing} bases={payload.bases} xpts={payload.xpts} />
             <label className={styles.checkItem}><input type="checkbox" checked={editing.active} onChange={(event) => setEditing({ ...editing, active: event.target.checked })} />Conta ativa</label>
             <div className={styles.modalActions}><button className="secondary-button" type="button" onClick={() => setEditing(null)}>Cancelar</button><button className="primary-button" disabled={saving} type="button" onClick={() => void saveEdit()}><Save size={15} />Salvar alterações</button></div>
           </div>
@@ -332,18 +358,24 @@ function UserManagementPanel({ currentUserId }: { currentUserId: string }) {
   );
 }
 
-function AccessEditor({ draft, setDraft, bases }: { draft: UserDraft; setDraft: (draft: UserDraft) => void; bases: BaseOption[] }) {
+function AccessEditor({ draft, setDraft, bases, xpts }: { draft: UserDraft; setDraft: (draft: UserDraft) => void; bases: BaseOption[]; xpts: XptOption[] }) {
   const moduleCap = roleModuleCap(draft.role);
   const tabCap = roleDriverManagementCap(draft.role);
   const full = isFullRole(draft.role);
-  const allBases = full || draft.role === "loss_supervisor" || draft.role === "administration_supervisor";
+  const allBases = hasGlobalBaseScope(draft.role);
+  const allXpts = isGlobalOperationalRole(draft.role);
+  const xptSelectable = supportsXptScope(draft.role);
   const [baseSearch, setBaseSearch] = useState("");
+  const [xptSearch, setXptSearch] = useState("");
   const visibleBases = bases.filter((base) => `${base.sigla} ${base.baseName} ${base.baseKey}`.toLowerCase().includes(baseSearch.toLowerCase()));
+  const visibleXpts = xpts.filter((xpt) => `${xpt.xptCode} ${xpt.label}`.toLowerCase().includes(xptSearch.toLowerCase()));
 
   const setAllModules = () => setDraft({ ...draft, moduleScope: [...moduleCap], driverManagementScope: [...tabCap] });
   const clearModules = () => setDraft({ ...draft, moduleScope: [], driverManagementScope: [] });
   const setAllBases = () => setDraft({ ...draft, baseScope: bases.map((base) => base.baseKey) });
   const clearBases = () => setDraft({ ...draft, baseScope: [] });
+  const setAllXpts = () => setDraft({ ...draft, xptScope: xpts.map((xpt) => xpt.xptCode) });
+  const clearXpts = () => setDraft({ ...draft, xptScope: [] });
 
   return (
     <div className={styles.sectionGrid}>
@@ -375,23 +407,46 @@ function AccessEditor({ draft, setDraft, bases }: { draft: UserDraft; setDraft: 
         ) : null}
       </div>
 
-      <div className={styles.checkPanel}>
-        <div className={styles.panelHeader}>
-          <div><span className={styles.legend}>SVC / Bases responsáveis</span><small>{allBases ? "Abrangência definida pela função" : `${draft.baseScope.length} selecionada(s)`}</small></div>
-          {!allBases ? <div className={styles.compactActions}><button type="button" onClick={setAllBases}>Selecionar todas</button><button type="button" onClick={clearBases}>Limpar</button></div> : null}
+      <div style={{ display: "grid", gap: 12, alignContent: "start", minWidth: 0 }}>
+        <div className={styles.checkPanel}>
+          <div className={styles.panelHeader}>
+            <div><span className={styles.legend}>SVC / Bases responsáveis</span><small>{allBases ? "Abrangência definida pela função" : `${draft.baseScope.length} selecionada(s)`}</small></div>
+            {!allBases ? <div className={styles.compactActions}><button type="button" onClick={setAllBases}>Selecionar todas</button><button type="button" onClick={clearBases}>Limpar</button></div> : null}
+          </div>
+          {allBases ? (
+            <div className={styles.allBasesState}><ShieldCheck size={22} /><div><strong>Todas as SVCs/bases permitidas</strong><span>Este escopo é independente do cadastro de XPT.</span></div></div>
+          ) : (
+            <>
+              <label className={styles.searchBox}><Search size={15} /><input value={baseSearch} onChange={(event) => setBaseSearch(event.target.value)} placeholder="Buscar SVC ou base" /></label>
+              <div className={styles.baseGrid}>{visibleBases.map((base) => {
+                const checked = draft.baseScope.includes(base.baseKey);
+                return <label className={`${styles.checkItem} ${checked ? styles.checkItemActive : ""}`} key={base.baseKey}><input type="checkbox" checked={checked} onChange={() => setDraft({ ...draft, baseScope: toggleValue(draft.baseScope, base.baseKey) })} /><span>{baseLabel(base)}</span></label>;
+              })}</div>
+              {!visibleBases.length ? <p className={styles.emptyState}>Nenhuma SVC/base encontrada para esta busca.</p> : null}
+            </>
+          )}
         </div>
-        {allBases ? (
-          <div className={styles.allBasesState}><ShieldCheck size={22} /><div><strong>Todas as SVCs/bases permitidas</strong><span>Esta função possui abrangência global dentro dos módulos autorizados. XPT permanece independente.</span></div></div>
-        ) : (
-          <>
-            <label className={styles.searchBox}><Search size={15} /><input value={baseSearch} onChange={(event) => setBaseSearch(event.target.value)} placeholder="Buscar SVC ou base" /></label>
-            <div className={styles.baseGrid}>{visibleBases.map((base) => {
-              const checked = draft.baseScope.includes(base.baseKey);
-              return <label className={`${styles.checkItem} ${checked ? styles.checkItemActive : ""}`} key={base.baseKey}><input type="checkbox" checked={checked} onChange={() => setDraft({ ...draft, baseScope: toggleValue(draft.baseScope, base.baseKey) })} /><span>{baseLabel(base)}</span></label>;
-            })}</div>
-            {!visibleBases.length ? <p className={styles.emptyState}>Nenhuma SVC/base encontrada para esta busca.</p> : null}
-          </>
-        )}
+
+        <div className={styles.checkPanel}>
+          <div className={styles.panelHeader}>
+            <div><span className={styles.legend}>XPTs responsáveis</span><small>{allXpts ? "Abrangência global de XPT" : xptSelectable ? `${draft.xptScope.length} selecionado(s)` : "Escopo independente"}</small></div>
+            {xptSelectable ? <div className={styles.compactActions}><button type="button" onClick={setAllXpts}>Selecionar todos</button><button type="button" onClick={clearXpts}>Limpar</button></div> : null}
+          </div>
+          {allXpts ? (
+            <div className={styles.allBasesState}><ShieldCheck size={22} /><div><strong>Todos os XPTs</strong><span>Abrangência global dentro dos módulos autorizados.</span></div></div>
+          ) : xptSelectable ? (
+            <>
+              <label className={styles.searchBox}><Search size={15} /><input value={xptSearch} onChange={(event) => setXptSearch(event.target.value)} placeholder="Buscar XPT" /></label>
+              <div className={styles.baseGrid}>{visibleXpts.map((xpt) => {
+                const checked = draft.xptScope.includes(xpt.xptCode);
+                return <label className={`${styles.checkItem} ${checked ? styles.checkItemActive : ""}`} key={xpt.xptCode}><input type="checkbox" checked={checked} onChange={() => setDraft({ ...draft, xptScope: toggleValue(draft.xptScope, xpt.xptCode) })} /><span>{xpt.label}</span></label>;
+              })}</div>
+              {!visibleXpts.length ? <p className={styles.emptyState}>Nenhum XPT encontrado para esta busca.</p> : null}
+            </>
+          ) : (
+            <div className={styles.allBasesState}><ShieldCheck size={22} /><div><strong>XPT não se aplica a este cargo</strong><span>Responsabilidades de XPT são separadas das SVCs/bases e usadas nos cargos operacionais.</span></div></div>
+          )}
+        </div>
       </div>
     </div>
   );
