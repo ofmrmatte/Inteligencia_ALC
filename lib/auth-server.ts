@@ -30,7 +30,7 @@ export async function getCurrentProfile(): Promise<AuthProfile | null> {
     email: profile.email ?? claims?.email ?? "",
     fullName: profile.full_name ?? profile.email ?? claims?.email ?? "Usuário ALC",
     role,
-    globalAccess: Boolean(profile.global_access),
+    globalAccess: Boolean(profile.global_access) || role === "loss_admin",
     baseScope: Array.isArray(profile.base_scope) ? profile.base_scope : [],
     siglaScope: Array.isArray(profile.sigla_scope) ? profile.sigla_scope : [],
     moduleScope: Array.isArray(profile.module_scope) ? profile.module_scope : [],
