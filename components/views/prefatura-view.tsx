@@ -25,7 +25,7 @@ export function PrefaturaView() {
 
   return (
     <div className="view-stack">
-      <PageIntro description="SVC, XPT e PNR permanecem identificados por aba. A unidade operacional usa o cadastro mestre SVC + Base e sua Filial XPT." chips={[`${formatNumber(scoped.prefatura.length)} linhas brutas`, `${formatNumber(uniqueRows.length)} IDs únicos`]} />
+      <PageIntro description="SVC, XPT e PNR permanecem identificados por aba. SVC + Base formam a unidade operacional; o XPT é uma estrutura independente e aparece em campo próprio quando houver relação regional." chips={[`${formatNumber(scoped.prefatura.length)} linhas brutas`, `${formatNumber(uniqueRows.length)} IDs únicos`]} />
       <div className="kpi-grid kpi-grid--four">
         <KpiCard label="Valor consolidado" value={formatCurrency(value)} detail="Sem duplicar o mesmo ID" icon={<BadgeDollarSign size={19} />} tone="red" />
         <KpiCard label="Pacotes únicos" value={formatNumber(uniqueRows.length)} detail="Unidade de faturamento" icon={<Boxes size={19} />} />
@@ -49,8 +49,8 @@ export function PrefaturaView() {
         </Panel>
       </div>
       <Panel title="Lançamentos de pré-fatura" subtitle="Repetições são marcadas, não removidas da auditoria" action={<StatusBadge tone={duplicateIds.size ? "red" : "green"}>{duplicateIds.size ? `${duplicateIds.size} duplicados` : "Sem duplicados"}</StatusBadge>}>
-        <TableWrap><thead><tr><th>ID do pacote</th><th>Operação</th><th>Base</th><th>Motorista</th><th>Data da rota</th><th>Rota</th><th>Status do ID</th><th className="align-right">Valor</th></tr></thead>
-          <tbody>{scoped.prefatura.slice(0, 60).map((row) => <tr key={`${row.batchId}-${row.sourceFile}-${row.sourceSheet}-${row.rowNumber}`}><td><strong className="mono">{row.shipmentId}</strong><small className="cell-subtitle">{row.sourceSheet}</small></td><td><StatusBadge tone={row.operation === "PNR" ? "amber" : row.operation === "SVC" ? "blue" : "neutral"}>{row.operation}</StatusBadge></td><td><strong>{row.sigla && row.baseName ? `${row.sigla} - ${row.baseName}` : row.baseName || row.baseLabel || "—"}</strong><small className="cell-subtitle">{row.xptCode ? `Filial XPT ${row.xptCode}` : "Filial XPT não identificada"}</small></td><td>{row.driverName || "—"}</td><td>{row.routeDate ? new Date(`${row.routeDate}T12:00:00`).toLocaleDateString("pt-BR") : "—"}</td><td className="mono">{row.routeId || "—"}</td><td>{duplicateIds.has(row.shipmentId) ? <StatusBadge tone="red">Repetido</StatusBadge> : <StatusBadge tone="green">Único</StatusBadge>}</td><td className="align-right"><strong>{formatCurrency(row.value)}</strong></td></tr>)}</tbody>
+        <TableWrap><thead><tr><th>ID do pacote</th><th>Operação</th><th>Base</th><th>XPT</th><th>Motorista</th><th>Data da rota</th><th>Rota</th><th>Status do ID</th><th className="align-right">Valor</th></tr></thead>
+          <tbody>{scoped.prefatura.slice(0, 60).map((row) => <tr key={`${row.batchId}-${row.sourceFile}-${row.sourceSheet}-${row.rowNumber}`}><td><strong className="mono">{row.shipmentId}</strong><small className="cell-subtitle">{row.sourceSheet}</small></td><td><StatusBadge tone={row.operation === "PNR" ? "amber" : row.operation === "SVC" ? "blue" : "neutral"}>{row.operation}</StatusBadge></td><td><strong>{row.sigla && row.baseName ? `${row.sigla} - ${row.baseName}` : row.baseName || row.baseLabel || "—"}</strong></td><td className="mono">{row.xptCode || "—"}</td><td>{row.driverName || "—"}</td><td>{row.routeDate ? new Date(`${row.routeDate}T12:00:00`).toLocaleDateString("pt-BR") : "—"}</td><td className="mono">{row.routeId || "—"}</td><td>{duplicateIds.has(row.shipmentId) ? <StatusBadge tone="red">Repetido</StatusBadge> : <StatusBadge tone="green">Único</StatusBadge>}</td><td className="align-right"><strong>{formatCurrency(row.value)}</strong></td></tr>)}</tbody>
         </TableWrap>
       </Panel>
     </div>
