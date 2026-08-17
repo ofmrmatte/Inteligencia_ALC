@@ -8,7 +8,12 @@ export interface SourceTrace {
   rowNumber: number;
 }
 
-export interface HierarchyRecord extends SourceTrace {
+export interface OperationalUnitFields {
+  unitKey?: string;
+  xptCode?: string;
+}
+
+export interface HierarchyRecord extends SourceTrace, OperationalUnitFields {
   coordinator: string;
   supervisor: string;
   sigla: string;
@@ -16,7 +21,7 @@ export interface HierarchyRecord extends SourceTrace {
   baseKey: string;
 }
 
-export interface PrefaturaRecord extends SourceTrace {
+export interface PrefaturaRecord extends SourceTrace, OperationalUnitFields {
   period: string;
   baseLabel: string;
   baseName: string;
@@ -40,7 +45,7 @@ export interface PrefaturaRecord extends SourceTrace {
 
 export type PrefaturaQualityStatus = "resolved" | "partial" | "needs_review" | "conflict";
 
-export interface PnrRecord extends SourceTrace {
+export interface PnrRecord extends SourceTrace, OperationalUnitFields {
   caseDate: string | null;
   status: string;
   billingPeriod: string;
@@ -49,6 +54,7 @@ export interface PnrRecord extends SourceTrace {
   purchaseValue: number;
   carrier: string;
   originStation: string;
+  baseName?: string;
   baseKey: string;
   sigla: string;
   routeId: string;
@@ -56,12 +62,13 @@ export interface PnrRecord extends SourceTrace {
   custom: string;
 }
 
-export interface RiskRecord extends SourceTrace {
+export interface RiskRecord extends SourceTrace, OperationalUnitFields {
   failureDate: string | null;
   shipmentId: string;
   itemDescription: string;
   driverId: string;
   facilityId: string;
+  baseName?: string;
   destinationType: string;
   carrierName: string;
   failureReason: string;
@@ -137,6 +144,7 @@ export interface ParsedBatch {
 export interface DashboardFilters {
   month: string;
   fortnight: string;
+  xpt: string;
   coordinator: string;
   base: string;
   sigla: string;
@@ -158,6 +166,7 @@ export const EMPTY_DATA: DashboardData = {
 export const EMPTY_FILTERS: DashboardFilters = {
   month: "Todos",
   fortnight: "Todas",
+  xpt: "Todos",
   coordinator: "Todos",
   base: "Todas",
   sigla: "Todas",
