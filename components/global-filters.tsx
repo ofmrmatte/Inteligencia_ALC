@@ -26,12 +26,13 @@ export function GlobalFilters() {
 
   const baseOptions = [...new Map(
     data.hierarchy
+      .filter((row) => filters.xpt === "Todos" || row.xptCode === filters.xpt)
       .filter((row) => filters.coordinator === "Todos" || row.coordinator === filters.coordinator)
-      .filter((row) => row.base)
+      .filter((row) => row.base && row.sigla)
       .map((row) => {
-        const value = `${row.sigla || "SEM_SIGLA"}|||${row.base}`;
-        const label = row.sigla ? `${row.sigla} - ${row.base}` : row.base;
-        return [value, { value, label, sigla: row.sigla || "Todas", base: row.base }] as const;
+        const value = `${row.sigla}|||${row.base}`;
+        const label = `${row.sigla} - ${row.base}`;
+        return [value, { value, label, sigla: row.sigla, base: row.base }] as const;
       }),
   ).values()].sort((a, b) => a.label.localeCompare(b.label, "pt-BR"));
 
@@ -55,9 +56,10 @@ export function GlobalFilters() {
     <section className="filters-bar" aria-label="Filtros globais">
       <SelectFilter label="Mês" value={filters.month} options={options.months} allLabel="Todos" onChange={(value) => setFilter("month", value)} formatOption={formatMonthLabel} />
       <SelectFilter label="Quinzena" value={filters.fortnight} options={options.fortnights} allLabel="Todas" onChange={(value) => setFilter("fortnight", value)} formatOption={formatFortnightLabel} />
+      <SelectFilter label="Filial XPT" value={filters.xpt} options={options.xpts} allLabel="Todos" onChange={(value) => setFilter("xpt", value)} />
       <SelectFilter label="Coordenador" value={filters.coordinator} options={options.coordinators} allLabel="Todos" onChange={(value) => setFilter("coordinator", value)} />
       <label className="filter-control">
-        <span>Base</span>
+        <span>Base (SVC)</span>
         <select value={selectedBase} onChange={(event) => changeBase(event.target.value)}>
           <option value="Todas">Todas</option>
           {baseOptions.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
