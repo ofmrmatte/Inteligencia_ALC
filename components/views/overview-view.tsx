@@ -2,7 +2,8 @@
 
 import { Area, AreaChart, Bar, BarChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
 import { BadgeDollarSign, Boxes, CircleCheckBig, Copy, ShieldAlert, Truck } from "lucide-react";
-import { monthlyMovement, overviewMetrics, prefaturaByOperation, scopeData } from "@/lib/metrics";
+import { scopeData } from "@/lib/dashboard-scope";
+import { monthlyMovement, overviewMetrics, prefaturaByOperation } from "@/lib/metrics";
 import { useDashboardStore } from "@/lib/store";
 import { formatCurrency, formatNumber, formatPercent, KpiCard, Panel, PageIntro, StatusBadge } from "@/components/ui";
 import { ChartTooltip, NoResults, TableWrap } from "./shared";
