@@ -1,7 +1,8 @@
 "use client";
 
 import { CheckCheck, CircleDashed, Copy, Link2 } from "lucide-react";
-import { reconciliation, scopeData } from "@/lib/metrics";
+import { scopeData } from "@/lib/dashboard-scope";
+import { reconciliation } from "@/lib/metrics";
 import { useDashboardStore } from "@/lib/store";
 import { formatCurrency, formatNumber, KpiCard, Panel, PageIntro, StatusBadge } from "@/components/ui";
 import { NoResults, TableWrap } from "./shared";
