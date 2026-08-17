@@ -91,7 +91,11 @@ function firstId(values: RowMap, headers: string[]) {
 }
 
 function parseWorkbook(bytes: Uint8Array, sourceFile: string, batchName: string, batchId: string) {
-  const workbook = XLSX.read(bytes, { type: "array", cellDates: true });
+  const isCsv = /\.csv$/i.test(sourceFile);
+  // CSVs exportados pelo Mercado Livre usam ponto decimal (ex.: R$ 55.00).
+  // Mantemos o CSV em modo raw para impedir que o SheetJS aplique inferência
+  // regional e transforme 55.00 em 5500 antes da normalização pt-BR.
+  const workbook = XLSX.read(bytes, { type: "array", cellDates: true, raw: isCsv });
   const hierarchy: HierarchyRecord[] = [];
   const prefatura: PrefaturaRecord[] = [];
   const pnr: PnrRecord[] = [];
