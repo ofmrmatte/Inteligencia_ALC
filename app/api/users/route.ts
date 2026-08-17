@@ -40,8 +40,24 @@ function fullRole(role: UserRole) {
   return ["director", "developer", "loss_supervisor"].includes(role);
 }
 
-function needsAssignedBases(role: UserRole) {
-  return ["admin", "coordinator", "supervisor"].includes(role);
+function globalOperationalRole(role: UserRole) {
+  return ["director", "developer", "loss_supervisor", "loss_admin"].includes(role);
+}
+
+function globalBaseScopeRole(role: UserRole) {
+  return globalOperationalRole(role) || role === "administration_supervisor";
+}
+
+function supportsXptScope(role: UserRole) {
+  return role === "coordinator" || role === "supervisor";
+}
+
+function requiresBaseScope(role: UserRole) {
+  return role === "admin";
+}
+
+function requiresOperationalScope(role: UserRole) {
+  return role === "coordinator" || role === "supervisor";
 }
 
 function allowedSubset(values: string[], allowed: readonly string[]) {
@@ -91,9 +107,10 @@ function parseUserPayload(payload: DbRow, requirePassword: boolean) {
     password,
     fullName: toStringValue(payload.fullName ?? payload.full_name).trim(),
     role,
-    globalAccess: fullRole(role),
+    globalAccess: globalOperationalRole(role),
     active: payload.active !== false,
-    baseScope: fullRole(role) || role === "administration_supervisor" ? [] : toStringArray(payload.baseScope ?? payload.base_scope),
+    baseScope: globalBaseScopeRole(role) ? [] : toStringArray(payload.baseScope ?? payload.base_scope),
+    xptScope: supportsXptScope(role) ? toStringArray(payload.xptScope ?? payload.xpt_scope) : [],
     moduleScope,
     driverManagementScope,
   };
@@ -104,9 +121,18 @@ async function loadBaseRows(admin: AdminClient) {
     .from("operational_units")
     .select("unit_key,base_key,base_name,sigla,xpt_code,coordinator_name,active")
     .eq("active", true)
-    .order("xpt_code", { ascending: true })
     .order("sigla", { ascending: true })
     .order("base_name", { ascending: true });
+  if (error) throw new Error(error.message);
+  return (data ?? []) as DbRow[];
+}
+
+async function loadXptRows(admin: AdminClient) {
+  const { data, error } = await admin
+    .from("operational_xpts")
+    .select("xpt_code,active")
+    .eq("active", true)
+    .order("xpt_code", { ascending: true });
   if (error) throw new Error(error.message);
   return (data ?? []) as DbRow[];
 }
@@ -145,7 +171,17 @@ async function resolveBaseScopes(admin: AdminClient, requested: string[], role: 
   };
 }
 
-function canonicalizeStoredBaseScope(values: string[], siglaScope: string[], role: UserRole, bases: DbRow[]) {
+async function resolveXptScope(admin: AdminClient, requested: string[], role: UserRole, preloadedXpts?: DbRow[]) {
+  if (!supportsXptScope(role) || !requested.length) return [] as string[];
+  const rows = preloadedXpts ?? await loadXptRows(admin);
+  const byNormalized = new Map(rows.map((row) => [normalizeText(row.xpt_code), toStringValue(row.xpt_code)]));
+  const resolved = requested.map((value) => byNormalized.get(normalizeText(value)) ?? "");
+  const unresolved = requested.filter((_, index) => !resolved[index]);
+  if (unresolved.length) throw new Error(`XPT(s) não reconhecido(s): ${unresolved.join(", ")}.`);
+  return [...new Set(resolved.filter(Boolean))];
+}
+
+function canonicalizeStoredBaseScope(values: string[], siglaScope: string[], bases: DbRow[]) {
   if (!values.length) return [];
   const result = values.map((value) => canonicalBaseFor(value, bases, siglaScope));
   return [...new Set(result.map((row, index) => {
@@ -154,7 +190,13 @@ function canonicalizeStoredBaseScope(values: string[], siglaScope: string[], rol
   }).filter(Boolean))];
 }
 
-function mapManagedUser(row: DbRow, bases: DbRow[]) {
+function canonicalizeStoredXptScope(values: string[], xpts: DbRow[]) {
+  if (!values.length) return [];
+  const byNormalized = new Map(xpts.map((row) => [normalizeText(row.xpt_code), toStringValue(row.xpt_code)]));
+  return [...new Set(values.map((value) => byNormalized.get(normalizeText(value)) ?? value).filter(Boolean))];
+}
+
+function mapManagedUser(row: DbRow, bases: DbRow[], xpts: DbRow[]) {
   const role = parseRole(row.role);
   const siglaScope = toStringArray(row.sigla_scope);
   return {
@@ -162,9 +204,10 @@ function mapManagedUser(row: DbRow, bases: DbRow[]) {
     email: toStringValue(row.email),
     fullName: toStringValue(row.full_name),
     role,
-    globalAccess: fullRole(role),
+    globalAccess: globalOperationalRole(role),
     active: row.active !== false,
-    baseScope: canonicalizeStoredBaseScope(toStringArray(row.base_scope), siglaScope, role, bases),
+    baseScope: canonicalizeStoredBaseScope(toStringArray(row.base_scope), siglaScope, bases),
+    xptScope: canonicalizeStoredXptScope(toStringArray(row.xpt_scope), xpts),
     moduleScope: toStringArray(row.module_scope),
     driverManagementScope: toStringArray(row.driver_management_scope),
     createdAt: toStringValue(row.created_at),
@@ -252,21 +295,25 @@ async function syncAdministrationAssignments(
 
 async function responsePayload() {
   const admin = createAdminClient();
-  const [usersResult, bases] = await Promise.all([
+  const [usersResult, bases, xpts] = await Promise.all([
     admin.from("profiles").select("*").in("role", [...MANAGED_USER_ROLES]).order("email", { ascending: true }),
     loadBaseRows(admin),
+    loadXptRows(admin),
   ]);
   if (usersResult.error) throw new Error(usersResult.error.message);
   return NextResponse.json({
     roles: MANAGED_USER_ROLES,
     driverManagementTabs: DRIVER_MANAGEMENT_TABS,
-    users: ((usersResult.data ?? []) as DbRow[]).map((row) => mapManagedUser(row, bases)),
+    users: ((usersResult.data ?? []) as DbRow[]).map((row) => mapManagedUser(row, bases, xpts)),
     bases: bases.map((row) => ({
       baseKey: toStringValue(row.unit_key),
       baseName: toStringValue(row.base_name) || toStringValue(row.base_key),
       sigla: toStringValue(row.sigla),
+      label: `${toStringValue(row.sigla)} - ${toStringValue(row.base_name) || toStringValue(row.base_key)}`,
+    })),
+    xpts: xpts.map((row) => ({
       xptCode: toStringValue(row.xpt_code),
-      label: `${toStringValue(row.sigla)} - ${toStringValue(row.base_name) || toStringValue(row.base_key)}${row.xpt_code ? ` · XPT ${toStringValue(row.xpt_code)}` : ""}`,
+      label: toStringValue(row.xpt_code),
     })),
   });
 }
@@ -287,9 +334,15 @@ export async function POST(request: Request) {
     const manager = await requireUserManager();
     const admin = createAdminClient();
     const payload = parseUserPayload((await request.json()) as DbRow, true);
-    const scopes = await resolveBaseScopes(admin, payload.baseScope, payload.role);
-    if (needsAssignedBases(payload.role) && scopes.baseScope.length === 0) {
-      throw new Error("Selecione ao menos uma base responsável para este cargo.");
+    const [scopes, xptScope] = await Promise.all([
+      resolveBaseScopes(admin, payload.baseScope, payload.role),
+      resolveXptScope(admin, payload.xptScope, payload.role),
+    ]);
+    if (requiresBaseScope(payload.role) && scopes.baseScope.length === 0) {
+      throw new Error("Selecione ao menos uma SVC/base responsável para este cargo.");
+    }
+    if (requiresOperationalScope(payload.role) && scopes.baseScope.length === 0 && xptScope.length === 0) {
+      throw new Error("Selecione ao menos uma SVC/base ou um XPT responsável para este cargo.");
     }
 
     const { data: created, error: createError } = await admin.auth.admin.createUser({
@@ -310,6 +363,7 @@ export async function POST(request: Request) {
       active: payload.active,
       base_scope: scopes.baseScope,
       sigla_scope: scopes.siglaScope,
+      xpt_scope: xptScope,
       module_scope: payload.moduleScope,
       driver_management_scope: payload.driverManagementScope,
       updated_at: new Date().toISOString(),
@@ -333,9 +387,15 @@ export async function PATCH(request: Request) {
     if (!id) throw new Error("Usuário não informado.");
     const payload = parseUserPayload(body, false);
     if (id === manager.id && payload.active === false) throw new Error("Você não pode desativar sua própria conta.");
-    const scopes = await resolveBaseScopes(admin, payload.baseScope, payload.role);
-    if (needsAssignedBases(payload.role) && scopes.baseScope.length === 0) {
-      throw new Error("Selecione ao menos uma base responsável para este cargo.");
+    const [scopes, xptScope] = await Promise.all([
+      resolveBaseScopes(admin, payload.baseScope, payload.role),
+      resolveXptScope(admin, payload.xptScope, payload.role),
+    ]);
+    if (requiresBaseScope(payload.role) && scopes.baseScope.length === 0) {
+      throw new Error("Selecione ao menos uma SVC/base responsável para este cargo.");
+    }
+    if (requiresOperationalScope(payload.role) && scopes.baseScope.length === 0 && xptScope.length === 0) {
+      throw new Error("Selecione ao menos uma SVC/base ou um XPT responsável para este cargo.");
     }
 
     const { error: profileError } = await admin.from("profiles").update({
@@ -346,6 +406,7 @@ export async function PATCH(request: Request) {
       active: payload.active,
       base_scope: scopes.baseScope,
       sigla_scope: scopes.siglaScope,
+      xpt_scope: xptScope,
       module_scope: payload.moduleScope,
       driver_management_scope: payload.driverManagementScope,
       updated_at: new Date().toISOString(),
