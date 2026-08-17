@@ -47,7 +47,7 @@ async function allRows(table: string, select: string, orderColumn: string) {
       .order(orderColumn, { ascending: true })
       .range(offset, offset + size - 1);
     if (error) throw new Error(error.message);
-    return { rows: (data ?? []) as DbRow[], count: count ?? null };
+    return { rows: (data ?? []) as unknown as DbRow[], count: count ?? null };
   });
 }
 
