@@ -1,5 +1,6 @@
 "use client";
 
+import { useMemo, useState } from "react";
 import { Bar, BarChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
 import { BadgeDollarSign, Boxes, CircleCheckBig, Link2, TimerReset } from "lucide-react";
 import { latestPnrByShipment, pnrDecisionRows, scopeData } from "@/lib/metrics";
@@ -8,11 +9,47 @@ import { useDashboardStore } from "@/lib/store";
 import { formatCurrency, formatNumber, formatPercent, KpiCard, Panel, PageIntro, StatusBadge } from "@/components/ui";
 import { ChartTooltip, NoResults, TableWrap } from "./shared";
 
+const columnFilterStyle = {
+  display: "block",
+  marginTop: 6,
+  width: 156,
+  height: 28,
+  padding: "0 24px 0 8px",
+  color: "#25272b",
+  background: "#fff",
+  border: "1px solid #d7d9dd",
+  borderRadius: 5,
+  outline: "none",
+  fontSize: 10,
+} as const;
+
+function pnrStatusKey(status: string) {
+  return normalizeText(status || "Sem status");
+}
+
 export function PnrView() {
   const data = useDashboardStore((state) => state.data);
   const filters = useDashboardStore((state) => state.filters);
   const scoped = scopeData(data, filters);
+  // Os uploads diários podem repetir o mesmo ID. Para o painel operacional,
+  // o snapshot do lote importado mais recentemente é a fonte de verdade.
   const rows = latestPnrByShipment(scoped.pnr, data.imports);
+  const [statusFilter, setStatusFilter] = useState("TODOS");
+
+  const statusOptions = useMemo(() => {
+    const labels = new Map<string, string>();
+    rows.forEach((row) => {
+      const label = row.status || "Sem status";
+      const key = pnrStatusKey(label);
+      if (key && !labels.has(key)) labels.set(key, label);
+    });
+    return [...labels.entries()].sort((a, b) => a[1].localeCompare(b[1], "pt-BR"));
+  }, [rows]);
+
+  const tableRows = statusFilter === "TODOS"
+    ? rows
+    : rows.filter((row) => pnrStatusKey(row.status) === statusFilter);
+
   if (!rows.length) return <NoResults title="Nenhum caso PNR neste recorte" />;
 
   const value = rows.reduce((sum, row) => sum + row.purchaseValue, 0);
@@ -30,7 +67,7 @@ export function PnrView() {
 
   return (
     <div className="view-stack">
-      <PageIntro description="Cada ID de envio conta como um caso. A correspondência com pré-fatura ocorre somente pelo mesmo ID." chips={[`${status.length} status encontrados`, `${formatNumber(scoped.pnr.length - rows.length)} repetições consolidadas`]} />
+      <PageIntro description="Cada ID de envio conta como um caso. Em uploads diários repetidos, status e demais campos exibidos vêm sempre do lote importado mais recentemente." chips={[`${status.length} status encontrados`, `${formatNumber(scoped.pnr.length - rows.length)} repetições consolidadas`]} />
       <div className="kpi-grid kpi-grid--four">
         <KpiCard label="Casos únicos" value={formatNumber(rows.length)} detail="IDs de envio" icon={<Boxes size={19} />} />
         <KpiCard label="Valor de compra" value={formatCurrency(value)} detail="Base dos casos PNR" icon={<BadgeDollarSign size={19} />} tone="red" />
@@ -59,9 +96,27 @@ export function PnrView() {
           <tbody>{decisions.map((row) => <tr className={`decision-row decision-row--${row.tone}`} key={row.status}><td><strong>{row.status}</strong></td><td>{formatNumber(row.cases)}</td><td>{formatPercent(row.percentage)}</td><td className="align-right"><strong>{formatCurrency(row.value)}</strong></td><td>{row.priority}</td><td>{row.action}</td></tr>)}</tbody>
         </TableWrap>
       </Panel>
-      <Panel title="Casos PNR" subtitle="Detalhe rastreável até arquivo, aba e linha" action={<StatusBadge tone="neutral"><TimerReset size={13} /> {rows.length} IDs</StatusBadge>}>
-        <TableWrap><thead><tr><th>ID de envio</th><th>Status</th><th>Data</th><th>Base de origem</th><th>Motorista</th><th>Rota</th><th className="align-right">Valor</th></tr></thead>
-          <tbody>{rows.slice(0, 50).map((row) => <tr key={`${row.batchId}-${row.shipmentId}`}><td><strong className="mono">{row.shipmentId}</strong><small className="cell-subtitle">{row.sourceFile}</small></td><td><StatusBadge tone={/PROCEDENTE|APROVADO/.test(normalizeText(row.status)) ? "green" : /ANALISE|PENDENTE/.test(normalizeText(row.status)) ? "amber" : "neutral"}>{row.status || "Sem status"}</StatusBadge></td><td>{row.caseDate ? new Date(`${row.caseDate}T12:00:00`).toLocaleDateString("pt-BR") : "—"}</td><td>{row.originStation || "—"}</td><td className="mono">{row.driverId || "—"}</td><td className="mono">{row.routeId || "—"}</td><td className="align-right"><strong>{formatCurrency(row.purchaseValue)}</strong></td></tr>)}</tbody>
+      <Panel title="Casos PNR" subtitle="Detalhe rastreável até arquivo, aba e linha" action={<StatusBadge tone="neutral"><TimerReset size={13} /> {tableRows.length} IDs</StatusBadge>}>
+        <TableWrap>
+          <thead>
+            <tr>
+              <th>ID de envio</th>
+              <th>
+                Status
+                <select
+                  aria-label="Filtrar casos PNR por status"
+                  value={statusFilter}
+                  onChange={(event) => setStatusFilter(event.target.value)}
+                  style={columnFilterStyle}
+                >
+                  <option value="TODOS">Todos os status</option>
+                  {statusOptions.map(([key, label]) => <option key={key} value={key}>{label}</option>)}
+                </select>
+              </th>
+              <th>Data</th><th>Base de origem</th><th>Motorista</th><th>Rota</th><th className="align-right">Valor</th>
+            </tr>
+          </thead>
+          <tbody>{tableRows.slice(0, 50).map((row) => <tr key={`${row.batchId}-${row.shipmentId}`}><td><strong className="mono">{row.shipmentId}</strong><small className="cell-subtitle">{row.sourceFile}</small></td><td><StatusBadge tone={/PROCEDENTE|APROVADO/.test(normalizeText(row.status)) ? "green" : /ANALISE|PENDENTE/.test(normalizeText(row.status)) ? "amber" : "neutral"}>{row.status || "Sem status"}</StatusBadge></td><td>{row.caseDate ? new Date(`${row.caseDate}T12:00:00`).toLocaleDateString("pt-BR") : "—"}</td><td>{row.originStation || "—"}</td><td className="mono">{row.driverId || "—"}</td><td className="mono">{row.routeId || "—"}</td><td className="align-right"><strong>{formatCurrency(row.purchaseValue)}</strong></td></tr>)}</tbody>
         </TableWrap>
       </Panel>
     </div>
