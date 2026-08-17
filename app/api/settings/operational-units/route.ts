@@ -169,7 +169,7 @@ async function syncLegacyBase(baseKey: string, baseName: string, sigla: string) 
 function parseUnit(body: DbRow, requireAll: boolean) {
   const sigla = normalized(body.sigla);
   const baseName = text(body.baseName ?? body.base_name);
-  const baseKey = normalized(baseName || body.baseKey ?? body.base_key);
+  const baseKey = normalized(baseName || body.baseKey || body.base_key);
   const xptCode = normalized(body.xptCode ?? body.xpt_code);
   const coordinator = text(body.coordinator ?? body.coordinator_name);
   const supervisors = stringArray(body.supervisors);
