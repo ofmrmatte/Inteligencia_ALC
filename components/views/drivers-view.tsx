@@ -2,7 +2,8 @@
 
 import { Bar, BarChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
 import { BadgeDollarSign, CircleCheckBig, Siren, Truck } from "lucide-react";
-import { driverPerformance, scopeData } from "@/lib/metrics";
+import { scopeData } from "@/lib/dashboard-scope";
+import { driverPerformance } from "@/lib/metrics";
 import { useDashboardStore } from "@/lib/store";
 import { formatCurrency, formatNumber, formatPercent, KpiCard, Panel, PageIntro, StatusBadge } from "@/components/ui";
 import { ChartTooltip, NoResults, TableWrap } from "./shared";
