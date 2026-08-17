@@ -37,10 +37,13 @@ describe("matriz de acesso do painel", () => {
     expect(driverManagementTabsForProfile(current)).toEqual([]);
   });
 
-  it("mantém Administração Loss nos módulos operacionais, com todas as bases e permissão de importar", () => {
-    const current = profile("loss_admin", ["visao-geral", "gestao-pnr", "risco-lm", "perfil"], []);
-    expect(modulesForProfile(current)).toEqual(["visao-geral", "gestao-pnr", "risco-lm", "perfil"]);
+  it("mantém Administração Loss nos módulos operacionais e importações, com todas as bases", () => {
+    const current = profile("loss_admin", ["visao-geral"], []);
+    expect(canAccessSection(current, "visao-geral")).toBe(true);
+    expect(canAccessSection(current, "gestao-pnr")).toBe(true);
+    expect(canAccessSection(current, "pre-faturamento")).toBe(true);
     expect(canAccessSection(current, "risco-lm")).toBe(true);
+    expect(canAccessSection(current, "importacoes")).toBe(true);
     expect(canAccessSection(current, "configuracoes")).toBe(false);
     expect(canAccessSection(current, "gestao-motoristas")).toBe(false);
     expect(driverManagementTabsForProfile(current)).toEqual([]);
