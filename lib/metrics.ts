@@ -121,9 +121,14 @@ export function latestPnrByShipment(records: PnrRecord[], imports: ImportEntry[]
   return [...latest.values()];
 }
 
-function matchesScope(record: { baseKey: string; sigla: string }, allowedBases: Set<string>, allowedSiglas: Set<string>, scopeActive: boolean) {
+function matchesScope(record: { baseKey: string; sigla: string }, allowedPairs: Set<string>, allowedBases: Set<string>, allowedSiglas: Set<string>, scopeActive: boolean) {
   if (!scopeActive) return true;
-  return allowedBases.has(normalizeText(record.baseKey)) || allowedSiglas.has(normalizeText(record.sigla));
+  const base = normalizeText(record.baseKey);
+  const sigla = normalizeText(record.sigla);
+  if (base && sigla) return allowedPairs.has(`${sigla}|${base}`);
+  if (base) return allowedBases.has(base);
+  if (sigla) return allowedSiglas.has(sigla);
+  return false;
 }
 
 function driverIdMap(drivers: DriverRecord[]) {
@@ -195,7 +200,7 @@ function operationalActivity(data: DashboardData): OperationalActivity {
 }
 
 function activeOperationalScope(filters: DashboardFilters) {
-  return filters.month === "Todos" && filters.fortnight === "Todas";
+  return filters.month === "Todos" && filters.fortnight === "Todas" && filters.xpt === "Todos";
 }
 
 function isActiveBase(activity: OperationalActivity, record: { baseKey: string; sigla: string }) {
@@ -221,6 +226,7 @@ export function scopeData(data: DashboardData, filters: DashboardFilters, option
   const importFortnights = importFortnightByBatch(data.imports);
   const activeScope = Boolean(options.activeOnly) && activeOperationalScope(filters);
   const hierarchy = data.hierarchy.filter((row) => {
+    if (filters.xpt !== "Todos" && row.xptCode !== filters.xpt) return false;
     if (filters.coordinator !== "Todos" && row.coordinator !== filters.coordinator) return false;
     if (filters.sigla !== "Todas" && row.sigla !== filters.sigla) return false;
     if (filters.base !== "Todas" && row.base !== filters.base) return false;
@@ -228,15 +234,16 @@ export function scopeData(data: DashboardData, filters: DashboardFilters, option
     if (activeScope && !isActiveBase(activity, row)) return false;
     return true;
   });
-  const scopeActive = filters.coordinator !== "Todos" || filters.sigla !== "Todas" || filters.base !== "Todas" || filters.supervisor !== "Todos";
+  const scopeActive = filters.xpt !== "Todos" || filters.coordinator !== "Todos" || filters.sigla !== "Todas" || filters.base !== "Todas" || filters.supervisor !== "Todos";
   const allowedBases = new Set(hierarchy.map((row) => normalizeText(row.baseKey)));
   const allowedSiglas = new Set(hierarchy.map((row) => normalizeText(row.sigla)));
+  const allowedPairs = new Set(hierarchy.map((row) => `${normalizeText(row.sigla)}|${normalizeText(row.baseKey)}`));
   const idByName = driverIdMap(data.drivers);
   const selectedDriverId = filters.driver === "Todos" ? "" : idByName.get(normalizeText(filters.driver)) ?? filters.driver;
 
   const prefatura = data.prefatura.filter((row) => {
     if (!inFortnight(recordFortnight(importFortnights, row, row.period, row.routeDate), filters)) return false;
-    if (!matchesScope(row, allowedBases, allowedSiglas, scopeActive)) return false;
+    if (!matchesScope(row, allowedPairs, allowedBases, allowedSiglas, scopeActive)) return false;
     if (activeScope && (!isActiveBase(activity, row) || !isActiveDriverName(activity, row.driverName))) return false;
     if (filters.operation !== "Todas" && row.operation !== filters.operation) return false;
     if (filters.driver !== "Todos" && normalizeText(row.driverName) !== normalizeText(filters.driver)) return false;
@@ -244,7 +251,7 @@ export function scopeData(data: DashboardData, filters: DashboardFilters, option
   });
   const pnr = data.pnr.filter((row) => {
     if (!inFortnight(recordFortnight(importFortnights, row, row.billingPeriod, row.caseDate), filters)) return false;
-    if (!matchesScope(row, allowedBases, allowedSiglas, scopeActive)) return false;
+    if (!matchesScope(row, allowedPairs, allowedBases, allowedSiglas, scopeActive)) return false;
     if (activeScope && (!isActiveBase(activity, row) || !isActiveDriverId(activity, row.driverId))) return false;
     if (filters.operation !== "Todas" && filters.operation !== "PNR") return false;
     if (selectedDriverId && row.driverId !== selectedDriverId) return false;
@@ -252,7 +259,7 @@ export function scopeData(data: DashboardData, filters: DashboardFilters, option
   });
   const risk = data.risk.filter((row) => {
     if (!inFortnight(recordFortnight(importFortnights, row, undefined, row.failureDate), filters)) return false;
-    if (!matchesScope(row, allowedBases, allowedSiglas, scopeActive)) return false;
+    if (!matchesScope(row, allowedPairs, allowedBases, allowedSiglas, scopeActive)) return false;
     if (activeScope && (!isActiveBase(activity, row) || !isActiveDriverId(activity, row.driverId))) return false;
     if (selectedDriverId && row.driverId !== selectedDriverId) return false;
     return true;
@@ -273,7 +280,8 @@ export function scopeData(data: DashboardData, filters: DashboardFilters, option
 
 export function filterOptions(data: DashboardData, filters: DashboardFilters) {
   const importFortnights = importFortnightByBatch(data.imports);
-  const afterCoordinator = data.hierarchy.filter((row) => filters.coordinator === "Todos" || row.coordinator === filters.coordinator);
+  const afterXpt = data.hierarchy.filter((row) => filters.xpt === "Todos" || row.xptCode === filters.xpt);
+  const afterCoordinator = afterXpt.filter((row) => filters.coordinator === "Todos" || row.coordinator === filters.coordinator);
   const afterSigla = afterCoordinator.filter((row) => filters.sigla === "Todas" || row.sigla === filters.sigla);
   const afterBase = afterSigla.filter((row) => filters.base === "Todas" || row.base === filters.base);
   const scoped = scopeData(data, { ...filters, driver: "Todos" });
@@ -297,10 +305,11 @@ export function filterOptions(data: DashboardData, filters: DashboardFilters) {
   return {
     months,
     fortnights,
-    coordinators: unique(data.hierarchy.map((row) => row.coordinator)).sort((a, b) => a.localeCompare(b, "pt-BR")),
+    xpts: unique(data.hierarchy.map((row) => row.xptCode || "").filter(Boolean)).sort(),
+    coordinators: unique(afterXpt.map((row) => row.coordinator).filter(Boolean)).sort((a, b) => a.localeCompare(b, "pt-BR")),
     siglas: unique(afterCoordinator.map((row) => row.sigla)).sort(),
     bases: unique(afterSigla.map((row) => row.base)).sort((a, b) => a.localeCompare(b, "pt-BR")),
-    supervisors: unique(afterBase.map((row) => row.supervisor)).sort((a, b) => a.localeCompare(b, "pt-BR")),
+    supervisors: unique(afterBase.map((row) => row.supervisor).filter(Boolean)).sort((a, b) => a.localeCompare(b, "pt-BR")),
     drivers: driverNames,
   };
 }
@@ -415,8 +424,8 @@ export function driverPerformance(scoped: ScopedData, allDrivers: DriverRecord[]
   }>();
 
   const ensure = (driver: DriverRecord | undefined, fallback: string) => {
-    const key = driver?.driverId || fallback;
-    if (!rows.has(key)) rows.set(key, {
+    const rowKey = driver?.driverId || fallback;
+    if (!rows.has(rowKey)) rows.set(rowKey, {
       driverId: driver?.driverId || "—",
       name: driver?.name || fallback || "Não identificado",
       shipped: driver?.shipped || 0,
@@ -427,7 +436,7 @@ export function driverPerformance(scoped: ScopedData, allDrivers: DriverRecord[]
       packages: 0,
       riskValue: 0,
     });
-    return rows.get(key)!;
+    return rows.get(rowKey)!;
   };
 
   scoped.drivers.forEach((driver) => ensure(driver, driver.name));
@@ -483,25 +492,27 @@ export interface QualityIssue {
 }
 
 export function qualityIssues(data: DashboardData): QualityIssue[] {
-  const hierarchyBases = new Set(data.hierarchy.map((row) => normalizeText(row.baseKey)));
-  const hierarchySiglas = new Set(data.hierarchy.map((row) => normalizeText(row.sigla)));
+  const hierarchyPairs = new Set(data.hierarchy.map((row) => `${normalizeText(row.sigla)}|${normalizeText(row.baseKey)}`));
   const knownDrivers = new Set(data.drivers.map((row) => normalizeText(row.name)));
-  const matchHierarchy = (row: { baseKey: string; sigla: string }) => hierarchyBases.has(normalizeText(row.baseKey)) || hierarchySiglas.has(normalizeText(row.sigla));
+  const matchHierarchy = (row: { baseKey: string; sigla: string }) => hierarchyPairs.has(`${normalizeText(row.sigla)}|${normalizeText(row.baseKey)}`);
   const unmatchedBases = [...data.prefatura, ...data.pnr, ...data.risk].filter((row) => !matchHierarchy(row));
   const unmatchedDrivers = data.prefatura.filter((row) => row.driverName && !knownDrivers.has(normalizeText(row.driverName)));
   const duplicatePrefatura = duplicateGroups(data.prefatura);
   const missingIds = [...data.prefatura, ...data.pnr, ...data.risk].filter((row) => !row.shipmentId);
   const multipleSupervisors = new Map<string, Set<string>>();
-  data.hierarchy.forEach((row) => multipleSupervisors.set(row.sigla, new Set([...(multipleSupervisors.get(row.sigla) ?? []), row.supervisor])));
+  data.hierarchy.forEach((row) => {
+    const unit = row.unitKey || `${row.sigla}|${row.baseKey}`;
+    if (row.supervisor) multipleSupervisors.set(unit, new Set([...(multipleSupervisors.get(unit) ?? []), row.supervisor]));
+  });
   const sharedScopes = [...multipleSupervisors.values()].filter((set) => set.size > 1).length;
   const issues: QualityIssue[] = [
     {
       id: "base-unmatched",
       severity: unmatchedBases.length ? "Atenção" : "Informativo",
       rule: "Base/Sigla sem correspondência",
-      dataset: "Operacional × Hierarquia",
+      dataset: "Operacional × Cadastro de bases",
       count: unmatchedBases.length,
-      detail: "Bases operacionais que não encontraram BASE ou SIGLA na planilha de coordenadores.",
+      detail: "Registros operacionais que não encontraram a combinação exata de SVC/SIGLA e BASE no cadastro mestre.",
     },
     {
       id: "driver-unmatched",
@@ -533,7 +544,7 @@ export function qualityIssues(data: DashboardData): QualityIssue[] {
       rule: "Supervisão compartilhada",
       dataset: "Hierarquia",
       count: sharedScopes,
-      detail: "Uma SIGLA possui mais de um supervisor; sem vínculo motorista-supervisor, o escopo do supervisor permanece compartilhado na base.",
+      detail: "Uma mesma SVC/Base possui mais de um supervisor cadastrado; todos permanecem vinculados à mesma unidade operacional.",
     },
   ];
   return issues;
