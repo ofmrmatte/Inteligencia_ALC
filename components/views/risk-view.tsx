@@ -4,28 +4,18 @@ import { useMemo, useState } from "react";
 import { Bar, BarChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
 import { BadgeDollarSign, Clock3, PackageX, ShieldAlert } from "lucide-react";
 import { scopeData } from "@/lib/metrics";
-import { normalizeText } from "@/lib/normalize";
+import { cleanText, normalizeText } from "@/lib/normalize";
 import { useDashboardStore } from "@/lib/store";
 import type { ImportEntry, RiskRecord } from "@/lib/types";
 import { formatCurrency, formatNumber, KpiCard, Panel, PageIntro, StatusBadge } from "@/components/ui";
-import { ChartTooltip, NoResults, TableWrap } from "./shared";
+import { ChartTooltip, ColumnSelectFilter, NoResults, TableWrap } from "./shared";
 
-const columnFilterStyle = {
-  display: "block",
-  marginTop: 6,
-  width: 156,
-  height: 28,
-  padding: "0 24px 0 8px",
-  color: "#25272b",
-  background: "#fff",
-  border: "1px solid #d7d9dd",
-  borderRadius: 5,
-  outline: "none",
-  fontSize: 10,
-} as const;
+function reasonLabel(reason: string) {
+  return cleanText(reason) || "Sem motivo";
+}
 
 function reasonKey(reason: string) {
-  return normalizeText(reason || "Sem motivo");
+  return normalizeText(reasonLabel(reason));
 }
 
 function latestRiskByShipment(records: RiskRecord[], imports: ImportEntry[]): RiskRecord[] {
@@ -62,11 +52,13 @@ export function RiskView() {
   const reasonOptions = useMemo(() => {
     const labels = new Map<string, string>();
     rows.forEach((row) => {
-      const label = row.failureReason || "Sem motivo";
+      const label = reasonLabel(row.failureReason);
       const key = reasonKey(label);
       if (key && !labels.has(key)) labels.set(key, label);
     });
-    return [...labels.entries()].sort((a, b) => a[1].localeCompare(b[1], "pt-BR"));
+    return [...labels.entries()]
+      .map(([value, label]) => ({ value, label }))
+      .sort((a, b) => a.label.localeCompare(b.label, "pt-BR"));
   }, [rows]);
 
   const tableRows = reasonFilter === "TODOS"
@@ -78,7 +70,14 @@ export function RiskView() {
   const avgStopped = rows.reduce((sum, row) => sum + row.stoppedDays, 0) / rows.length;
   const critical = rows.filter((row) => row.stoppedDays >= 4).length;
   const reasons = new Map<string, { reason: string; packages: number; gmv: number }>();
-  rows.forEach((row) => { const key = row.failureReason || "Sem motivo"; const current = reasons.get(key) ?? { reason: key, packages: 0, gmv: 0 }; current.packages += 1; current.gmv += row.gmvBrl; reasons.set(key, current); });
+  rows.forEach((row) => {
+    const label = reasonLabel(row.failureReason);
+    const key = reasonKey(label);
+    const current = reasons.get(key) ?? { reason: label, packages: 0, gmv: 0 };
+    current.packages += 1;
+    current.gmv += row.gmvBrl;
+    reasons.set(key, current);
+  });
   const reasonData = [...reasons.values()].sort((a, b) => b.gmv - a.gmv).slice(0, 8);
 
   return (
@@ -115,20 +114,18 @@ export function RiskView() {
               <th>ID do pacote</th><th>Base</th><th>Motorista</th>
               <th>
                 Motivo
-                <select
-                  aria-label="Filtrar Risco LM por motivo"
+                <ColumnSelectFilter
+                  ariaLabel="Filtrar Risco LM por motivo"
                   value={reasonFilter}
-                  onChange={(event) => setReasonFilter(event.target.value)}
-                  style={columnFilterStyle}
-                >
-                  <option value="TODOS">Todos os motivos</option>
-                  {reasonOptions.map(([key, label]) => <option key={key} value={key}>{label}</option>)}
-                </select>
+                  options={reasonOptions}
+                  onChange={setReasonFilter}
+                  allLabel="Todos os motivos"
+                />
               </th>
               <th>Substatus</th><th>Dias</th><th className="align-right">GMV</th>
             </tr>
           </thead>
-          <tbody>{[...tableRows].sort((a, b) => b.stoppedDays - a.stoppedDays || b.gmvBrl - a.gmvBrl).slice(0, 60).map((row) => <tr key={`${row.batchId}-${row.shipmentId}`}><td><strong className="mono">{row.shipmentId}</strong><small className="cell-subtitle">Rota {row.routeId || "—"}</small></td><td>{row.facilityId || "—"}</td><td className="mono">{row.driverId || "—"}</td><td>{row.failureReason || "—"}</td><td>{row.lastSubstatus || "—"}</td><td><StatusBadge tone={row.stoppedDays >= 4 ? "red" : row.stoppedDays >= 2 ? "amber" : "green"}>{row.stoppedDays} dias</StatusBadge></td><td className="align-right"><strong>{formatCurrency(row.gmvBrl)}</strong></td></tr>)}</tbody>
+          <tbody>{[...tableRows].sort((a, b) => b.stoppedDays - a.stoppedDays || b.gmvBrl - a.gmvBrl).slice(0, 60).map((row) => <tr key={`${row.batchId}-${row.shipmentId}`}><td><strong className="mono">{row.shipmentId}</strong><small className="cell-subtitle">Rota {row.routeId || "—"}</small></td><td>{row.facilityId || "—"}</td><td className="mono">{row.driverId || "—"}</td><td>{reasonLabel(row.failureReason)}</td><td>{cleanText(row.lastSubstatus) || "—"}</td><td><StatusBadge tone={row.stoppedDays >= 4 ? "red" : row.stoppedDays >= 2 ? "amber" : "green"}>{row.stoppedDays} dias</StatusBadge></td><td className="align-right"><strong>{formatCurrency(row.gmvBrl)}</strong></td></tr>)}</tbody>
         </TableWrap>
       </Panel>
     </div>
