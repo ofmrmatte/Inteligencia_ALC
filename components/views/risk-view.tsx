@@ -3,7 +3,7 @@
 import { useMemo, useState } from "react";
 import { Bar, BarChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
 import { BadgeDollarSign, Clock3, PackageX, ShieldAlert } from "lucide-react";
-import { scopeData } from "@/lib/metrics";
+import { scopeData } from "@/lib/dashboard-scope";
 import { cleanText, normalizeText } from "@/lib/normalize";
 import { useDashboardStore } from "@/lib/store";
 import type { ImportEntry, RiskRecord } from "@/lib/types";
