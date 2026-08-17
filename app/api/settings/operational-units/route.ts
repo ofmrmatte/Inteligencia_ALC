@@ -166,17 +166,28 @@ async function syncLegacyBase(baseKey: string, baseName: string, sigla: string) 
   }
 }
 
-function parseUnit(body: DbRow, requireAll: boolean) {
+function parseUnit(body: DbRow) {
   const sigla = normalized(body.sigla);
   const baseName = text(body.baseName ?? body.base_name);
   const baseKey = normalized(baseName || body.baseKey || body.base_key);
-  const xptCode = normalized(body.xptCode ?? body.xpt_code);
   const coordinator = text(body.coordinator ?? body.coordinator_name);
   const supervisors = stringArray(body.supervisors);
   if (!sigla || !baseName || !baseKey) throw new Error("Informe a sigla SVC e o nome da base.");
-  if (requireAll && !xptCode) throw new Error("Informe a filial XPT responsável pela SVC.");
-  if (requireAll && !coordinator) throw new Error("Informe o coordenador responsável.");
-  return { sigla, baseName, baseKey, xptCode, coordinator, supervisors, active: body.active !== false, unitKey: canonicalUnitKey(sigla, baseKey) };
+  if (!coordinator) throw new Error("Informe o coordenador responsável.");
+  return { sigla, baseName, baseKey, coordinator, supervisors, active: body.active !== false, unitKey: canonicalUnitKey(sigla, baseKey) };
+}
+
+async function regionalXptForSvc(sigla: string) {
+  const admin = createAdminClient();
+  const { data, error } = await admin
+    .from("operational_units")
+    .select("xpt_code")
+    .eq("sigla", sigla)
+    .not("xpt_code", "is", null)
+    .limit(1)
+    .maybeSingle();
+  if (error) throw new Error(error.message);
+  return text((data as DbRow | null)?.xpt_code) || null;
 }
 
 async function replaceSupervisors(unitKey: string, supervisors: string[]) {
@@ -203,14 +214,15 @@ export async function POST(request: Request) {
     const profile = await requireProfile();
     if (!canManageUsers(profile)) return jsonError("Cadastro de bases restrito à gestão autorizada.", 403);
     const body = (await request.json()) as DbRow;
-    const unit = parseUnit(body, true);
+    const unit = parseUnit(body);
     const admin = createAdminClient();
+    const xptCode = await regionalXptForSvc(unit.sigla);
     const { error } = await admin.from("operational_units").insert({
       unit_key: unit.unitKey,
       sigla: unit.sigla,
       base_name: unit.baseName,
       base_key: unit.baseKey,
-      xpt_code: unit.xptCode,
+      xpt_code: xptCode,
       coordinator_name: unit.coordinator,
       source: "manual",
       active: unit.active,
@@ -233,15 +245,26 @@ export async function PATCH(request: Request) {
     const body = (await request.json()) as DbRow;
     const originalUnitKey = text(body.originalUnitKey ?? body.unitKey ?? body.unit_key);
     if (!originalUnitKey) throw new Error("Base original não informada.");
-    const unit = parseUnit(body, false);
+    const unit = parseUnit(body);
     const admin = createAdminClient();
+    const { data: original, error: originalError } = await admin
+      .from("operational_units")
+      .select("sigla,xpt_code")
+      .eq("unit_key", originalUnitKey)
+      .maybeSingle();
+    if (originalError) throw new Error(originalError.message);
+    const originalRow = (original ?? {}) as DbRow;
+    const xptCode = normalized(originalRow.sigla) === unit.sigla
+      ? text(originalRow.xpt_code) || null
+      : await regionalXptForSvc(unit.sigla);
+
     const { error } = await admin.from("operational_units").update({
       unit_key: unit.unitKey,
       sigla: unit.sigla,
       base_name: unit.baseName,
       base_key: unit.baseKey,
-      xpt_code: unit.xptCode || null,
-      coordinator_name: unit.coordinator || null,
+      xpt_code: xptCode,
+      coordinator_name: unit.coordinator,
       active: unit.active,
       updated_at: new Date().toISOString(),
     }).eq("unit_key", originalUnitKey);
