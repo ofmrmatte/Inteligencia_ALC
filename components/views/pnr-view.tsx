@@ -3,7 +3,8 @@
 import { useMemo, useState } from "react";
 import { Bar, BarChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
 import { BadgeDollarSign, Boxes, CircleCheckBig, Link2, TimerReset } from "lucide-react";
-import { latestPnrByShipment, pnrDecisionRows, scopeData } from "@/lib/metrics";
+import { scopeData } from "@/lib/dashboard-scope";
+import { latestPnrByShipment, pnrDecisionRows } from "@/lib/metrics";
 import { cleanText, normalizeText } from "@/lib/normalize";
 import { useDashboardStore } from "@/lib/store";
 import { formatCurrency, formatNumber, formatPercent, KpiCard, Panel, PageIntro, StatusBadge } from "@/components/ui";
