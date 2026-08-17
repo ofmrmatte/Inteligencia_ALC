@@ -37,6 +37,15 @@ describe("matriz de acesso do painel", () => {
     expect(driverManagementTabsForProfile(current)).toEqual([]);
   });
 
+  it("mantém Administração Loss restrita aos módulos operacionais e sem acesso global", () => {
+    const current = profile("loss_admin", ["visao-geral", "gestao-pnr", "risco-lm", "perfil"], []);
+    expect(modulesForProfile(current)).toEqual(["visao-geral", "gestao-pnr", "risco-lm", "perfil"]);
+    expect(canAccessSection(current, "risco-lm")).toBe(true);
+    expect(canAccessSection(current, "configuracoes")).toBe(false);
+    expect(canAccessSection(current, "gestao-motoristas")).toBe(false);
+    expect(driverManagementTabsForProfile(current)).toEqual([]);
+  });
+
   it("limita Supervisor de Administração ao módulo Gestão de Motoristas", () => {
     const current = profile("administration_supervisor", ["gestao-motoristas"], ["overview", "pilot", "drivers", "tickets", "payments", "disputes", "admins"]);
     expect(modulesForProfile(current)).toEqual(["gestao-motoristas"]);
