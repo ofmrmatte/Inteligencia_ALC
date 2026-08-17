@@ -1,7 +1,48 @@
 import * as XLSX from "xlsx";
 
+const WINDOWS_1252_MOJIBAKE: Array<[string, string]> = [
+  ["â€“", "–"],
+  ["â€”", "—"],
+  ["â€˜", "‘"],
+  ["â€™", "’"],
+  ["â€œ", "“"],
+  ["â€", "”"],
+  ["â€¦", "…"],
+  ["â€¢", "•"],
+  ["â‚¬", "€"],
+  ["â„¢", "™"],
+];
+
+/**
+ * Repara texto UTF-8 que tenha sido interpretado como Latin-1/Windows-1252.
+ * Ex.: "Em revisÃ£o" -> "Em revisão" e "AbsorÃ§Ã£o" -> "Absorção".
+ * A correção é conservadora: só converte pares C2/C3 seguidos por bytes de
+ * continuação, portanto palavras legítimas como "CHAPADÃO" ou "GUIMARÃES"
+ * não são alteradas.
+ */
+export function repairTextEncoding(value: unknown): string {
+  let text = String(value ?? "").replace(/^\uFEFF/, "");
+
+  for (let pass = 0; pass < 3; pass += 1) {
+    const repaired = text.replace(/[ÂÃ][\u0080-\u00BF]/g, (sequence) => {
+      const lead = sequence.charCodeAt(0);
+      const trail = sequence.charCodeAt(1);
+      const codePoint = ((lead & 0x1f) << 6) | (trail & 0x3f);
+      return String.fromCharCode(codePoint);
+    });
+    if (repaired === text) break;
+    text = repaired;
+  }
+
+  for (const [broken, correct] of WINDOWS_1252_MOJIBAKE) {
+    text = text.replaceAll(broken, correct);
+  }
+
+  return text.normalize("NFC");
+}
+
 export function normalizeText(value: unknown): string {
-  return String(value ?? "")
+  return repairTextEncoding(value)
     .normalize("NFD")
     .replace(/[\u0300-\u036f]/g, "")
     .replace(/\s+/g, " ")
@@ -14,7 +55,7 @@ export function headerKey(value: unknown): string {
 }
 
 export function cleanText(value: unknown): string {
-  return String(value ?? "").replace(/\s+/g, " ").trim();
+  return repairTextEncoding(value).replace(/\s+/g, " ").trim();
 }
 
 export function asId(value: unknown): string {
