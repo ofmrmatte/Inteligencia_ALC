@@ -15,12 +15,14 @@ import { readPaged } from "@/lib/pagination";
 export const dynamic = "force-dynamic";
 
 type DbRow = Record<string, unknown>;
+type UnitType = "svc" | "xpt";
 type UnitRef = {
   unitKey: string;
   baseKey: string;
   baseName: string;
   sigla: string;
   xptCode: string;
+  unitType: UnitType;
 };
 type CanonicalDriver = DbRow & {
   driverCode: string;
@@ -29,6 +31,7 @@ type CanonicalDriver = DbRow & {
   baseName: string;
   sigla: string;
   xptCode: string;
+  unitType: UnitType | "unresolved";
 };
 
 function jsonError(message: string, status = 400) {
@@ -59,22 +62,53 @@ function pairKey(sigla: unknown, baseKey: unknown) {
   return siglaKey && base ? `${siglaKey}|${base}` : "";
 }
 
+function displaySigla(unit: UnitRef) {
+  return unit.unitType === "xpt" ? `XPT • ${unit.sigla}` : `SVC • ${unit.sigla}`;
+}
+
 async function loadMasterUnits() {
   const admin = createAdminClient();
-  const { data, error } = await admin
-    .from("operational_units")
-    .select("unit_key,base_key,base_name,sigla,xpt_code,active")
-    .eq("active", true)
-    .order("sigla", { ascending: true })
-    .order("base_name", { ascending: true });
-  if (error) throw new Error(error.message);
-  return ((data ?? []) as DbRow[]).map((row): UnitRef => ({
-    unitKey: textValue(row.unit_key),
-    baseKey: textValue(row.base_key),
-    baseName: textValue(row.base_name) || textValue(row.base_key),
-    sigla: textValue(row.sigla),
-    xptCode: textValue(row.xpt_code),
-  }));
+  const [{ data: svcData, error: svcError }, { data: xptData, error: xptError }] = await Promise.all([
+    admin
+      .from("operational_units")
+      .select("unit_key,base_key,base_name,sigla,active")
+      .eq("active", true)
+      .order("sigla", { ascending: true })
+      .order("base_name", { ascending: true }),
+    admin
+      .from("operational_xpts")
+      .select("xpt_code,base_key,base_name,active")
+      .eq("active", true)
+      .order("xpt_code", { ascending: true }),
+  ]);
+  if (svcError) throw new Error(svcError.message);
+  if (xptError) throw new Error(xptError.message);
+
+  const xptCodes = new Set(((xptData ?? []) as DbRow[]).map((row) => normalized(row.xpt_code)).filter(Boolean));
+  const svcUnits = ((svcData ?? []) as DbRow[])
+    .filter((row) => !xptCodes.has(normalized(row.sigla)))
+    .map((row): UnitRef => ({
+      unitKey: textValue(row.unit_key),
+      baseKey: textValue(row.base_key),
+      baseName: textValue(row.base_name) || textValue(row.base_key),
+      sigla: textValue(row.sigla),
+      xptCode: "",
+      unitType: "svc",
+    }));
+  const xptUnits = ((xptData ?? []) as DbRow[]).map((row): UnitRef => {
+    const code = textValue(row.xpt_code);
+    const baseKey = textValue(row.base_key) || normalized(row.base_name);
+    return {
+      unitKey: `XPT|${code}`,
+      baseKey,
+      baseName: textValue(row.base_name) || baseKey,
+      sigla: code,
+      xptCode: code,
+      unitType: "xpt",
+    };
+  });
+
+  return [...svcUnits, ...xptUnits];
 }
 
 function buildUnitResolver(units: UnitRef[]) {
@@ -82,6 +116,7 @@ function buildUnitResolver(units: UnitRef[]) {
   const byPair = new Map(units.map((unit) => [pairKey(unit.sigla, unit.baseKey), unit]));
   const byBase = new Map<string, UnitRef[]>();
   const bySigla = new Map<string, UnitRef[]>();
+  const xptByCode = new Map(units.filter((unit) => unit.unitType === "xpt").map((unit) => [normalized(unit.sigla), unit]));
 
   for (const unit of units) {
     const base = normalized(unit.baseKey);
@@ -96,6 +131,11 @@ function buildUnitResolver(units: UnitRef[]) {
 
     const base = normalized(input.baseKey);
     const sigla = normalized(input.sigla);
+
+    // XPT is authoritative when its code is present. It must never be
+    // converted to an SVC merely because both operations share a base name.
+    if (sigla && xptByCode.has(sigla)) return xptByCode.get(sigla) ?? null;
+
     if (base && sigla) {
       const exact = byPair.get(`${sigla}|${base}`);
       if (exact) return exact;
@@ -106,10 +146,8 @@ function buildUnitResolver(units: UnitRef[]) {
       if (matches.length === 1) return matches[0];
     }
 
-    // Old records may have stored SVC in BASE_KEY. Only use that fallback
-    // when the SVC has one master base; ambiguous SVCs remain unresolved.
     if (sigla && (!base || base === sigla)) {
-      const matches = bySigla.get(sigla) ?? [];
+      const matches = (bySigla.get(sigla) ?? []).filter((unit) => unit.unitType === "svc");
       if (matches.length === 1) return matches[0];
     }
 
@@ -121,8 +159,9 @@ function buildUnitResolver(units: UnitRef[]) {
     const allowed = new Set(baseFilter.map(normalized).filter(Boolean));
     return units.filter((unit) => {
       if (allowed.has(normalized(unit.unitKey)) || allowed.has(normalized(unit.baseKey))) return true;
-      const siglaMatches = bySigla.get(normalized(unit.sigla)) ?? [];
-      return siglaMatches.length === 1 && allowed.has(normalized(unit.sigla));
+      if (unit.unitType === "xpt" && allowed.has(normalized(unit.sigla))) return true;
+      const siglaMatches = (bySigla.get(normalized(unit.sigla)) ?? []).filter((item) => item.unitType === "svc");
+      return unit.unitType === "svc" && siglaMatches.length === 1 && allowed.has(normalized(unit.sigla));
     });
   };
 
@@ -149,18 +188,17 @@ async function loadDrivers(units: UnitRef[], visibleUnits: UnitRef[], scoped: bo
     const unit = resolver.resolve({ baseKey: row.base_key, sigla: row.sigla });
     if (scoped && (!unit || !visible.has(unit.unitKey))) return [];
     const portalStatus = textValue(row.portal_status) || textValue(row.status) || "not_activated";
-    const canonicalBaseKey = unit?.baseKey ?? textValue(row.base_key);
-    const canonicalSigla = unit?.sigla ?? "";
     return [{
       ...row,
       id: textValue(row.id),
       driverCode: code,
       fullName: name,
       unitKey: unit?.unitKey ?? "",
-      baseKey: canonicalBaseKey,
-      sigla: canonicalSigla,
-      xptCode: unit?.xptCode ?? "",
+      baseKey: unit?.baseKey ?? textValue(row.base_key),
+      sigla: unit?.sigla ?? textValue(row.sigla),
+      xptCode: unit?.unitType === "xpt" ? unit.xptCode : "",
       baseName: unit?.baseName ?? "",
+      unitType: unit?.unitType ?? "unresolved",
       status: textValue(row.status),
       portalStatus,
       portalEligible: Boolean(row.portal_eligible),
@@ -195,12 +233,7 @@ function canonicalUnitForRecord(
   return resolver.resolve(input) ?? byDriver.get(textValue(input.driverCode)) ?? null;
 }
 
-async function loadDocuments(
-  units: UnitRef[],
-  visibleUnits: UnitRef[],
-  scoped: boolean,
-  byDriver: Map<string, UnitRef>,
-) {
+async function loadDocuments(units: UnitRef[], visibleUnits: UnitRef[], scoped: boolean, byDriver: Map<string, UnitRef>) {
   const admin = createAdminClient();
   const resolver = buildUnitResolver(units);
   const visible = new Set(visibleUnits.map((unit) => unit.unitKey));
@@ -228,17 +261,13 @@ async function loadDocuments(
       base_name: unit?.baseName ?? "",
       sigla: unit?.sigla ?? "",
       unit_key: unit?.unitKey ?? "",
-      xpt_code: unit?.xptCode ?? "",
+      xpt_code: unit?.unitType === "xpt" ? unit.xptCode : "",
+      unit_type: unit?.unitType ?? "unresolved",
     }];
   });
 }
 
-async function loadDisputes(
-  units: UnitRef[],
-  visibleUnits: UnitRef[],
-  scoped: boolean,
-  byDriver: Map<string, UnitRef>,
-) {
+async function loadDisputes(units: UnitRef[], visibleUnits: UnitRef[], scoped: boolean, byDriver: Map<string, UnitRef>) {
   const admin = createAdminClient();
   const resolver = buildUnitResolver(units);
   const visible = new Set(visibleUnits.map((unit) => unit.unitKey));
@@ -266,17 +295,13 @@ async function loadDisputes(
       base_name: unit?.baseName ?? "",
       sigla: unit?.sigla ?? "",
       unit_key: unit?.unitKey ?? "",
-      xpt_code: unit?.xptCode ?? "",
+      xpt_code: unit?.unitType === "xpt" ? unit.xptCode : "",
+      unit_type: unit?.unitType ?? "unresolved",
     }];
   });
 }
 
-async function loadCanonicalTickets(
-  units: UnitRef[],
-  visibleUnits: UnitRef[],
-  scoped: boolean,
-  byDriver: Map<string, UnitRef>,
-) {
+async function loadCanonicalTickets(units: UnitRef[], visibleUnits: UnitRef[], scoped: boolean, byDriver: Map<string, UnitRef>) {
   const resolver = buildUnitResolver(units);
   const visible = new Set(visibleUnits.map((unit) => unit.unitKey));
   const tickets = await loadTickets({ allowedBases: null });
@@ -293,7 +318,8 @@ async function loadCanonicalTickets(
       baseKey: unit?.baseKey ?? ticket.baseKey,
       baseName: unit?.baseName ?? "",
       sigla: unit?.sigla ?? "",
-      xptCode: unit?.xptCode ?? "",
+      xptCode: unit?.unitType === "xpt" ? unit.xptCode : "",
+      unitType: unit?.unitType ?? "unresolved",
     }];
   });
 }
@@ -310,7 +336,7 @@ async function loadAssignments(units: UnitRef[]) {
     const unit = resolver.resolve({ baseKey: row.base_key });
     return {
       ...row,
-      operational_bases: unit ? { base_name: unit.baseName, sigla: unit.sigla } : null,
+      operational_bases: unit ? { base_name: unit.baseName, sigla: displaySigla(unit) } : null,
     };
   });
 }
@@ -332,10 +358,11 @@ export async function GET(request: Request) {
     const byDriver = driverUnitMap(drivers, allUnits);
     const bases = visibleUnits.map((unit) => ({
       unit_key: unit.unitKey,
+      unit_type: unit.unitType,
       base_key: unit.baseKey,
       base_name: unit.baseName,
-      sigla: unit.sigla,
-      xpt_code: unit.xptCode,
+      sigla: displaySigla(unit),
+      xpt_code: unit.unitType === "xpt" ? unit.xptCode : "",
       active: true,
     }));
     const payload: Record<string, unknown> = {
