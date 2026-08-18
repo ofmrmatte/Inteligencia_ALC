@@ -45,12 +45,15 @@ function buildDirectory(payload: OperationalDirectoryPayload) {
   const byPair = new Map(activeUnits.map((unit) => [pairKey(unit.sigla, unit.baseKey), unit]));
   const bySigla = new Map<string, OperationalUnit[]>();
   const byBase = new Map<string, OperationalUnit[]>();
+  const byXpt = new Map<string, OperationalUnit[]>();
 
   for (const unit of activeUnits) {
     const sigla = key(unit.sigla);
     const base = key(unit.baseKey);
+    const xpt = key(unit.xptCode);
     bySigla.set(sigla, [...(bySigla.get(sigla) ?? []), unit]);
     byBase.set(base, [...(byBase.get(base) ?? []), unit]);
+    if (xpt) byXpt.set(xpt, [...(byXpt.get(xpt) ?? []), unit]);
   }
 
   const ambiguousSiglas = new Set(payload.ambiguousSiglas.map(key));
@@ -89,14 +92,21 @@ function buildDirectory(payload: OperationalDirectoryPayload) {
   const fromSourceSigla = (sigla: string, driverId: string, inferredDrivers: Map<string, OperationalUnit>) => {
     const siglaKey = key(sigla);
     if (!siglaKey) return inferredDrivers.get(driverId) ?? null;
+    const mapped = inferredDrivers.get(driverId);
     const matches = bySigla.get(siglaKey) ?? [];
     if (matches.length === 1) return matches[0];
-    if (matches.length > 1) {
-      const mapped = inferredDrivers.get(driverId);
-      return mapped && key(mapped.sigla) === siglaKey ? mapped : null;
-    }
-    // Quando a planilha informou uma estação/facility que não existe no
-    // cadastro mestre, ela fica pendente. Não trocamos por outra SVC.
+    if (matches.length > 1) return mapped && key(mapped.sigla) === siglaKey ? mapped : null;
+
+    // XPT is a parallel dimension, not an SVC. Some legacy imports stored
+    // the XPT code in the SVC/station field. In that case we only accept the
+    // driver's already-resolved master unit when it belongs to the same XPT.
+    // This repairs the old encoding without ever presenting XPT as an SVC.
+    const xptMatches = byXpt.get(siglaKey) ?? [];
+    if (xptMatches.length) return mapped && key(mapped.xptCode) === siglaKey ? mapped : null;
+
+    // When the source facility is unknown to the master directory it remains
+    // pending. We never swap it for an unrelated SVC just because a driver has
+    // worked elsewhere.
     return null;
   };
 
