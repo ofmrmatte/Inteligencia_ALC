@@ -1,5 +1,6 @@
 import type { LucideIcon } from "lucide-react";
 import {
+  BadgeDollarSign,
   Boxes,
   ChartNoAxesCombined,
   CircleGauge,
@@ -17,6 +18,7 @@ export const SECTION_IDS = [
   "visao-geral",
   "gestao-pnr",
   "pre-faturamento",
+  "gestao-descontos",
   "risco-lm",
   "motoristas",
   "gestao-motoristas",
@@ -42,6 +44,7 @@ export const NAVIGATION: NavigationItem[] = [
   { id: "visao-geral", label: "Visão Geral", shortLabel: "Visão geral", href: "/", icon: CircleGauge, group: "Análises" },
   { id: "gestao-pnr", label: "Gestão PNR", shortLabel: "Gestão PNR", href: "/gestao-pnr", icon: Boxes, group: "Análises" },
   { id: "pre-faturamento", label: "Pré-faturamento", shortLabel: "Pré-faturamento", href: "/pre-faturamento", icon: ReceiptText, group: "Análises" },
+  { id: "gestao-descontos", label: "Gestão de Descontos", shortLabel: "Descontos", href: "/gestao-descontos", icon: BadgeDollarSign, group: "Análises" },
   { id: "risco-lm", label: "Risco LM", shortLabel: "Risco LM", href: "/risco-lm", icon: ShieldAlert, group: "Análises" },
   { id: "motoristas", label: "Desempenho de motoristas", shortLabel: "Motoristas", href: "/motoristas", icon: ChartNoAxesCombined, group: "Análises" },
   { id: "gestao-motoristas", label: "Gestão de Motoristas", shortLabel: "Gestão Motoristas", href: "/gestao-motoristas", icon: IdCard, group: "Controle de dados" },
@@ -56,6 +59,7 @@ export const SECTION_META: Record<SectionId, { title: string; eyebrow: string; d
   "visao-geral": { title: "Visão Geral", eyebrow: "Monitoramento executivo", description: "Leitura consolidada de pacotes, descontos, risco e nível de entrega." },
   "gestao-pnr": { title: "Gestão PNR", eyebrow: "Casos e tratativas", description: "Acompanhe status, valores e cruzamentos dos casos PNR por pacote." },
   "pre-faturamento": { title: "Pré-faturamento", eyebrow: "Conferência financeira", description: "Analise descontos SVC, XPT e PNR sem duplicar IDs de pacote." },
+  "gestao-descontos": { title: "Gestão de Descontos", eyebrow: "Direcionamento financeiro", description: "Centralize decisões de desconto ou absorção por ID e cruze automaticamente com Pré-fatura e PNR." },
   "risco-lm": { title: "Risco LM", eyebrow: "Exposição operacional", description: "Priorize pacotes parados, motivos de insucesso e GMV exposto." },
   motoristas: { title: "Desempenho de motoristas", eyebrow: "Produtividade e qualidade", description: "Cruze entregas, incidentes, descontos e risco por transportador." },
   "gestao-motoristas": { title: "Gestão de Motoristas", eyebrow: "Portal e documentos", description: "Administre motoristas, pendências, PDFs de pagamento, contestações e bases responsáveis." },
