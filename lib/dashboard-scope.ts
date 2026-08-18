@@ -14,6 +14,11 @@ function matchesXpt(value: string | undefined, selected: string) {
   return normalizeText(value) === normalizeText(selected);
 }
 
+function currentMonthKey() {
+  const now = new Date();
+  return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`;
+}
+
 export function scopeData(data: DashboardData, filters: DashboardFilters, options: ScopeOptions = {}) {
   // XPT é uma dimensão paralela: não participa da hierarquia SVC → Base → Coordenador → Supervisor.
   const scoped = baseScopeData(data, { ...filters, xpt: "Todos" }, options);
@@ -54,6 +59,8 @@ export function filterOptions(data: DashboardData, filters: DashboardFilters) {
     ...data.pnr.map((row) => row.xptCode ?? ""),
     ...data.risk.map((row) => row.xptCode ?? ""),
   ]);
+  const currentMonth = currentMonthKey();
+  const months = options.months.filter((month) => /^\d{4}-\d{2}$/.test(month) && month <= currentMonth);
 
-  return { ...options, xpts };
+  return { ...options, months, xpts };
 }
