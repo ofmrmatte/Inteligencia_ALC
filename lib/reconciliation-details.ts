@@ -55,15 +55,13 @@ function recordStatus(record: SourceRecord) {
   return "";
 }
 
-function sortScore(record: SourceRecord, importedAt: Map<string, string>) {
-  const importTime = Date.parse(importedAt.get(record.batchId) || "") || 0;
-  const operationalTime = Date.parse(recordDate(record) || "") || 0;
-  return importTime * 10_000 + Math.min(9_999, Math.max(0, operationalTime % 10_000));
+function recordTimestamp(record: SourceRecord, importedAt: Map<string, string>) {
+  return Date.parse(importedAt.get(record.batchId) || "") || Date.parse(recordDate(record) || "") || 0;
 }
 
 function currentRows<T extends SourceRecord>(records: T[], importedAt: Map<string, string>) {
   if (!records.length) return [];
-  const latest = [...records].sort((a, b) => sortScore(b, importedAt) - sortScore(a, importedAt))[0];
+  const latest = [...records].sort((a, b) => recordTimestamp(b, importedAt) - recordTimestamp(a, importedAt))[0];
   return records.filter((record) => record.batchId === latest.batchId);
 }
 
