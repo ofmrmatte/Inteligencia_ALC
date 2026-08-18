@@ -18,6 +18,7 @@ const ImportPanel = dynamic(() => import("@/components/import-panel").then((modu
 const SIDEBAR_KEY = "alc-inteligencia:sidebar-collapsed";
 const SIDEBAR_EVENT = "alc-inteligencia:sidebar-change";
 const ADMIN_SECTIONS: SectionId[] = ["gestao-motoristas", "configuracoes", "perfil"];
+const STANDALONE_SECTIONS: SectionId[] = ["gestao-descontos", ...ADMIN_SECTIONS];
 
 function subscribeSidebarChange(callback: () => void) {
   window.addEventListener("storage", callback);
@@ -47,6 +48,7 @@ export function DashboardApp({ section, profile }: { section: SectionId; profile
   const meta = SECTION_META[section];
   const canImport = canManageImports(profile);
   const canLoadOperationalData = canAccessOperationalData(profile);
+  const standalone = STANDALONE_SECTIONS.includes(section);
   const cacheOwnerId = [
     profile.id,
     profile.role,
@@ -54,9 +56,9 @@ export function DashboardApp({ section, profile }: { section: SectionId; profile
     [...profile.baseScope].sort().join(","),
     [...profile.siglaScope].sort().join(","),
   ].join("::");
-  const initialDataLoad = canLoadOperationalData && !hydrated;
-  const showEmptyState = canLoadOperationalData && hydrated && !loadError && data.imports.length === 0 && !ADMIN_SECTIONS.includes(section);
-  const showGlobalFilters = canLoadOperationalData && hydrated && data.imports.length > 0 && !ADMIN_SECTIONS.includes(section);
+  const initialDataLoad = canLoadOperationalData && !hydrated && !standalone;
+  const showEmptyState = canLoadOperationalData && hydrated && !loadError && data.imports.length === 0 && !standalone;
+  const showGlobalFilters = canLoadOperationalData && hydrated && data.imports.length > 0 && !standalone;
 
   const requestImport = () => {
     if (!canImport) {
@@ -91,7 +93,7 @@ export function DashboardApp({ section, profile }: { section: SectionId; profile
             <div className="view-loading" role="status" aria-live="polite" aria-label="Carregando dados do painel">
               <span /><span /><span />
             </div>
-          ) : loadError && data.imports.length === 0 && canLoadOperationalData ? (
+          ) : loadError && data.imports.length === 0 && canLoadOperationalData && !standalone ? (
             <div className="page-intro"><p>Não foi possível sincronizar os dados agora. Recarregue a página para tentar novamente. Detalhe: {loadError}</p></div>
           ) : showEmptyState ? (
             <EmptyDashboard onImport={requestImport} canImport={canImport} />
