@@ -236,9 +236,20 @@ export const useDashboardStore = create<DashboardStore>((storeSet, getState) => 
     }
   },
   removeBatch: async (batchId) => {
-    const response = await fetch(`/api/imports?batchId=${encodeURIComponent(batchId)}`, { method: "DELETE" });
+    const response = await fetch(`/api/imports/delete?batchId=${encodeURIComponent(batchId)}`, { method: "DELETE" });
     if (!response.ok) throw new Error(await readError(response, "Falha ao remover lote online."));
-    const next = await applyOnlineDirectory((await response.json()) as DashboardData);
+    await response.json().catch(() => ({}));
+
+    const current = getState().data;
+    const next: DashboardData = {
+      ...current,
+      imports: current.imports.filter((row) => row.batchId !== batchId),
+      hierarchy: current.hierarchy.filter((row) => row.batchId !== batchId),
+      prefatura: current.prefatura.filter((row) => row.batchId !== batchId),
+      pnr: current.pnr.filter((row) => row.batchId !== batchId),
+      risk: current.risk.filter((row) => row.batchId !== batchId),
+      drivers: current.drivers.filter((row) => row.batchId !== batchId),
+    };
     const syncedAt = Date.now();
     storeSet({ data: next, hydrated: true, refreshing: false, lastSyncedAt: syncedAt, loadError: "" });
     await save(next, getState().cacheOwnerId, syncedAt);
