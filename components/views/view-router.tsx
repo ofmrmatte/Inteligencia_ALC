@@ -10,7 +10,7 @@ const PnrView = dynamic(() => import("./pnr-view").then((module) => module.PnrVi
 const PrefaturaView = dynamic(() => import("./prefatura-view").then((module) => module.PrefaturaView), { loading });
 const RiskView = dynamic(() => import("./risk-view").then((module) => module.RiskView), { loading });
 const DriversView = dynamic(() => import("./drivers-view").then((module) => module.DriversView), { loading });
-const DriverManagementView = dynamic(() => import("./driver-management-view-v2").then((module) => module.DriverManagementViewV2), { loading });
+const DriverManagementView = dynamic(() => import("./driver-management-view-v3").then((module) => module.DriverManagementViewV3), { loading });
 const ReconciliationView = dynamic(() => import("./reconciliation-view").then((module) => module.ReconciliationView), { loading });
 const QualityView = dynamic(() => import("./quality-view").then((module) => module.QualityView), { loading });
 const ImportsView = dynamic(() => import("./imports-view").then((module) => module.ImportsView), { loading });
