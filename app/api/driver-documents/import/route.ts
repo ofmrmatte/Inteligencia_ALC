@@ -10,6 +10,7 @@ import {
 } from "@/lib/driver-portal";
 import { paymentDriverMatchesBase, type PaymentBaseRef } from "@/lib/payment-document-server";
 import { assertBaseAccess, jsonError, loadKnownDrivers, requirePortalProfile, textValue } from "@/lib/driver-portal-server";
+import { normalizeText } from "@/lib/normalize";
 import { createAdminClient } from "@/lib/supabase/admin";
 
 export const dynamic = "force-dynamic";
@@ -42,12 +43,24 @@ export async function POST(request: Request) {
     });
     if (uploadArchive.error) throw new Error(uploadArchive.error.message);
 
-    let baseQuery = admin.from("operational_bases").select("base_key,base_name,sigla").eq("active", true);
-    if (allowedBases) baseQuery = baseQuery.in("base_key", allowedBases.length ? allowedBases : ["__none__"]);
-    const baseResult = await baseQuery.order("base_name", { ascending: true });
+    // Payment classification now uses the same SVC + Base master directory as
+    // the dashboard. operational_bases remains only a compatibility table for
+    // legacy foreign keys and must not be used as the semantic directory.
+    const baseResult = await admin
+      .from("operational_units")
+      .select("unit_key,base_key,base_name,sigla")
+      .eq("active", true)
+      .order("sigla", { ascending: true })
+      .order("base_name", { ascending: true });
     if (baseResult.error) throw new Error(baseResult.error.message);
 
-    const operationalBases: PaymentBaseReference[] = (baseResult.data ?? []).map((row) => ({
+    const allowed = allowedBases ? new Set(allowedBases.map(normalizeText).filter(Boolean)) : null;
+    const baseRows = (baseResult.data ?? []).filter((row) => {
+      if (!allowed) return true;
+      return allowed.has(normalizeText(row.unit_key)) || allowed.has(normalizeText(row.base_key));
+    });
+
+    const operationalBases: PaymentBaseReference[] = baseRows.map((row) => ({
       baseKey: textValue(row.base_key),
       baseName: textValue(row.base_name) || textValue(row.base_key),
       sigla: textValue(row.sigla),
