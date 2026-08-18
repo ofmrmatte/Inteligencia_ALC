@@ -61,7 +61,7 @@ on public.discount_cases
 for select
 to authenticated
 using (
-  public.current_user_role() in ('director','developer','loss_supervisor','loss_admin','super_admin','coordinator','supervisor')
+  app_private.current_user_role() in ('director','developer','loss_supervisor','loss_admin','super_admin','coordinator','supervisor')
 );
 
 create policy "discount cases analysis write"
@@ -69,10 +69,10 @@ on public.discount_cases
 for all
 to authenticated
 using (
-  public.current_user_role() in ('director','developer','loss_supervisor','loss_admin','super_admin','coordinator','supervisor')
+  app_private.current_user_role() in ('director','developer','loss_supervisor','loss_admin','super_admin','coordinator','supervisor')
 )
 with check (
-  public.current_user_role() in ('director','developer','loss_supervisor','loss_admin','super_admin','coordinator','supervisor')
+  app_private.current_user_role() in ('director','developer','loss_supervisor','loss_admin','super_admin','coordinator','supervisor')
 );
 
 create policy "discount events analysis read"
@@ -80,7 +80,7 @@ on public.discount_case_events
 for select
 to authenticated
 using (
-  public.current_user_role() in ('director','developer','loss_supervisor','loss_admin','super_admin','coordinator','supervisor')
+  app_private.current_user_role() in ('director','developer','loss_supervisor','loss_admin','super_admin','coordinator','supervisor')
 );
 
 create policy "discount events analysis write"
@@ -88,7 +88,7 @@ on public.discount_case_events
 for insert
 to authenticated
 with check (
-  public.current_user_role() in ('director','developer','loss_supervisor','loss_admin','super_admin','coordinator','supervisor')
+  app_private.current_user_role() in ('director','developer','loss_supervisor','loss_admin','super_admin','coordinator','supervisor')
 );
 
 grant select, insert, update, delete on public.discount_cases to authenticated;
