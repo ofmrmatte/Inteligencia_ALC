@@ -55,6 +55,7 @@ export function DashboardApp({ section, profile }: { section: SectionId; profile
   const collapsed = useSyncExternalStore(subscribeSidebarChange, getSidebarSnapshot, getServerSidebarSnapshot);
   const [mobileMenu, setMobileMenu] = useState(false);
   const [importOpen, setImportOpen] = useState(false);
+  const [viewRevision, setViewRevision] = useState(0);
   const meta = SECTION_META[section];
   const canImport = canManageImports(profile);
   const canLoadOperationalData = canAccessOperationalData(profile);
@@ -103,6 +104,7 @@ export function DashboardApp({ section, profile }: { section: SectionId; profile
         if (disposed) return;
         window.localStorage.setItem(revisionKey, String(revision));
         window.dispatchEvent(new CustomEvent(GLOBAL_SYNC_EVENT, { detail: { revision } }));
+        if (standalone) setViewRevision((current) => current + 1);
       } catch {
         // A sincronização periódica não deve interromper o uso do painel.
       } finally {
@@ -110,7 +112,7 @@ export function DashboardApp({ section, profile }: { section: SectionId; profile
       }
     };
 
-    void synchronize();
+    const initialTimer = window.setTimeout(() => { void synchronize(); }, 800);
     const timer = window.setInterval(() => { void synchronize(); }, GLOBAL_SYNC_INTERVAL_MS);
     const handleFocus = () => { void synchronize(); };
     const handleVisibility = () => { if (document.visibilityState === "visible") void synchronize(); };
@@ -123,12 +125,13 @@ export function DashboardApp({ section, profile }: { section: SectionId; profile
     document.addEventListener("visibilitychange", handleVisibility);
     return () => {
       disposed = true;
+      window.clearTimeout(initialTimer);
       window.clearInterval(timer);
       window.removeEventListener("focus", handleFocus);
       window.removeEventListener("storage", handleStorage);
       document.removeEventListener("visibilitychange", handleVisibility);
     };
-  }, [hydrate, cacheOwnerId, canLoadOperationalData]);
+  }, [hydrate, cacheOwnerId, canLoadOperationalData, standalone]);
 
   const toggleCollapsed = () => {
     window.localStorage.setItem(SIDEBAR_KEY, String(!collapsed));
@@ -158,7 +161,7 @@ export function DashboardApp({ section, profile }: { section: SectionId; profile
           ) : showEmptyState ? (
             <EmptyDashboard onImport={requestImport} canImport={canImport} />
           ) : (
-            <ViewRouter section={section} profile={profile} />
+            <ViewRouter key={`${section}:${viewRevision}`} section={section} profile={profile} />
           )}
         </main>
       </div>
