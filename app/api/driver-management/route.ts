@@ -1,12 +1,7 @@
 import { NextResponse } from "next/server";
 import { DRIVER_MANAGEMENT_TABS, driverManagementTabsForProfile, type DriverManagementTab } from "@/lib/access-control";
 import { accessErrorStatus, assertDriverManagementTab, driverManagementBaseScope } from "@/lib/access-control-server";
-import {
-  paymentDriverMatchesBase,
-  paymentDriverNameKeyFromTitle,
-  paymentNameKey,
-  type PaymentBaseRef,
-} from "@/lib/payment-document-server";
+import { normalizeText } from "@/lib/normalize";
 import { createAdminClient } from "@/lib/supabase/admin";
 import {
   driverPortalPatchForAction,
@@ -20,6 +15,21 @@ import { readPaged } from "@/lib/pagination";
 export const dynamic = "force-dynamic";
 
 type DbRow = Record<string, unknown>;
+type UnitRef = {
+  unitKey: string;
+  baseKey: string;
+  baseName: string;
+  sigla: string;
+  xptCode: string;
+};
+type CanonicalDriver = DbRow & {
+  driverCode: string;
+  unitKey: string;
+  baseKey: string;
+  baseName: string;
+  sigla: string;
+  xptCode: string;
+};
 
 function jsonError(message: string, status = 400) {
   return NextResponse.json({ error: message }, { status });
@@ -39,122 +49,270 @@ function reliableName(name: string, code: string) {
   return Boolean(name.trim() && normalizedName && normalizedName !== normalizedCode && !/^\d+$/.test(normalizedName));
 }
 
-async function loadBases(baseFilter: string[] | null) {
-  const admin = createAdminClient();
-  let query = admin.from("operational_bases").select("base_key,base_name,sigla,active").eq("active", true);
-  if (baseFilter) query = query.in("base_key", baseFilter.length ? baseFilter : ["__none__"]);
-  const { data, error } = await query.order("sigla", { ascending: true }).order("base_name", { ascending: true });
-  if (error) throw new Error(error.message);
-  return (data ?? []) as DbRow[];
+function normalized(value: unknown) {
+  return normalizeText(textValue(value));
 }
 
-async function loadDrivers(baseFilter: string[] | null) {
+function pairKey(sigla: unknown, baseKey: unknown) {
+  const siglaKey = normalized(sigla);
+  const base = normalized(baseKey);
+  return siglaKey && base ? `${siglaKey}|${base}` : "";
+}
+
+async function loadMasterUnits() {
   const admin = createAdminClient();
+  const { data, error } = await admin
+    .from("operational_units")
+    .select("unit_key,base_key,base_name,sigla,xpt_code,active")
+    .eq("active", true)
+    .order("sigla", { ascending: true })
+    .order("base_name", { ascending: true });
+  if (error) throw new Error(error.message);
+  return ((data ?? []) as DbRow[]).map((row): UnitRef => ({
+    unitKey: textValue(row.unit_key),
+    baseKey: textValue(row.base_key),
+    baseName: textValue(row.base_name) || textValue(row.base_key),
+    sigla: textValue(row.sigla),
+    xptCode: textValue(row.xpt_code),
+  }));
+}
+
+function buildUnitResolver(units: UnitRef[]) {
+  const byUnit = new Map(units.map((unit) => [normalized(unit.unitKey), unit]));
+  const byPair = new Map(units.map((unit) => [pairKey(unit.sigla, unit.baseKey), unit]));
+  const byBase = new Map<string, UnitRef[]>();
+  const bySigla = new Map<string, UnitRef[]>();
+
+  for (const unit of units) {
+    const base = normalized(unit.baseKey);
+    const sigla = normalized(unit.sigla);
+    byBase.set(base, [...(byBase.get(base) ?? []), unit]);
+    bySigla.set(sigla, [...(bySigla.get(sigla) ?? []), unit]);
+  }
+
+  const resolve = (input: { unitKey?: unknown; baseKey?: unknown; sigla?: unknown }) => {
+    const unitKey = normalized(input.unitKey);
+    if (unitKey && byUnit.has(unitKey)) return byUnit.get(unitKey) ?? null;
+
+    const base = normalized(input.baseKey);
+    const sigla = normalized(input.sigla);
+    if (base && sigla) {
+      const exact = byPair.get(`${sigla}|${base}`);
+      if (exact) return exact;
+    }
+
+    if (base) {
+      const matches = byBase.get(base) ?? [];
+      if (matches.length === 1) return matches[0];
+    }
+
+    // Old records may have stored SVC in BASE_KEY. Only use that fallback
+    // when the SVC has one master base; ambiguous SVCs remain unresolved.
+    if (sigla && (!base || base === sigla)) {
+      const matches = bySigla.get(sigla) ?? [];
+      if (matches.length === 1) return matches[0];
+    }
+
+    return null;
+  };
+
+  const unitsForScope = (baseFilter: string[] | null) => {
+    if (baseFilter === null) return units;
+    const allowed = new Set(baseFilter.map(normalized).filter(Boolean));
+    return units.filter((unit) => {
+      if (allowed.has(normalized(unit.unitKey)) || allowed.has(normalized(unit.baseKey))) return true;
+      const siglaMatches = bySigla.get(normalized(unit.sigla)) ?? [];
+      return siglaMatches.length === 1 && allowed.has(normalized(unit.sigla));
+    });
+  };
+
+  return { resolve, unitsForScope };
+}
+
+async function loadDrivers(units: UnitRef[], visibleUnits: UnitRef[], scoped: boolean) {
+  const admin = createAdminClient();
+  const resolver = buildUnitResolver(units);
+  const visible = new Set(visibleUnits.map((unit) => unit.unitKey));
   const rows = await readPaged<DbRow>(async (offset, pageSize) => {
-    let query = admin
+    const { data, error, count } = await admin
       .from("alc_drivers")
-      .select("id,driver_code,full_name,base_key,sigla,status,portal_status,portal_eligible,operational_status,last_seen_at,last_operational_seen_at,source_payload,operational_bases(base_name)", { count: "exact" });
-    if (baseFilter) query = query.in("base_key", baseFilter.length ? baseFilter : ["__none__"]);
-    const { data, error, count } = await query.order("full_name", { ascending: true }).range(offset, offset + pageSize - 1);
+      .select("id,driver_code,full_name,base_key,sigla,status,portal_status,portal_eligible,operational_status,last_seen_at,last_operational_seen_at,source_payload", { count: "exact" })
+      .order("full_name", { ascending: true })
+      .range(offset, offset + pageSize - 1);
     if (error) throw new Error(error.message);
-    return { rows: (data ?? []) as DbRow[], count };
+    return { rows: (data ?? []) as unknown as DbRow[], count };
   });
 
-  return rows.map((row) => {
+  return rows.flatMap((row): CanonicalDriver[] => {
     const code = textValue(row.driver_code);
     const name = textValue(row.full_name);
+    const unit = resolver.resolve({ baseKey: row.base_key, sigla: row.sigla });
+    if (scoped && (!unit || !visible.has(unit.unitKey))) return [];
     const portalStatus = textValue(row.portal_status) || textValue(row.status) || "not_activated";
-    return {
+    const canonicalBaseKey = unit?.baseKey ?? textValue(row.base_key);
+    const canonicalSigla = unit?.sigla ?? "";
+    return [{
+      ...row,
       id: textValue(row.id),
       driverCode: code,
       fullName: name,
-      baseKey: textValue(row.base_key),
-      sigla: textValue(row.sigla),
-      baseName: textValue((row.operational_bases as DbRow | null)?.base_name) || textValue(row.base_key),
+      unitKey: unit?.unitKey ?? "",
+      baseKey: canonicalBaseKey,
+      sigla: canonicalSigla,
+      xptCode: unit?.xptCode ?? "",
+      baseName: unit?.baseName ?? "",
       status: textValue(row.status),
       portalStatus,
       portalEligible: Boolean(row.portal_eligible),
       operationalStatus: textValue(row.operational_status) || "unknown",
       lastSeenAt: textValue(row.last_seen_at),
       lastOperationalSeenAt: textValue(row.last_operational_seen_at),
-      quality: reliableName(name, code) && Boolean(textValue(row.base_key)) ? "resolved" : "needs_review",
+      quality: reliableName(name, code) && Boolean(unit) ? "resolved" : "needs_review",
       lastActivitySource: textValue((row.source_payload as DbRow | null)?.last_activity_source),
       pilotCandidate: !Boolean(row.portal_eligible)
         && portalStatus !== "blocked"
         && textValue(row.operational_status) === "active"
         && reliableName(name, code)
-        && Boolean(textValue(row.base_key)),
-    };
+        && Boolean(unit),
+    }];
   });
 }
 
-async function loadDocuments(baseFilter: string[] | null) {
-  const admin = createAdminClient();
-  return readPaged<DbRow>(async (offset, pageSize) => {
-    let query = admin
-      .from("driver_payment_documents")
-      .select("*,alc_drivers(driver_code,full_name,base_key,sigla),driver_payment_document_versions:driver_payment_document_versions!driver_payment_document_versions_document_id_fkey(*)", { count: "exact" });
-    if (baseFilter) query = query.in("base_key", baseFilter.length ? baseFilter : ["__none__"]);
-    const { data, error, count } = await query.order("created_at", { ascending: false }).range(offset, offset + pageSize - 1);
-    if (error) throw new Error(error.message);
-    return { rows: (data ?? []) as DbRow[], count };
-  });
-}
-
-async function loadPaymentDrivers(baseFilter: string[] | null, documents: DbRow[], bases: DbRow[]) {
-  if (baseFilter === null) return loadDrivers(null);
-
-  const allDrivers = await loadDrivers(null);
-  const baseRefs: PaymentBaseRef[] = bases.map((base) => ({
-    baseKey: textValue(base.base_key),
-    baseName: textValue(base.base_name),
-    sigla: textValue(base.sigla),
-  }));
-  const unresolvedNameKeys = new Set(
-    documents
-      .filter((doc) => ["unidentified", "error"].includes(textValue(doc.status)))
-      .map((doc) => paymentDriverNameKeyFromTitle(textValue(doc.title)))
-      .filter(Boolean),
+function driverUnitMap(drivers: CanonicalDriver[], units: UnitRef[]) {
+  const byUnit = new Map(units.map((unit) => [unit.unitKey, unit]));
+  return new Map(
+    drivers
+      .map((driver) => [driver.driverCode, byUnit.get(driver.unitKey)] as const)
+      .filter((entry): entry is readonly [string, UnitRef] => Boolean(entry[0] && entry[1])),
   );
-
-  return allDrivers.filter((driver) => {
-    if (!/^\d+$/.test(driver.driverCode)) return false;
-    const matchesAllowedOperation = baseFilter.some((allowedBase) => paymentDriverMatchesBase(
-      allowedBase,
-      { baseKey: driver.baseKey, sigla: driver.sigla },
-      baseRefs,
-      false,
-    ));
-    if (matchesAllowedOperation) return true;
-
-    if (!driver.baseKey && !driver.sigla) {
-      return unresolvedNameKeys.has(paymentNameKey(driver.fullName));
-    }
-    return false;
-  });
 }
 
-async function loadDisputes(baseFilter: string[] | null) {
+function canonicalUnitForRecord(
+  resolver: ReturnType<typeof buildUnitResolver>,
+  byDriver: Map<string, UnitRef>,
+  input: { unitKey?: unknown; baseKey?: unknown; sigla?: unknown; driverCode?: unknown },
+) {
+  return resolver.resolve(input) ?? byDriver.get(textValue(input.driverCode)) ?? null;
+}
+
+async function loadDocuments(
+  units: UnitRef[],
+  visibleUnits: UnitRef[],
+  scoped: boolean,
+  byDriver: Map<string, UnitRef>,
+) {
   const admin = createAdminClient();
-  return readPaged<DbRow>(async (offset, pageSize) => {
-    let query = admin
-      .from("driver_disputes")
-      .select("*,alc_drivers(driver_code,full_name),driver_payment_documents(title)", { count: "exact" });
-    if (baseFilter) query = query.in("base_key", baseFilter.length ? baseFilter : ["__none__"]);
-    const { data, error, count } = await query.order("created_at", { ascending: false }).range(offset, offset + pageSize - 1);
+  const resolver = buildUnitResolver(units);
+  const visible = new Set(visibleUnits.map((unit) => unit.unitKey));
+  const rows = await readPaged<DbRow>(async (offset, pageSize) => {
+    const { data, error, count } = await admin
+      .from("driver_payment_documents")
+      .select("*,alc_drivers(driver_code,full_name,base_key,sigla),driver_payment_document_versions:driver_payment_document_versions!driver_payment_document_versions_document_id_fkey(*)", { count: "exact" })
+      .order("created_at", { ascending: false })
+      .range(offset, offset + pageSize - 1);
     if (error) throw new Error(error.message);
     return { rows: (data ?? []) as DbRow[], count };
   });
+
+  return rows.flatMap((row) => {
+    const driver = row.alc_drivers as DbRow | null;
+    const unit = canonicalUnitForRecord(resolver, byDriver, {
+      baseKey: row.base_key || driver?.base_key,
+      sigla: driver?.sigla,
+      driverCode: driver?.driver_code,
+    });
+    if (scoped && (!unit || !visible.has(unit.unitKey))) return [];
+    return [{
+      ...row,
+      base_key: unit?.baseKey ?? textValue(row.base_key),
+      base_name: unit?.baseName ?? "",
+      sigla: unit?.sigla ?? "",
+      unit_key: unit?.unitKey ?? "",
+      xpt_code: unit?.xptCode ?? "",
+    }];
+  });
 }
 
-async function loadAssignments() {
+async function loadDisputes(
+  units: UnitRef[],
+  visibleUnits: UnitRef[],
+  scoped: boolean,
+  byDriver: Map<string, UnitRef>,
+) {
   const admin = createAdminClient();
+  const resolver = buildUnitResolver(units);
+  const visible = new Set(visibleUnits.map((unit) => unit.unitKey));
+  const rows = await readPaged<DbRow>(async (offset, pageSize) => {
+    const { data, error, count } = await admin
+      .from("driver_disputes")
+      .select("*,alc_drivers(driver_code,full_name,base_key,sigla),driver_payment_documents(title)", { count: "exact" })
+      .order("created_at", { ascending: false })
+      .range(offset, offset + pageSize - 1);
+    if (error) throw new Error(error.message);
+    return { rows: (data ?? []) as DbRow[], count };
+  });
+
+  return rows.flatMap((row) => {
+    const driver = row.alc_drivers as DbRow | null;
+    const unit = canonicalUnitForRecord(resolver, byDriver, {
+      baseKey: row.base_key || driver?.base_key,
+      sigla: driver?.sigla,
+      driverCode: driver?.driver_code,
+    });
+    if (scoped && (!unit || !visible.has(unit.unitKey))) return [];
+    return [{
+      ...row,
+      base_key: unit?.baseKey ?? textValue(row.base_key),
+      base_name: unit?.baseName ?? "",
+      sigla: unit?.sigla ?? "",
+      unit_key: unit?.unitKey ?? "",
+      xpt_code: unit?.xptCode ?? "",
+    }];
+  });
+}
+
+async function loadCanonicalTickets(
+  units: UnitRef[],
+  visibleUnits: UnitRef[],
+  scoped: boolean,
+  byDriver: Map<string, UnitRef>,
+) {
+  const resolver = buildUnitResolver(units);
+  const visible = new Set(visibleUnits.map((unit) => unit.unitKey));
+  const tickets = await loadTickets({ allowedBases: null });
+  return tickets.flatMap((ticket) => {
+    const unit = canonicalUnitForRecord(resolver, byDriver, {
+      baseKey: ticket.baseKey,
+      sigla: ticket.sigla,
+      driverCode: ticket.driverCode,
+    });
+    if (scoped && (!unit || !visible.has(unit.unitKey))) return [];
+    return [{
+      ...ticket,
+      unitKey: unit?.unitKey ?? "",
+      baseKey: unit?.baseKey ?? ticket.baseKey,
+      baseName: unit?.baseName ?? "",
+      sigla: unit?.sigla ?? "",
+      xptCode: unit?.xptCode ?? "",
+    }];
+  });
+}
+
+async function loadAssignments(units: UnitRef[]) {
+  const admin = createAdminClient();
+  const resolver = buildUnitResolver(units);
   const { data, error } = await admin
     .from("admin_base_assignments")
-    .select("*,profiles:profiles!admin_base_assignments_admin_id_fkey(email,full_name,role),operational_bases(base_name,sigla)")
+    .select("*,profiles:profiles!admin_base_assignments_admin_id_fkey(email,full_name,role)")
     .order("created_at", { ascending: false });
   if (error) throw new Error(error.message);
-  return data ?? [];
+  return ((data ?? []) as DbRow[]).map((row) => {
+    const unit = resolver.resolve({ baseKey: row.base_key });
+    return {
+      ...row,
+      operational_bases: unit ? { base_name: unit.baseName, sigla: unit.sigla } : null,
+    };
+  });
 }
 
 export async function GET(request: Request) {
@@ -166,33 +324,44 @@ export async function GET(request: Request) {
     assertDriverManagementTab(profile, requested);
 
     const baseFilter = await driverManagementBaseScope(profile);
-    const bases = await loadBases(baseFilter);
+    const allUnits = await loadMasterUnits();
+    const resolver = buildUnitResolver(allUnits);
+    const visibleUnits = resolver.unitsForScope(baseFilter);
+    const scoped = baseFilter !== null;
+    const drivers = await loadDrivers(allUnits, visibleUnits, scoped);
+    const byDriver = driverUnitMap(drivers, allUnits);
+    const bases = visibleUnits.map((unit) => ({
+      unit_key: unit.unitKey,
+      base_key: unit.baseKey,
+      base_name: unit.baseName,
+      sigla: unit.sigla,
+      xpt_code: unit.xptCode,
+      active: true,
+    }));
     const payload: Record<string, unknown> = {
       access: { tabs: allowedTabs, bases: baseFilter, role: profile.role },
       bases,
     };
 
     if (requested === "overview") {
-      const [drivers, tickets, documents, disputes] = await Promise.all([
-        loadDrivers(baseFilter),
-        loadTickets({ allowedBases: baseFilter }),
-        loadDocuments(baseFilter),
-        loadDisputes(baseFilter),
+      const [tickets, documents, disputes] = await Promise.all([
+        loadCanonicalTickets(allUnits, visibleUnits, scoped, byDriver),
+        loadDocuments(allUnits, visibleUnits, scoped, byDriver),
+        loadDisputes(allUnits, visibleUnits, scoped, byDriver),
       ]);
       Object.assign(payload, { drivers, tickets, documents, disputes });
     }
 
-    if (requested === "pilot" || requested === "drivers") payload.drivers = await loadDrivers(baseFilter);
-    if (requested === "tickets") payload.tickets = await loadTickets({ allowedBases: baseFilter });
+    if (requested === "pilot" || requested === "drivers") payload.drivers = drivers;
+    if (requested === "tickets") payload.tickets = await loadCanonicalTickets(allUnits, visibleUnits, scoped, byDriver);
 
     if (requested === "payments") {
-      const documents = await loadDocuments(baseFilter);
-      const drivers = await loadPaymentDrivers(baseFilter, documents, bases);
+      const documents = await loadDocuments(allUnits, visibleUnits, scoped, byDriver);
       Object.assign(payload, { documents, drivers });
     }
 
-    if (requested === "disputes") payload.disputes = await loadDisputes(baseFilter);
-    if (requested === "admins") payload.assignments = await loadAssignments();
+    if (requested === "disputes") payload.disputes = await loadDisputes(allUnits, visibleUnits, scoped, byDriver);
+    if (requested === "admins") payload.assignments = await loadAssignments(allUnits);
 
     return NextResponse.json(payload);
   } catch (error) {
@@ -286,8 +455,12 @@ export async function PATCH(request: Request) {
       if (current.error) throw new Error(current.error.message);
 
       const baseFilter = await driverManagementBaseScope(profile);
-      if (baseFilter && !baseFilter.includes(textValue(current.data.base_key))) {
-        return jsonError("Acesso negado para a base solicitada.", 403);
+      if (baseFilter) {
+        const units = await loadMasterUnits();
+        const resolver = buildUnitResolver(units);
+        const unit = resolver.resolve({ baseKey: current.data.base_key, sigla: current.data.sigla });
+        const visible = new Set(resolver.unitsForScope(baseFilter).map((item) => item.unitKey));
+        if (!unit || !visible.has(unit.unitKey)) return jsonError("Acesso negado para a base solicitada.", 403);
       }
 
       const now = new Date().toISOString();
