@@ -56,7 +56,6 @@ export function GlobalFilters() {
     <section className="filters-bar" aria-label="Filtros globais">
       <SelectFilter label="Mês" value={filters.month} options={options.months} allLabel="Todos" onChange={(value) => setFilter("month", value)} formatOption={formatMonthLabel} />
       <SelectFilter label="Quinzena" value={filters.fortnight} options={options.fortnights} allLabel="Todas" onChange={(value) => setFilter("fortnight", value)} formatOption={formatFortnightLabel} />
-      <SelectFilter label="XPT" value={filters.xpt} options={options.xpts} allLabel="Todos" onChange={(value) => setFilter("xpt", value)} />
       <SelectFilter label="Coordenador" value={filters.coordinator} options={options.coordinators} allLabel="Todos" onChange={(value) => setFilter("coordinator", value)} />
       <label className="filter-control">
         <span>Base (SVC)</span>
@@ -65,6 +64,7 @@ export function GlobalFilters() {
           {baseOptions.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
         </select>
       </label>
+      <SelectFilter label="XPT" value={filters.xpt} options={options.xpts} allLabel="Todos" onChange={(value) => setFilter("xpt", value)} />
       <SelectFilter label="Operação" value={filters.operation} options={["SVC", "XPT", "PNR"]} allLabel="Todas" onChange={(value) => setFilter("operation", value)} />
       <SelectFilter label="Supervisor" value={filters.supervisor} options={options.supervisors} allLabel="Todos" onChange={(value) => setFilter("supervisor", value)} />
       <SelectFilter label="Motorista" value={filters.driver} options={options.drivers} allLabel="Todos" onChange={(value) => setFilter("driver", value)} />
