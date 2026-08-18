@@ -13,6 +13,29 @@ function isStatus(value: unknown): value is DriverDisputeStatus {
   return typeof value === "string" && DRIVER_DISPUTE_STATUSES.includes(value as DriverDisputeStatus);
 }
 
+export async function GET(request: Request) {
+  try {
+    const profile = await requirePortalProfile();
+    assertDriverManagementTab(profile, "disputes");
+    const id = new URL(request.url).searchParams.get("id")?.trim();
+    if (!id) throw new Error("Informe a contestação.");
+
+    const admin = createAdminClient();
+    const current = await admin
+      .from("driver_disputes")
+      .select("*,alc_drivers(driver_code,full_name,base_key,sigla),driver_payment_documents(id,title,status,active_version_id,period),driver_dispute_messages(*)")
+      .eq("id", id)
+      .maybeSingle();
+    if (current.error) throw new Error(current.error.message);
+    if (!current.data) return jsonError("Contestação não encontrada.", 404);
+    const allowedBases = await driverManagementBaseScope(profile);
+    assertBaseAccess(textValue(current.data.base_key), allowedBases);
+    return NextResponse.json({ dispute: current.data });
+  } catch (error) {
+    return jsonError(error instanceof Error ? error.message : "Falha ao carregar contestação.", accessErrorStatus(error, 400));
+  }
+}
+
 export async function POST() {
   return NextResponse.json(
     {
@@ -51,17 +74,21 @@ export async function PATCH(request: Request) {
     }
     const updated = await admin.from("driver_disputes").update(patch).eq("id", id).select().single();
     if (updated.error) throw new Error(updated.error.message);
-    if (body.message) await admin.from("driver_dispute_messages").insert({ dispute_id: id, author_profile_id: profile.id, body: textValue(body.message) });
+    const message = textValue(body.message).trim();
+    if (message) {
+      const insertedMessage = await admin.from("driver_dispute_messages").insert({ dispute_id: id, author_profile_id: profile.id, body: message });
+      if (insertedMessage.error) throw new Error(insertedMessage.error.message);
+    }
     if (updated.data.driver_id) {
       await admin.from("driver_notifications").insert({
         driver_id: textValue(updated.data.driver_id),
-        title: "Contestação atualizada",
-        body: `Status: ${nextStatus.replaceAll("_", " ")}.`,
+        title: message ? "Nova mensagem na contestação" : "Contestação atualizada",
+        body: message || `Status: ${nextStatus.replaceAll("_", " ")}.`,
         entity_table: "driver_disputes",
         entity_id: id,
       });
     }
-    await admin.from("driver_portal_audit_events").insert({ actor_profile_id: profile.id, action: "dispute_status_changed", entity_table: "driver_disputes", entity_id: id, before_data: current.data, after_data: updated.data });
+    await admin.from("driver_portal_audit_events").insert({ actor_profile_id: profile.id, action: message ? "dispute_admin_message" : "dispute_status_changed", entity_table: "driver_disputes", entity_id: id, before_data: current.data, after_data: updated.data });
     return NextResponse.json({ dispute: updated.data });
   } catch (error) {
     return jsonError(error instanceof Error ? error.message : "Falha ao atualizar contestação.", accessErrorStatus(error, 400));
