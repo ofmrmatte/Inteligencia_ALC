@@ -17,6 +17,8 @@ import { useDashboardStore } from "@/lib/store";
 const ImportPanel = dynamic(() => import("@/components/import-panel").then((module) => module.ImportPanel), { ssr: false });
 const SIDEBAR_KEY = "alc-inteligencia:sidebar-collapsed";
 const SIDEBAR_EVENT = "alc-inteligencia:sidebar-change";
+const GLOBAL_SYNC_EVENT = "alc-inteligencia:global-data-sync";
+const GLOBAL_SYNC_INTERVAL_MS = 15_000;
 const ADMIN_SECTIONS: SectionId[] = ["gestao-motoristas", "configuracoes", "perfil"];
 const STANDALONE_SECTIONS: SectionId[] = ["gestao-descontos", ...ADMIN_SECTIONS];
 
@@ -35,6 +37,14 @@ function getSidebarSnapshot() {
 
 function getServerSidebarSnapshot() {
   return true;
+}
+
+async function readGlobalRevision() {
+  const response = await fetch("/api/sync/version", { cache: "no-store" });
+  if (!response.ok) return null;
+  const body = (await response.json().catch(() => ({}))) as { revision?: unknown };
+  const revision = Number(body.revision ?? 0);
+  return Number.isFinite(revision) && revision > 0 ? revision : null;
 }
 
 export function DashboardApp({ section, profile }: { section: SectionId; profile: AuthProfile }) {
@@ -69,6 +79,56 @@ export function DashboardApp({ section, profile }: { section: SectionId; profile
   };
 
   useEffect(() => { void hydrate(cacheOwnerId, canLoadOperationalData); }, [hydrate, cacheOwnerId, canLoadOperationalData]);
+
+  useEffect(() => {
+    let disposed = false;
+    let syncing = false;
+    const revisionKey = `alc-inteligencia:global-revision:${cacheOwnerId}`;
+
+    const synchronize = async () => {
+      if (disposed || syncing || document.visibilityState === "hidden") return;
+      syncing = true;
+      try {
+        const revision = await readGlobalRevision();
+        if (!revision || disposed) return;
+        const knownRevision = window.localStorage.getItem(revisionKey);
+        if (knownRevision === String(revision)) return;
+
+        if (canLoadOperationalData) {
+          useDashboardStore.setState({ lastSyncedAt: 0 });
+          await hydrate(cacheOwnerId, true);
+          if (useDashboardStore.getState().loadError) return;
+        }
+
+        if (disposed) return;
+        window.localStorage.setItem(revisionKey, String(revision));
+        window.dispatchEvent(new CustomEvent(GLOBAL_SYNC_EVENT, { detail: { revision } }));
+      } catch {
+        // A sincronização periódica não deve interromper o uso do painel.
+      } finally {
+        syncing = false;
+      }
+    };
+
+    void synchronize();
+    const timer = window.setInterval(() => { void synchronize(); }, GLOBAL_SYNC_INTERVAL_MS);
+    const handleFocus = () => { void synchronize(); };
+    const handleVisibility = () => { if (document.visibilityState === "visible") void synchronize(); };
+    const handleStorage = (event: StorageEvent) => {
+      if (event.key === revisionKey) void synchronize();
+    };
+
+    window.addEventListener("focus", handleFocus);
+    window.addEventListener("storage", handleStorage);
+    document.addEventListener("visibilitychange", handleVisibility);
+    return () => {
+      disposed = true;
+      window.clearInterval(timer);
+      window.removeEventListener("focus", handleFocus);
+      window.removeEventListener("storage", handleStorage);
+      document.removeEventListener("visibilitychange", handleVisibility);
+    };
+  }, [hydrate, cacheOwnerId, canLoadOperationalData]);
 
   const toggleCollapsed = () => {
     window.localStorage.setItem(SIDEBAR_KEY, String(!collapsed));
