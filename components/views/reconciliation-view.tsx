@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useState } from "react";
 import { CheckCheck, CircleDashed, Copy, Eye, GitMerge, Link2, LoaderCircle, X } from "lucide-react";
 import { toast } from "sonner";
 import { scopeData } from "@/lib/dashboard-scope";
@@ -62,7 +62,7 @@ export function ReconciliationView() {
   const duplicates = rows.filter((row) => row.status === "Duplicado");
   const isolated = rows.filter((row) => row.status === "Isolado");
 
-  const filteredRows = useMemo(() => rows.filter((row) => {
+  const filteredRows = rows.filter((row) => {
     if (columnFilters.prefatura !== "TODOS" && String(row.prefatura) !== columnFilters.prefatura) return false;
     if (columnFilters.pnr !== "TODOS" && String(row.pnr) !== columnFilters.pnr) return false;
     if (columnFilters.risk !== "TODOS" && String(row.risk) !== columnFilters.risk) return false;
@@ -71,7 +71,7 @@ export function ReconciliationView() {
     if (columnFilters.status !== "TODOS" && row.status !== columnFilters.status) return false;
     if (columnFilters.latestStatus !== "TODOS" && row.latestStatus !== columnFilters.latestStatus) return false;
     return true;
-  }), [rows, columnFilters]);
+  });
 
   const visibleRows = filteredRows.slice(0, 100);
   const visibleDuplicateIds = visibleRows.filter((row) => row.status === "Duplicado").map((row) => row.shipmentId);
