@@ -201,10 +201,12 @@ function parseWorkbook(bytes: Uint8Array, sourceFile: string, batchName: string,
       continue;
     }
 
-    headerIndex = findHeader(matrix, ["SHP_SHIPMENT_ID", "SHP_LG_DRIVER_ID", "GMV_BRL"]);
+    const riskHeaderLegacy = findHeader(matrix, ["SHP_SHIPMENT_ID", "SHP_LG_DRIVER_ID", "GMV_BRL"]);
+    const riskHeaderCurrent = findHeader(matrix, ["ID PACOTE", "SHP_LG_DRIVER_ID", "GMV_BRL"]);
+    headerIndex = riskHeaderLegacy >= 0 ? riskHeaderLegacy : riskHeaderCurrent;
     if (headerIndex >= 0) {
       for (const row of rowsFrom(matrix, headerIndex)) {
-        const shipmentId = asId(row.values["SHP SHIPMENT ID"]);
+        const shipmentId = firstId(row.values, ["SHP SHIPMENT ID", "ID PACOTE", "ID DO PACOTE"]);
         if (!shipmentId) continue;
         const facility = parseBase(row.values["SHP LG FACILITY ID"]);
         risk.push({
