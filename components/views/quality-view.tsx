@@ -2,10 +2,10 @@
 
 import { useState } from "react";
 import { ArrowRight, CheckCircle2, CircleAlert, DatabaseZap, Eye, RefreshCw, ShieldCheck, Wrench, X } from "lucide-react";
-import { duplicateGroups, qualityIssues } from "@/lib/metrics";
+import { duplicateGroups, qualityIssues, type QualityIssue } from "@/lib/metrics";
 import { normalizeText } from "@/lib/normalize";
 import { useDashboardStore } from "@/lib/store";
-import type { DashboardData, QualityIssue } from "@/lib/types";
+import type { DashboardData } from "@/lib/types";
 import { formatNumber, KpiCard, Panel, PageIntro, StatusBadge } from "@/components/ui";
 import { TableWrap } from "./shared";
 
