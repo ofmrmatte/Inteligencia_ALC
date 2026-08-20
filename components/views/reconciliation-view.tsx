@@ -1,33 +1,13 @@
 "use client";
 
 import { useState } from "react";
-import { CheckCheck, CircleDashed, Copy, Eye, GitMerge, Link2, LoaderCircle, X } from "lucide-react";
+import { CheckCheck, CircleDashed, Copy, Eye, GitMerge, Link2, LoaderCircle, Search, X } from "lucide-react";
 import { toast } from "sonner";
 import { scopeData } from "@/lib/dashboard-scope";
 import { detailedReconciliation, type DetailedReconciliationRow } from "@/lib/reconciliation-details";
 import { useDashboardStore } from "@/lib/store";
 import { formatCurrency, formatNumber, KpiCard, Panel, PageIntro, StatusBadge } from "@/components/ui";
 import { ColumnSelectFilter, NoResults, TableWrap } from "./shared";
-
-type ColumnFilters = {
-  prefatura: string;
-  pnr: string;
-  risk: string;
-  sources: string;
-  occurrences: string;
-  status: string;
-  latestStatus: string;
-};
-
-const EMPTY_COLUMN_FILTERS: ColumnFilters = {
-  prefatura: "TODOS",
-  pnr: "TODOS",
-  risk: "TODOS",
-  sources: "TODOS",
-  occurrences: "TODOS",
-  status: "TODOS",
-  latestStatus: "TODOS",
-};
 
 async function readError(response: Response, fallback: string) {
   try {
@@ -36,10 +16,6 @@ async function readError(response: Response, fallback: string) {
   } catch {
     return fallback;
   }
-}
-
-function numericOptions(values: number[]) {
-  return [...new Set(values)].sort((a, b) => a - b).map((value) => ({ value: String(value), label: String(value) }));
 }
 
 function textOptions(values: string[]) {
@@ -53,7 +29,9 @@ export function ReconciliationView() {
   const [mergingId, setMergingId] = useState("");
   const [bulkMerging, setBulkMerging] = useState(false);
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
-  const [columnFilters, setColumnFilters] = useState<ColumnFilters>(EMPTY_COLUMN_FILTERS);
+  const [statusFilter, setStatusFilter] = useState("TODOS");
+  const [idSearchOpen, setIdSearchOpen] = useState(false);
+  const [idSearch, setIdSearch] = useState("");
 
   const rows = detailedReconciliation(scopeData(data, filters), data.imports);
   if (!rows.length) return <NoResults title="Nenhum ID disponível para conciliação" />;
@@ -61,15 +39,11 @@ export function ReconciliationView() {
   const reconciled = rows.filter((row) => row.status === "Conciliado");
   const duplicates = rows.filter((row) => row.status === "Duplicado");
   const isolated = rows.filter((row) => row.status === "Isolado");
+  const normalizedIdSearch = idSearch.replace(/\D/g, "");
 
   const filteredRows = rows.filter((row) => {
-    if (columnFilters.prefatura !== "TODOS" && String(row.prefatura) !== columnFilters.prefatura) return false;
-    if (columnFilters.pnr !== "TODOS" && String(row.pnr) !== columnFilters.pnr) return false;
-    if (columnFilters.risk !== "TODOS" && String(row.risk) !== columnFilters.risk) return false;
-    if (columnFilters.sources !== "TODOS" && String(row.sources) !== columnFilters.sources) return false;
-    if (columnFilters.occurrences !== "TODOS" && String(row.occurrences) !== columnFilters.occurrences) return false;
-    if (columnFilters.status !== "TODOS" && row.status !== columnFilters.status) return false;
-    if (columnFilters.latestStatus !== "TODOS" && row.latestStatus !== columnFilters.latestStatus) return false;
+    if (statusFilter !== "TODOS" && row.status !== statusFilter) return false;
+    if (normalizedIdSearch && !row.shipmentId.includes(normalizedIdSearch)) return false;
     return true;
   });
 
@@ -77,10 +51,6 @@ export function ReconciliationView() {
   const visibleDuplicateIds = visibleRows.filter((row) => row.status === "Duplicado").map((row) => row.shipmentId);
   const allVisibleDuplicatesSelected = visibleDuplicateIds.length > 0 && visibleDuplicateIds.every((id) => selectedIds.has(id));
   const busy = Boolean(mergingId) || bulkMerging;
-
-  const setColumnFilter = (key: keyof ColumnFilters, value: string) => {
-    setColumnFilters((current) => ({ ...current, [key]: value }));
-  };
 
   const toggleSelected = (shipmentId: string) => {
     setSelectedIds((current) => {
@@ -171,14 +141,24 @@ export function ReconciliationView() {
           <thead>
             <tr>
               <th style={{ width: 34 }}><input type="checkbox" aria-label="Selecionar duplicados visíveis" checked={allVisibleDuplicatesSelected} onChange={toggleAllVisible} disabled={!visibleDuplicateIds.length || busy} /></th>
-              <th>ID do pacote</th>
-              <th>Pré-fatura <ColumnSelectFilter ariaLabel="Filtrar Pré-fatura" value={columnFilters.prefatura} options={numericOptions(rows.map((row) => row.prefatura))} onChange={(value) => setColumnFilter("prefatura", value)} /></th>
-              <th>KPI PNR <ColumnSelectFilter ariaLabel="Filtrar KPI PNR" value={columnFilters.pnr} options={numericOptions(rows.map((row) => row.pnr))} onChange={(value) => setColumnFilter("pnr", value)} /></th>
-              <th>Risco LM <ColumnSelectFilter ariaLabel="Filtrar Risco LM" value={columnFilters.risk} options={numericOptions(rows.map((row) => row.risk))} onChange={(value) => setColumnFilter("risk", value)} /></th>
-              <th>Fontes <ColumnSelectFilter ariaLabel="Filtrar quantidade de fontes" value={columnFilters.sources} options={numericOptions(rows.map((row) => row.sources))} onChange={(value) => setColumnFilter("sources", value)} /></th>
-              <th>Ocorrências <ColumnSelectFilter ariaLabel="Filtrar ocorrências" value={columnFilters.occurrences} options={numericOptions(rows.map((row) => row.occurrences))} onChange={(value) => setColumnFilter("occurrences", value)} /></th>
-              <th>Conciliação <ColumnSelectFilter ariaLabel="Filtrar conciliação" value={columnFilters.status} options={textOptions(rows.map((row) => row.status))} onChange={(value) => setColumnFilter("status", value)} /></th>
-              <th>Status mais recente <ColumnSelectFilter ariaLabel="Filtrar status mais recente" value={columnFilters.latestStatus} options={textOptions(rows.map((row) => row.latestStatus))} onChange={(value) => setColumnFilter("latestStatus", value)} /></th>
+              <th>
+                <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
+                  ID do pacote
+                  <span style={{ display: "inline-flex", alignItems: "center", height: 24, transition: "width .2s ease", width: idSearchOpen ? 150 : 24, overflow: "hidden", border: `1px solid ${idSearch || idSearchOpen ? "#f2b8bd" : "#e4e5e8"}`, borderRadius: 999, background: idSearch ? "#fff3f4" : "#f5f6f7" }}>
+                    <button type="button" aria-label={idSearchOpen ? "Fechar busca de ID" : "Buscar ID do pacote"} title={idSearchOpen ? "Fechar busca" : "Buscar ID"} onClick={() => { if (idSearchOpen) { setIdSearchOpen(false); setIdSearch(""); } else setIdSearchOpen(true); }} style={{ width: 24, height: 22, flex: "0 0 24px", border: 0, background: "transparent", display: "grid", placeItems: "center", color: idSearch ? "#b8000b" : "#7f8289", cursor: "pointer", padding: 0 }}>
+                      <Search size={10} strokeWidth={2} />
+                    </button>
+                    {idSearchOpen ? <input autoFocus inputMode="numeric" aria-label="Pesquisar ID do pacote" value={idSearch} onChange={(event) => setIdSearch(event.target.value.replace(/\D/g, ""))} placeholder="Buscar ID..." style={{ width: 118, minWidth: 0, height: 22, border: 0, outline: 0, background: "transparent", fontSize: 9, color: "#30343a", padding: "0 7px 0 2px" }} /> : null}
+                  </span>
+                </span>
+              </th>
+              <th>Pré-fatura</th>
+              <th>KPI PNR</th>
+              <th>Risco LM</th>
+              <th>Fontes</th>
+              <th>Ocorrências</th>
+              <th>Conciliação <ColumnSelectFilter ariaLabel="Filtrar conciliação" value={statusFilter} options={textOptions(rows.map((row) => row.status))} onChange={setStatusFilter} /></th>
+              <th>Status mais recente</th>
               <th className="align-right">Valor de referência</th>
               <th aria-label="Ações" />
             </tr>
@@ -197,7 +177,7 @@ export function ReconciliationView() {
             <td className="align-right">{row.status === "Duplicado" ? <div style={{ display: "inline-flex", gap: 6 }}><button className="table-action" title="Analisar duplicação" onClick={() => setAnalysis(row)} type="button" disabled={busy}><Eye size={15} /></button><button className="table-action" title="Mesclar e manter o mais recente" onClick={() => void mergeDuplicate(row)} type="button" disabled={busy}>{mergingId === row.shipmentId ? <LoaderCircle size={15} className="spin" /> : <GitMerge size={15} />}</button></div> : null}</td>
           </tr>)}</tbody>
         </TableWrap>
-        {!visibleRows.length ? <div style={{ padding: 20 }}><NoResults title="Nenhum ID corresponde aos filtros da tabela" detail="Limpe ou altere os filtros minimalistas do cabeçalho." /></div> : null}
+        {!visibleRows.length ? <div style={{ padding: 20 }}><NoResults title="Nenhum ID corresponde aos filtros da tabela" detail="Revise a busca por ID ou o filtro de conciliação." /></div> : null}
       </Panel>
       {analysis ? <AnalysisModal row={analysis} onClose={() => setAnalysis(null)} onMerge={() => void mergeDuplicate(analysis)} merging={mergingId === analysis.shipmentId} disabled={busy && mergingId !== analysis.shipmentId} /> : null}
     </div>
