@@ -22,6 +22,11 @@ function textOptions(values: string[]) {
   return [...new Set(values.filter(Boolean))].sort((a, b) => a.localeCompare(b, "pt-BR")).map((value) => ({ value, label: value }));
 }
 
+function initialSearchParam(name: string) {
+  if (typeof window === "undefined") return "";
+  return new URLSearchParams(window.location.search).get(name) || "";
+}
+
 export function ReconciliationView() {
   const data = useDashboardStore((state) => state.data);
   const filters = useDashboardStore((state) => state.filters);
@@ -29,9 +34,12 @@ export function ReconciliationView() {
   const [mergingId, setMergingId] = useState("");
   const [bulkMerging, setBulkMerging] = useState(false);
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
-  const [statusFilter, setStatusFilter] = useState("TODOS");
-  const [idSearchOpen, setIdSearchOpen] = useState(false);
-  const [idSearch, setIdSearch] = useState("");
+  const [statusFilter, setStatusFilter] = useState(() => {
+    const requested = initialSearchParam("status");
+    return ["Conciliado", "Duplicado", "Isolado"].includes(requested) ? requested : "TODOS";
+  });
+  const [idSearchOpen, setIdSearchOpen] = useState(() => Boolean(initialSearchParam("id")));
+  const [idSearch, setIdSearch] = useState(() => initialSearchParam("id").replace(/\D/g, ""));
 
   const rows = detailedReconciliation(scopeData(data, filters), data.imports);
   if (!rows.length) return <NoResults title="Nenhum ID disponível para conciliação" />;
@@ -144,11 +152,9 @@ export function ReconciliationView() {
               <th>
                 <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
                   ID do pacote
-                  <span style={{ display: "inline-flex", alignItems: "center", height: 24, transition: "width .2s ease", width: idSearchOpen ? 150 : 24, overflow: "hidden", border: `1px solid ${idSearch || idSearchOpen ? "#f2b8bd" : "#e4e5e8"}`, borderRadius: 999, background: idSearch ? "#fff3f4" : "#f5f6f7" }}>
-                    <button type="button" aria-label={idSearchOpen ? "Fechar busca de ID" : "Buscar ID do pacote"} title={idSearchOpen ? "Fechar busca" : "Buscar ID"} onClick={() => { if (idSearchOpen) { setIdSearchOpen(false); setIdSearch(""); } else setIdSearchOpen(true); }} style={{ width: 24, height: 22, flex: "0 0 24px", border: 0, background: "transparent", display: "grid", placeItems: "center", color: idSearch ? "#b8000b" : "#7f8289", cursor: "pointer", padding: 0 }}>
-                      <Search size={10} strokeWidth={2} />
-                    </button>
-                    {idSearchOpen ? <input autoFocus inputMode="numeric" aria-label="Pesquisar ID do pacote" value={idSearch} onChange={(event) => setIdSearch(event.target.value.replace(/\D/g, ""))} placeholder="Buscar ID..." style={{ width: 118, minWidth: 0, height: 22, border: 0, outline: 0, background: "transparent", fontSize: 9, color: "#30343a", padding: "0 7px 0 2px" }} /> : null}
+                  <span className={`column-search ${idSearchOpen ? "column-search--open" : ""}`}>
+                    <button className={`column-filter__trigger ${normalizedIdSearch ? "column-filter__trigger--active" : ""}`} type="button" aria-label="Pesquisar ID do pacote" title="Pesquisar ID do pacote" onClick={() => { if (idSearchOpen) { setIdSearch(""); setIdSearchOpen(false); } else setIdSearchOpen(true); }}><Search size={12} /></button>
+                    {idSearchOpen ? <input autoFocus value={idSearch} onChange={(event) => setIdSearch(event.target.value.replace(/\D/g, ""))} placeholder="Buscar ID" inputMode="numeric" aria-label="Busca ativa por ID do pacote" /> : null}
                   </span>
                 </span>
               </th>
@@ -177,7 +183,7 @@ export function ReconciliationView() {
             <td className="align-right">{row.status === "Duplicado" ? <div style={{ display: "inline-flex", gap: 6 }}><button className="table-action" title="Analisar duplicação" onClick={() => setAnalysis(row)} type="button" disabled={busy}><Eye size={15} /></button><button className="table-action" title="Mesclar e manter o mais recente" onClick={() => void mergeDuplicate(row)} type="button" disabled={busy}>{mergingId === row.shipmentId ? <LoaderCircle size={15} className="spin" /> : <GitMerge size={15} />}</button></div> : null}</td>
           </tr>)}</tbody>
         </TableWrap>
-        {!visibleRows.length ? <div style={{ padding: 20 }}><NoResults title="Nenhum ID corresponde aos filtros da tabela" detail="Revise a busca por ID ou o filtro de conciliação." /></div> : null}
+        {!visibleRows.length ? <div style={{ padding: 20 }}><NoResults title="Nenhum ID corresponde aos filtros da tabela" detail="Limpe a busca do ID ou altere o filtro de conciliação." /></div> : null}
       </Panel>
       {analysis ? <AnalysisModal row={analysis} onClose={() => setAnalysis(null)} onMerge={() => void mergeDuplicate(analysis)} merging={mergingId === analysis.shipmentId} disabled={busy && mergingId !== analysis.shipmentId} /> : null}
     </div>
