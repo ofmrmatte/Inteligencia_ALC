@@ -8,7 +8,7 @@ const loading = () => <div className="view-loading"><span /><span /><span /></di
 const OverviewView = dynamic(() => import("./overview-view").then((module) => module.OverviewView), { loading });
 const PnrView = dynamic(() => import("./pnr-view").then((module) => module.PnrView), { loading });
 const PrefaturaView = dynamic(() => import("./prefatura-view").then((module) => module.PrefaturaView), { loading });
-const DiscountManagementView = dynamic(() => import("./discount-management-view-v3").then((module) => module.DiscountManagementViewV3), { loading });
+const DiscountManagementView = dynamic(() => import("./discount-management-view-v4").then((module) => module.DiscountManagementViewV4), { loading });
 const ReportsView = dynamic(() => import("./reports-view-v2").then((module) => module.ReportsView), { loading });
 const RiskView = dynamic(() => import("./risk-view").then((module) => module.RiskView), { loading });
 const DriversView = dynamic(() => import("./drivers-view").then((module) => module.DriversView), { loading });
