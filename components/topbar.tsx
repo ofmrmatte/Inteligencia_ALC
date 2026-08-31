@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { Bell, Check, Database, HardDriveUpload, LogOut, Menu, ShieldCheck, TriangleAlert, XCircle } from "lucide-react";
 import { format } from "date-fns";
 import { ptBR } from "date-fns/locale";
@@ -18,6 +18,38 @@ interface NotificationItem {
   time?: string;
 }
 
+const NOTIFICATION_READ_EVENT = "alc-notifications-read-updated";
+
+function readNotificationIds(storageKey: string) {
+  if (typeof window === "undefined") return "[]";
+  try {
+    return localStorage.getItem(storageKey) || "[]";
+  } catch {
+    return "[]";
+  }
+}
+
+function parseNotificationIds(serialized: string) {
+  try {
+    const saved: unknown = JSON.parse(serialized);
+    return Array.isArray(saved) ? saved.filter((value): value is string => typeof value === "string") : [];
+  } catch {
+    return [];
+  }
+}
+
+function subscribeNotificationIds(onStoreChange: () => void) {
+  const handleStorage = (event: StorageEvent) => {
+    if (!event.key || event.key.startsWith("alc-notifications-read:")) onStoreChange();
+  };
+  window.addEventListener("storage", handleStorage);
+  window.addEventListener(NOTIFICATION_READ_EVENT, onStoreChange);
+  return () => {
+    window.removeEventListener("storage", handleStorage);
+    window.removeEventListener(NOTIFICATION_READ_EVENT, onStoreChange);
+  };
+}
+
 export function Topbar({ section, profile, canImport, onImport, onMobileMenu }: { section: SectionId; profile: AuthProfile; canImport: boolean; onImport: () => void; onMobileMenu: () => void }) {
   const data = useDashboardStore((state) => state.data);
   const hydrated = useDashboardStore((state) => state.hydrated);
@@ -26,9 +58,14 @@ export function Topbar({ section, profile, canImport, onImport, onMobileMenu }: 
   const meta = SECTION_META[section];
   const last = data.imports[0];
   const [notificationOpen, setNotificationOpen] = useState(false);
-  const [readIds, setReadIds] = useState<string[]>([]);
   const notificationRef = useRef<HTMLDivElement>(null);
   const storageKey = `alc-notifications-read:${profile.id}`;
+  const serializedReadIds = useSyncExternalStore(
+    subscribeNotificationIds,
+    () => readNotificationIds(storageKey),
+    () => "[]",
+  );
+  const readIds = parseNotificationIds(serializedReadIds);
 
   const dataLabel = !hydrated
     ? "Carregando dados…"
@@ -62,15 +99,6 @@ export function Topbar({ section, profile, canImport, onImport, onMobileMenu }: 
   }, [data.imports, loadError]);
 
   useEffect(() => {
-    try {
-      const saved = JSON.parse(localStorage.getItem(storageKey) || "[]");
-      setReadIds(Array.isArray(saved) ? saved.filter((value): value is string => typeof value === "string") : []);
-    } catch {
-      setReadIds([]);
-    }
-  }, [storageKey]);
-
-  useEffect(() => {
     function handleOutside(event: MouseEvent) {
       if (notificationRef.current && !notificationRef.current.contains(event.target as Node)) setNotificationOpen(false);
     }
@@ -82,8 +110,12 @@ export function Topbar({ section, profile, canImport, onImport, onMobileMenu }: 
 
   function persistRead(next: string[]) {
     const compact = [...new Set(next)].slice(-80);
-    setReadIds(compact);
-    try { localStorage.setItem(storageKey, JSON.stringify(compact)); } catch { /* storage indisponível */ }
+    try {
+      localStorage.setItem(storageKey, JSON.stringify(compact));
+      window.dispatchEvent(new Event(NOTIFICATION_READ_EVENT));
+    } catch {
+      // storage indisponível: a leitura permanece somente no estado persistido disponível.
+    }
   }
 
   function markRead(id: string) {
