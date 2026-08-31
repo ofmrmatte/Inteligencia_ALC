@@ -19,6 +19,9 @@ interface AssignmentRow { id: string; admin_id: string; base_key: string; active
 interface Payload { access?: { bases?: string[] | null }; bases?: BaseRow[]; drivers?: DriverRow[]; tickets?: TicketRow[]; documents?: DocumentRow[]; disputes?: DisputeRow[]; assignments?: AssignmentRow[] }
 interface ReviewBatch { batchId: string; counts: { identified: number; unidentified: number; duplicate: number; error: number } }
 
+const EMPTY_DRIVERS: DriverRow[] = [];
+const EMPTY_DOCUMENTS: DocumentRow[] = [];
+
 const TAB_LABELS: Record<DriverManagementTab, string> = { overview: "Visão geral", pilot: "Piloto do Portal", drivers: "Motoristas", tickets: "Pendências", payments: "Pagamentos", disputes: "Contestações", admins: "Administrativos e bases" };
 const STATUS_LABELS: Record<string, string> = { draft: "Rascunho", published: "Publicado", unidentified: "Não identificado", duplicate: "Duplicado", error: "Erro", active: "Ativo", inactive: "Inativo", unknown: "Não definido", not_activated: "Não ativado", blocked: "Bloqueado", pending_activation: "Aguardando ativação", resolved: "Resolvido", needs_review: "Revisar", conflict: "Conflito", aberta: "Aberta", em_analise: "Em análise", aguardando_informacao: "Aguardando retorno do motorista", deferida: "Deferida", indeferida: "Indeferida", pdf_em_correcao: "Aguardando novo PDF", concluida: "Concluída" };
 const DISPUTE_STATUSES = ["aberta", "em_analise", "aguardando_informacao", "deferida", "indeferida", "pdf_em_correcao", "concluida"];
@@ -50,9 +53,9 @@ export function DriverManagementViewV3({ profile }: { profile: AuthProfile }) {
     catch (error) { setData({}); setMessage(error instanceof Error ? error.message : "Falha ao carregar Gestão de Motoristas."); }
     finally { setLoading(false); }
   }
-  useEffect(() => { void loadTab(tab); }, [tab]);
+  useEffect(() => { queueMicrotask(() => void loadTab(tab)); }, [tab]);
 
-  const bases = data.bases ?? []; const drivers = data.drivers ?? []; const tickets = data.tickets ?? []; const documents = data.documents ?? []; const disputes = data.disputes ?? []; const assignments = data.assignments ?? [];
+  const bases = data.bases ?? []; const drivers = data.drivers ?? EMPTY_DRIVERS; const tickets = data.tickets ?? []; const documents = data.documents ?? EMPTY_DOCUMENTS; const disputes = data.disputes ?? []; const assignments = data.assignments ?? [];
   const baseLabel = (baseKey?: string, sigla?: string, unitKey?: string) => {
     if (unitKey) { const exact = bases.find((item) => item.unit_key === unitKey); if (exact) return `${exact.sigla} - ${exact.base_name || exact.base_key}`; }
     if (baseKey && sigla) { const exact = bases.find((item) => normalize(item.base_key) === normalize(baseKey) && normalize(item.sigla || "") === normalize(sigla)); if (exact) return `${exact.sigla} - ${exact.base_name || exact.base_key}`; }

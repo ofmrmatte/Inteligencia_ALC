@@ -281,14 +281,14 @@ function patchDiscountWorkbook(workbookBytes: ArrayBuffer, logoBytes: Uint8Array
     if ((row >= 7 && row <= 16) || (row >= 21 && row <= 35)) { const alt = row % 2 === 0; if (["D", "J"].includes(column)) return alt ? 16 : 15; if (["E", "K"].includes(column)) return alt ? 20 : 19; return alt ? 14 : 13; }
     return null;
   }));
-  let detail = freezeRows(hideGridlines(strFromU8(files["xl/worksheets/sheet3.xml"])), detailHeaderRow);
+  const detail = freezeRows(hideGridlines(strFromU8(files["xl/worksheets/sheet3.xml"])), detailHeaderRow);
   files["xl/worksheets/sheet3.xml"] = strToU8(cellStyleXml(detail, (column, row) => {
     if (row === 1) return 4; if (row === 2) return 6; if (row === 3) { if (["A", "C", "E"].includes(column)) return 8; if (column === "B") return 9; if (column === "D") return 10; return 13; }
     if (row === detailHeaderRow) return 12;
     if (row > detailHeaderRow) { const dataIndex = row - detailHeaderRow - 1; const alt = dataIndex % 2 === 1; if (column === "C") return alt ? 18 : 17; if (column === detailValueColumn) return alt ? 16 : 15; if (column === "M") return directionStyleId(rows[dataIndex]?.direction) ?? (alt ? 14 : 13); if (["N", "O"].includes(column)) return alt ? 22 : 21; return alt ? 14 : 13; }
     return null;
   }));
-  let raw = freezeRows(hideGridlines(strFromU8(files["xl/worksheets/sheet4.xml"])), rawHeaderRow);
+  const raw = freezeRows(hideGridlines(strFromU8(files["xl/worksheets/sheet4.xml"])), rawHeaderRow);
   files["xl/worksheets/sheet4.xml"] = strToU8(cellStyleXml(raw, (column, row) => {
     if (row === 1) return 4; if (row === 2) return 6; if (row === rawHeaderRow) return 12;
     if (row > rawHeaderRow) { const dataIndex = row - rawHeaderRow - 1; const alt = dataIndex % 2 === 1; if (column === "C") return alt ? 18 : 17; if (column === rawValueColumn) return alt ? 16 : 15; if (column === "M") return directionStyleId(rows[dataIndex]?.direction) ?? (alt ? 14 : 13); if (["N", "O", "R", "S", "T", "U"].includes(column)) return alt ? 22 : 21; return alt ? 14 : 13; }
@@ -399,7 +399,7 @@ function DiscountReportPanel() {
     } catch (error) { toast.error(error instanceof Error ? error.message : "Falha ao carregar os dados do relatório."); }
     finally { setLoading(false); }
   }
-  useEffect(() => { void loadRows(); const refresh = () => void loadRows(); window.addEventListener("alc-inteligencia:global-data-sync", refresh); return () => window.removeEventListener("alc-inteligencia:global-data-sync", refresh); }, []);
+  useEffect(() => { queueMicrotask(() => void loadRows()); const refresh = () => void loadRows(); window.addEventListener("alc-inteligencia:global-data-sync", refresh); return () => window.removeEventListener("alc-inteligencia:global-data-sync", refresh); }, []);
   const monthOptions = useMemo(() => unique(rows.map((row) => row.discount_month || row.month || "")), [rows]);
   const baseOptions = useMemo(() => unique(rows.map(baseLabel)), [rows]);
   const filtered = useMemo(() => rows.filter((row) => { if (month !== ALL && (row.discount_month || row.month) !== month) return false; if (direction !== ALL && row.direction !== direction) return false; if (base !== ALL && baseLabel(row) !== base) return false; return true; }), [rows, month, direction, base]);

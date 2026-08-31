@@ -244,6 +244,11 @@ export function DiscountManagementViewV3() {
   const [historyLoading, setHistoryLoading] = useState(false);
   const [importingSheet, setImportingSheet] = useState(false);
 
+  function updateFilters(next: Parameters<typeof setFilters>[0]) {
+    setFilters(next);
+    setPage(1);
+  }
+
   async function loadRows(showToast = false) {
     setLoading(true);
     try {
@@ -257,7 +262,7 @@ export function DiscountManagementViewV3() {
     }
   }
 
-  useEffect(() => { void loadRows(); }, []);
+  useEffect(() => { queueMicrotask(() => void loadRows()); }, []);
   useEffect(() => {
     const refresh = () => void loadRows();
     window.addEventListener("alc-inteligencia:global-data-sync", refresh);
@@ -300,7 +305,6 @@ export function DiscountManagementViewV3() {
     });
   }, [rows, filters]);
 
-  useEffect(() => { setPage(1); }, [filters]);
 
   const totalPages = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE));
   const visibleRows = filtered.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE);
@@ -480,22 +484,22 @@ export function DiscountManagementViewV3() {
       </div>
 
       <Panel title="Filtros da Gestão de Descontos" subtitle="Mês e quinzena filtram a competência financeira do desconto, não a data real do pacote." action={<div className={styles.panelAction}>
-        <button className={styles.secondaryButton} onClick={() => { setFilters(EMPTY_FILTERS); setPage(1); }}>Limpar filtros</button>
+        <button className={styles.secondaryButton} onClick={() => { updateFilters(EMPTY_FILTERS); setPage(1); }}>Limpar filtros</button>
         <label className={styles.secondaryButton} aria-disabled={importingSheet}><UploadCloud size={15} />{importingSheet ? "Importando…" : "Importar planilha"}<input hidden type="file" accept=".xlsx,.xlsm,.xls" disabled={importingSheet} onChange={(event) => void importSpreadsheet(event)} /></label>
         <button className={styles.primaryButton} onClick={() => { const month = filters.month !== ALL ? filters.month : currentMonth(); setNewOpen(true); setLookupMatch(null); setLookupInfo({ existingCount: 0, allocatedTotal: 0, existingEntries: [] }); setLookupId(""); setNewForm(emptyForm(month)); }}><Plus size={15} />Novo direcionamento</button>
       </div>}>
         <div className={styles.toolbar}>
-          <label className={styles.field}><span>Buscar</span><div className={styles.searchWrap}><Search size={15} /><input value={filters.search} onChange={(event) => setFilters((current) => ({ ...current, search: event.target.value }))} placeholder="ID, motorista, responsável, rota ou base" /></div></label>
-          <label className={styles.field}><span>Mês do desconto</span><select value={filters.month} onChange={(event) => setFilters((current) => ({ ...current, month: event.target.value }))}><option value={ALL}>Todos</option>{options.months.map((value) => <option value={value} key={value}>{formatMonth(value)}</option>)}</select></label>
-          <label className={styles.field}><span>Quinzena</span><select value={filters.fortnight} onChange={(event) => setFilters((current) => ({ ...current, fortnight: event.target.value }))}><option value={ALL}>Todas</option>{options.fortnights.map((value) => <option value={value} key={value}>{formatFortnight(value)}</option>)}</select></label>
-          <label className={styles.field}><span>Base</span><select value={filters.base} onChange={(event) => setFilters((current) => ({ ...current, base: event.target.value }))}><option value={ALL}>Todas</option>{options.bases.map((value) => <option value={value} key={value}>{value}</option>)}</select></label>
-          <label className={styles.field}><span>XPT</span><select value={filters.xpt} onChange={(event) => setFilters((current) => ({ ...current, xpt: event.target.value }))}><option value={ALL}>Todos</option>{options.xpts.map((value) => <option value={value} key={value}>{value}</option>)}</select></label>
+          <label className={styles.field}><span>Buscar</span><div className={styles.searchWrap}><Search size={15} /><input value={filters.search} onChange={(event) => updateFilters((current) => ({ ...current, search: event.target.value }))} placeholder="ID, motorista, responsável, rota ou base" /></div></label>
+          <label className={styles.field}><span>Mês do desconto</span><select value={filters.month} onChange={(event) => updateFilters((current) => ({ ...current, month: event.target.value }))}><option value={ALL}>Todos</option>{options.months.map((value) => <option value={value} key={value}>{formatMonth(value)}</option>)}</select></label>
+          <label className={styles.field}><span>Quinzena</span><select value={filters.fortnight} onChange={(event) => updateFilters((current) => ({ ...current, fortnight: event.target.value }))}><option value={ALL}>Todas</option>{options.fortnights.map((value) => <option value={value} key={value}>{formatFortnight(value)}</option>)}</select></label>
+          <label className={styles.field}><span>Base</span><select value={filters.base} onChange={(event) => updateFilters((current) => ({ ...current, base: event.target.value }))}><option value={ALL}>Todas</option>{options.bases.map((value) => <option value={value} key={value}>{value}</option>)}</select></label>
+          <label className={styles.field}><span>XPT</span><select value={filters.xpt} onChange={(event) => updateFilters((current) => ({ ...current, xpt: event.target.value }))}><option value={ALL}>Todos</option>{options.xpts.map((value) => <option value={value} key={value}>{value}</option>)}</select></label>
         </div>
         <div className={styles.toolbarSecondary}>
-          <label className={styles.field}><span>Motorista</span><select value={filters.driver} onChange={(event) => setFilters((current) => ({ ...current, driver: event.target.value }))}><option value={ALL}>Todos</option>{options.drivers.map((value) => <option value={value} key={value}>{value}</option>)}</select></label>
-          <label className={styles.field}><span>Direcionamento</span><select value={filters.direction} onChange={(event) => setFilters((current) => ({ ...current, direction: event.target.value }))}><option value={ALL}>Todos</option>{DISCOUNT_DIRECTIONS.map((direction) => <option value={direction} key={direction}>{DISCOUNT_DIRECTION_LABELS[direction]}</option>)}</select></label>
-          <label className={styles.field}><span>Origem</span><select value={filters.origin} onChange={(event) => setFilters((current) => ({ ...current, origin: event.target.value }))}><option value={ALL}>Todas</option>{options.origins.map((value) => <option value={value} key={value}>{value}</option>)}</select></label>
-          <label className={styles.field}><span>Status PNR</span><select value={filters.pnrStatus} onChange={(event) => setFilters((current) => ({ ...current, pnrStatus: event.target.value }))}><option value={ALL}>Todos</option>{options.pnrStatuses.map((value) => <option value={value} key={value}>{value}</option>)}</select></label>
+          <label className={styles.field}><span>Motorista</span><select value={filters.driver} onChange={(event) => updateFilters((current) => ({ ...current, driver: event.target.value }))}><option value={ALL}>Todos</option>{options.drivers.map((value) => <option value={value} key={value}>{value}</option>)}</select></label>
+          <label className={styles.field}><span>Direcionamento</span><select value={filters.direction} onChange={(event) => updateFilters((current) => ({ ...current, direction: event.target.value }))}><option value={ALL}>Todos</option>{DISCOUNT_DIRECTIONS.map((direction) => <option value={direction} key={direction}>{DISCOUNT_DIRECTION_LABELS[direction]}</option>)}</select></label>
+          <label className={styles.field}><span>Origem</span><select value={filters.origin} onChange={(event) => updateFilters((current) => ({ ...current, origin: event.target.value }))}><option value={ALL}>Todas</option>{options.origins.map((value) => <option value={value} key={value}>{value}</option>)}</select></label>
+          <label className={styles.field}><span>Status PNR</span><select value={filters.pnrStatus} onChange={(event) => updateFilters((current) => ({ ...current, pnrStatus: event.target.value }))}><option value={ALL}>Todos</option>{options.pnrStatuses.map((value) => <option value={value} key={value}>{value}</option>)}</select></label>
         </div>
       </Panel>
 

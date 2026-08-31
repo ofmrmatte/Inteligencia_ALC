@@ -155,10 +155,7 @@ export function SettingsViewV2({ profile }: { profile: AuthProfile }) {
   }, [profile]);
 
   const [activeSection, setActiveSection] = useState<SettingsSection>(() => sections[0]?.id ?? "hierarchy");
-
-  useEffect(() => {
-    if (!sections.some((section) => section.id === activeSection)) setActiveSection(sections[0]?.id ?? "hierarchy");
-  }, [activeSection, sections]);
+  const resolvedActiveSection = sections.some((section) => section.id === activeSection) ? activeSection : (sections[0]?.id ?? "hierarchy");
 
   return (
     <div className={styles.stack}>
@@ -172,9 +169,9 @@ export function SettingsViewV2({ profile }: { profile: AuthProfile }) {
           <button
             key={section.id}
             type="button"
-            className={`${styles.navCard} ${activeSection === section.id ? styles.navCardActive : ""}`}
+            className={`${styles.navCard} ${resolvedActiveSection === section.id ? styles.navCardActive : ""}`}
             onClick={() => setActiveSection(section.id)}
-            aria-current={activeSection === section.id ? "page" : undefined}
+            aria-current={resolvedActiveSection === section.id ? "page" : undefined}
           >
             <span className={styles.navIcon}>
               {section.id === "users" ? <UsersRound size={18} /> : section.id === "portal" ? <Smartphone size={18} /> : <ShieldCheck size={18} />}
@@ -184,9 +181,9 @@ export function SettingsViewV2({ profile }: { profile: AuthProfile }) {
         ))}
       </nav>
 
-      {activeSection === "users" && canManageUsers(profile) ? <UserManagementPanel currentUserId={profile.id} /> : null}
-      {activeSection === "portal" && canManageDriverPortalBaseSettings(profile) ? <PortalBaseAccessPanel /> : null}
-      {activeSection === "hierarchy" ? <HierarchyPanel /> : null}
+      {resolvedActiveSection === "users" && canManageUsers(profile) ? <UserManagementPanel currentUserId={profile.id} /> : null}
+      {resolvedActiveSection === "portal" && canManageDriverPortalBaseSettings(profile) ? <PortalBaseAccessPanel /> : null}
+      {resolvedActiveSection === "hierarchy" ? <HierarchyPanel /> : null}
     </div>
   );
 }
@@ -230,7 +227,7 @@ function UserManagementPanel({ currentUserId }: { currentUserId: string }) {
     }
   }
 
-  useEffect(() => { void load(); }, []);
+  useEffect(() => { queueMicrotask(() => void load()); }, []);
 
   async function createUser(event: FormEvent) {
     event.preventDefault();
@@ -468,7 +465,7 @@ function PortalBaseAccessPanel() {
       setMessage(error instanceof Error ? error.message : "Falha ao carregar controle do portal.");
     }
   }
-  useEffect(() => { void load(); }, []);
+  useEffect(() => { queueMicrotask(() => void load()); }, []);
 
   const rows = useMemo(() => (payload?.rows ?? []).filter((row) => {
     if (status === "Liberadas" && !row.enabled) return false;

@@ -107,7 +107,7 @@ export function OperationalUnitsPanel() {
     }
   }
 
-  useEffect(() => { void load(); }, []);
+  useEffect(() => { queueMicrotask(() => void load()); }, []);
 
   const units = useMemo(() => (payload?.units ?? []).filter((unit) => {
     const haystack = `${unit.sigla} ${unit.baseName} ${unit.coordinator} ${unit.supervisors.join(" ")}`.toLowerCase();
