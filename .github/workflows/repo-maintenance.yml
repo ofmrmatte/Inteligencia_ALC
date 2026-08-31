@@ -1,0 +1,144 @@
+name: one-time repo maintenance
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - .github/workflows/repo-maintenance.yml
+
+permissions:
+  contents: write
+
+jobs:
+  refactor:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Set up Node
+        uses: actions/setup-node@v6
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Apply deterministic React 19 cleanup
+        shell: bash
+        run: |
+          python3 <<'PY'
+          from pathlib import Path
+
+          def replace_exact(path: str, old: str, new: str, expected: int = 1):
+              file = Path(path)
+              text = file.read_text(encoding="utf-8")
+              count = text.count(old)
+              if count != expected:
+                  raise SystemExit(f"{path}: expected {expected} occurrence(s), found {count}: {old[:100]!r}")
+              file.write_text(text.replace(old, new), encoding="utf-8")
+
+          # Gestão de Descontos v3: carregamento inicial deixa de disparar setState
+          # síncrono no effect; paginação passa a resetar junto com a ação que altera filtros.
+          path = Path("components/views/discount-management-view-v3.tsx")
+          text = path.read_text(encoding="utf-8")
+          old = "  useEffect(() => { void loadRows(); }, []);"
+          if text.count(old) != 1:
+              raise SystemExit("discount-management-view-v3: initial load effect changed unexpectedly")
+          text = text.replace(old, "  useEffect(() => { queueMicrotask(() => void loadRows()); }, []);")
+          old = "  useEffect(() => { setPage(1); }, [filters]);\n"
+          if text.count(old) != 1:
+              raise SystemExit("discount-management-view-v3: pagination effect changed unexpectedly")
+          text = text.replace(old, "")
+          filter_calls = text.count("setFilters(")
+          if filter_calls < 2:
+              raise SystemExit(f"discount-management-view-v3: expected filter setters, found {filter_calls}")
+          text = text.replace("setFilters(", "updateFilters(")
+          marker = "  const [importingSheet, setImportingSheet] = useState(false);\n"
+          if text.count(marker) != 1:
+              raise SystemExit("discount-management-view-v3: state marker changed unexpectedly")
+          helper = marker + "\n  function updateFilters(next: Parameters<typeof setFilters>[0]) {\n    setFilters(next);\n    setPage(1);\n  }\n"
+          text = text.replace(marker, helper)
+          path.write_text(text, encoding="utf-8")
+
+          # Gestão de Descontos v4: const onde não há reatribuição e carga inicial deferida.
+          replace_exact("components/views/discount-management-view-v4.tsx", "  let detail = freezeRows(", "  const detail = freezeRows(")
+          replace_exact("components/views/discount-management-view-v4.tsx", "  let raw = freezeRows(", "  const raw = freezeRows(")
+          replace_exact(
+              "components/views/discount-management-view-v4.tsx",
+              "  useEffect(() => { void loadRows(); const refresh = () => void loadRows(); window.addEventListener(\"alc-inteligencia:global-data-sync\", refresh); return () => window.removeEventListener(\"alc-inteligencia:global-data-sync\", refresh); }, []);",
+              "  useEffect(() => { queueMicrotask(() => void loadRows()); const refresh = () => void loadRows(); window.addEventListener(\"alc-inteligencia:global-data-sync\", refresh); return () => window.removeEventListener(\"alc-inteligencia:global-data-sync\", refresh); }, []);",
+          )
+
+          # Gestão de Motoristas: carga inicial fora da fase síncrona do effect e
+          # fallbacks estáveis para dependências de memoização.
+          path = Path("components/views/driver-management-view-v3.tsx")
+          text = path.read_text(encoding="utf-8")
+          marker = "interface ReviewBatch { batchId: string; counts: { identified: number; unidentified: number; duplicate: number; error: number } }\n"
+          if text.count(marker) != 1:
+              raise SystemExit("driver-management-view-v3: ReviewBatch marker changed unexpectedly")
+          text = text.replace(marker, marker + "\nconst EMPTY_DRIVERS: DriverRow[] = [];\nconst EMPTY_DOCUMENTS: DocumentRow[] = [];\n")
+          old = "  useEffect(() => { void loadTab(tab); }, [tab]);"
+          if text.count(old) != 1:
+              raise SystemExit("driver-management-view-v3: load effect changed unexpectedly")
+          text = text.replace(old, "  useEffect(() => { queueMicrotask(() => void loadTab(tab)); }, [tab]);")
+          old = "  const bases = data.bases ?? []; const drivers = data.drivers ?? []; const tickets = data.tickets ?? []; const documents = data.documents ?? []; const disputes = data.disputes ?? []; const assignments = data.assignments ?? [];"
+          if text.count(old) != 1:
+              raise SystemExit("driver-management-view-v3: payload fallback line changed unexpectedly")
+          new = "  const bases = data.bases ?? []; const drivers = data.drivers ?? EMPTY_DRIVERS; const tickets = data.tickets ?? []; const documents = data.documents ?? EMPTY_DOCUMENTS; const disputes = data.disputes ?? []; const assignments = data.assignments ?? [];"
+          text = text.replace(old, new)
+          path.write_text(text, encoding="utf-8")
+
+          # Painel de unidades: a primeira sincronização ocorre após o commit do effect.
+          replace_exact(
+              "components/views/operational-units-panel.tsx",
+              "  useEffect(() => { void load(); }, []);",
+              "  useEffect(() => { queueMicrotask(() => void load()); }, []);",
+          )
+
+          # Configurações: seção inválida passa a ser derivada, sem effect de correção;
+          # cargas remotas são iniciadas fora da fase síncrona do effect.
+          path = Path("components/views/settings-view-v2.tsx")
+          text = path.read_text(encoding="utf-8")
+          old = "  const [activeSection, setActiveSection] = useState<SettingsSection>(() => sections[0]?.id ?? \"hierarchy\");\n\n  useEffect(() => {\n    if (!sections.some((section) => section.id === activeSection)) setActiveSection(sections[0]?.id ?? \"hierarchy\");\n  }, [activeSection, sections]);"
+          if text.count(old) != 1:
+              raise SystemExit("settings-view-v2: active section block changed unexpectedly")
+          new = "  const [activeSection, setActiveSection] = useState<SettingsSection>(() => sections[0]?.id ?? \"hierarchy\");\n  const resolvedActiveSection = sections.some((section) => section.id === activeSection) ? activeSection : (sections[0]?.id ?? \"hierarchy\");"
+          text = text.replace(old, new)
+          comparisons = text.count("activeSection ===")
+          if comparisons < 3:
+              raise SystemExit(f"settings-view-v2: expected active section comparisons, found {comparisons}")
+          text = text.replace("activeSection ===", "resolvedActiveSection ===")
+          load_effect = "  useEffect(() => { void load(); }, []);"
+          if text.count(load_effect) != 2:
+              raise SystemExit(f"settings-view-v2: expected 2 load effects, found {text.count(load_effect)}")
+          text = text.replace(load_effect, "  useEffect(() => { queueMicrotask(() => void load()); }, []);")
+          path.write_text(text, encoding="utf-8")
+          PY
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Tests
+        run: npm test
+
+      - name: Commit validated cleanup
+        shell: bash
+        run: |
+          if git diff --quiet; then
+            echo "No source changes to commit."
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add components/views
+          git commit -m "Resolve React 19 lint debt in active views"
+          git push origin HEAD:main
