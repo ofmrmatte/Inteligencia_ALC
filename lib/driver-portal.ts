@@ -179,8 +179,10 @@ export function paymentArchiveContext(sourceName: string, bases: PaymentBaseRefe
 
 function matchPeriod(text: string) {
   const normalized = normalizeText(text);
-  const direct = /20\d{2}[-_/ ]?(0[1-9]|1[0-2])/.exec(normalized);
-  if (direct) return `${direct[0].slice(0, 4)}-${direct[1]}`;
+  const separated = /(?:^|\D)(20\d{2})[-_/](0[1-9]|1[0-2])(?:\D|$)/.exec(normalized);
+  if (separated) return `${separated[1]}-${separated[2]}`;
+  const compact = /(?:^|\D)(20\d{2})(0[1-9]|1[0-2])(?:\D|$)/.exec(normalized);
+  if (compact) return `${compact[1]}-${compact[2]}`;
   const monthYear = /(JAN|JANEIRO|FEV|FEVEREIRO|MAR|MARCO|ABR|ABRIL|MAI|MAIO|JUN|JUNHO|JUL|JULHO|AGO|AGOSTO|SET|SETEMBRO|OUT|OUTUBRO|NOV|NOVEMBRO|DEZ|DEZEMBRO)[^\d]*(\d{2,4})/.exec(normalized);
   if (!monthYear) return "";
   const months: Record<string, string> = { JAN: "01", JANEIRO: "01", FEV: "02", FEVEREIRO: "02", MAR: "03", MARCO: "03", ABR: "04", ABRIL: "04", MAI: "05", MAIO: "05", JUN: "06", JUNHO: "06", JUL: "07", JULHO: "07", AGO: "08", AGOSTO: "08", SET: "09", SETEMBRO: "09", OUT: "10", OUTUBRO: "10", NOV: "11", NOVEMBRO: "11", DEZ: "12", DEZEMBRO: "12" };
