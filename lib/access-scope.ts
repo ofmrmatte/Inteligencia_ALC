@@ -59,7 +59,13 @@ export function canAccessScopedRecord(scope: AccessScope, record: ScopedRecord) 
   // Só aceitamos esse fallback quando a SVC identifica uma única base no cadastro mestre.
   if (sigla && (!baseKey || baseKey === sigla)) return scope.safeSiglaOnly.includes(sigla);
 
-  if (baseKey && sigla) return scope.allowedPairs.includes(pair(sigla, baseKey));
+  if (baseKey && sigla) {
+    // O escopo resolvido pelo servidor contém pares SVC/base e deve continuar exato.
+    // Escopos legados/testes sem pares ainda podem usar a base atribuída; quando
+    // existe siglaScope explícito, ele também precisa autorizar a SVC do registro.
+    if (scope.allowedPairs.length > 0) return scope.allowedPairs.includes(pair(sigla, baseKey));
+    return scope.allowedBaseKeys.includes(baseKey) && (scope.allowedSiglas.length === 0 || scope.allowedSiglas.includes(sigla));
+  }
   if (baseKey) return scope.allowedBaseKeys.includes(baseKey);
   return Boolean(sigla && scope.safeSiglaOnly.includes(sigla));
 }
