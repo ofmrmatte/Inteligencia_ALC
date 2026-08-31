@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useState } from "react";
 import { Bar, BarChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
 import { BadgeDollarSign, Boxes, CircleCheckBig, Link2, Search, TimerReset, X } from "lucide-react";
 import { scopeData } from "@/lib/dashboard-scope";
@@ -28,30 +28,27 @@ export function PnrView() {
   const [idSearch, setIdSearch] = useState("");
   const [valueSort, setValueSort] = useState("NONE");
 
-  const statusOptions = useMemo(() => {
-    const labels = new Map<string, string>();
-    rows.forEach((row) => {
-      const label = pnrStatusLabel(row.status);
-      const key = pnrStatusKey(label);
-      if (key && !labels.has(key)) labels.set(key, label);
-    });
-    return [...labels.entries()]
-      .map(([value, label]) => ({ value, label }))
-      .sort((a, b) => a.label.localeCompare(b.label, "pt-BR"));
-  }, [rows]);
+  const labels = new Map<string, string>();
+  rows.forEach((row) => {
+    const label = pnrStatusLabel(row.status);
+    const key = pnrStatusKey(label);
+    if (key && !labels.has(key)) labels.set(key, label);
+  });
+  const statusOptions = [...labels.entries()]
+    .map(([value, label]) => ({ value, label }))
+    .sort((a, b) => a.label.localeCompare(b.label, "pt-BR"));
 
-  const filteredRows = useMemo(() => {
-    const search = idSearch.replace(/\D/g, "");
-    const filtered = rows.filter((row) => {
-      if (statusFilter !== "TODOS" && pnrStatusKey(row.status) !== statusFilter) return false;
-      if (search && !row.shipmentId.includes(search)) return false;
-      return true;
-    });
-
-    if (valueSort === "DESC") return [...filtered].sort((a, b) => b.purchaseValue - a.purchaseValue);
-    if (valueSort === "ASC") return [...filtered].sort((a, b) => a.purchaseValue - b.purchaseValue);
-    return filtered;
-  }, [rows, statusFilter, idSearch, valueSort]);
+  const search = idSearch.replace(/\D/g, "");
+  const matchingRows = rows.filter((row) => {
+    if (statusFilter !== "TODOS" && pnrStatusKey(row.status) !== statusFilter) return false;
+    if (search && !row.shipmentId.includes(search)) return false;
+    return true;
+  });
+  const filteredRows = valueSort === "DESC"
+    ? [...matchingRows].sort((a, b) => b.purchaseValue - a.purchaseValue)
+    : valueSort === "ASC"
+      ? [...matchingRows].sort((a, b) => a.purchaseValue - b.purchaseValue)
+      : matchingRows;
 
   if (!rows.length) return <NoResults title="Nenhum caso PNR neste recorte" />;
 
