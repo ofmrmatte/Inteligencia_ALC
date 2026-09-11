@@ -4,12 +4,38 @@ export function NoResults({ title = "Nenhum registro neste recorte", detail = "R
   return <div className="no-results"><Inbox size={28} /><strong>{title}</strong><p>{detail}</p></div>;
 }
 
-export function ChartTooltip({ active, payload, label, currency = false }: { active?: boolean; payload?: Array<{ name?: string; value?: unknown; color?: string }>; label?: string; currency?: boolean }) {
+export function ChartTooltip({
+  active,
+  payload,
+  label,
+  currency = false,
+  shareTotal,
+}: {
+  active?: boolean;
+  payload?: Array<{ name?: string; value?: unknown; color?: string }>;
+  label?: string;
+  currency?: boolean;
+  shareTotal?: number;
+}) {
   if (!active || !payload?.length) return null;
   return (
     <div className="chart-tooltip">
       <strong>{label}</strong>
-      {payload.map((item) => <span key={item.name}><i style={{ background: item.color }} />{item.name}: <b>{currency ? new Intl.NumberFormat("pt-BR", { style: "currency", currency: "BRL" }).format(Number(item.value) || 0) : new Intl.NumberFormat("pt-BR").format(Number(item.value) || 0)}</b></span>)}
+      {payload.map((item) => {
+        const numericValue = Number(item.value) || 0;
+        const formattedValue = currency
+          ? new Intl.NumberFormat("pt-BR", { style: "currency", currency: "BRL" }).format(numericValue)
+          : new Intl.NumberFormat("pt-BR").format(numericValue);
+        const share = shareTotal && shareTotal > 0
+          ? new Intl.NumberFormat("pt-BR", { style: "percent", minimumFractionDigits: 1, maximumFractionDigits: 1 }).format(numericValue / shareTotal)
+          : "";
+        return (
+          <span key={item.name}>
+            <i style={{ background: item.color }} />
+            {item.name}: <b>{formattedValue}{share ? ` · ${share}` : ""}</b>
+          </span>
+        );
+      })}
     </div>
   );
 }
