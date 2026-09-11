@@ -6,10 +6,11 @@ let next = source;
 
 const originalBlob = '  const blob = new Blob([bytes], { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" });';
 const replacementBlob = '  const blobBuffer = bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) as ArrayBuffer;\n  const blob = new Blob([blobBuffer], { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" });';
+const typedArrayBlob = '  const blob = new Blob([new Uint8Array(bytes)], { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" });';
 
 if (next.includes(originalBlob)) {
   next = next.replace(originalBlob, replacementBlob);
-} else if (!next.includes("const blobBuffer = bytes.buffer.slice")) {
+} else if (!next.includes("const blobBuffer = bytes.buffer.slice") && !next.includes(typedArrayBlob)) {
   throw new Error("Não foi possível preparar o gerador de relatórios para o build.");
 }
 
