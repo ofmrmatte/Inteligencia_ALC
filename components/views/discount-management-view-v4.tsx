@@ -14,10 +14,10 @@ import { strFromU8, strToU8, unzipSync, zipSync } from "fflate";
 import { toast } from "sonner";
 import { Panel, formatCurrency, formatNumber, formatPercent } from "@/components/ui";
 import {
-  DISCOUNT_DIRECTIONS,
   DISCOUNT_DIRECTION_LABELS,
   type DiscountDirection,
 } from "@/lib/discount-management";
+import { DISCOUNT_FILTER_ALL, useDiscountFiltersStore } from "@/lib/discount-filters-store";
 import { DiscountManagementViewV3 } from "./discount-management-view-v3";
 
 type DiscountReportRow = {
@@ -55,7 +55,7 @@ type DiscountReportRow = {
 type AnalysisRow = { label: string; count: number; value: number; share: number };
 
 const API = "/api/discount-management-v2";
-const ALL = "TODOS";
+const ALL = DISCOUNT_FILTER_ALL;
 
 const BRAND = {
   red: "E30613",
@@ -111,9 +111,6 @@ function targetLabel(row: DiscountReportRow) {
   return row.allocation_target_name || row.allocation_target_id || "Não informado";
 }
 
-function unique(values: string[]) {
-  return [...new Set(values.filter(Boolean))].sort((a, b) => a.localeCompare(b, "pt-BR"));
-}
 
 function fileToken(value: string) {
   return value.normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/[^A-Za-z0-9]+/g, "_").replace(/^_+|_+$/g, "").toUpperCase();
@@ -385,9 +382,7 @@ function DiscountReportPanel() {
   const [rows, setRows] = useState<DiscountReportRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [exporting, setExporting] = useState(false);
-  const [month, setMonth] = useState(ALL);
-  const [direction, setDirection] = useState(ALL);
-  const [base, setBase] = useState(ALL);
+  const filters = useDiscountFiltersStore((state) => state.filters);
   async function loadRows(showToast = false) {
     setLoading(true);
     try {
@@ -400,26 +395,48 @@ function DiscountReportPanel() {
     finally { setLoading(false); }
   }
   useEffect(() => { queueMicrotask(() => void loadRows()); const refresh = () => void loadRows(); window.addEventListener("alc-inteligencia:global-data-sync", refresh); return () => window.removeEventListener("alc-inteligencia:global-data-sync", refresh); }, []);
-  const monthOptions = useMemo(() => unique(rows.map((row) => row.discount_month || row.month || "")), [rows]);
-  const baseOptions = useMemo(() => unique(rows.map(baseLabel)), [rows]);
-  const filtered = useMemo(() => rows.filter((row) => { if (month !== ALL && (row.discount_month || row.month) !== month) return false; if (direction !== ALL && row.direction !== direction) return false; if (base !== ALL && baseLabel(row) !== base) return false; return true; }), [rows, month, direction, base]);
+  const filtered = useMemo(() => {
+    const search = filters.search.trim().toLocaleLowerCase("pt-BR");
+    return rows.filter((row) => {
+      if (search) {
+        const haystack = [
+          row.shipment_id,
+          row.driver_name,
+          row.driver_id,
+          row.allocation_target_name,
+          row.allocation_target_id,
+          row.route_id,
+          row.base_name,
+          row.base_key,
+          row.sigla,
+          row.xpt_code,
+          row.note,
+        ].filter(Boolean).join(" ").toLocaleLowerCase("pt-BR");
+        if (!haystack.includes(search)) return false;
+      }
+      if (filters.month !== ALL && (row.discount_month || row.month) !== filters.month) return false;
+      if (filters.fortnight !== ALL && row.fortnight !== filters.fortnight) return false;
+      if (filters.base !== ALL && (row.base_name || row.base_key || row.sigla) !== filters.base) return false;
+      if (filters.xpt !== ALL && row.xpt_code !== filters.xpt) return false;
+      if (filters.driver !== ALL && (row.driver_name || row.driver_id) !== filters.driver) return false;
+      if (filters.direction !== ALL && row.direction !== filters.direction) return false;
+      if (filters.origin !== ALL && row.origin !== filters.origin) return false;
+      if (filters.pnrStatus !== ALL && row.pnr_status !== filters.pnrStatus) return false;
+      return true;
+    });
+  }, [rows, filters]);
   const totalValue = filtered.reduce((sum, row) => sum + Number(row.amount || 0), 0);
   const uniqueIds = new Set(filtered.map((row) => row.shipment_id)).size;
   const directionAnalysis = useMemo(() => groupAnalysis(filtered, (row) => directionLabel(row.direction), totalValue), [filtered, totalValue]);
   const topDirection = directionAnalysis[0];
   async function handleExport() {
     setExporting(true);
-    try { const filename = await exportDiscountReport(filtered, { month, direction, base }); toast.success(`${filename} gerado com Resumo Executivo, Leitura Gerencial, Detalhamento e Dados Brutos.`); }
+    try { const filename = await exportDiscountReport(filtered, { month: filters.month, direction: filters.direction, base: filters.base }); toast.success(`${filename} gerado com Resumo Executivo, Leitura Gerencial, Detalhamento e Dados Brutos.`); }
     catch (error) { toast.error(error instanceof Error ? error.message : "Falha ao gerar o relatório XLSX."); }
     finally { setExporting(false); }
   }
   return (
     <Panel title="Relatório executivo — Gestão de Descontos" subtitle="Mesmo padrão gerencial dos relatórios de pacotes, agora com base branca, identidade ALC em vermelho e sem fundo preto." action={<div style={{ display: "flex", gap: 8, alignItems: "center" }}><button className="secondary-button" type="button" onClick={() => void loadRows(true)} disabled={loading}><RefreshCw size={14} />{loading ? "Atualizando…" : "Atualizar"}</button><button className="primary-button" type="button" onClick={() => void handleExport()} disabled={exporting || !filtered.length}><Download size={16} />{exporting ? "Montando relatório…" : "Baixar relatório ALC"}</button></div>}>
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(3, minmax(180px, 1fr))", gap: 12, marginBottom: 16 }}>
-        <label className="filter-control"><span>Mês do desconto</span><select value={month} onChange={(event) => setMonth(event.target.value)}><option value={ALL}>Todos</option>{monthOptions.map((value) => <option key={value} value={value}>{formatMonth(value)}</option>)}</select></label>
-        <label className="filter-control"><span>Direcionamento</span><select value={direction} onChange={(event) => setDirection(event.target.value)}><option value={ALL}>Todos</option>{DISCOUNT_DIRECTIONS.map((value) => <option key={value} value={value}>{directionLabel(value)}</option>)}</select></label>
-        <label className="filter-control"><span>Base</span><select value={base} onChange={(event) => setBase(event.target.value)}><option value={ALL}>Todas</option>{baseOptions.map((value) => <option key={value} value={value}>{value}</option>)}</select></label>
-      </div>
       <div style={{ display: "grid", gridTemplateColumns: "repeat(4, minmax(0, 1fr))", gap: 10 }}>
         <div className="quality-callout" style={{ margin: 0 }}><FileSpreadsheet size={18} /><div><strong>{formatNumber(filtered.length)} lançamentos</strong><p>{formatNumber(uniqueIds)} IDs únicos no recorte.</p></div></div>
         <div className="quality-callout" style={{ margin: 0 }}><BadgeDollarSign size={18} /><div><strong>{formatCurrency(totalValue)}</strong><p>Valor total sob gestão.</p></div></div>
