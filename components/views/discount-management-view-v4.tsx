@@ -13,6 +13,7 @@ import {
   type DiscountDirection,
 } from "@/lib/discount-management";
 import { DISCOUNT_FILTER_ALL, useDiscountFiltersStore } from "@/lib/discount-filters-store";
+import { useDiscountDataStore } from "@/lib/discount-data-store";
 import { DiscountManagementViewV3 } from "./discount-management-view-v3";
 
 type DiscountReportRow = {
@@ -49,7 +50,6 @@ type DiscountReportRow = {
 
 type AnalysisRow = { label: string; count: number; value: number; share: number };
 
-const API = "/api/discount-management-v2";
 const ALL = DISCOUNT_FILTER_ALL;
 
 const BRAND = {
@@ -374,22 +374,18 @@ async function exportDiscountReport(rows: DiscountReportRow[], filters: { month:
 }
 
 function DiscountReportPanel() {
-  const [rows, setRows] = useState<DiscountReportRow[]>([]);
-  const [loading, setLoading] = useState(true);
+  const sharedRows = useDiscountDataStore((state) => state.rows);
+  const loading = useDiscountDataStore((state) => state.loading);
+  const loadSharedRows = useDiscountDataStore((state) => state.loadRows);
+  const rows = sharedRows as DiscountReportRow[];
   const [exporting, setExporting] = useState(false);
   const filters = useDiscountFiltersStore((state) => state.filters);
   async function loadRows(showToast = false) {
-    setLoading(true);
     try {
-      const response = await fetch(API, { cache: "no-store" });
-      const body = (await response.json().catch(() => ({}))) as { rows?: DiscountReportRow[]; error?: string };
-      if (!response.ok) throw new Error(body.error || "Falha ao carregar os dados do relatório.");
-      setRows(body.rows ?? []);
+      await loadSharedRows(true);
       if (showToast) toast.success("Dados do relatório atualizados.");
     } catch (error) { toast.error(error instanceof Error ? error.message : "Falha ao carregar os dados do relatório."); }
-    finally { setLoading(false); }
   }
-  useEffect(() => { queueMicrotask(() => void loadRows()); const refresh = () => void loadRows(); window.addEventListener("alc-inteligencia:global-data-sync", refresh); return () => window.removeEventListener("alc-inteligencia:global-data-sync", refresh); }, []);
   const filtered = useMemo(() => {
     const search = filters.search.trim().toLocaleLowerCase("pt-BR");
     return rows.filter((row) => {
