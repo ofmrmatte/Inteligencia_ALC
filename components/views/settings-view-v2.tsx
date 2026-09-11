@@ -293,7 +293,7 @@ function UserManagementPanel({ currentUserId }: { currentUserId: string }) {
 
   return (
     <Panel title="Usuários e permissões" subtitle="Cadastre pessoas e atribua SVC/bases e XPTs em escopos separados">
-      <form className={styles.stack} onSubmit={createUser}>
+      <form className={`${styles.stack} ${styles.userCreateForm}`} onSubmit={createUser}>
         <div className={styles.formGrid}>
           <label className={styles.field}><span>E-mail</span><input required type="email" value={draft.email} onChange={(event) => setDraft({ ...draft, email: event.target.value })} placeholder="usuario@alc.com.br" /></label>
           <label className={styles.field}><span>Nome</span><input required value={draft.fullName} onChange={(event) => setDraft({ ...draft, fullName: event.target.value })} placeholder="Nome do usuário" /></label>
