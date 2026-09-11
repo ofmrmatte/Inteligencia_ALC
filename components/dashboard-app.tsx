@@ -6,7 +6,7 @@ import { FlaskConical } from "lucide-react";
 import { toast } from "sonner";
 import { EmptyDashboard } from "@/components/empty-dashboard";
 import { GlobalFilters } from "@/components/global-filters";
-import { ReportFilterExtras } from "@/components/report-filter-extras";
+import { ReportFiltersBar } from "@/components/report-filters-bar";
 import { Sidebar } from "@/components/sidebar";
 import { Topbar } from "@/components/topbar";
 import { canAccessOperationalData } from "@/lib/access-control";
@@ -14,7 +14,6 @@ import { canManageImports, type AuthProfile } from "@/lib/auth";
 import { ViewRouter } from "@/components/views/view-router";
 import { SECTION_META, type SectionId } from "@/lib/navigation";
 import { useDashboardStore } from "@/lib/store";
-import { useReportFiltersStore } from "@/lib/report-filters-store";
 
 const ImportPanel = dynamic(() => import("@/components/import-panel").then((module) => module.ImportPanel), { ssr: false });
 const SIDEBAR_KEY = "alc-inteligencia:sidebar-collapsed";
@@ -54,10 +53,6 @@ export function DashboardApp({ section, profile }: { section: SectionId; profile
   const hydrated = useDashboardStore((state) => state.hydrated);
   const loadError = useDashboardStore((state) => state.loadError);
   const data = useDashboardStore((state) => state.data);
-  const reportDateStart = useReportFiltersStore((state) => state.dateStart);
-  const reportDateEnd = useReportFiltersStore((state) => state.dateEnd);
-  const reportStatus = useReportFiltersStore((state) => state.statusFilter);
-  const resetReportFilters = useReportFiltersStore((state) => state.resetLocal);
   const collapsed = useSyncExternalStore(subscribeSidebarChange, getSidebarSnapshot, getServerSidebarSnapshot);
   const [mobileMenu, setMobileMenu] = useState(false);
   const [importOpen, setImportOpen] = useState(false);
@@ -152,11 +147,7 @@ export function DashboardApp({ section, profile }: { section: SectionId; profile
       <Sidebar active={section} collapsed={collapsed} onToggle={toggleCollapsed} onImport={requestImport} canImport={canImport} profile={profile} />
       <div className="app-main">
         <Topbar section={section} profile={profile} canImport={canImport} onImport={requestImport} onMobileMenu={() => setMobileMenu(true)} />
-        {showGlobalFilters && (
-          section === "relatorios-pacotes"
-            ? <GlobalFilters extra={<ReportFilterExtras />} extraActive={Boolean(reportDateStart || reportDateEnd || reportStatus !== "TODOS")} onResetExtra={resetReportFilters} />
-            : <GlobalFilters />
-        )}
+        {showGlobalFilters && (section === "relatorios-pacotes" ? <ReportFiltersBar /> : <GlobalFilters />)}
         <main className="page-canvas">
           <div className="page-heading">
             <div><p>{meta.description}</p></div>
