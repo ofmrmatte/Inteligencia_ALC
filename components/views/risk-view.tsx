@@ -59,16 +59,23 @@ export function RiskView() {
       .sort((a, b) => a.label.localeCompare(b.label, "pt-BR"));
   }, [rows]);
 
-  const tableRows = reasonFilter === "TODOS"
-    ? rows
-    : rows.filter((row) => reasonKey(row.failureReason) === reasonFilter);
+  const filteredRows = useMemo(
+    () => reasonFilter === "TODOS"
+      ? rows
+      : rows.filter((row) => reasonKey(row.failureReason) === reasonFilter),
+    [rows, reasonFilter],
+  );
 
   if (!rows.length) return <NoResults title="Nenhum pacote de risco LM neste recorte" />;
-  const gmv = rows.reduce((sum, row) => sum + row.gmvBrl, 0);
-  const avgStopped = rows.reduce((sum, row) => sum + row.stoppedDays, 0) / rows.length;
-  const critical = rows.filter((row) => row.stoppedDays >= 4).length;
+
+  const gmv = filteredRows.reduce((sum, row) => sum + row.gmvBrl, 0);
+  const avgStopped = filteredRows.length
+    ? filteredRows.reduce((sum, row) => sum + row.stoppedDays, 0) / filteredRows.length
+    : 0;
+  const critical = filteredRows.filter((row) => row.stoppedDays >= 4).length;
+
   const reasons = new Map<string, { reason: string; packages: number; gmv: number }>();
-  rows.forEach((row) => {
+  filteredRows.forEach((row) => {
     const label = reasonLabel(row.failureReason);
     const key = reasonKey(label);
     const current = reasons.get(key) ?? { reason: label, packages: 0, gmv: 0 };
@@ -77,18 +84,48 @@ export function RiskView() {
     reasons.set(key, current);
   });
   const reasonData = [...reasons.values()].sort((a, b) => b.gmv - a.gmv).slice(0, 8);
+  const filterActive = reasonFilter !== "TODOS";
 
   return (
     <div className="view-stack">
-      <PageIntro description="A exposição considera um registro por ID de pacote. SVC + Base são conciliados pelo cadastro mestre; o XPT permanece independente e é exibido separadamente quando houver relação regional. Em uploads recorrentes, prevalece o lote mais recente." chips={[`${formatNumber(scoped.risk.length - rows.length)} repetições consolidadas`, `${reasonData.length} motivos principais`]} />
+      <PageIntro
+        description="A exposição considera um registro por ID de pacote. SVC + Base são conciliados pelo cadastro mestre; o XPT permanece independente e é exibido separadamente quando houver relação regional. Em uploads recorrentes, prevalece o lote mais recente."
+        chips={[
+          `${formatNumber(scoped.risk.length - rows.length)} repetições consolidadas`,
+          filterActive ? `${formatNumber(filteredRows.length)} IDs no motivo selecionado` : `${reasonData.length} motivos principais`,
+        ]}
+      />
       <div className="kpi-grid kpi-grid--four">
-        <KpiCard label="GMV exposto" value={formatCurrency(gmv)} detail="IDs únicos em risco" icon={<BadgeDollarSign size={19} />} tone="red" />
-        <KpiCard label="Pacotes em risco" value={formatNumber(rows.length)} detail="Unidades identificadas" icon={<ShieldAlert size={19} />} tone="amber" />
-        <KpiCard label="Tempo médio parado" value={`${avgStopped.toFixed(1)} dias`} detail="Desde o insucesso" icon={<Clock3 size={19} />} />
-        <KpiCard label="Risco crítico" value={formatNumber(critical)} detail="4 dias ou mais" icon={<PackageX size={19} />} tone={critical ? "red" : "neutral"} />
+        <KpiCard
+          label="GMV exposto"
+          value={formatCurrency(gmv)}
+          detail={filterActive ? "Somente o motivo selecionado" : "IDs únicos em risco"}
+          icon={<BadgeDollarSign size={19} />}
+          tone="red"
+        />
+        <KpiCard
+          label="Pacotes em risco"
+          value={formatNumber(filteredRows.length)}
+          detail={filterActive ? "No motivo selecionado" : "Unidades identificadas"}
+          icon={<ShieldAlert size={19} />}
+          tone="amber"
+        />
+        <KpiCard
+          label="Tempo médio parado"
+          value={`${avgStopped.toFixed(1)} dias`}
+          detail={filterActive ? "No recorte selecionado" : "Desde o insucesso"}
+          icon={<Clock3 size={19} />}
+        />
+        <KpiCard
+          label="Risco crítico"
+          value={formatNumber(critical)}
+          detail={filterActive ? "4 dias ou mais no recorte" : "4 dias ou mais"}
+          icon={<PackageX size={19} />}
+          tone={critical ? "red" : "neutral"}
+        />
       </div>
       <div className="content-grid content-grid--wide">
-        <Panel title="GMV por motivo de insucesso" subtitle="Oito maiores exposições" className="panel--chart">
+        <Panel title="GMV por motivo de insucesso" subtitle={filterActive ? "Exposição do motivo selecionado" : "Oito maiores exposições"} className="panel--chart">
           <ResponsiveContainer width="100%" height={300}>
             <BarChart data={reasonData} layout="vertical" margin={{ left: 12, right: 20, top: 4 }}>
               <CartesianGrid stroke="#ECEDEF" horizontal={false} />
@@ -99,13 +136,31 @@ export function RiskView() {
             </BarChart>
           </ResponsiveContainer>
         </Panel>
-        <Panel title="Faixa de permanência" subtitle="Priorização por dias parados" className="panel--chart">
+        <Panel title="Faixa de permanência" subtitle={filterActive ? "Priorização dentro do motivo selecionado" : "Priorização por dias parados"} className="panel--chart">
           <div className="risk-bands">
-            {[{ label: "Até 1 dia", test: (n: number) => n <= 1, tone: "green" }, { label: "2 a 3 dias", test: (n: number) => n >= 2 && n <= 3, tone: "amber" }, { label: "4 a 6 dias", test: (n: number) => n >= 4 && n <= 6, tone: "red" }, { label: "7+ dias", test: (n: number) => n >= 7, tone: "dark" }].map((band) => { const bandRows = rows.filter((row) => band.test(row.stoppedDays)); return <div key={band.label} className={`risk-band risk-band--${band.tone}`}><span>{band.label}</span><strong>{bandRows.length}</strong><small>{formatCurrency(bandRows.reduce((sum, row) => sum + row.gmvBrl, 0))}</small></div>; })}
+            {[
+              { label: "Até 1 dia", test: (n: number) => n <= 1, tone: "green" },
+              { label: "2 a 3 dias", test: (n: number) => n >= 2 && n <= 3, tone: "amber" },
+              { label: "4 a 6 dias", test: (n: number) => n >= 4 && n <= 6, tone: "red" },
+              { label: "7+ dias", test: (n: number) => n >= 7, tone: "dark" },
+            ].map((band) => {
+              const bandRows = filteredRows.filter((row) => band.test(row.stoppedDays));
+              return (
+                <div key={band.label} className={`risk-band risk-band--${band.tone}`}>
+                  <span>{band.label}</span>
+                  <strong>{bandRows.length}</strong>
+                  <small>{formatCurrency(bandRows.reduce((sum, row) => sum + row.gmvBrl, 0))}</small>
+                </div>
+              );
+            })}
           </div>
         </Panel>
       </div>
-      <Panel title="Fila de priorização" subtitle="Ordenada por dias parados e GMV" action={<StatusBadge tone="red">{tableRows.length} IDs exibidos</StatusBadge>}>
+      <Panel
+        title="Fila de priorização"
+        subtitle="Ordenada por dias parados e GMV"
+        action={<StatusBadge tone="red">{filteredRows.length} IDs exibidos</StatusBadge>}
+      >
         <TableWrap>
           <thead>
             <tr>
@@ -117,8 +172,29 @@ export function RiskView() {
               <th>Substatus</th><th>Dias</th><th className="align-right">GMV</th>
             </tr>
           </thead>
-          <tbody>{[...tableRows].sort((a, b) => b.stoppedDays - a.stoppedDays || b.gmvBrl - a.gmvBrl).slice(0, 60).map((row) => <tr key={`${row.batchId}-${row.shipmentId}`}><td><strong className="mono">{row.shipmentId}</strong><small className="cell-subtitle">Rota {row.routeId || "—"}</small></td><td><strong>{row.facilityId || "—"}</strong></td><td className="mono">{row.xptCode || "—"}</td><td className="mono">{row.driverId || "—"}</td><td>{reasonLabel(row.failureReason)}</td><td>{cleanText(row.lastSubstatus) || "—"}</td><td><StatusBadge tone={row.stoppedDays >= 4 ? "red" : row.stoppedDays >= 2 ? "amber" : "green"}>{row.stoppedDays} dias</StatusBadge></td><td className="align-right"><strong>{formatCurrency(row.gmvBrl)}</strong></td></tr>)}</tbody>
+          <tbody>
+            {[...filteredRows]
+              .sort((a, b) => b.stoppedDays - a.stoppedDays || b.gmvBrl - a.gmvBrl)
+              .slice(0, 60)
+              .map((row) => (
+                <tr key={`${row.batchId}-${row.shipmentId}`}>
+                  <td><strong className="mono">{row.shipmentId}</strong><small className="cell-subtitle">Rota {row.routeId || "—"}</small></td>
+                  <td><strong>{row.facilityId || "—"}</strong></td>
+                  <td className="mono">{row.xptCode || "—"}</td>
+                  <td className="mono">{row.driverId || "—"}</td>
+                  <td>{reasonLabel(row.failureReason)}</td>
+                  <td>{cleanText(row.lastSubstatus) || "—"}</td>
+                  <td><StatusBadge tone={row.stoppedDays >= 4 ? "red" : row.stoppedDays >= 2 ? "amber" : "green"}>{row.stoppedDays} dias</StatusBadge></td>
+                  <td className="align-right"><strong>{formatCurrency(row.gmvBrl)}</strong></td>
+                </tr>
+              ))}
+          </tbody>
         </TableWrap>
+        {!filteredRows.length ? (
+          <div style={{ padding: 20 }}>
+            <NoResults title="Nenhum pacote corresponde ao filtro" detail="Selecione outro motivo ou limpe o filtro da coluna Motivo." />
+          </div>
+        ) : null}
       </Panel>
     </div>
   );
