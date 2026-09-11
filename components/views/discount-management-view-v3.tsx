@@ -20,6 +20,7 @@ import {
 import { toast } from "sonner";
 import { formatCurrency, formatNumber, KpiCard, PageIntro, Panel, StatusBadge } from "@/components/ui";
 import { DISCOUNT_DIRECTIONS, DISCOUNT_DIRECTION_LABELS, type DiscountDirection } from "@/lib/discount-management";
+import { DISCOUNT_FILTER_ALL, useDiscountFiltersStore } from "@/lib/discount-filters-store";
 import { TableWrap } from "./shared";
 import styles from "./discount-management-view.module.css";
 
@@ -84,18 +85,6 @@ type HistoryEvent = {
 type LookupMatch = Partial<DiscountRow> & { shipment_id: string; amount: number; awaiting_match: boolean; origin: string };
 type LookupInfo = { existingCount: number; allocatedTotal: number; existingEntries: DiscountRow[] };
 
-type FilterState = {
-  search: string;
-  month: string;
-  fortnight: string;
-  base: string;
-  xpt: string;
-  driver: string;
-  direction: string;
-  origin: string;
-  pnrStatus: string;
-};
-
 type EditForm = {
   direction: DiscountDirection;
   note: string;
@@ -116,8 +105,7 @@ type EditForm = {
 const API = "/api/discount-management-v2";
 const IMPORT_API = "/api/discount-management-v2/import";
 const PAGE_SIZE = 50;
-const ALL = "TODOS";
-const EMPTY_FILTERS: FilterState = { search: "", month: ALL, fortnight: ALL, base: ALL, xpt: ALL, driver: ALL, direction: ALL, origin: ALL, pnrStatus: ALL };
+const ALL = DISCOUNT_FILTER_ALL;
 
 function currentMonth() {
   const parts = new Intl.DateTimeFormat("en-CA", { timeZone: "America/Sao_Paulo", year: "numeric", month: "2-digit" }).formatToParts(new Date());
@@ -230,7 +218,9 @@ export function DiscountManagementViewV3() {
   const [rows, setRows] = useState<DiscountRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [busyId, setBusyId] = useState("");
-  const [filters, setFilters] = useState<FilterState>(EMPTY_FILTERS);
+  const filters = useDiscountFiltersStore((state) => state.filters);
+  const setFilters = useDiscountFiltersStore((state) => state.setFilters);
+  const resetFilters = useDiscountFiltersStore((state) => state.resetFilters);
   const [page, setPage] = useState(1);
   const [newOpen, setNewOpen] = useState(false);
   const [lookupId, setLookupId] = useState("");
@@ -246,7 +236,6 @@ export function DiscountManagementViewV3() {
 
   function updateFilters(next: Parameters<typeof setFilters>[0]) {
     setFilters(next);
-    setPage(1);
   }
 
   async function loadRows(showToast = false) {
@@ -263,6 +252,7 @@ export function DiscountManagementViewV3() {
   }
 
   useEffect(() => { queueMicrotask(() => void loadRows()); }, []);
+  useEffect(() => { setPage(1); }, [filters]);
   useEffect(() => {
     const refresh = () => void loadRows();
     window.addEventListener("alc-inteligencia:global-data-sync", refresh);
@@ -483,23 +473,14 @@ export function DiscountManagementViewV3() {
         <KpiCard label="Abono" value={formatCurrency(summary.abono.value)} detail={`${formatNumber(summary.abono.count)} lançamentos`} icon={<Gift size={19} />} tone="green" />
       </div>
 
-      <Panel title="Filtros da Gestão de Descontos" subtitle="Mês e quinzena filtram a competência financeira do desconto, não a data real do pacote." action={<div className={styles.panelAction}>
-        <button className={styles.secondaryButton} onClick={() => { updateFilters(EMPTY_FILTERS); setPage(1); }}>Limpar filtros</button>
+      <Panel title="Pesquisa e ações" subtitle="Mês, quinzena, base, XPT, motorista, direcionamento e Status PNR ficam na barra superior e filtram toda a Gestão de Descontos." action={<div className={styles.panelAction}>
+        <button className={styles.secondaryButton} onClick={resetFilters}>Limpar filtros</button>
         <label className={styles.secondaryButton} aria-disabled={importingSheet}><UploadCloud size={15} />{importingSheet ? "Importando…" : "Importar planilha"}<input hidden type="file" accept=".xlsx,.xlsm,.xls" disabled={importingSheet} onChange={(event) => void importSpreadsheet(event)} /></label>
         <button className={styles.primaryButton} onClick={() => { const month = filters.month !== ALL ? filters.month : currentMonth(); setNewOpen(true); setLookupMatch(null); setLookupInfo({ existingCount: 0, allocatedTotal: 0, existingEntries: [] }); setLookupId(""); setNewForm(emptyForm(month)); }}><Plus size={15} />Novo direcionamento</button>
       </div>}>
-        <div className={styles.toolbar}>
+        <div className={styles.toolbarCompact}>
           <label className={styles.field}><span>Buscar</span><div className={styles.searchWrap}><Search size={15} /><input value={filters.search} onChange={(event) => updateFilters((current) => ({ ...current, search: event.target.value }))} placeholder="ID, motorista, responsável, rota ou base" /></div></label>
-          <label className={styles.field}><span>Mês do desconto</span><select value={filters.month} onChange={(event) => updateFilters((current) => ({ ...current, month: event.target.value }))}><option value={ALL}>Todos</option>{options.months.map((value) => <option value={value} key={value}>{formatMonth(value)}</option>)}</select></label>
-          <label className={styles.field}><span>Quinzena</span><select value={filters.fortnight} onChange={(event) => updateFilters((current) => ({ ...current, fortnight: event.target.value }))}><option value={ALL}>Todas</option>{options.fortnights.map((value) => <option value={value} key={value}>{formatFortnight(value)}</option>)}</select></label>
-          <label className={styles.field}><span>Base</span><select value={filters.base} onChange={(event) => updateFilters((current) => ({ ...current, base: event.target.value }))}><option value={ALL}>Todas</option>{options.bases.map((value) => <option value={value} key={value}>{value}</option>)}</select></label>
-          <label className={styles.field}><span>XPT</span><select value={filters.xpt} onChange={(event) => updateFilters((current) => ({ ...current, xpt: event.target.value }))}><option value={ALL}>Todos</option>{options.xpts.map((value) => <option value={value} key={value}>{value}</option>)}</select></label>
-        </div>
-        <div className={styles.toolbarSecondary}>
-          <label className={styles.field}><span>Motorista</span><select value={filters.driver} onChange={(event) => updateFilters((current) => ({ ...current, driver: event.target.value }))}><option value={ALL}>Todos</option>{options.drivers.map((value) => <option value={value} key={value}>{value}</option>)}</select></label>
-          <label className={styles.field}><span>Direcionamento</span><select value={filters.direction} onChange={(event) => updateFilters((current) => ({ ...current, direction: event.target.value }))}><option value={ALL}>Todos</option>{DISCOUNT_DIRECTIONS.map((direction) => <option value={direction} key={direction}>{DISCOUNT_DIRECTION_LABELS[direction]}</option>)}</select></label>
           <label className={styles.field}><span>Origem</span><select value={filters.origin} onChange={(event) => updateFilters((current) => ({ ...current, origin: event.target.value }))}><option value={ALL}>Todas</option>{options.origins.map((value) => <option value={value} key={value}>{value}</option>)}</select></label>
-          <label className={styles.field}><span>Status PNR</span><select value={filters.pnrStatus} onChange={(event) => updateFilters((current) => ({ ...current, pnrStatus: event.target.value }))}><option value={ALL}>Todos</option>{options.pnrStatuses.map((value) => <option value={value} key={value}>{value}</option>)}</select></label>
         </div>
       </Panel>
 
