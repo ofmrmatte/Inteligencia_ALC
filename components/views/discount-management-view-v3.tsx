@@ -21,6 +21,7 @@ import { toast } from "sonner";
 import { formatCurrency, formatNumber, KpiCard, PageIntro, Panel, StatusBadge } from "@/components/ui";
 import { DISCOUNT_DIRECTIONS, DISCOUNT_DIRECTION_LABELS, type DiscountDirection } from "@/lib/discount-management";
 import { DISCOUNT_FILTER_ALL, useDiscountFiltersStore } from "@/lib/discount-filters-store";
+import { useDiscountDataStore } from "@/lib/discount-data-store";
 import { TableWrap } from "./shared";
 import styles from "./discount-management-view.module.css";
 
@@ -215,8 +216,14 @@ async function readJson(response: Response, fallback: string) {
 }
 
 export function DiscountManagementViewV3() {
-  const [rows, setRows] = useState<DiscountRow[]>([]);
-  const [loading, setLoading] = useState(true);
+  const sharedRows = useDiscountDataStore((state) => state.rows);
+  const loading = useDiscountDataStore((state) => state.loading);
+  const setSharedRows = useDiscountDataStore((state) => state.setRows);
+  const loadSharedRows = useDiscountDataStore((state) => state.loadRows);
+  const rows = sharedRows as DiscountRow[];
+  const setRows = (nextRows: DiscountRow[] | ((current: DiscountRow[]) => DiscountRow[])) => {
+    setSharedRows((current) => typeof nextRows === "function" ? nextRows(current as DiscountRow[]) : nextRows);
+  };
   const [busyId, setBusyId] = useState("");
   const filters = useDiscountFiltersStore((state) => state.filters);
   const setFilters = useDiscountFiltersStore((state) => state.setFilters);
@@ -238,23 +245,19 @@ export function DiscountManagementViewV3() {
     setFilters(next);
   }
 
-  async function loadRows(showToast = false) {
-    setLoading(true);
+  async function loadRows(showToast = false, force = false) {
     try {
-      const body = await readJson(await fetch(API, { cache: "no-store" }), "Falha ao carregar a Gestão de Descontos.");
-      setRows((body.rows as DiscountRow[]) ?? []);
+      await loadSharedRows(force);
       if (showToast) toast.success("Gestão de Descontos atualizada.");
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "Falha ao carregar a Gestão de Descontos.");
-    } finally {
-      setLoading(false);
     }
   }
 
-  useEffect(() => { queueMicrotask(() => void loadRows()); }, []);
+  useEffect(() => { queueMicrotask(() => void loadRows(false, false)); }, []);
   useEffect(() => { setPage(1); }, [filters]);
   useEffect(() => {
-    const refresh = () => void loadRows();
+    const refresh = () => void loadRows(false, true);
     window.addEventListener("alc-inteligencia:global-data-sync", refresh);
     return () => window.removeEventListener("alc-inteligencia:global-data-sync", refresh);
   }, []);
@@ -484,7 +487,7 @@ export function DiscountManagementViewV3() {
         </div>
       </Panel>
 
-      <Panel title="Direcionamentos" subtitle="Cada linha é um lançamento financeiro. O mesmo ID pode aparecer mais de uma vez sem que os direcionamentos sejam mesclados." action={<button className={styles.secondaryButton} onClick={() => void loadRows(true)} disabled={loading}><RefreshCw size={14} className={loading ? styles.spin : ""} />Atualizar cruzamento</button>}>
+      <Panel title="Direcionamentos" subtitle="Cada linha é um lançamento financeiro. O mesmo ID pode aparecer mais de uma vez sem que os direcionamentos sejam mesclados." action={<button className={styles.secondaryButton} onClick={() => void loadRows(true, true)} disabled={loading}><RefreshCw size={14} className={loading ? styles.spin : ""} />Atualizar cruzamento</button>}>
         {loading ? <div className={styles.loading}>Carregando e cruzando os IDs...</div> : filtered.length === 0 ? <div className={styles.empty}><FileSearch size={28} /><strong>Nenhum direcionamento neste recorte</strong><span>Importe uma planilha ou cadastre um novo ID.</span></div> : <>
           <TableWrap>
             <thead><tr><th>ID</th><th>Motorista do pacote</th><th>Base</th><th>Rota / Data ID</th><th>Mês do desconto</th><th>Origem</th><th>Status PNR</th><th>Direcionamento</th><th>Observação</th><th className="align-right">Valor</th><th className="align-right">Ações</th></tr></thead>
