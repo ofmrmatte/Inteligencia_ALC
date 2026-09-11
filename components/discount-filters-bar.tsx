@@ -128,6 +128,25 @@ export function DiscountFiltersBar() {
     };
   }, [rows]);
 
+  useEffect(() => {
+    if (!rows.length) return;
+
+    const monthValues = new Set(options.months.map((item) => item.value));
+    const fortnightValues = new Set(options.fortnights.map((item) => item.value));
+    const baseValues = new Set(options.bases.map((item) => item.value));
+    const xptValues = new Set(options.xpts.map((item) => item.value));
+    const driverValues = new Set(options.drivers.map((item) => item.value));
+    const statusValues = new Set(options.statuses.map((item) => item.value));
+
+    if (filters.month !== ALL && !monthValues.has(filters.month)) setFilter("month", ALL);
+    if (filters.fortnight !== ALL && !fortnightValues.has(filters.fortnight)) setFilter("fortnight", ALL);
+    if (filters.base !== ALL && !baseValues.has(filters.base)) setFilter("base", ALL);
+    if (filters.xpt !== ALL && !xptValues.has(filters.xpt)) setFilter("xpt", ALL);
+    if (filters.driver !== ALL && !driverValues.has(filters.driver)) setFilter("driver", ALL);
+    if (filters.pnrStatus !== ALL && !statusValues.has(filters.pnrStatus)) setFilter("pnrStatus", ALL);
+    if (filters.direction !== ALL && !DISCOUNT_DIRECTIONS.includes(filters.direction as DiscountDirection)) setFilter("direction", ALL);
+  }, [rows, options, filters, setFilter]);
+
   const active = Object.values(filters).some((value) => value !== "" && value !== ALL);
 
   return (
