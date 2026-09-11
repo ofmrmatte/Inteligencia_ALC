@@ -6,10 +6,7 @@ import {
   BadgeDollarSign,
   Boxes,
   Building2,
-  CalendarDays,
   ChartNoAxesCombined,
-  Download,
-  FileSpreadsheet,
   TrendingUp,
   Users,
 } from "lucide-react";
@@ -21,7 +18,7 @@ import { normalizeText } from "@/lib/normalize";
 import { useDashboardStore } from "@/lib/store";
 import { useReportFiltersStore, type ReportKind } from "@/lib/report-filters-store";
 import type { ImportEntry, PrefaturaRecord } from "@/lib/types";
-import { formatCurrency, formatNumber, formatPercent, KpiCard, Panel, PageIntro, StatusBadge } from "@/components/ui";
+import { formatCurrency, formatNumber, formatPercent, KpiCard, Panel, StatusBadge } from "@/components/ui";
 import { ChartTooltip, NoResults, TableWrap } from "./shared";
 
 type ReportRow = {
@@ -516,7 +513,6 @@ export function ReportsView() {
   const topBase = baseAnalysis[0];
   const statusTrend = useMemo(() => buildStatusTrend(filtered, kind), [filtered, kind]);
 
-  const globalPeriod = `${filters.month === "Todos" ? "Todos os meses" : monthLabel(filters.month)} · ${filters.fortnight === "Todas" ? "Todas as quinzenas" : filters.fortnight}`;
 
   const exportXlsx = async () => {
     if (!filtered.length) {
@@ -728,7 +724,6 @@ export function ReportsView() {
 
   return (
     <div className="view-stack">
-      <PageIntro description="Relatórios executivos ALC para leitura gerencial e auditoria. O arquivo agora separa resumo, análise, detalhamento e dados brutos, com identidade visual ALC e totais dinâmicos no Excel." chips={[globalPeriod, `${formatNumber(filtered.length)} IDs no recorte`, "XLSX executivo ALC"]} />
 
       <div className="kpi-grid kpi-grid--six">
         <KpiCard label="IDs" value={formatNumber(filtered.length)} detail="Pacotes únicos" icon={<Boxes size={19} />} />
@@ -787,15 +782,6 @@ export function ReportsView() {
           <div className="rank-list">{driverAnalysis.slice(0, 8).map((row, index) => <div key={row.label}><span>{String(index + 1).padStart(2, "0")}</span><div><strong>{row.label}</strong><small>{formatNumber(row.cases)} pacotes · {formatPercent(row.share * 100)}</small></div><b>{formatCurrency(row.value)}</b></div>)}</div>
         </Panel>
       </div>
-
-      <Panel title="O que será baixado" subtitle="Estrutura do novo relatório executivo ALC">
-        <div style={{ display: "grid", gridTemplateColumns: "repeat(4, minmax(0, 1fr))", gap: 10 }}>
-          <div className="quality-callout" style={{ margin: 0 }}><FileSpreadsheet size={18} /><div><strong>Resumo Executivo</strong><p>Logo ALC, indicadores, leitura do cenário, rankings e filtros aplicados.</p></div></div>
-          <div className="quality-callout" style={{ margin: 0 }}><ChartNoAxesCombined size={18} /><div><strong>Leitura Gerencial</strong><p>Top bases, top motoristas e distribuição financeira com participação percentual.</p></div></div>
-          <div className="quality-callout" style={{ margin: 0 }}><CalendarDays size={18} /><div><strong>Detalhamento</strong><p>Tabela operacional limpa com filtros do Excel e totais dinâmicos por linhas visíveis.</p></div></div>
-          <div className="quality-callout" style={{ margin: 0 }}><Download size={18} /><div><strong>Dados Brutos</strong><p>Base completa para auditoria, incluindo arquivo de origem e rastreabilidade.</p></div></div>
-        </div>
-      </Panel>
 
       <Panel title="Prévia do detalhamento" subtitle="Primeiros 50 registros que entrarão no arquivo" action={<StatusBadge tone="neutral">{filtered.length} IDs</StatusBadge>}>
         <TableWrap>
