@@ -1,5 +1,6 @@
 "use client";
 
+import type { ReactNode } from "react";
 import { RotateCcw } from "lucide-react";
 import { filterOptions } from "@/lib/dashboard-scope";
 import { formatFortnightLabel, formatMonthLabel } from "@/lib/metrics";
@@ -17,7 +18,7 @@ function SelectFilter({ label, value, options, allLabel, onChange, formatOption 
   );
 }
 
-export function GlobalFilters() {
+export function GlobalFilters({ extra, onResetExtra, extraActive = false }: { extra?: ReactNode; onResetExtra?: () => void; extraActive?: boolean }) {
   const data = useDashboardStore((state) => state.data);
   const filters = useDashboardStore((state) => state.filters);
   const setFilter = useDashboardStore((state) => state.setFilter);
@@ -52,6 +53,11 @@ export function GlobalFilters() {
     setFilter("base", option.base);
   };
 
+  const resetAll = () => {
+    resetFilters();
+    onResetExtra?.();
+  };
+
   return (
     <section className="filters-bar" aria-label="Filtros globais">
       <SelectFilter label="Mês" value={filters.month} options={options.months} allLabel="Todos" onChange={(value) => setFilter("month", value)} formatOption={formatMonthLabel} />
@@ -68,7 +74,8 @@ export function GlobalFilters() {
       <SelectFilter label="Operação" value={filters.operation} options={["SVC", "XPT", "PNR"]} allLabel="Todas" onChange={(value) => setFilter("operation", value)} />
       <SelectFilter label="Supervisor" value={filters.supervisor} options={options.supervisors} allLabel="Todos" onChange={(value) => setFilter("supervisor", value)} />
       <SelectFilter label="Motorista" value={filters.driver} options={options.drivers} allLabel="Todos" onChange={(value) => setFilter("driver", value)} />
-      <button className="reset-filter" onClick={resetFilters} disabled={!active} title="Limpar filtros"><RotateCcw size={17} /></button>
+      {extra}
+      <button className="reset-filter" onClick={resetAll} disabled={!active && !extraActive} title="Limpar filtros"><RotateCcw size={17} /></button>
     </section>
   );
 }
