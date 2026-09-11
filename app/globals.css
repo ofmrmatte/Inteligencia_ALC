@@ -160,10 +160,11 @@ a { color: inherit; text-decoration: none; }
 .filters-bar--reports .filter-control { min-width: 98px; flex: 0 1 128px; }
 .filters-bar--reports .filter-control select { width: 100%; max-width: none; }
 .filters-bar--reports .filter-control input { width: 100%; }
-.filters-bar--reports .report-filter--kind { flex-basis: 108px; }
-.filters-bar--reports .report-filter--status { flex-basis: 158px; }
-.filters-bar--reports .report-filter--base { flex-basis: 166px; }
-.filters-bar--reports .report-filter--driver { flex-basis: 154px; }
+.filters-bar--reports .report-filter--kind { flex-basis: 112px; }
+.filters-bar--reports .report-filter--status { flex-basis: 170px; }
+.filters-bar--reports .report-filter--unit { flex-basis: 220px; }
+.filters-bar--reports-compact { flex-wrap: nowrap; }
+.filters-bar--reports-compact .report-filter-actions { margin-left: auto; flex: 0 0 auto; }
 .report-more-filters {
   position: relative;
   align-self: end;
