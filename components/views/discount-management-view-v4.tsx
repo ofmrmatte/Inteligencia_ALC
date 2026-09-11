@@ -2,13 +2,8 @@
 
 import { useEffect, useMemo, useState } from "react";
 import {
-  BadgeDollarSign,
-  Building2,
-  ChartNoAxesCombined,
   Download,
-  FileSpreadsheet,
   RefreshCw,
-  Users,
 } from "lucide-react";
 import { strFromU8, strToU8, unzipSync, zipSync } from "fflate";
 import { toast } from "sonner";
@@ -427,8 +422,6 @@ function DiscountReportPanel() {
   }, [rows, filters]);
   const totalValue = filtered.reduce((sum, row) => sum + Number(row.amount || 0), 0);
   const uniqueIds = new Set(filtered.map((row) => row.shipment_id)).size;
-  const directionAnalysis = useMemo(() => groupAnalysis(filtered, (row) => directionLabel(row.direction), totalValue), [filtered, totalValue]);
-  const topDirection = directionAnalysis[0];
   async function handleExport() {
     setExporting(true);
     try { const filename = await exportDiscountReport(filtered, { month: filters.month, direction: filters.direction, base: filters.base }); toast.success(`${filename} gerado com Resumo Executivo, Leitura Gerencial, Detalhamento e Dados Brutos.`); }
@@ -436,14 +429,18 @@ function DiscountReportPanel() {
     finally { setExporting(false); }
   }
   return (
-    <Panel title="Relatório executivo — Gestão de Descontos" subtitle="Mesmo padrão gerencial dos relatórios de pacotes, agora com base branca, identidade ALC em vermelho e sem fundo preto." action={<div style={{ display: "flex", gap: 8, alignItems: "center" }}><button className="secondary-button" type="button" onClick={() => void loadRows(true)} disabled={loading}><RefreshCw size={14} />{loading ? "Atualizando…" : "Atualizar"}</button><button className="primary-button" type="button" onClick={() => void handleExport()} disabled={exporting || !filtered.length}><Download size={16} />{exporting ? "Montando relatório…" : "Baixar relatório ALC"}</button></div>}>
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(4, minmax(0, 1fr))", gap: 10 }}>
-        <div className="quality-callout" style={{ margin: 0 }}><FileSpreadsheet size={18} /><div><strong>{formatNumber(filtered.length)} lançamentos</strong><p>{formatNumber(uniqueIds)} IDs únicos no recorte.</p></div></div>
-        <div className="quality-callout" style={{ margin: 0 }}><BadgeDollarSign size={18} /><div><strong>{formatCurrency(totalValue)}</strong><p>Valor total sob gestão.</p></div></div>
-        <div className="quality-callout" style={{ margin: 0 }}><ChartNoAxesCombined size={18} /><div><strong>{topDirection?.label || "Sem concentração"}</strong><p>{topDirection ? `${formatPercent(topDirection.share * 100)} do valor.` : "Sem dados no recorte."}</p></div></div>
-        <div className="quality-callout" style={{ margin: 0 }}><Building2 size={18} /><div><strong>4 abas gerenciais</strong><p>Resumo, análise, detalhamento e auditoria.</p></div></div>
-      </div>
-      <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginTop: 14, color: "#60636A", fontSize: 12 }}><span style={{ display: "inline-flex", alignItems: "center", gap: 5 }}><Users size={14} />Ranking de motoristas e bases</span><span>•</span><span>Totais dinâmicos na aba Detalhamento</span><span>•</span><span>Logo ALC e rastreabilidade do arquivo de origem</span></div>
+    <Panel
+      title="Relatório executivo — Gestão de Descontos"
+      subtitle={loading
+        ? "Atualizando dados do relatório…"
+        : `${formatNumber(filtered.length)} lançamentos · ${formatNumber(uniqueIds)} IDs únicos · ${formatCurrency(totalValue)} no recorte atual`}
+      action={<div style={{ display: "flex", gap: 8, alignItems: "center" }}><button className="secondary-button" type="button" onClick={() => void loadRows(true)} disabled={loading}><RefreshCw size={14} />{loading ? "Atualizando…" : "Atualizar"}</button><button className="primary-button" type="button" onClick={() => void handleExport()} disabled={exporting || !filtered.length}><Download size={16} />{exporting ? "Montando relatório…" : "Baixar relatório ALC"}</button></div>}
+    >
+      {!loading && !filtered.length ? (
+        <div style={{ padding: "8px 0", fontSize: 12, color: "#60636A" }}>
+          Nenhum lançamento corresponde aos filtros atuais. Use o botão de limpar filtros na barra superior para restaurar todos os dados.
+        </div>
+      ) : null}
     </Panel>
   );
 }
