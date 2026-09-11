@@ -18,6 +18,7 @@ export function ReportFilterExtras() {
   const setDateEnd = useReportFiltersStore((state) => state.setDateEnd);
   const setStatusFilter = useReportFiltersStore((state) => state.setStatusFilter);
   const requestExport = useReportFiltersStore((state) => state.requestExport);
+  const exporting = useReportFiltersStore((state) => state.exporting);
 
   const scoped = scopeData(data, filters);
   const statusOptions = [...new Set(
@@ -57,10 +58,11 @@ export function ReportFilterExtras() {
         className="primary-button primary-button--small"
         style={{ alignSelf: "end", minHeight: 31, height: 31, whiteSpace: "nowrap" }}
         onClick={requestExport}
+        disabled={exporting}
         title="Baixar relatório ALC"
       >
         <Download size={14} />
-        Baixar relatório
+        {exporting ? "Gerando..." : "Baixar relatório"}
       </button>
     </>
   );
