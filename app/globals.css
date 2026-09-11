@@ -149,6 +149,64 @@ a { color: inherit; text-decoration: none; }
 .filter-control select { max-width: 154px; }
 .filter-control input { width: 118px; padding-right: 6px; }
 .filter-control select:focus, .filter-control input:focus { border-color: var(--red); background: #fff; box-shadow: 0 0 0 2px rgba(227, 6, 19, .08); }
+
+.filters-bar--reports {
+  min-height: 64px;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  row-gap: 8px;
+  overflow-x: visible;
+}
+.filters-bar--reports .filter-control { min-width: 98px; flex: 0 1 128px; }
+.filters-bar--reports .filter-control select { width: 100%; max-width: none; }
+.filters-bar--reports .filter-control input { width: 100%; }
+.filters-bar--reports .report-filter--kind { flex-basis: 108px; }
+.filters-bar--reports .report-filter--status { flex-basis: 158px; }
+.filters-bar--reports .report-filter--base { flex-basis: 166px; }
+.filters-bar--reports .report-filter--driver { flex-basis: 154px; }
+.report-more-filters {
+  position: relative;
+  align-self: end;
+  height: 31px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 10px;
+  color: var(--gray-700);
+  background: #fff;
+  border: 1px solid var(--gray-300);
+  border-radius: 5px;
+  font-size: 10px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+.report-more-filters:hover,
+.report-more-filters.is-active { color: var(--red); background: #fff7f8; border-color: #f0b7bc; }
+.report-more-filters > b {
+  width: 6px;
+  height: 6px;
+  background: var(--red);
+  border-radius: 50%;
+}
+.report-more-filters .is-open { transform: rotate(180deg); }
+.report-filter-actions {
+  align-self: end;
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.report-download-button { min-height: 31px; height: 31px; padding-inline: 12px; white-space: nowrap; }
+.report-advanced-filters {
+  width: 100%;
+  display: flex;
+  align-items: flex-end;
+  gap: 8px;
+  padding-top: 8px;
+  border-top: 1px solid var(--gray-200);
+}
+.report-advanced-filters .filter-control { flex: 0 1 180px; }
+
 .reset-filter { align-self: end; width: 31px; height: 31px; display: grid; place-items: center; padding: 0; color: var(--red); background: #fff4f5; border: 1px solid #ffd9dc; border-radius: 5px; }
 .reset-filter:disabled { color: var(--gray-300); background: #fafafa; border-color: var(--gray-200); cursor: default; }
 
