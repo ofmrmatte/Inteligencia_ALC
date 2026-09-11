@@ -1,9 +1,9 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
-import { ChevronDown, Download, RotateCcw, SlidersHorizontal } from "lucide-react";
+import { useEffect, useMemo } from "react";
+import { Download, RotateCcw } from "lucide-react";
 import { filterOptions } from "@/lib/dashboard-scope";
-import { formatFortnightLabel, formatMonthLabel, latestPnrByShipment } from "@/lib/metrics";
+import { formatFortnightLabel, latestPnrByShipment } from "@/lib/metrics";
 import { useDashboardStore } from "@/lib/store";
 import { useReportFiltersStore } from "@/lib/report-filters-store";
 
@@ -53,39 +53,61 @@ export function ReportFiltersBar() {
   const resetLocal = useReportFiltersStore((state) => state.resetLocal);
   const requestExport = useReportFiltersStore((state) => state.requestExport);
 
-  const [advancedOpen, setAdvancedOpen] = useState(false);
   const options = filterOptions(data, filters);
 
-  // Operação é redundante nesta tela: o próprio seletor Relatório define PNR x Pacote Perdido.
+  // Estes filtros não fazem parte do fluxo de Relatórios de Pacotes.
+  // Ao entrar na tela, neutralizamos qualquer recorte oculto herdado de outra página.
   useEffect(() => {
+    if (filters.month !== "Todos") setFilter("month", "Todos");
+    if (filters.coordinator !== "Todos") setFilter("coordinator", "Todos");
+    if (filters.supervisor !== "Todos") setFilter("supervisor", "Todos");
+    if (filters.driver !== "Todos") setFilter("driver", "Todos");
     if (filters.operation !== "Todas") setFilter("operation", "Todas");
-  }, [filters.operation, setFilter]);
+  }, [filters.month, filters.coordinator, filters.supervisor, filters.driver, filters.operation, setFilter]);
 
   const baseOptions = useMemo(() => [...new Map(
     data.hierarchy
-      .filter((row) => filters.coordinator === "Todos" || row.coordinator === filters.coordinator)
       .filter((row) => row.base && row.sigla)
+      .filter((row) => row.sigla.toUpperCase() !== "AMAZON" && row.base.toUpperCase() !== "AMAZON")
       .map((row) => {
-        const value = `${row.sigla}|||${row.base}`;
-        const label = `${row.sigla} - ${row.base}`;
+        const value = `BASE|||${row.sigla}|||${row.base}`;
+        const label = `SVC · ${row.sigla} - ${row.base}`;
         return [value, { value, label, sigla: row.sigla, base: row.base }] as const;
       }),
-  ).values()].sort((a, b) => a.label.localeCompare(b.label, "pt-BR")), [data.hierarchy, filters.coordinator]);
+  ).values()].sort((a, b) => a.label.localeCompare(b.label, "pt-BR")), [data.hierarchy]);
 
-  const selectedBase = filters.base !== "Todas" && filters.sigla !== "Todas"
-    ? `${filters.sigla}|||${filters.base}`
-    : "Todas";
+  const xptOptions = useMemo(() => options.xpts
+    .filter((xpt) => xpt.toUpperCase() !== "AMAZON")
+    .map((xpt) => ({ value: `XPT|||${xpt}`, label: `XPT · ${xpt}`, xpt })),
+  [options.xpts]);
 
-  const changeBase = (value: string) => {
-    if (value === "Todas") {
+  const selectedUnit = filters.xpt !== "Todos"
+    ? `XPT|||${filters.xpt}`
+    : filters.base !== "Todas" && filters.sigla !== "Todas"
+      ? `BASE|||${filters.sigla}|||${filters.base}`
+      : "Todos";
+
+  const changeUnit = (value: string) => {
+    if (value === "Todos") {
+      setFilter("xpt", "Todos");
       setFilter("sigla", "Todas");
       setFilter("base", "Todas");
       return;
     }
-    const option = baseOptions.find((item) => item.value === value);
-    if (!option) return;
-    setFilter("sigla", option.sigla);
-    setFilter("base", option.base);
+
+    if (value.startsWith("XPT|||")) {
+      const xpt = value.slice("XPT|||".length);
+      setFilter("sigla", "Todas");
+      setFilter("base", "Todas");
+      setFilter("xpt", xpt);
+      return;
+    }
+
+    const [, sigla, base] = value.split("|||");
+    if (!sigla || !base) return;
+    setFilter("xpt", "Todos");
+    setFilter("sigla", sigla);
+    setFilter("base", base);
   };
 
   const statusOptions = useMemo(() => {
@@ -93,21 +115,19 @@ export function ReportFiltersBar() {
     return [...new Set(statuses)].sort((a, b) => a.localeCompare(b, "pt-BR"));
   }, [data.pnr, data.imports]);
 
-  const globalActive = Object.entries(filters).some(([key, value]) => {
-    const defaultValue = key === "base" || key === "sigla" || key === "operation" || key === "fortnight" ? "Todas" : "Todos";
-    return value !== defaultValue;
-  });
-  const localActive = Boolean(dateStart || dateEnd || statusFilter !== "TODOS");
-  const advancedActive = filters.coordinator !== "Todos" || filters.supervisor !== "Todos" || filters.xpt !== "Todos";
+  const active = filters.fortnight !== "Todas"
+    || filters.base !== "Todas"
+    || filters.sigla !== "Todas"
+    || filters.xpt !== "Todos"
+    || Boolean(dateStart || dateEnd || statusFilter !== "TODOS");
 
   const resetAll = () => {
     resetFilters();
     resetLocal();
-    setAdvancedOpen(false);
   };
 
   return (
-    <section className="filters-bar filters-bar--reports" aria-label="Filtros dos Relatórios de Pacotes">
+    <section className="filters-bar filters-bar--reports filters-bar--reports-compact" aria-label="Filtros dos Relatórios de Pacotes">
       <label className="filter-control report-filter--kind">
         <span>Relatório</span>
         <select value={kind} onChange={(event) => setKind(event.target.value as "PNR" | "PERDIDO")}>
@@ -116,7 +136,6 @@ export function ReportFiltersBar() {
         </select>
       </label>
 
-      <SelectFilter label="Mês" value={filters.month} options={options.months} allLabel="Todos" onChange={(value) => setFilter("month", value)} formatOption={formatMonthLabel} />
       <SelectFilter label="Quinzena" value={filters.fortnight} options={options.fortnights} allLabel="Todas" onChange={(value) => setFilter("fortnight", value)} formatOption={formatFortnightLabel} />
 
       <label className="filter-control">
@@ -138,30 +157,21 @@ export function ReportFiltersBar() {
         </label>
       ) : null}
 
-      <label className="filter-control report-filter--base">
-        <span>Base</span>
-        <select value={selectedBase} onChange={(event) => changeBase(event.target.value)}>
-          <option value="Todas">Todas</option>
-          {baseOptions.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
+      <label className="filter-control report-filter--unit">
+        <span>Base / XPT</span>
+        <select value={selectedUnit} onChange={(event) => changeUnit(event.target.value)}>
+          <option value="Todos">Todos</option>
+          <optgroup label="Bases SVC">
+            {baseOptions.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
+          </optgroup>
+          <optgroup label="XPTs">
+            {xptOptions.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
+          </optgroup>
         </select>
       </label>
 
-      <SelectFilter label="Motorista" value={filters.driver} options={options.drivers} allLabel="Todos" onChange={(value) => setFilter("driver", value)} className="report-filter--driver" />
-
-      <button
-        type="button"
-        className={`report-more-filters ${advancedOpen || advancedActive ? "is-active" : ""}`}
-        onClick={() => setAdvancedOpen((current) => !current)}
-        title="Filtros avançados"
-      >
-        <SlidersHorizontal size={14} />
-        <span>Mais filtros</span>
-        {advancedActive ? <b /> : null}
-        <ChevronDown size={12} className={advancedOpen ? "is-open" : ""} />
-      </button>
-
       <div className="report-filter-actions">
-        <button className="reset-filter" onClick={resetAll} disabled={!globalActive && !localActive} title="Limpar filtros">
+        <button className="reset-filter" onClick={resetAll} disabled={!active} title="Limpar filtros">
           <RotateCcw size={17} />
         </button>
         <button
@@ -175,14 +185,6 @@ export function ReportFiltersBar() {
           {exporting ? "Gerando..." : "Baixar relatório"}
         </button>
       </div>
-
-      {advancedOpen ? (
-        <div className="report-advanced-filters">
-          <SelectFilter label="Coordenador" value={filters.coordinator} options={options.coordinators} allLabel="Todos" onChange={(value) => setFilter("coordinator", value)} />
-          <SelectFilter label="Supervisor" value={filters.supervisor} options={options.supervisors} allLabel="Todos" onChange={(value) => setFilter("supervisor", value)} />
-          <SelectFilter label="XPT" value={filters.xpt} options={options.xpts} allLabel="Todos" onChange={(value) => setFilter("xpt", value)} />
-        </div>
-      ) : null}
     </section>
   );
 }
