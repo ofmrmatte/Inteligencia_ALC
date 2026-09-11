@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo } from "react";
 import { RotateCcw } from "lucide-react";
 import {
   DISCOUNT_DIRECTIONS,
@@ -11,6 +11,7 @@ import {
   DISCOUNT_FILTER_ALL,
   useDiscountFiltersStore,
 } from "@/lib/discount-filters-store";
+import { useDiscountDataStore } from "@/lib/discount-data-store";
 
 type FilterRow = {
   discount_month: string | null;
@@ -26,7 +27,6 @@ type FilterRow = {
   pnr_status: string | null;
 };
 
-const API = "/api/discount-management-v2";
 const ALL = DISCOUNT_FILTER_ALL;
 
 function unique(values: Array<string | null | undefined>) {
@@ -78,29 +78,13 @@ export function DiscountFiltersBar() {
   const filters = useDiscountFiltersStore((state) => state.filters);
   const setFilter = useDiscountFiltersStore((state) => state.setFilter);
   const resetFilters = useDiscountFiltersStore((state) => state.resetFilters);
-  const [rows, setRows] = useState<FilterRow[]>([]);
+  const sharedRows = useDiscountDataStore((state) => state.rows);
+  const loadRows = useDiscountDataStore((state) => state.loadRows);
+  const rows = sharedRows as FilterRow[];
 
   useEffect(() => {
-    let active = true;
-
-    const load = async () => {
-      try {
-        const response = await fetch(API, { cache: "no-store" });
-        const body = (await response.json().catch(() => ({}))) as { rows?: FilterRow[] };
-        if (active && response.ok) setRows(body.rows ?? []);
-      } catch {
-        // A barra mantém os filtros atuais mesmo se a atualização das opções falhar.
-      }
-    };
-
-    void load();
-    const refresh = () => void load();
-    window.addEventListener("alc-inteligencia:global-data-sync", refresh);
-    return () => {
-      active = false;
-      window.removeEventListener("alc-inteligencia:global-data-sync", refresh);
-    };
-  }, []);
+    void loadRows(false).catch(() => undefined);
+  }, [loadRows]);
 
   const options = useMemo(() => {
     const bases = new Map<string, string>();
