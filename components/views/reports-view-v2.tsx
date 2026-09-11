@@ -717,7 +717,7 @@ export function ReportsView() {
               <CartesianGrid stroke="#ECEDEF" horizontal={false} />
               <XAxis type="number" axisLine={false} tickLine={false} tick={{ fontSize: 11, fill: "#73767d" }} tickFormatter={(value) => `${Math.round(Number(value) / 1000)}k`} />
               <YAxis type="category" dataKey="label" width={150} axisLine={false} tickLine={false} tick={{ fontSize: 10, fill: "#333" }} />
-              <Tooltip content={<ChartTooltip currency />} />
+              <Tooltip content={<ChartTooltip currency shareTotal={totalValue} />} />
               <Bar dataKey="value" name="Valor" fill="#E30613" radius={[0, 4, 4, 0]} maxBarSize={23} />
             </BarChart>
           </ResponsiveContainer>
