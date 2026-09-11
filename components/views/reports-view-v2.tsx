@@ -1,8 +1,7 @@
 "use client";
 
-import { useMemo, useState } from "react";
-import Image from "next/image";
-import { Bar, BarChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
+import { useEffect, useMemo, useRef } from "react";
+import { Area, AreaChart, Bar, BarChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
 import {
   BadgeDollarSign,
   Boxes,
@@ -11,7 +10,6 @@ import {
   ChartNoAxesCombined,
   Download,
   FileSpreadsheet,
-  RotateCcw,
   TrendingUp,
   Users,
 } from "lucide-react";
@@ -21,11 +19,10 @@ import { scopeData } from "@/lib/dashboard-scope";
 import { fortnightFromDate, latestPnrByShipment, monthFromFortnight, normalizeFortnight } from "@/lib/metrics";
 import { normalizeText } from "@/lib/normalize";
 import { useDashboardStore } from "@/lib/store";
+import { useReportFiltersStore, type ReportKind } from "@/lib/report-filters-store";
 import type { ImportEntry, PrefaturaRecord } from "@/lib/types";
 import { formatCurrency, formatNumber, formatPercent, KpiCard, Panel, PageIntro, StatusBadge } from "@/components/ui";
 import { ChartTooltip, NoResults, TableWrap } from "./shared";
-
-type ReportKind = "PNR" | "PERDIDO";
 
 type ReportRow = {
   shipmentId: string;
@@ -131,6 +128,55 @@ function groupAnalysis(rows: ReportRow[], key: (row: ReportRow) => string, total
   return [...map.values()]
     .map((item) => ({ ...item, share: totalValue ? item.value / totalValue : 0 }))
     .sort((a, b) => b.value - a.value);
+}
+
+type StatusTrendRow = {
+  period: string;
+  label: string;
+  anulado: number;
+  faturamento: number;
+  aguardando: number;
+  penalidade: number;
+  perdido: number;
+};
+
+function trackedStatus(status: string) {
+  const normalized = normalizeText(status);
+  if (/ANULAD/.test(normalized)) return "anulado" as const;
+  if (/ENVIAD.*FATURAMENTO/.test(normalized)) return "faturamento" as const;
+  if (/AGUARDANDO COMPROVANTE/.test(normalized)) return "aguardando" as const;
+  if (/COM PENALIDADE/.test(normalized)) return "penalidade" as const;
+  return null;
+}
+
+function buildStatusTrend(rows: ReportRow[], kind: ReportKind): StatusTrendRow[] {
+  const dated = rows.filter((row) => row.date).sort((a, b) => String(a.date).localeCompare(String(b.date)));
+  const distinctDates = [...new Set(dated.map((row) => row.date as string))];
+  const monthly = distinctDates.length > 62;
+  const grouped = new Map<string, StatusTrendRow>();
+
+  for (const row of dated) {
+    const period = monthly ? String(row.date).slice(0, 7) : String(row.date);
+    const current = grouped.get(period) ?? {
+      period,
+      label: monthly ? monthLabel(period) : brDate(period),
+      anulado: 0,
+      faturamento: 0,
+      aguardando: 0,
+      penalidade: 0,
+      perdido: 0,
+    };
+
+    if (kind === "PERDIDO") {
+      current.perdido += row.value;
+    } else {
+      const status = trackedStatus(row.status);
+      if (status) current[status] += row.value;
+    }
+    grouped.set(period, current);
+  }
+
+  return [...grouped.values()].sort((a, b) => a.period.localeCompare(b.period));
 }
 
 function textBar(share: number, width = 18) {
@@ -398,11 +444,14 @@ function downloadBlob(bytes: Uint8Array, filename: string) {
 export function ReportsView() {
   const data = useDashboardStore((state) => state.data);
   const filters = useDashboardStore((state) => state.filters);
-  const [kind, setKind] = useState<ReportKind>("PNR");
-  const [dateStart, setDateStart] = useState("");
-  const [dateEnd, setDateEnd] = useState("");
-  const [statusFilter, setStatusFilter] = useState("TODOS");
-  const [exporting, setExporting] = useState(false);
+  const kind = useReportFiltersStore((state) => state.kind);
+  const dateStart = useReportFiltersStore((state) => state.dateStart);
+  const dateEnd = useReportFiltersStore((state) => state.dateEnd);
+  const statusFilter = useReportFiltersStore((state) => state.statusFilter);
+  const exportRequest = useReportFiltersStore((state) => state.exportRequest);
+  const exporting = useReportFiltersStore((state) => state.exporting);
+  const setExporting = useReportFiltersStore((state) => state.setExporting);
+  const lastExportRequest = useRef(exportRequest);
   const scoped = scopeData(data, filters);
 
   const rows = useMemo<ReportRow[]>(() => {
@@ -453,7 +502,6 @@ export function ReportsView() {
   }, [kind, scoped.pnr, scoped.prefatura, data.imports, data.drivers]);
 
   const dateFiltered = useMemo(() => rows.filter((row) => dateInRange(row.date, dateStart, dateEnd)), [rows, dateStart, dateEnd]);
-  const statusOptions = useMemo(() => [...new Set(dateFiltered.map((row) => row.status).filter(Boolean))].sort((a, b) => a.localeCompare(b, "pt-BR")), [dateFiltered]);
   const filtered = useMemo(() => kind === "PNR" && statusFilter !== "TODOS" ? dateFiltered.filter((row) => row.status === statusFilter) : dateFiltered, [dateFiltered, kind, statusFilter]);
   const totalValue = filtered.reduce((sum, row) => sum + row.value, 0);
   const bases = new Set(filtered.map((row) => row.base).filter((value) => value && value !== "—"));
@@ -466,14 +514,9 @@ export function ReportsView() {
   const analysis = kind === "PNR" ? operationAnalysis : baseAnalysis;
   const topImpact = analysis[0];
   const topBase = baseAnalysis[0];
+  const statusTrend = useMemo(() => buildStatusTrend(filtered, kind), [filtered, kind]);
 
   const globalPeriod = `${filters.month === "Todos" ? "Todos os meses" : monthLabel(filters.month)} · ${filters.fortnight === "Todas" ? "Todas as quinzenas" : filters.fortnight}`;
-
-  const resetLocal = () => {
-    setDateStart("");
-    setDateEnd("");
-    setStatusFilter("TODOS");
-  };
 
   const exportXlsx = async () => {
     if (!filtered.length) {
@@ -673,33 +716,19 @@ export function ReportsView() {
     }
   };
 
+  useEffect(() => {
+    if (exportRequest === lastExportRequest.current) return;
+    lastExportRequest.current = exportRequest;
+    void exportXlsx();
+    // A solicitação vem do botão de download integrado à barra superior de filtros.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [exportRequest]);
+
   if (!rows.length) return <NoResults title={kind === "PNR" ? "Nenhum caso PNR neste recorte" : "Nenhum pacote perdido neste recorte"} detail="Ajuste os filtros globais de período, base ou motorista." />;
 
   return (
     <div className="view-stack">
       <PageIntro description="Relatórios executivos ALC para leitura gerencial e auditoria. O arquivo agora separa resumo, análise, detalhamento e dados brutos, com identidade visual ALC e totais dinâmicos no Excel." chips={[globalPeriod, `${formatNumber(filtered.length)} IDs no recorte`, "XLSX executivo ALC"]} />
-
-      <Panel title="Gerador de relatório ALC" subtitle="Escolha PNR ou Pacotes Perdidos e refine a data real antes de gerar o arquivo.">
-        <div style={{ display: "grid", gridTemplateColumns: "180px minmax(0, 1fr)", gap: 22, alignItems: "center" }}>
-          <div style={{ minHeight: 116, display: "grid", placeItems: "center", padding: 16, background: "#090909", borderRadius: 10 }}>
-            <Image src="/brand/alc-logo.png" alt="ALC Pereira Filho & Transportes" width={150} height={88} style={{ width: "100%", height: 82, objectFit: "contain" }} />
-          </div>
-          <div style={{ display: "flex", gap: 12, alignItems: "end", flexWrap: "wrap" }}>
-            <div className="filter-control" style={{ minWidth: 210 }}>
-              <span>Tipo de relatório</span>
-              <div style={{ display: "flex", gap: 6 }}>
-                <button type="button" className={kind === "PNR" ? "primary-button primary-button--small" : "secondary-button"} onClick={() => { setKind("PNR"); setStatusFilter("TODOS"); }}>PNR</button>
-                <button type="button" className={kind === "PERDIDO" ? "primary-button primary-button--small" : "secondary-button"} onClick={() => { setKind("PERDIDO"); setStatusFilter("TODOS"); }}>Pacote perdido</button>
-              </div>
-            </div>
-            <label className="filter-control"><span>Data inicial</span><input type="date" value={dateStart} onChange={(event) => setDateStart(event.target.value)} /></label>
-            <label className="filter-control"><span>Data final</span><input type="date" value={dateEnd} onChange={(event) => setDateEnd(event.target.value)} /></label>
-            {kind === "PNR" ? <label className="filter-control" style={{ minWidth: 190 }}><span>Status PNR</span><select value={statusFilter} onChange={(event) => setStatusFilter(event.target.value)}><option value="TODOS">Todos</option>{statusOptions.map((status) => <option key={status} value={status}>{status}</option>)}</select></label> : null}
-            <button className="secondary-button" type="button" onClick={resetLocal}><RotateCcw size={14} />Limpar</button>
-            <div style={{ marginLeft: "auto" }}><button className="primary-button" type="button" onClick={() => void exportXlsx()} disabled={exporting || !filtered.length}><Download size={16} />{exporting ? "Montando relatório..." : "Baixar relatório ALC"}</button></div>
-          </div>
-        </div>
-      </Panel>
 
       <div className="kpi-grid kpi-grid--six">
         <KpiCard label="IDs" value={formatNumber(filtered.length)} detail="Pacotes únicos" icon={<Boxes size={19} />} />
@@ -722,12 +751,31 @@ export function ReportsView() {
             </BarChart>
           </ResponsiveContainer>
         </Panel>
-        <Panel title="Como interpretar" subtitle="Leitura sugerida antes de baixar" className="panel--chart">
-          <div style={{ display: "grid", gap: 10 }}>
-            <div className="quality-callout" style={{ margin: 0 }}><TrendingUp size={18} /><div><strong>1. Veja a concentração</strong><p>{topImpact ? `${topImpact.label} concentra ${formatPercent(topImpact.share * 100)} do valor do recorte.` : "Não há concentração relevante no recorte."}</p></div></div>
-            <div className="quality-callout" style={{ margin: 0 }}><Building2 size={18} /><div><strong>2. Identifique a origem</strong><p>{topBase ? `${topBase.label} é a base com maior impacto financeiro: ${formatCurrency(topBase.value)}.` : "As bases serão apresentadas no arquivo."}</p></div></div>
-            <div className="quality-callout" style={{ margin: 0 }}><FileSpreadsheet size={18} /><div><strong>3. Investigue os IDs</strong><p>Na aba Detalhamento do Excel, filtre Base, Motorista, Status ou Operação. Os totais visíveis mudam automaticamente.</p></div></div>
-          </div>
+        <Panel
+          title={kind === "PNR" ? "Evolução dos principais status" : "Evolução financeira dos pacotes perdidos"}
+          subtitle={kind === "PNR" ? "Anulado, enviado para faturamento, aguardando comprovante e com penalidade" : "Valor por data no recorte"}
+          className="panel--chart"
+        >
+          {statusTrend.length ? (
+            <ResponsiveContainer width="100%" height={300}>
+              <AreaChart data={statusTrend} margin={{ left: 6, right: 12, top: 8, bottom: 0 }}>
+                <CartesianGrid stroke="#ECEDEF" vertical={false} />
+                <XAxis dataKey="label" axisLine={false} tickLine={false} tick={{ fontSize: 10, fill: "#73767d" }} minTickGap={22} />
+                <YAxis axisLine={false} tickLine={false} tick={{ fontSize: 10, fill: "#73767d" }} tickFormatter={(value) => `${Math.round(Number(value) / 1000)}k`} />
+                <Tooltip content={<ChartTooltip currency />} />
+                {kind === "PNR" ? (
+                  <>
+                    <Area type="monotone" dataKey="anulado" name="Anulado" stroke="#E30613" strokeWidth={2.4} fill="#E30613" fillOpacity={0.06} connectNulls />
+                    <Area type="monotone" dataKey="faturamento" name="Enviado para faturamento" stroke="#16845B" strokeWidth={2} fill="transparent" connectNulls />
+                    <Area type="monotone" dataKey="aguardando" name="Aguardando comprovante" stroke="#B76B00" strokeWidth={2} fill="transparent" connectNulls />
+                    <Area type="monotone" dataKey="penalidade" name="Com penalidade" stroke="#60636A" strokeWidth={2} fill="transparent" connectNulls />
+                  </>
+                ) : (
+                  <Area type="monotone" dataKey="perdido" name="Pacotes perdidos" stroke="#E30613" strokeWidth={2.4} fill="#E30613" fillOpacity={0.08} connectNulls />
+                )}
+              </AreaChart>
+            </ResponsiveContainer>
+          ) : <NoResults title="Sem evolução para o recorte atual" detail="Ajuste o período ou os filtros para visualizar a série temporal." />}
         </Panel>
       </div>
 
