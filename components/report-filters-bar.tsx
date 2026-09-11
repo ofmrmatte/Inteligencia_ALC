@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Download, RotateCcw } from "lucide-react";
 import { filterOptions } from "@/lib/dashboard-scope";
 import { formatFortnightLabel, latestPnrByShipment } from "@/lib/metrics";
@@ -54,6 +54,20 @@ export function ReportFiltersBar() {
   const requestExport = useReportFiltersStore((state) => state.requestExport);
 
   const options = filterOptions(data, filters);
+  const [masterXpts, setMasterXpts] = useState<string[]>([]);
+
+  useEffect(() => {
+    let active = true;
+    void fetch("/api/report-xpts", { cache: "no-store" })
+      .then(async (response) => response.ok ? response.json() : Promise.reject(new Error("Falha ao carregar XPTs.")))
+      .then((payload: { xpts?: string[] }) => {
+        if (active) setMasterXpts(Array.isArray(payload.xpts) ? payload.xpts : []);
+      })
+      .catch(() => {
+        if (active) setMasterXpts([]);
+      });
+    return () => { active = false; };
+  }, []);
 
   // Estes filtros não fazem parte do fluxo de Relatórios de Pacotes.
   // Ao entrar na tela, neutralizamos qualquer recorte oculto herdado de outra página.
@@ -76,10 +90,12 @@ export function ReportFiltersBar() {
       }),
   ).values()].sort((a, b) => a.label.localeCompare(b.label, "pt-BR")), [data.hierarchy]);
 
-  const xptOptions = useMemo(() => options.xpts
-    .filter((xpt) => xpt.toUpperCase() !== "AMAZON")
-    .map((xpt) => ({ value: `XPT|||${xpt}`, label: `XPT · ${xpt}`, xpt })),
-  [options.xpts]);
+  const xptOptions = useMemo(() => {
+    const source = masterXpts.length ? masterXpts : options.xpts;
+    return source
+      .filter((xpt) => xpt.toUpperCase() !== "AMAZON")
+      .map((xpt) => ({ value: `XPT|||${xpt}`, label: `XPT · ${xpt}`, xpt }));
+  }, [masterXpts, options.xpts]);
 
   const selectedUnit = filters.xpt !== "Todos"
     ? `XPT|||${filters.xpt}`
