@@ -168,6 +168,30 @@ describe("atividade operacional de bases e motoristas", () => {
     expect(current.risk.map((row) => row.shipmentId)).toEqual(["A", "B"]);
   });
 
+  it("ignora competências futuras ao decidir quais motoristas estão ativos", () => {
+    const data = {
+      hierarchy: [
+        { coordinator: "Gestor", supervisor: "Supervisor", sigla: "ATUAL", base: "Base Atual", baseKey: "BASE ATUAL" },
+        { coordinator: "Gestor", supervisor: "Supervisor", sigla: "FUT", base: "Base Futura", baseKey: "BASE FUTURA" },
+      ],
+      prefatura: [],
+      pnr: [
+        { batchId: "atual", billingPeriod: "01Q092026", caseDate: "2026-09-10", baseKey: "BASE ATUAL", sigla: "ATUAL", driverId: "D1", shipmentId: "A" },
+        { batchId: "futuro", billingPeriod: "02Q082099", caseDate: "2026-08-24", baseKey: "BASE FUTURA", sigla: "FUT", driverId: "D2", shipmentId: "B" },
+      ],
+      risk: [],
+      drivers: [
+        { driverId: "D1", name: "Motorista Atual" },
+        { driverId: "D2", name: "Motorista Futuro" },
+      ],
+      imports: [],
+      isDemo: false,
+    } as unknown as DashboardData;
+
+    const current = scopeData(data, EMPTY_FILTERS, { activeOnly: true });
+    expect(current.drivers.map((driver) => driver.driverId)).toEqual(["D1"]);
+  });
+
   it("usa o período do lote quando a linha não traz período ou data válida", () => {
     const data = {
       hierarchy: [{ coordinator: "Gestor", supervisor: "Supervisor", sigla: "SMG", base: "Base Julho", baseKey: "BASE JULHO" }],
