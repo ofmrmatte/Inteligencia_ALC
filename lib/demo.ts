@@ -89,6 +89,9 @@ export function createDemoData(): DashboardData {
       routeId: record.routeId,
       driverId: drivers[index % drivers.length].driverId,
       custom: "",
+      billingType: "",
+      cancellationType: "",
+      classificationColumnsPresent: false,
     }));
 
   const risk: RiskRecord[] = prefatura.slice(5, 19).map((record, index) => ({
