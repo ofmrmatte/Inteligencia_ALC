@@ -59,7 +59,7 @@ function sheetMatrix(sheet: XLSX.WorkSheet): Matrix {
         row.push(null);
         continue;
       }
-      row.push(cell.t === "d" && typeof cell.w === "string" ? cell.w : cell.v ?? null);
+      row.push(cell.t === "d" ? cell.v ?? null : cell.v ?? null);
     }
     matrix.push(row);
   }
