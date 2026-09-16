@@ -2,6 +2,7 @@ import { unzipSync } from "fflate";
 import * as XLSX from "xlsx";
 import { asDate, asId, asNumber, cleanText, headerKey, normalizeText, parseBase } from "@/lib/normalize";
 import { parseCompetence } from "@/lib/competence";
+import { normalizePnrBillingType, normalizePnrCancellationType } from "@/lib/pnr-classification";
 import type {
   DriverRecord,
   HierarchyRecord,
@@ -90,6 +91,14 @@ function firstId(values: RowMap, headers: string[]) {
   return "";
 }
 
+function firstValue(values: RowMap, headers: string[]) {
+  for (const header of headers) {
+    const key = headerKey(header);
+    if (key in values && cleanText(values[key])) return values[key];
+  }
+  return null;
+}
+
 function decodeCsvText(bytes: Uint8Array) {
   try {
     return new TextDecoder("utf-8", { fatal: true }).decode(bytes);
@@ -175,6 +184,16 @@ function parseWorkbook(bytes: Uint8Array, sourceFile: string, batchName: string,
 
     headerIndex = findHeader(matrix, ["ID DE ENVIO", "ID DO MOTORISTA", "VALOR DA COMPRA"]);
     if (headerIndex >= 0) {
+      const headerSet = new Set(matrix[headerIndex].map(headerKey));
+      const billingHeaders = ["TIPO DE FATURAMENTO", "TIPOS DE FATURAMENTO", "TIPO FATURAMENTO", "CLASSIFICACAO FATURAMENTO"];
+      const cancellationHeaders = ["TIPO DE ANULACAO", "TIPOS DE ANULACAO", "TIPO DE ANULADA", "TIPOS DE ANULADAS", "CLASSIFICACAO ANULACAO"];
+      const hasBillingTypeColumn = billingHeaders.some((header) => headerSet.has(headerKey(header)));
+      const hasCancellationTypeColumn = cancellationHeaders.some((header) => headerSet.has(headerKey(header)));
+      const classificationColumnsPresent = hasBillingTypeColumn || hasCancellationTypeColumn;
+      if (classificationColumnsPresent && !(hasBillingTypeColumn && hasCancellationTypeColumn)) {
+        issues.push(`${sourceFile}/${sheetName}: classificação PNR incompleta; mantenha as duas colunas TIPO DE FATURAMENTO e TIPO DE ANULAÇÃO.`);
+      }
+
       for (const row of rowsFrom(matrix, headerIndex)) {
         const shipmentId = asId(row.values["ID DE ENVIO"]);
         if (!shipmentId) continue;
@@ -195,6 +214,9 @@ function parseWorkbook(bytes: Uint8Array, sourceFile: string, batchName: string,
           routeId: asId(row.values["ID DA ROTA"]),
           driverId: asId(row.values["ID DO MOTORISTA"]),
           custom: cleanText(row.values.ACAO ?? row.values.PERSONALIZAR),
+          billingType: normalizePnrBillingType(firstValue(row.values, billingHeaders)),
+          cancellationType: normalizePnrCancellationType(firstValue(row.values, cancellationHeaders)),
+          classificationColumnsPresent,
         });
       }
       kinds.add("pnr");
