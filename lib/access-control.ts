@@ -82,6 +82,7 @@ export function modulesForProfile(profile: Pick<AuthProfile, "role" | "moduleSco
 }
 
 export function canAccessSection(profile: Pick<AuthProfile, "role" | "moduleScope">, section: SectionId) {
+  if (section === "auditoria-pnr") return modulesForProfile(profile).includes("gestao-pnr");
   return modulesForProfile(profile).includes(section);
 }
 
