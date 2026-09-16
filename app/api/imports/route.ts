@@ -190,6 +190,9 @@ function mapPnr(row: DbRow): PnrRecord {
     routeId: toStringValue(row.route_id),
     driverId: toStringValue(row.driver_id),
     custom: toStringValue(row.custom),
+    billingType: toStringValue(row.billing_type),
+    cancellationType: toStringValue(row.cancellation_type),
+    classificationColumnsPresent: Boolean(row.classification_columns_present),
   };
 }
 
@@ -657,6 +660,9 @@ async function persistBatch(supabase: ServerClient, profile: AuthProfile, batch:
         route_id: row.routeId,
         driver_id: row.driverId,
         custom: row.custom,
+        billing_type: row.billingType,
+        cancellation_type: row.cancellationType,
+        classification_columns_present: row.classificationColumnsPresent,
         original_payload: row,
         ...traceColumns(row),
       };
