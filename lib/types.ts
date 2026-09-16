@@ -60,6 +60,9 @@ export interface PnrRecord extends SourceTrace, OperationalUnitFields {
   routeId: string;
   driverId: string;
   custom: string;
+  billingType: string;
+  cancellationType: string;
+  classificationColumnsPresent: boolean;
 }
 
 export interface RiskRecord extends SourceTrace, OperationalUnitFields {
