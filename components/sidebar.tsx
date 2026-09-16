@@ -30,18 +30,47 @@ export function Sidebar({
       <div className="sidebar__brand"><Brand compact={collapsed} /></div>
       <nav className="sidebar__nav" aria-label="Navegação principal">
         {groups.map((group) => {
-          const groupItems = visibleNavigation.filter((item) => item.group === group);
+          const groupItems = visibleNavigation.filter((item) => item.group === group && !item.parentId);
           if (!groupItems.length) return null;
+
           return (
             <div className="sidebar__group" key={group}>
               {!collapsed && <p>{group}</p>}
               {groupItems.map((item) => {
                 const Icon = item.icon;
+                const children = visibleNavigation.filter((child) => child.parentId === item.id);
+                const childActive = children.some((child) => child.id === active);
+                const itemClass = item.id === active
+                  ? "sidebar__item is-active"
+                  : childActive
+                    ? "sidebar__item is-parent-active"
+                    : "sidebar__item";
+
                 return (
-                  <Link className={item.id === active ? "sidebar__item is-active" : "sidebar__item"} href={item.href} key={item.id} title={collapsed ? item.label : undefined}>
-                    <Icon size={19} strokeWidth={1.9} />
-                    {!collapsed && <span>{item.label}</span>}
-                  </Link>
+                  <div className="sidebar__branch" key={item.id}>
+                    <Link className={itemClass} href={item.href} title={collapsed ? item.label : undefined}>
+                      <Icon size={19} strokeWidth={1.9} />
+                      {!collapsed && <span>{item.label}</span>}
+                    </Link>
+
+                    {!collapsed && children.length ? (
+                      <div className="sidebar__subnav" aria-label={`Subcategorias de ${item.label}`}>
+                        {children.map((child) => {
+                          const ChildIcon = child.icon;
+                          return (
+                            <Link
+                              className={child.id === active ? "sidebar__subitem is-active" : "sidebar__subitem"}
+                              href={child.href}
+                              key={child.id}
+                            >
+                              <ChildIcon size={14} strokeWidth={1.9} />
+                              <span>{child.label}</span>
+                            </Link>
+                          );
+                        })}
+                      </div>
+                    ) : null}
+                  </div>
                 );
               })}
             </div>
