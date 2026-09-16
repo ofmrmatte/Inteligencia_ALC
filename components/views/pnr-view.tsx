@@ -1,18 +1,11 @@
 "use client";
 
 import { useState } from "react";
-import { Bar, BarChart, CartesianGrid, Cell, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
-import { AlertTriangle, BadgeDollarSign, Boxes, CircleCheckBig, ClipboardCheck, Link2, Search, Tags, TimerReset, X } from "lucide-react";
+import { Bar, BarChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
+import { BadgeDollarSign, Boxes, CircleCheckBig, Link2, Search, TimerReset, X } from "lucide-react";
 import { scopeData } from "@/lib/dashboard-scope";
 import { latestPnrByShipment, pnrDecisionRows } from "@/lib/metrics";
 import { cleanText, normalizeText } from "@/lib/normalize";
-import {
-  auditPnrClassification,
-  PNR_BILLING_TYPES,
-  PNR_CANCELLATION_TYPES,
-  pnrClassificationFamily,
-  pnrClassificationLabel,
-} from "@/lib/pnr-classification";
 import { useDashboardStore } from "@/lib/store";
 import { formatCurrency, formatNumber, formatPercent, KpiCard, Panel, PageIntro, StatusBadge } from "@/components/ui";
 import { ChartTooltip, ColumnSelectFilter, NoResults, TableWrap } from "./shared";
@@ -76,43 +69,6 @@ export function PnrView() {
   const matched = filteredRows.filter((row) => prefaturaIds.has(row.shipmentId)).length;
   const divisor = filteredRows.length || 1;
 
-  const auditableRows = filteredRows.filter((row) => row.classificationColumnsPresent);
-  const auditedRows = auditableRows.map((row) => ({
-    row,
-    audit: auditPnrClassification(row),
-    family: pnrClassificationFamily(row.status),
-    label: pnrClassificationLabel(row),
-  }));
-  const classifiedRows = auditedRows.filter((item) => item.audit === "CLASSIFICADO");
-  const pendingRows = auditedRows.filter((item) => item.audit === "PENDENTE");
-  const inconsistentRows = auditedRows.filter((item) => item.audit === "INCONSISTENTE");
-  const classifiedValue = classifiedRows.reduce((sum, item) => sum + item.row.purchaseValue, 0);
-
-  const classificationData = [
-    ...PNR_BILLING_TYPES.map((label) => ({ family: "FATURAMENTO" as const, label })),
-    ...PNR_CANCELLATION_TYPES.map((label) => ({ family: "ANULAÇÃO" as const, label })),
-  ].map((definition) => {
-    const matches = classifiedRows.filter((item) => item.family === definition.family && item.label === definition.label);
-    return {
-      ...definition,
-      cases: matches.length,
-      value: matches.reduce((sum, item) => sum + item.row.purchaseValue, 0),
-      chartLabel: definition.family === "FATURAMENTO"
-        ? definition.label.replace("MLP ALC - LOSS/DISPATCHER", "MLP ALC")
-        : `Anulada · ${definition.label}`,
-    };
-  });
-
-  const baseMap = new Map<string, { base: string; cases: number; value: number }>();
-  classifiedRows.forEach(({ row }) => {
-    const base = row.originStation || row.sigla || "Base não identificada";
-    const current = baseMap.get(base) ?? { base, cases: 0, value: 0 };
-    current.cases += 1;
-    current.value += row.purchaseValue;
-    baseMap.set(base, current);
-  });
-  const baseData = [...baseMap.values()].sort((a, b) => b.value - a.value).slice(0, 8);
-
   const idHeaderSearch = (
     <span style={{ display: "inline-flex", alignItems: "center", gap: 5, marginLeft: 6, verticalAlign: "middle" }}>
       <button
@@ -169,7 +125,6 @@ export function PnrView() {
         <KpiCard label="Procedência" value={formatPercent((completed / divisor) * 100)} detail={`${completed} casos concluídos`} icon={<CircleCheckBig size={19} />} tone="green" />
         <KpiCard label="Conciliados" value={formatPercent((matched / divisor) * 100)} detail={`${matched} IDs na pré-fatura`} icon={<Link2 size={19} />} tone="neutral" />
       </div>
-
       <div className="content-grid content-grid--wide">
         <Panel title="Distribuição por status" subtitle="Casos únicos por tratativa" className="panel--chart">
           <ResponsiveContainer width="100%" height={286}>
@@ -186,87 +141,12 @@ export function PnrView() {
           <div className="status-list">{status.map((item, index) => <div key={item.status}><span className="status-list__rank">{String(index + 1).padStart(2, "0")}</span><div><strong>{item.status}</strong><small>{item.cases} casos</small></div><span className="status-list__value">{formatCurrency(item.value)}</span></div>)}</div>
         </Panel>
       </div>
-
-      <Panel
-        title="Auditoria de Classificação PNR"
-        subtitle={auditableRows.length
-          ? "Quantidade e valores são calculados diretamente dos IDs da PNR importada; as novas colunas servem apenas para classificar cada caso."
-          : "Aguardando uma PNR com as colunas TIPO DE FATURAMENTO e TIPO DE ANULAÇÃO. Até lá, a auditoria permanece zerada."}
-      >
-        <div className="kpi-grid kpi-grid--four" style={{ marginBottom: 14 }}>
-          <KpiCard label="Classificados" value={formatNumber(classifiedRows.length)} detail={auditableRows.length ? `${formatNumber(auditableRows.length)} casos habilitados para auditoria` : "Nenhuma PNR classificada importada"} icon={<ClipboardCheck size={19} />} tone="green" />
-          <KpiCard label="Valor classificado" value={formatCurrency(classifiedValue)} detail="Somado diretamente do valor da PNR" icon={<BadgeDollarSign size={19} />} tone="neutral" />
-          <KpiCard label="Pendentes" value={formatNumber(pendingRows.length)} detail="Status final sem classificação correspondente" icon={<Tags size={19} />} tone="amber" />
-          <KpiCard label="Inconsistências" value={formatNumber(inconsistentRows.length)} detail="Tipo inválido, conflito ou família incompatível" icon={<AlertTriangle size={19} />} tone={inconsistentRows.length ? "red" : "neutral"} />
-        </div>
-
-        <div style={{ display: "grid", gridTemplateColumns: "repeat(5, minmax(0, 1fr))", gap: 10, marginBottom: 14 }}>
-          {classificationData.map((item) => (
-            <div
-              key={`${item.family}-${item.label}`}
-              style={{
-                border: "1px solid #e7e8eb",
-                borderLeft: `3px solid ${item.family === "ANULAÇÃO" ? "#E30613" : "#16845B"}`,
-                borderRadius: 8,
-                padding: "12px 13px",
-                background: "#fff",
-                minHeight: 92,
-              }}
-            >
-              <small style={{ display: "block", color: "#8a8d94", fontSize: 9, fontWeight: 700, textTransform: "uppercase", letterSpacing: ".04em", marginBottom: 5 }}>{item.family}</small>
-              <strong style={{ display: "block", fontSize: 12, lineHeight: 1.25, minHeight: 30 }}>{item.label}</strong>
-              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "end", gap: 8, marginTop: 8 }}>
-                <span style={{ fontSize: 18, fontWeight: 800 }}>{formatNumber(item.cases)}</span>
-                <small style={{ color: "#60636A", fontWeight: 600 }}>{formatCurrency(item.value)}</small>
-              </div>
-            </div>
-          ))}
-        </div>
-
-        <div className="content-grid content-grid--wide">
-          <Panel title="Casos por classificação" subtitle="Faturamento e anulação no mesmo recorte" className="panel--chart">
-            {auditableRows.length ? (
-              <ResponsiveContainer width="100%" height={280}>
-                <BarChart data={classificationData} layout="vertical" margin={{ left: 12, right: 20, top: 6 }}>
-                  <CartesianGrid stroke="#ECEDEF" horizontal={false} />
-                  <XAxis type="number" axisLine={false} tickLine={false} allowDecimals={false} tick={{ fontSize: 10, fill: "#73767d" }} />
-                  <YAxis type="category" dataKey="chartLabel" width={148} axisLine={false} tickLine={false} tick={{ fontSize: 10, fill: "#333" }} />
-                  <Tooltip content={<ChartTooltip />} />
-                  <Bar dataKey="cases" name="Casos" radius={[0, 4, 4, 0]} maxBarSize={22}>
-                    {classificationData.map((item) => <Cell key={`${item.family}-${item.label}`} fill={item.family === "ANULAÇÃO" ? "#E30613" : "#16845B"} />)}
-                  </Bar>
-                </BarChart>
-              </ResponsiveContainer>
-            ) : (
-              <NoResults title="Classificações ainda não disponíveis" detail="Os gráficos serão preenchidos automaticamente quando a próxima PNR vier com as duas colunas de classificação." />
-            )}
-          </Panel>
-
-          <Panel title="Bases com maior impacto classificado" subtitle="Valor somado diretamente dos casos PNR" className="panel--chart">
-            {baseData.length ? (
-              <ResponsiveContainer width="100%" height={280}>
-                <BarChart data={baseData} layout="vertical" margin={{ left: 12, right: 20, top: 6 }}>
-                  <CartesianGrid stroke="#ECEDEF" horizontal={false} />
-                  <XAxis type="number" axisLine={false} tickLine={false} tick={{ fontSize: 10, fill: "#73767d" }} tickFormatter={(number) => `${Math.round(Number(number) / 1000)}k`} />
-                  <YAxis type="category" dataKey="base" width={155} axisLine={false} tickLine={false} tick={{ fontSize: 10, fill: "#333" }} />
-                  <Tooltip content={<ChartTooltip currency />} />
-                  <Bar dataKey="value" name="Valor" fill="#E30613" radius={[0, 4, 4, 0]} maxBarSize={22} />
-                </BarChart>
-              </ResponsiveContainer>
-            ) : (
-              <NoResults title="Nenhuma base classificada ainda" detail="O ranking será criado automaticamente pelos IDs classificados da PNR." />
-            )}
-          </Panel>
-        </div>
-      </Panel>
-
       <Panel title="Monitoramento e tomada de decisão" subtitle="Status, exposição e próxima ação operacional por recorte">
         <TableWrap>
           <thead><tr><th>Status</th><th>Casos</th><th>% do total</th><th className="align-right">Valor exposto</th><th>Prioridade</th><th>Ação sugerida</th></tr></thead>
           <tbody>{decisions.map((row) => <tr className={`decision-row decision-row--${row.tone}`} key={row.status}><td><strong>{pnrStatusLabel(row.status)}</strong></td><td>{formatNumber(row.cases)}</td><td>{formatPercent(row.percentage)}</td><td className="align-right"><strong>{formatCurrency(row.value)}</strong></td><td>{row.priority}</td><td>{row.action}</td></tr>)}</tbody>
         </TableWrap>
       </Panel>
-
       <Panel title="Casos PNR" subtitle="Detalhe rastreável até arquivo, aba e linha" action={<StatusBadge tone="neutral"><TimerReset size={13} /> {filteredRows.length} IDs</StatusBadge>}>
         <TableWrap>
           <thead>
@@ -276,29 +156,11 @@ export function PnrView() {
                 Status
                 <ColumnSelectFilter ariaLabel="Filtrar casos PNR por status" value={statusFilter} options={statusOptions} onChange={setStatusFilter} allLabel="Todos os status" />
               </th>
-              <th>Data</th><th>Base de origem</th><th>XPT</th><th>Motorista</th><th>Rota</th><th>Classificação</th><th>Auditoria</th>
+              <th>Data</th><th>Base de origem</th><th>XPT</th><th>Motorista</th><th>Rota</th>
               <th className="align-right">Valor <ColumnSelectFilter ariaLabel="Ordenar casos PNR por valor" value={valueSort} options={[{ value: "DESC", label: "Maior → menor" }, { value: "ASC", label: "Menor → maior" }]} onChange={setValueSort} allValue="NONE" allLabel="Ordenar" /></th>
             </tr>
           </thead>
-          <tbody>{filteredRows.slice(0, 50).map((row) => {
-            const audit = auditPnrClassification(row);
-            const family = pnrClassificationFamily(row.status);
-            const label = pnrClassificationLabel(row);
-            return (
-              <tr key={`${row.batchId}-${row.shipmentId}`}>
-                <td><strong className="mono">{row.shipmentId}</strong><small className="cell-subtitle">{row.sourceFile}</small></td>
-                <td><StatusBadge tone={/PROCEDENTE|APROVADO/.test(normalizeText(row.status)) ? "green" : /ANALISE|PENDENTE/.test(normalizeText(row.status)) ? "amber" : "neutral"}>{pnrStatusLabel(row.status)}</StatusBadge></td>
-                <td>{row.caseDate ? new Date(`${row.caseDate}T12:00:00`).toLocaleDateString("pt-BR") : "—"}</td>
-                <td><strong>{row.originStation || "—"}</strong></td>
-                <td className="mono">{row.xptCode || "—"}</td>
-                <td className="mono">{row.driverId || "—"}</td>
-                <td className="mono">{row.routeId || "—"}</td>
-                <td>{row.classificationColumnsPresent && family && label ? <><strong>{family}</strong><small className="cell-subtitle">{label}</small></> : "—"}</td>
-                <td>{audit === "CLASSIFICADO" ? <StatusBadge tone="green">Classificado</StatusBadge> : audit === "PENDENTE" ? <StatusBadge tone="amber">Pendente</StatusBadge> : audit === "INCONSISTENTE" ? <StatusBadge tone="red">Inconsistente</StatusBadge> : <span style={{ color: "#9a9da3" }}>—</span>}</td>
-                <td className="align-right"><strong>{formatCurrency(row.purchaseValue)}</strong></td>
-              </tr>
-            );
-          })}</tbody>
+          <tbody>{filteredRows.slice(0, 50).map((row) => <tr key={`${row.batchId}-${row.shipmentId}`}><td><strong className="mono">{row.shipmentId}</strong><small className="cell-subtitle">{row.sourceFile}</small></td><td><StatusBadge tone={/PROCEDENTE|APROVADO/.test(normalizeText(row.status)) ? "green" : /ANALISE|PENDENTE/.test(normalizeText(row.status)) ? "amber" : "neutral"}>{pnrStatusLabel(row.status)}</StatusBadge></td><td>{row.caseDate ? new Date(`${row.caseDate}T12:00:00`).toLocaleDateString("pt-BR") : "—"}</td><td><strong>{row.originStation || "—"}</strong></td><td className="mono">{row.xptCode || "—"}</td><td className="mono">{row.driverId || "—"}</td><td className="mono">{row.routeId || "—"}</td><td className="align-right"><strong>{formatCurrency(row.purchaseValue)}</strong></td></tr>)}</tbody>
         </TableWrap>
         {!filteredRows.length ? <div style={{ padding: 20 }}><NoResults title="Nenhum caso corresponde à busca" detail="Limpe a pesquisa por ID ou altere o filtro de status." /></div> : null}
       </Panel>
