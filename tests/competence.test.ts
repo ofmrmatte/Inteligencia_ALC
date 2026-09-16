@@ -25,4 +25,11 @@ describe("competência canônica", () => {
   it("prefere competência do arquivo à data da rota anterior", () => {
     expect(parseCompetence({ sourceFile: "PRE FATURA 2Q JULHO 26.xlsx", routeDate: "2026-06-18" })?.fortnight).toBe("02Q072026");
   });
+
+  it("corrige ano implausível de arquivo ambíguo usando o ano da data operacional", () => {
+    expect(parseCompetence({
+      sourceFile: "LOGISTICS_PNR - 02q0831.xlsx",
+      routeDate: "2026-08-24",
+    })?.fortnight).toBe("02Q082026");
+  });
 });
