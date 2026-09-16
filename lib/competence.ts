@@ -59,6 +59,19 @@ function buildCompetence(half: number, month: string, year: string): Competence 
   };
 }
 
+function alignImplausibleYearWithRouteDate(competence: Competence | null, routeDate: string | null | undefined) {
+  if (!competence || !routeDate) return competence;
+  const match = /^(\d{4})-\d{2}-\d{2}/.exec(routeDate);
+  if (!match) return competence;
+
+  const routeYear = Number(match[1]);
+  const competenceYear = Number(competence.year);
+  if (!Number.isFinite(routeYear) || !Number.isFinite(competenceYear)) return competence;
+  if (Math.abs(competenceYear - routeYear) <= 1) return competence;
+
+  return buildCompetence(competence.half, competence.month.slice(-2), String(routeYear));
+}
+
 function halfFromText(text: string): 1 | 2 | null {
   const normalized = compactText(text);
   if (/(^|\D)(?:0?1\s*Q|Q\s*0?1|1A\s+QUINZENA|1\s+QUINZENA|PRIMEIRA\s+QUINZENA)(\D|$)/.test(normalized)) return 1;
@@ -140,7 +153,10 @@ export function parseCompetence({
 }): Competence | null {
   const cell = String(value ?? "");
   const directCell = normalizeFortnight(cell);
-  if (directCell) return buildCompetence(directCell.startsWith("01Q") ? 1 : 2, directCell.slice(3, 5), directCell.slice(5));
+  if (directCell) {
+    const competence = buildCompetence(directCell.startsWith("01Q") ? 1 : 2, directCell.slice(3, 5), directCell.slice(5));
+    return alignImplausibleYearWithRouteDate(competence, routeDate);
+  }
 
   const half = halfFromText(cell);
   if (half) {
@@ -153,7 +169,10 @@ export function parseCompetence({
 
   for (const source of [sourceFile, sourceSheet, batchName, confirmed]) {
     const fortnight = normalizeFortnight(source);
-    if (fortnight) return buildCompetence(fortnight.startsWith("01Q") ? 1 : 2, fortnight.slice(3, 5), fortnight.slice(5));
+    if (fortnight) {
+      const competence = buildCompetence(fortnight.startsWith("01Q") ? 1 : 2, fortnight.slice(3, 5), fortnight.slice(5));
+      return alignImplausibleYearWithRouteDate(competence, routeDate);
+    }
   }
 
   if (allowDateFallback) {
