@@ -78,6 +78,18 @@ function fortnightOrder(value: string) {
   return Number(year) * 24 + (Number(month) - 1) * 2 + (half === "02" ? 1 : 0);
 }
 
+function currentFortnightOrder() {
+  const now = new Date();
+  const half = now.getDate() <= 15 ? "01" : "02";
+  const month = String(now.getMonth() + 1).padStart(2, "0");
+  const year = String(now.getFullYear());
+  return fortnightOrder(`${half}Q${month}${year}`);
+}
+
+function eligibleOperationalOrder(order: number, maxOrder: number) {
+  return order !== Number.NEGATIVE_INFINITY && order <= maxOrder;
+}
+
 function inFortnight(fortnight: string, filters: DashboardFilters) {
   if (filters.month !== "Todos" && monthFromFortnight(fortnight) !== filters.month) return false;
   if (filters.fortnight === "Todas") return true;
@@ -163,6 +175,7 @@ function operationalActivity(data: DashboardData): OperationalActivity {
   const driverLastSeen = new Map<string, number>();
   const idByDriverName = driverIdMap(data.drivers);
   const importFortnights = importFortnightByBatch(data.imports);
+  const maxOperationalOrder = currentFortnightOrder();
   let latestOrder = Number.NEGATIVE_INFINITY;
 
   const touchBase = (record: { baseKey: string; sigla: string }, order: number) => {
@@ -176,17 +189,20 @@ function operationalActivity(data: DashboardData): OperationalActivity {
 
   for (const row of data.prefatura) {
     const order = fortnightOrder(recordFortnight(importFortnights, row, row.period, row.routeDate));
+    if (!eligibleOperationalOrder(order, maxOperationalOrder)) continue;
     touchBase(row, order);
     const knownId = idByDriverName.get(normalizeText(row.driverName));
     touchDriver([knownId ? driverKey(knownId) : "", driverNameKey(row.driverName)], order);
   }
   for (const row of data.pnr) {
     const order = fortnightOrder(recordFortnight(importFortnights, row, row.billingPeriod, row.caseDate));
+    if (!eligibleOperationalOrder(order, maxOperationalOrder)) continue;
     touchBase(row, order);
     touchDriver([driverKey(row.driverId)], order);
   }
   for (const row of data.risk) {
     const order = fortnightOrder(recordFortnight(importFortnights, row, undefined, row.failureDate));
+    if (!eligibleOperationalOrder(order, maxOperationalOrder)) continue;
     touchBase(row, order);
     touchDriver([driverKey(row.driverId)], order);
   }
