@@ -18,6 +18,7 @@ import {
 export const SECTION_IDS = [
   "visao-geral",
   "gestao-pnr",
+  "auditoria-pnr",
   "pre-faturamento",
   "gestao-descontos",
   "relatorios-pacotes",
@@ -40,11 +41,13 @@ export interface NavigationItem {
   href: string;
   icon: LucideIcon;
   group: "Análises" | "Controle de dados" | "Administração";
+  parentId?: SectionId;
 }
 
 export const NAVIGATION: NavigationItem[] = [
   { id: "visao-geral", label: "Visão Geral", shortLabel: "Visão geral", href: "/", icon: CircleGauge, group: "Análises" },
   { id: "gestao-pnr", label: "Gestão PNR", shortLabel: "Gestão PNR", href: "/gestao-pnr", icon: Boxes, group: "Análises" },
+  { id: "auditoria-pnr", label: "Auditoria PNR", shortLabel: "Auditoria PNR", href: "/auditoria-pnr", icon: ClipboardCheck, group: "Análises", parentId: "gestao-pnr" },
   { id: "pre-faturamento", label: "Pré-faturamento", shortLabel: "Pré-faturamento", href: "/pre-faturamento", icon: ReceiptText, group: "Análises" },
   { id: "gestao-descontos", label: "Gestão de Descontos", shortLabel: "Descontos", href: "/gestao-descontos", icon: BadgeDollarSign, group: "Análises" },
   { id: "relatorios-pacotes", label: "Relatórios de Pacotes", shortLabel: "Relatórios", href: "/relatorios-pacotes", icon: FileSpreadsheet, group: "Análises" },
@@ -61,6 +64,7 @@ export const NAVIGATION: NavigationItem[] = [
 export const SECTION_META: Record<SectionId, { title: string; eyebrow: string; description: string }> = {
   "visao-geral": { title: "Visão Geral", eyebrow: "Monitoramento executivo", description: "Leitura consolidada de pacotes, descontos, risco e nível de entrega." },
   "gestao-pnr": { title: "Gestão PNR", eyebrow: "Casos e tratativas", description: "Acompanhe status, valores e cruzamentos dos casos PNR por pacote." },
+  "auditoria-pnr": { title: "Auditoria PNR", eyebrow: "Classificação financeira", description: "Audite tipos de faturamento e anulação por ID, com quantidades e valores calculados diretamente da PNR." },
   "pre-faturamento": { title: "Pré-faturamento", eyebrow: "Conferência financeira", description: "Analise descontos SVC, XPT e PNR sem duplicar IDs de pacote." },
   "gestao-descontos": { title: "Gestão de Descontos", eyebrow: "Direcionamento financeiro", description: "Centralize decisões de desconto ou absorção por ID e cruze automaticamente com Pré-fatura e PNR." },
   "relatorios-pacotes": { title: "Relatórios de Pacotes", eyebrow: "Relatórios gerenciais", description: "Gere relatórios ALC de PNR e Pacotes Perdidos por competência, datas e escopo operacional." },
