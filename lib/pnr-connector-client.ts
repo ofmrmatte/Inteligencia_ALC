@@ -1,5 +1,48 @@
 "use client";
 
+import connectorPackage from "@/extension-pnr/package.json";
+
+export const MINIMUM_SUPPORTED_CONNECTOR_VERSION = "1.1.0";
+export const LATEST_CONNECTOR_VERSION = connectorPackage.version;
+export const CONNECTOR_DOWNLOAD_URL = `/downloads/alc-pnr-connector-v${LATEST_CONNECTOR_VERSION}.zip`;
+
+export interface PnrConnectorHandshake {
+  installed: true;
+  version: string;
+  mlTabAvailable: boolean;
+  sessionAvailable: boolean;
+  sessionError?: string;
+}
+
+export type PnrConnectorState = "checking" | "connected" | "outdated" | "unsupported" | "ml-missing" | "expired" | "extension-missing" | "error";
+
+export function compareConnectorVersions(left: string, right: string) {
+  if (!/^\d+\.\d+\.\d+$/.test(left) || !/^\d+\.\d+\.\d+$/.test(right)) {
+    throw new Error("Versão do Conector PNR inválida.");
+  }
+  const a = left.split(".").map(Number);
+  const b = right.split(".").map(Number);
+  if (![...a, ...b].every(Number.isSafeInteger)) throw new Error("Versão do Conector PNR inválida.");
+  for (let index = 0; index < 3; index += 1) {
+    if (a[index] !== b[index]) return a[index] - b[index];
+  }
+  return 0;
+}
+
+export function connectorStateFromHandshake(
+  handshake: PnrConnectorHandshake | null,
+  versions = { minimumSupportedVersion: MINIMUM_SUPPORTED_CONNECTOR_VERSION, latestVersion: LATEST_CONNECTOR_VERSION },
+): PnrConnectorState {
+  if (!handshake?.installed) return "extension-missing";
+  if (typeof handshake.version !== "string" || !/^\d{1,9}\.\d{1,9}\.\d{1,9}$/.test(handshake.version)
+    || compareConnectorVersions(handshake.version, versions.minimumSupportedVersion) < 0) return "unsupported";
+  if (!handshake.mlTabAvailable) return "ml-missing";
+  if (!handshake.sessionAvailable) {
+    return handshake.sessionError === "HTTP_ERROR" || handshake.sessionError === "INVALID_RESPONSE" ? "error" : "expired";
+  }
+  return compareConnectorVersions(handshake.version, versions.latestVersion) < 0 ? "outdated" : "connected";
+}
+
 export type PnrConnectorRequestType = "PING" | "FETCH_PAGE" | "FETCH_TIMELINE";
 export type PnrConnectorErrorCode =
   | "EXTENSION_NOT_FOUND"

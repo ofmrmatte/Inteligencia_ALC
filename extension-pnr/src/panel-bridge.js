@@ -12,7 +12,8 @@ function allowed(origin) {
   return allowedOrigins.has(url.origin) || (url.protocol === "http:" && (url.hostname === "localhost" || url.hostname === "127.0.0.1"));
 }
 
-if (allowed(window.location.origin)) {
+if (allowed(window.location.origin) && !globalThis.__alcPnrBridgeInstalled) {
+  globalThis.__alcPnrBridgeInstalled = true;
   window.addEventListener("message", (event) => {
     if (event.source !== window || event.origin !== window.location.origin) return;
     const message = event.data;

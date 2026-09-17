@@ -1,8 +1,8 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Bar, BarChart, CartesianGrid, Cell, Pie, PieChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
-import { BadgeDollarSign, Ban, Boxes, CircleCheckBig, CloudDownload, History, RefreshCw, Square, XCircle } from "lucide-react";
+import { BadgeDollarSign, Ban, Boxes, CircleCheckBig, CloudDownload, Download, ExternalLink, History, RefreshCw, Square, XCircle } from "lucide-react";
 import { toast } from "sonner";
 import { canManageImports, type AuthProfile } from "@/lib/auth";
 import { normalizeFortnight } from "@/lib/competence";
@@ -12,7 +12,17 @@ import {
   type PnrCaseTimelineEvent,
   runCaseCenterPagination,
 } from "@/lib/pnr-case-center";
-import { connectorStatusFromCode, PnrConnectorError, requestPnrConnector } from "@/lib/pnr-connector-client";
+import {
+  CONNECTOR_DOWNLOAD_URL,
+  LATEST_CONNECTOR_VERSION,
+  compareConnectorVersions,
+  connectorStateFromHandshake,
+  connectorStatusFromCode,
+  PnrConnectorError,
+  requestPnrConnector,
+  type PnrConnectorHandshake,
+  type PnrConnectorState,
+} from "@/lib/pnr-connector-client";
 import { useDashboardStore } from "@/lib/store";
 import type { PnrRecord } from "@/lib/types";
 import { formatCurrency, formatNumber, KpiCard, PageIntro, Panel, StatusBadge } from "@/components/ui";
@@ -47,18 +57,18 @@ interface TimelineConnectorResult {
   detail?: { claimId?: string; preInvoiceNumber?: string; billingPeriod?: string; driverId?: string };
 }
 
-type ConnectionState = "checking" | "connected" | "ml-missing" | "extension-missing" | "expired" | "error";
-
-function connectionPresentation(state: ConnectionState) {
-  if (state === "connected") return { label: "Mercado Livre conectado", tone: "green" as const };
-  if (state === "ml-missing") return { label: "Mercado Livre não detectado", tone: "amber" as const };
-  if (state === "extension-missing") return { label: "Extensão ALC não encontrada", tone: "red" as const };
-  if (state === "expired") return { label: "Sessão Mercado Livre expirada", tone: "amber" as const };
+function connectionPresentation(state: PnrConnectorState) {
+  if (state === "connected") return { label: "Conector Mercado Livre conectado", tone: "green" as const };
+  if (state === "outdated") return { label: "Existe uma versão mais recente do Conector PNR.", tone: "amber" as const };
+  if (state === "unsupported") return { label: "Atualize o Conector PNR para sincronizar novos dados.", tone: "red" as const };
+  if (state === "ml-missing") return { label: "Aba Mercado Livre não encontrada", tone: "amber" as const };
+  if (state === "extension-missing") return { label: "Conector PNR não instalado neste computador.", tone: "red" as const };
+  if (state === "expired") return { label: "Abra ou entre novamente na Bandeja de suporte do Mercado Livre.", tone: "amber" as const };
   if (state === "checking") return { label: "Verificando conexão...", tone: "neutral" as const };
   return { label: "Falha na conexão com o Mercado Livre", tone: "red" as const };
 }
 
-function connectionStateFromError(error: unknown): ConnectionState {
+function connectionStateFromError(error: unknown): PnrConnectorState {
   if (!(error instanceof PnrConnectorError)) return "error";
   if (error.code === "EXTENSION_NOT_FOUND") return "extension-missing";
   if (error.code === "MERCADO_LIVRE_NOT_DETECTED") return "ml-missing";
@@ -112,7 +122,8 @@ export function PnrInboxView({ profile }: { profile: AuthProfile }) {
   const [year, setYear] = useState(now.getFullYear());
   const [month, setMonth] = useState(now.getMonth() + 1);
   const [half, setHalf] = useState<1 | 2>(now.getDate() <= 15 ? 1 : 2);
-  const [connection, setConnection] = useState<ConnectionState>("checking");
+  const [connection, setConnection] = useState<PnrConnectorState>("checking");
+  const [installedVersion, setInstalledVersion] = useState<string | null>(null);
   const [running, setRunning] = useState(false);
   const [phase, setPhase] = useState("Pronto para sincronizar");
   const [progress, setProgress] = useState({ page: 0, totalPages: 0, processed: 0, totalElements: 0, errors: 0 });
@@ -125,6 +136,8 @@ export function PnrInboxView({ profile }: { profile: AuthProfile }) {
   const [detailProgress, setDetailProgress] = useState({ done: 0, total: 0, errors: 0 });
   const cancelRef = useRef(false);
   const detailCancelRef = useRef(false);
+  const connectorCheckRef = useRef(0);
+  const installDialogRef = useRef<HTMLDialogElement>(null);
   const competence = `${year}${String(month).padStart(2, "0")}Q${half}`;
   const fortnight = normalizeFortnight(competence);
   const resumeKey = `alc-pnr-case-center:${competence}`;
@@ -151,19 +164,48 @@ export function PnrInboxView({ profile }: { profile: AuthProfile }) {
   });
   const bases = [...baseMap.values()].sort((a, b) => b.cases - a.cases).slice(0, 8);
   const connectionMeta = connectionPresentation(connection);
+  const syncReady = connection === "connected" || connection === "outdated";
+  const updateAvailable = connection !== "unsupported" && installedVersion !== null
+    && /^\d{1,9}\.\d{1,9}\.\d{1,9}$/.test(installedVersion)
+    && compareConnectorVersions(installedVersion, LATEST_CONNECTOR_VERSION) < 0;
   const years = Array.from({ length: 4 }, (_, index) => now.getFullYear() - 2 + index);
 
   useEffect(() => {
-    setResumeAvailable(Boolean(window.localStorage.getItem(resumeKey)));
+    queueMicrotask(() => setResumeAvailable(Boolean(window.localStorage.getItem(resumeKey))));
   }, [resumeKey]);
 
-  useEffect(() => {
-    let disposed = false;
-    requestPnrConnector<{ connected: boolean }>("PING", {}, 1_500)
-      .then(() => { if (!disposed) setConnection("connected"); })
-      .catch((error) => { if (!disposed) setConnection(connectionStateFromError(error)); });
-    return () => { disposed = true; };
+  const checkConnector = useCallback(async () => {
+    const checkId = ++connectorCheckRef.current;
+    setConnection("checking");
+    try {
+      const handshake = await requestPnrConnector<PnrConnectorHandshake>("PING", {}, 10_000);
+      const state = handshake?.installed ? connectorStateFromHandshake(handshake) : "unsupported";
+      if (checkId === connectorCheckRef.current) {
+        setInstalledVersion(handshake?.installed ? handshake.version : null);
+        setConnection(state);
+      }
+      return state;
+    } catch (error) {
+      const state = error instanceof PnrConnectorError
+        && (error.code === "MERCADO_LIVRE_NOT_DETECTED" || error.code === "MERCADO_LIVRE_SESSION_REQUIRED")
+        ? "unsupported" : connectionStateFromError(error);
+      if (checkId === connectorCheckRef.current) {
+        setInstalledVersion(null);
+        setConnection(state);
+      }
+      return state;
+    }
   }, []);
+
+  useEffect(() => {
+    queueMicrotask(() => void checkConnector());
+    const onFocus = () => { void checkConnector(); };
+    window.addEventListener("focus", onFocus);
+    return () => {
+      connectorCheckRef.current += 1;
+      window.removeEventListener("focus", onFocus);
+    };
+  }, [checkConnector]);
 
   const refreshDashboard = async () => {
     useDashboardStore.setState({ lastSyncedAt: 0 });
@@ -181,8 +223,10 @@ export function PnrInboxView({ profile }: { profile: AuthProfile }) {
     setCompletion(null);
     setPhase("Conectando...");
     try {
-      await requestPnrConnector<{ connected: boolean }>("PING", {}, 2_500);
-      setConnection("connected");
+      const currentConnection = await checkConnector();
+      if (currentConnection !== "connected" && currentConnection !== "outdated") {
+        throw new Error(connectionPresentation(currentConnection).label);
+      }
       const stored = JSON.parse(window.localStorage.getItem(resumeKey) || "null") as ResumeState | null;
       const resume = stored ?? { syncId: crypto.randomUUID(), nextPage: 1, processed: 0, errors: 0 };
       let lastPersisted = resume.processed;
@@ -246,7 +290,6 @@ export function PnrInboxView({ profile }: { profile: AuthProfile }) {
           errors: result.errors,
         });
         await refreshDashboard();
-        void archivePendingDetails(useDashboardStore.getState().data.pnr);
       }
     } catch (error) {
       const state = connectionStateFromError(error);
@@ -315,6 +358,10 @@ export function PnrInboxView({ profile }: { profile: AuthProfile }) {
       if (cached.cached) {
         return;
       }
+      if (!syncReady) {
+        toast.message("Conector necessário apenas para sincronização com o Mercado Livre.");
+        return;
+      }
 
       const remote = await fetchTimelineWithRetry(row.caseId);
       const persisted = await persistTimeline(row.caseId, remote);
@@ -335,13 +382,25 @@ export function PnrInboxView({ profile }: { profile: AuthProfile }) {
         chips={[competence, resumeAvailable ? "retomada disponível" : "sem captura pendente"]}
       />
 
-      <Panel title="Captura do Case Center" subtitle="Selecione a competência e mantenha a Bandeja de suporte aberta no Chrome." action={<StatusBadge tone={connectionMeta.tone}>{connection === "checking" ? <RefreshCw size={12} /> : connection === "connected" ? <CircleCheckBig size={12} /> : <XCircle size={12} />}{connectionMeta.label}</StatusBadge>}>
+      <Panel title="Captura do Case Center" subtitle="Selecione a competência e mantenha a Bandeja de suporte aberta no Chrome." action={<StatusBadge tone={connectionMeta.tone}>{connection === "checking" ? <RefreshCw size={12} /> : syncReady ? <CircleCheckBig size={12} /> : <XCircle size={12} />}{syncReady ? "Pronto" : connection === "checking" ? "Verificando" : "Atenção"}</StatusBadge>}>
         <div className="case-center-control">
+          <div className="case-center-connector">
+            <div>
+              <strong>{connectionMeta.label}</strong>
+              <span>{installedVersion ? `Versão instalada ${installedVersion} · Atual ${LATEST_CONNECTOR_VERSION}` : "Conector necessário apenas para sincronização com o Mercado Livre."}</span>
+              {updateAvailable && connection !== "outdated" ? <span>Existe uma versão mais recente do Conector PNR.</span> : null}
+            </div>
+            <div className="case-center-connector__actions">
+              {connection === "extension-missing" || connection === "unsupported" || updateAvailable ? <button className="secondary-button" type="button" onClick={() => installDialogRef.current?.showModal()}><Download size={15} />{connection === "extension-missing" ? "Instalar Conector PNR" : "Baixar atualização"}</button> : null}
+              {connection === "ml-missing" || connection === "expired" ? <button className="secondary-button" type="button" onClick={() => window.open("https://envios.adminml.com/logistics/case-center/cases", "_blank", "noopener,noreferrer")}><ExternalLink size={15} />Abrir Bandeja Mercado Livre</button> : null}
+              <button className="secondary-button" type="button" disabled={connection === "checking"} onClick={() => void checkConnector()}><RefreshCw size={15} />Verificar novamente</button>
+            </div>
+          </div>
           <div className="case-center-form">
             <label><span>Ano</span><select value={year} onChange={(event) => setYear(Number(event.target.value))}>{years.map((item) => <option key={item}>{item}</option>)}</select></label>
             <label><span>Mês</span><select value={month} onChange={(event) => setMonth(Number(event.target.value))}>{MONTHS.map((label, index) => <option key={label} value={index + 1}>{label}</option>)}</select></label>
             <label><span>Quinzena</span><select value={half} onChange={(event) => setHalf(Number(event.target.value) as 1 | 2)}><option value={1}>Quinzena 1 / Q1</option><option value={2}>Quinzena 2 / Q2</option></select></label>
-            <button className="primary-button" type="button" disabled={running || !canImport} onClick={() => void startSync()}><CloudDownload size={17} />Trazer Dados para Inteligência ALC</button>
+            <button className="primary-button" type="button" disabled={running || !canImport || !syncReady} onClick={() => void startSync()}><CloudDownload size={17} />Trazer Dados para Inteligência ALC</button>
             {running ? <button className="secondary-button" type="button" onClick={() => { cancelRef.current = true; setPhase("Cancelando após a página atual..."); }}><Square size={14} />Cancelar</button> : null}
           </div>
           <div className="case-center-progress" aria-live="polite">
@@ -350,11 +409,30 @@ export function PnrInboxView({ profile }: { profile: AuthProfile }) {
             {completion ? <div className="case-center-result"><span>{formatNumber(completion.received)} encontrados</span><span>{formatNumber(completion.created)} novos</span><span>{formatNumber(completion.updated)} atualizados</span><span>{formatNumber(completion.unchanged)} sem alteração</span><span>{formatNumber(completion.deleted)} excluídos</span><span>{formatNumber(completion.errors)} erros</span></div> : null}
             <div className="case-center-detail-sync">
               <span>{detailProgress.total ? `Detalhes arquivados: ${formatNumber(detailProgress.done)} / ${formatNumber(detailProgress.total)}${detailProgress.errors ? ` · ${formatNumber(detailProgress.errors)} erros` : ""}` : "As timelines pendentes podem ser arquivadas sem bloquear o painel."}</span>
-              {detailRunning ? <button className="secondary-button" type="button" onClick={() => { detailCancelRef.current = true; }}><Square size={14} />Pausar detalhes</button> : <button className="secondary-button" type="button" disabled={!rows.some((row) => row.caseId && row.detailSyncStatus !== "COMPLETE")} onClick={() => void archivePendingDetails()}><History size={15} />Arquivar detalhes pendentes</button>}
+              {detailRunning ? <button className="secondary-button" type="button" onClick={() => { detailCancelRef.current = true; }}><Square size={14} />Pausar detalhes</button> : <button className="secondary-button" type="button" disabled={!syncReady || !rows.some((row) => row.caseId && row.detailSyncStatus !== "COMPLETE")} onClick={() => void archivePendingDetails()}><History size={15} />Arquivar detalhes pendentes</button>}
             </div>
           </div>
         </div>
       </Panel>
+
+      <dialog ref={installDialogRef} className="case-center-install-dialog" onClose={() => void checkConnector()} aria-labelledby="case-center-install-title">
+        <form method="dialog"><button className="icon-button" aria-label="Fechar instruções" title="Fechar instruções" type="submit"><XCircle size={18} /></button></form>
+        <h2 id="case-center-install-title">Instalar Conector PNR</h2>
+        <p>Instale uma única vez neste computador. O histórico permanece disponível sem o conector.</p>
+        {connection === "unsupported" || updateAvailable ? <p>Desative a versão anterior antes de carregar a nova pasta.</p> : null}
+        <ol>
+          <li>Baixe e extraia o Conector PNR.</li>
+          <li>Abra <code>chrome://extensions</code>.</li>
+          <li>Ative &quot;Modo do desenvolvedor&quot;.</li>
+          <li>Clique em &quot;Carregar sem compactação&quot;.</li>
+          <li>Selecione a pasta extraída <code>alc-pnr-connector</code>.</li>
+          <li>Volte ao Inteligência ALC.</li>
+        </ol>
+        <div className="case-center-install-dialog__actions">
+          <a className="primary-button" href={CONNECTOR_DOWNLOAD_URL} download><Download size={16} />Baixar Conector v{LATEST_CONNECTOR_VERSION}</a>
+          <button className="secondary-button" type="button" onClick={() => installDialogRef.current?.close()}><RefreshCw size={15} />Verificar instalação</button>
+        </div>
+      </dialog>
 
       <div className="kpi-grid kpi-grid--six">
         <KpiCard label="Casos encontrados" value={formatNumber(rows.length)} detail={competence} icon={<Boxes size={19} />} />

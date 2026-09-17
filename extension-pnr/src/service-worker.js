@@ -37,14 +37,6 @@ async function execute(tabId, func, args = []) {
   return result?.result;
 }
 
-function probeCaseCenter() {
-  return {
-    authenticated: location.hostname === "envios.adminml.com"
-      && location.pathname.startsWith("/logistics/case-center/cases")
-      && !location.pathname.includes("login"),
-  };
-}
-
 async function fetchCaseCenterPageInTab({ period, dateFrom, dateTo, page, size }) {
   const store = globalThis._n?.ctx?.r?.appProps?.pageProps?.preloadedStore;
   const carrier = store?.RootReducer?.operator?.carrierData?.id
@@ -87,7 +79,11 @@ async function fetchCaseCenterPageInTab({ period, dateFrom, dateTo, page, size }
   if (!contentType.includes("application/json")) {
     return { ok: false, code: "MERCADO_LIVRE_SESSION_REQUIRED", message: "Abra ou entre novamente na Bandeja de suporte do Mercado Livre." };
   }
-  return { ok: true, data: await response.json() };
+  const data = await response.json();
+  if (!Array.isArray(data?.casesList) || !data?.paging) {
+    return { ok: false, code: "INVALID_RESPONSE", message: "Resposta inesperada do Case Center." };
+  }
+  return { ok: true, data };
 }
 
 async function fetchCaseTimelineInTab(caseId) {
@@ -135,14 +131,22 @@ async function fetchCaseTimelineInTab(caseId) {
 
 async function handle(message) {
   const tab = await caseCenterTab();
-  if (!tab?.id) return connectorError("MERCADO_LIVRE_NOT_DETECTED", "Abra a Bandeja de suporte do Mercado Livre.");
-
   if (message.type === "PING") {
-    const probe = await execute(tab.id, probeCaseCenter);
-    return probe?.authenticated
-      ? { ok: true, data: { connected: true } }
-      : connectorError("MERCADO_LIVRE_SESSION_REQUIRED", "Abra ou entre novamente na Bandeja de suporte do Mercado Livre.");
+    const version = chrome.runtime.getManifest().version;
+    if (!tab?.id) return { ok: true, data: { installed: true, version, mlTabAvailable: false, sessionAvailable: false } };
+    const now = new Date();
+    const competence = `${now.getUTCFullYear()}${String(now.getUTCMonth() + 1).padStart(2, "0")}Q${now.getUTCDate() <= 15 ? 1 : 2}`;
+    const result = await execute(tab.id, fetchCaseCenterPageInTab, [{ ...periodDetails(competence), page: 1, size: 1 }]);
+    return { ok: true, data: {
+      installed: true,
+      version,
+      mlTabAvailable: true,
+      sessionAvailable: Boolean(result?.ok),
+      ...(!result?.ok ? { sessionError: result?.code || "INVALID_RESPONSE" } : {}),
+    } };
   }
+
+  if (!tab?.id) return connectorError("MERCADO_LIVRE_NOT_DETECTED", "Abra a Bandeja de suporte do Mercado Livre.");
 
   if (message.type === "FETCH_PAGE") {
     const page = Number(message.payload?.page);
@@ -173,4 +177,15 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     .then(sendResponse)
     .catch((error) => sendResponse(connectorError(error?.code || "INVALID_RESPONSE", error?.message || "Falha na extensão ALC.")));
   return true;
+});
+
+chrome.runtime.onInstalled.addListener(() => {
+  chrome.tabs.query({ url: [
+    "https://inteligenciaalc.vercel.app/*",
+    "https://dashboardfatura.vercel.app/*",
+    "http://localhost/*",
+    "http://127.0.0.1/*",
+  ] }).then((tabs) => Promise.all(tabs.filter((tab) => tab.id).map((tab) => (
+    chrome.scripting.executeScript({ target: { tabId: tab.id }, files: ["panel-bridge.js"] }).catch(() => undefined)
+  )))).catch(() => undefined);
 });

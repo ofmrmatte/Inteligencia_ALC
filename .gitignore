@@ -12,6 +12,7 @@
 .vercel
 /supabase/.temp
 /extension-pnr/dist
+/public/downloads/alc-pnr-connector-v*.zip
 .env*
 !.env.example
 
