@@ -278,4 +278,3 @@ Usar a opcao D para o botao **Trazer Dados para Inteligencia ALC**:
 5. nenhum cookie, CSRF ou token do Mercado Livre sai do navegador.
 
 A implementacao deve comecar somente apos validar `size = 50/100` no DevTools ou aceitar oficialmente 30 como tamanho de pagina, e apos definir quais dados pessoais do detalhe realmente precisam ser persistidos.
-
