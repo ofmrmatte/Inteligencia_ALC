@@ -84,7 +84,8 @@ describe("Case Center PNR", () => {
     expect(caseCenterEventLabel("ATTACHED_RECEIPT", "Nataly")).toBe("Nataly carregou comprovante.");
     expect(caseCenterEventLabel("NOT_ATTACHED_RECEIPT", "Marisa")).toBe("Marisa não carregou comprovante.");
     expect(caseCenterEventLabel("UPDATE_STATUS_TO_ON_REVIEW")).toBe("Foi solicitada uma revisão do caso.");
-    expect(caseCenterEventLabel("UPDATE_STATUS_TO_CLOSED_NOT_BILLED")).toBe("O caso foi revisado e anulado.");
+    expect(caseCenterEventLabel("UPDATE_STATUS_TO_CLOSED_NOT_BILLED")).toBe("O caso foi encerrado pelo cliente e anulado.");
+    expect(caseCenterEventLabel("UPDATE_STATUS_TO_CLOSED_NOT_BILLED", "", "reviewed")).toBe("O caso foi revisado e anulado.");
     expect(caseCenterEventLabel("UNMAPPED_EVENT")).toBe("Atualização do caso.");
   });
 

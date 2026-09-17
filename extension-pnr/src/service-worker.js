@@ -218,7 +218,9 @@ async function fetchCaseTimelineInTab(caseId) {
         id: event?.id,
         event_type: event?.event_type,
         date_created: event?.date_created,
-        created_by: event?.created_by?.name ? { name: event.created_by.name } : undefined,
+        created_by: event?.created_by?.name || event?.created_by?.user_id
+          ? { ...(event.created_by.name ? { name: event.created_by.name } : {}), ...(event.created_by.user_id != null ? { user_id: safeText(event.created_by.user_id) } : {}) }
+          : undefined,
       })) : [],
       detail: {
         claimId: safeText(detail?.claimId ?? detail?.claim_id ?? caseState?.pnrClaim?.claimId),

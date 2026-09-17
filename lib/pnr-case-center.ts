@@ -47,6 +47,7 @@ export interface PnrCaseTimelineEvent {
   dateCreated: string;
   label: string;
   actorName?: string;
+  actorUserId?: string;
 }
 
 export function parseCaseCenterCompetence(value: string): CaseCenterCompetence | null {
@@ -110,7 +111,9 @@ export function caseCenterEventLabel(eventType: string, actorName = "", reviewed
   const labels: Record<string, string> = {
     CREATE_CASE_BY_CONSUMER: "O caso foi criado.",
     UPDATE_STATUS_TO_BILL: "O caso foi revisado e alterado para o status Com penalidade.",
-    UPDATE_STATUS_TO_CLOSED_NOT_BILLED: "O caso foi revisado e anulado.",
+    UPDATE_STATUS_TO_CLOSED_NOT_BILLED: reviewedStatus.toLowerCase() === "reviewed"
+      ? "O caso foi revisado e anulado."
+      : "O caso foi encerrado pelo cliente e anulado.",
     UPDATE_CASE_BILLED: "Envio para faturamento registrado.",
   };
   return labels[eventType] ?? "Atualização do caso.";

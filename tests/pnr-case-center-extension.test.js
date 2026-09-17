@@ -56,11 +56,11 @@ describe("normalizador da extensão PNR", () => {
         id: 10,
         event_type: "UPDATE_STATUS_TO_BILL",
         date_created: "2026-08-05T14:00:00.000Z",
-        created_by: { name: "Operação" },
+        created_by: { name: "Operação", user_id: 2044259 },
       }] } } } },
     };
     const html = `<script>_n.ctx.r=${JSON.stringify(state)};_n.ctx.r.assets=[]</script>`;
-    expect(parseCaseTimelineHtml(html)[0]).toMatchObject({ eventId: "10", label: "O caso foi revisado e alterado para o status Com penalidade." });
+    expect(parseCaseTimelineHtml(html)[0]).toMatchObject({ eventId: "10", actorUserId: "2044259", label: "O caso foi revisado e alterado para o status Com penalidade." });
     expect(() => parseCaseTimelineHtml("<html></html>")).toThrow("não encontrado");
   });
 

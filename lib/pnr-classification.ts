@@ -17,6 +17,24 @@ export type PnrCancellationType = (typeof PNR_CANCELLATION_TYPES)[number];
 export type PnrClassificationFamily = "FATURAMENTO" | "ANULAÇÃO";
 export type PnrClassificationAuditStatus = "CLASSIFICADO" | "PENDENTE" | "INCONSISTENTE" | "NAO_APLICAVEL";
 
+export interface PnrCaseCenterClassificationEvent {
+  eventType: string;
+  dateCreated: string;
+  actorName?: string;
+  actorUserId?: string;
+}
+
+export interface PnrFinancialClassification {
+  audit: PnrClassificationAuditStatus;
+  family: PnrClassificationFamily | null;
+  label: PnrBillingType | PnrCancellationType | "";
+  source: "CASE_CENTER_DERIVED";
+}
+
+const LOSS_DISPATCHER_EVENT_TYPES = new Set(["NOT_ATTACHED_RECEIPT"]);
+const REVIEW_EVENT_TYPES = new Set(["UPDATE_STATUS_TO_ON_REVIEW", "UPDATE_STATUS_TO_IN_PROGRESS_ON_REVIEW"]);
+const BILLED_CLOSURE_EVENT_TYPES = new Set(["UPDATE_STATUS_TO_CLOSED_BILLED", "UPDATE_CASE_BILLED"]);
+
 function canonicalBillingType(value: unknown): PnrBillingType | null {
   const normalized = normalizeText(value);
   if (!normalized) return null;
@@ -52,19 +70,56 @@ export function isValidPnrCancellationType(value: string) {
   return canonicalCancellationType(value) !== null;
 }
 
-function caseCenterClassification(row: PnrRecord) {
+function pendingCaseCenterClassification(): PnrFinancialClassification {
+  return { audit: "PENDENTE", family: null, label: "", source: "CASE_CENTER_DERIVED" };
+}
+
+function classifiedCaseCenterClassification(family: PnrClassificationFamily, label: PnrBillingType | PnrCancellationType): PnrFinancialClassification {
+  return { audit: "CLASSIFICADO", family, label, source: "CASE_CENTER_DERIVED" };
+}
+
+function hasReviewEvent(events: PnrCaseCenterClassificationEvent[]) {
+  return events.some((event) => REVIEW_EVENT_TYPES.has(event.eventType));
+}
+
+export function isLossDispatcherBilling(row: Pick<PnrRecord, "subStatus">, events: PnrCaseCenterClassificationEvent[]) {
+  if (cleanText(row.subStatus).toUpperCase() !== "BILLED") return false;
+  const manualEvent = events.find((event) => LOSS_DISPATCHER_EVENT_TYPES.has(event.eventType)
+    && Boolean(cleanText(event.actorUserId) || cleanText(event.actorName)));
+  if (!manualEvent) return false;
+  const manualAt = new Date(manualEvent.dateCreated).getTime();
+  return events.some((event) => BILLED_CLOSURE_EVENT_TYPES.has(event.eventType)
+    && Number.isFinite(manualAt)
+    && new Date(event.dateCreated).getTime() >= manualAt);
+}
+
+export function derivePnrFinancialClassification(
+  row: Pick<PnrRecord, "subStatus" | "reviewedStatus" | "detailSyncStatus">,
+  events: PnrCaseCenterClassificationEvent[],
+): PnrFinancialClassification {
   const subStatus = cleanText(row.subStatus).toUpperCase();
   const reviewedStatus = cleanText(row.reviewedStatus).toLowerCase();
-  if (subStatus === "BILLED" && reviewedStatus === "reviewed") {
-    return { audit: "CLASSIFICADO" as const, family: "FATURAMENTO" as const, label: "REVISADA MELI" };
+  if (!(["BILLED", "NOT_BILLED"] as string[]).includes(subStatus) || row.detailSyncStatus !== "COMPLETE" || events.length === 0) {
+    return pendingCaseCenterClassification();
   }
-  if (subStatus === "BILLED" && reviewedStatus === "not_reviewed") {
-    return { audit: "CLASSIFICADO" as const, family: "FATURAMENTO" as const, label: "AUTOMÁTICA MELI" };
+  if (subStatus === "BILLED") {
+    if (isLossDispatcherBilling(row, events)) return classifiedCaseCenterClassification("FATURAMENTO", "MLP ALC - LOSS/DISPATCHER");
+    if (reviewedStatus === "reviewed" || hasReviewEvent(events)) return classifiedCaseCenterClassification("FATURAMENTO", "REVISADA MELI");
+    if (reviewedStatus === "not_reviewed" || reviewedStatus === "") return classifiedCaseCenterClassification("FATURAMENTO", "AUTOMÁTICA MELI");
+    return pendingCaseCenterClassification();
   }
-  if (subStatus === "NOT_BILLED" && reviewedStatus === "reviewed") {
-    return { audit: "CLASSIFICADO" as const, family: "ANULAÇÃO" as const, label: "REVISADA MELI" };
-  }
-  return { audit: "PENDENTE" as const, family: null, label: "" };
+  if (reviewedStatus === "reviewed" || hasReviewEvent(events)) return classifiedCaseCenterClassification("ANULAÇÃO", "REVISADA MELI");
+  if (reviewedStatus === "not_reviewed" || reviewedStatus === "") return classifiedCaseCenterClassification("ANULAÇÃO", "TONY");
+  return pendingCaseCenterClassification();
+}
+
+function caseCenterClassification(row: PnrRecord) {
+  const subStatus = cleanText(row.subStatus).toUpperCase();
+  const billing = canonicalBillingType(row.billingType);
+  const cancellation = canonicalCancellationType(row.cancellationType);
+  if (subStatus === "BILLED" && billing) return classifiedCaseCenterClassification("FATURAMENTO", billing);
+  if (subStatus === "NOT_BILLED" && cancellation) return classifiedCaseCenterClassification("ANULAÇÃO", cancellation);
+  return derivePnrFinancialClassification(row, []);
 }
 
 export function pnrClassificationFamily(value: string | PnrRecord): PnrClassificationFamily | null {

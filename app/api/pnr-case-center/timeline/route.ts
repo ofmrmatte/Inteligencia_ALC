@@ -30,6 +30,7 @@ const timelineSchema = z.object({
     eventType: z.string().trim().min(1).max(100),
     dateCreated: z.string().datetime({ offset: true }),
     actorName: z.string().trim().max(180).optional(),
+    actorUserId: z.string().trim().max(80).regex(/^[A-Za-z0-9._:-]+$/).optional(),
   }).strict()).max(200),
 }).strict().superRefine((value, context) => {
   const uniqueEventCount = new Set(value.events.map((event) => event.eventId)).size;
@@ -86,7 +87,7 @@ export async function GET(request: Request) {
     const { admin, record } = await authorizedCase(parsed.data);
     const { data, error } = await admin
       .from("pnr_case_events")
-      .select("event_id,event_type,date_created,operational_label,actor_name,cached_at")
+      .select("event_id,event_type,date_created,operational_label,actor_name,actor_user_id,cached_at")
       .eq("case_id", parsed.data)
       .order("date_created", { ascending: true })
       .order("event_id", { ascending: true });
@@ -102,6 +103,7 @@ export async function GET(request: Request) {
         dateCreated: event.date_created,
         label: caseCenterEventLabel(event.event_type, event.actor_name || "", record.reviewed_status || ""),
         actorName: event.actor_name || undefined,
+        actorUserId: event.actor_user_id || undefined,
       })),
     });
   } catch (error) {
@@ -131,7 +133,7 @@ export async function POST(request: Request) {
     if (eventIds.length) {
       const { data, error } = await admin
         .from("pnr_case_events")
-        .select("event_id,actor_name,first_captured_at")
+        .select("event_id,actor_name,actor_user_id,first_captured_at")
         .eq("case_id", parsed.data.caseId)
         .in("event_id", eventIds);
       if (error) throw new Error(`pnr_case_events: ${error.message}`);
@@ -144,6 +146,7 @@ export async function POST(request: Request) {
       date_created: event.dateCreated,
       operational_label: caseCenterEventLabel(event.eventType, event.actorName, record.reviewed_status || ""),
       actor_name: event.actorName || String(existingEvents.get(event.eventId)?.actor_name || "") || null,
+      actor_user_id: event.actorUserId || String(existingEvents.get(event.eventId)?.actor_user_id || "") || null,
       cached_by: profile.id,
       first_captured_at: String(existingEvents.get(event.eventId)?.first_captured_at || now),
       last_captured_at: now,
@@ -193,7 +196,7 @@ export async function POST(request: Request) {
 
     const { data: historicalEvents, error: historyError } = await admin
       .from("pnr_case_events")
-      .select("event_id,event_type,date_created,operational_label,actor_name")
+      .select("event_id,event_type,date_created,operational_label,actor_name,actor_user_id")
       .eq("case_id", parsed.data.caseId)
       .order("date_created", { ascending: true })
       .order("event_id", { ascending: true });
@@ -208,6 +211,7 @@ export async function POST(request: Request) {
         dateCreated: event.date_created,
         label: caseCenterEventLabel(event.event_type, event.actor_name || "", record.reviewed_status || ""),
         actorName: event.actor_name || undefined,
+        actorUserId: event.actor_user_id || undefined,
       })),
     });
   } catch (error) {

@@ -92,11 +92,12 @@ async function persistTimeline(caseId: string, result?: TimelineConnectorResult,
       status,
       detail: result?.detail,
       sourceEventCount: result?.sourceEventCount,
-      events: (result?.events ?? []).map(({ eventId, eventType, dateCreated, actorName }) => ({
+      events: (result?.events ?? []).map(({ eventId, eventType, dateCreated, actorName, actorUserId }) => ({
         eventId,
         eventType,
         dateCreated,
         ...(actorName ? { actorName } : {}),
+        ...(actorUserId ? { actorUserId } : {}),
       })),
     }),
   });

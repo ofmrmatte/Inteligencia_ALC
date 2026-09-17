@@ -98,7 +98,7 @@ export function eventLabel(eventType, actorName = "") {
     CREATE_CASE_BY_CONSUMER: "O caso foi criado.",
     UPDATE_STATUS_TO_BILL: "O caso foi revisado e alterado para o status Com penalidade.",
     UPDATE_STATUS_TO_CLOSED_BILLED: "O caso foi revisado e enviado para faturamento.",
-    UPDATE_STATUS_TO_CLOSED_NOT_BILLED: "O caso foi revisado e anulado.",
+    UPDATE_STATUS_TO_CLOSED_NOT_BILLED: "O caso foi encerrado e anulado.",
     UPDATE_CASE_BILLED: "Envio para faturamento registrado.",
   }[eventType] ?? "Atualização do caso.";
 }
@@ -121,6 +121,7 @@ export function normalizeCaseTimelineEvents(events) {
     const date = new Date(rawDate);
     if (!sourceEventId || !eventType || !Number.isFinite(date.getTime())) return [];
     const actorName = text(event?.created_by?.name).trim();
+    const actorUserId = text(event?.created_by?.user_id).trim();
     return [{
       sourceEventId,
       sourceIndex,
@@ -128,6 +129,7 @@ export function normalizeCaseTimelineEvents(events) {
       dateCreated: date.toISOString(),
       label: eventLabel(eventType, actorName),
       ...(actorName ? { actorName } : {}),
+      ...(actorUserId ? { actorUserId } : {}),
     }];
   });
   const idCounts = new Map();
@@ -136,8 +138,8 @@ export function normalizeCaseTimelineEvents(events) {
   return normalized
     .sort((left, right) => left.dateCreated.localeCompare(right.dateCreated) || left.sourceIndex - right.sourceIndex)
     .map((normalizedEvent) => {
-      const { sourceEventId, eventType, dateCreated, label, actorName } = normalizedEvent;
-      const event = { eventType, dateCreated, label, ...(actorName ? { actorName } : {}) };
+      const { sourceEventId, eventType, dateCreated, label, actorName, actorUserId } = normalizedEvent;
+      const event = { eventType, dateCreated, label, ...(actorName ? { actorName } : {}), ...(actorUserId ? { actorUserId } : {}) };
       if (sourceEventId !== "0" && idCounts.get(sourceEventId) === 1) return { eventId: sourceEventId, ...event };
       const fingerprint = `${sourceEventId}|${event.eventType}|${event.dateCreated}|${event.actorName ?? ""}`;
       const occurrence = (fingerprints.get(fingerprint) ?? 0) + 1;
