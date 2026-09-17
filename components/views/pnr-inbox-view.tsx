@@ -45,6 +45,7 @@ interface CompletionState {
   received: number;
   persisted: number;
   created: number;
+  reconciled: number;
   updated: number;
   unchanged: number;
   deleted: number;
@@ -53,6 +54,7 @@ interface CompletionState {
 
 interface TimelineConnectorResult {
   caseId: string;
+  sourceEventCount: number;
   events: PnrCaseTimelineEvent[];
   detail?: { claimId?: string; preInvoiceNumber?: string; billingPeriod?: string; driverId?: string };
 }
@@ -89,6 +91,7 @@ async function persistTimeline(caseId: string, result?: TimelineConnectorResult,
       caseId,
       status,
       detail: result?.detail,
+      sourceEventCount: result?.sourceEventCount,
       events: (result?.events ?? []).map(({ eventId, eventType, dateCreated, actorName }) => ({
         eventId,
         eventType,
@@ -123,6 +126,7 @@ export function PnrInboxView({ profile }: { profile: AuthProfile }) {
   const [month, setMonth] = useState(now.getMonth() + 1);
   const [half, setHalf] = useState<1 | 2>(now.getDate() <= 15 ? 1 : 2);
   const [connection, setConnection] = useState<PnrConnectorState>("checking");
+  const [connectionMessage, setConnectionMessage] = useState<string | null>(null);
   const [installedVersion, setInstalledVersion] = useState<string | null>(null);
   const [running, setRunning] = useState(false);
   const [phase, setPhase] = useState("Pronto para sincronizar");
@@ -177,12 +181,14 @@ export function PnrInboxView({ profile }: { profile: AuthProfile }) {
   const checkConnector = useCallback(async () => {
     const checkId = ++connectorCheckRef.current;
     setConnection("checking");
+    setConnectionMessage(null);
     try {
-      const handshake = await requestPnrConnector<PnrConnectorHandshake>("PING", {}, 10_000);
+      const handshake = await requestPnrConnector<PnrConnectorHandshake>("PING", { competence }, 10_000);
       const state = handshake?.installed ? connectorStateFromHandshake(handshake) : "unsupported";
       if (checkId === connectorCheckRef.current) {
         setInstalledVersion(handshake?.installed ? handshake.version : null);
         setConnection(state);
+        setConnectionMessage(state === "error" || state === "expired" ? handshake?.sessionMessage || null : null);
       }
       return state;
     } catch (error) {
@@ -192,10 +198,11 @@ export function PnrInboxView({ profile }: { profile: AuthProfile }) {
       if (checkId === connectorCheckRef.current) {
         setInstalledVersion(null);
         setConnection(state);
+        setConnectionMessage(error instanceof Error ? error.message : null);
       }
       return state;
     }
-  }, []);
+  }, [competence]);
 
   useEffect(() => {
     queueMicrotask(() => void checkConnector());
@@ -210,6 +217,20 @@ export function PnrInboxView({ profile }: { profile: AuthProfile }) {
   const refreshDashboard = async () => {
     useDashboardStore.setState({ lastSyncedAt: 0 });
     await hydrate(cacheOwnerId, true);
+  };
+
+  const openCaseCenter = async () => {
+    setConnection("checking");
+    setConnectionMessage(null);
+    try {
+      await requestPnrConnector("OPEN_CASE_CENTER", { competence }, 30_000);
+      await checkConnector();
+    } catch (error) {
+      const state = connectionStateFromError(error);
+      setConnection(state);
+      setConnectionMessage(error instanceof Error ? error.message : null);
+      toast.error(error instanceof Error ? error.message : "Falha ao abrir a Bandeja Mercado Livre.");
+    }
   };
 
   const startSync = async () => {
@@ -231,7 +252,7 @@ export function PnrInboxView({ profile }: { profile: AuthProfile }) {
       const resume = stored ?? { syncId: crypto.randomUUID(), nextPage: 1, processed: 0, errors: 0 };
       let lastPersisted = resume.processed;
       let totalFound = 0;
-      let lastCounts = { newCount: 0, updatedCount: 0, unchangedCount: 0, deletedCount: 0 };
+      let lastCounts = { newCount: 0, reconciledCount: 0, updatedCount: 0, unchangedCount: 0, deletedCount: 0 };
 
       const result = await runCaseCenterPagination({
         startPage: resume.nextPage,
@@ -259,7 +280,7 @@ export function PnrInboxView({ profile }: { profile: AuthProfile }) {
             }),
           });
           if (!response.ok) throw new Error(await readError(response, "Falha ao persistir casos PNR."));
-          const body = await response.json() as { persisted: number; newCount: number; updatedCount: number; unchangedCount: number; deletedCount: number };
+          const body = await response.json() as { persisted: number; newCount: number; reconciledCount: number; updatedCount: number; unchangedCount: number; deletedCount: number };
           lastPersisted = body.persisted;
           totalFound = pageResult.totalElements;
           lastCounts = body;
@@ -284,6 +305,7 @@ export function PnrInboxView({ profile }: { profile: AuthProfile }) {
           received: totalFound || result.processed,
           persisted: lastPersisted,
           created: lastCounts.newCount,
+          reconciled: lastCounts.reconciledCount,
           updated: lastCounts.updatedCount,
           unchanged: lastCounts.unchangedCount,
           deleted: lastCounts.deletedCount,
@@ -386,13 +408,13 @@ export function PnrInboxView({ profile }: { profile: AuthProfile }) {
         <div className="case-center-control">
           <div className="case-center-connector">
             <div>
-              <strong>{connectionMeta.label}</strong>
+              <strong>{connectionMessage || connectionMeta.label}</strong>
               <span>{installedVersion ? `Versão instalada ${installedVersion} · Atual ${LATEST_CONNECTOR_VERSION}` : "Conector necessário apenas para sincronização com o Mercado Livre."}</span>
               {updateAvailable && connection !== "outdated" ? <span>Existe uma versão mais recente do Conector PNR.</span> : null}
             </div>
             <div className="case-center-connector__actions">
               {connection === "extension-missing" || connection === "unsupported" || updateAvailable ? <button className="secondary-button" type="button" onClick={() => installDialogRef.current?.showModal()}><Download size={15} />{connection === "extension-missing" ? "Instalar Conector PNR" : "Baixar atualização"}</button> : null}
-              {connection === "ml-missing" || connection === "expired" ? <button className="secondary-button" type="button" onClick={() => window.open("https://envios.adminml.com/logistics/case-center/cases", "_blank", "noopener,noreferrer")}><ExternalLink size={15} />Abrir Bandeja Mercado Livre</button> : null}
+              {connection === "ml-missing" || connection === "expired" ? <button className="secondary-button" type="button" onClick={() => void openCaseCenter()}><ExternalLink size={15} />Abrir Bandeja Mercado Livre</button> : null}
               <button className="secondary-button" type="button" disabled={connection === "checking"} onClick={() => void checkConnector()}><RefreshCw size={15} />Verificar novamente</button>
             </div>
           </div>
@@ -406,7 +428,7 @@ export function PnrInboxView({ profile }: { profile: AuthProfile }) {
           <div className="case-center-progress" aria-live="polite">
             <div><strong>{phase}</strong><span>{progress.page ? `Página ${progress.page}${progress.totalPages ? ` de ${progress.totalPages}` : ""}` : competence}</span></div>
             <div className="case-center-progress__track"><i style={{ width: `${progress.totalElements ? Math.min(100, (progress.processed / progress.totalElements) * 100) : 0}%` }} /></div>
-            {completion ? <div className="case-center-result"><span>{formatNumber(completion.received)} encontrados</span><span>{formatNumber(completion.created)} novos</span><span>{formatNumber(completion.updated)} atualizados</span><span>{formatNumber(completion.unchanged)} sem alteração</span><span>{formatNumber(completion.deleted)} excluídos</span><span>{formatNumber(completion.errors)} erros</span></div> : null}
+            {completion ? <div className="case-center-result"><span>{formatNumber(completion.received)} encontrados</span><span>{formatNumber(completion.reconciled)} reconciliados com histórico</span><span>{formatNumber(completion.created)} novos</span><span>{formatNumber(completion.updated)} atualizados</span><span>{formatNumber(completion.unchanged)} sem alteração</span><span>{formatNumber(completion.deleted)} excluídos</span><span>{formatNumber(completion.errors)} erros</span></div> : null}
             <div className="case-center-detail-sync">
               <span>{detailProgress.total ? `Detalhes arquivados: ${formatNumber(detailProgress.done)} / ${formatNumber(detailProgress.total)}${detailProgress.errors ? ` · ${formatNumber(detailProgress.errors)} erros` : ""}` : "As timelines pendentes podem ser arquivadas sem bloquear o painel."}</span>
               {detailRunning ? <button className="secondary-button" type="button" onClick={() => { detailCancelRef.current = true; }}><Square size={14} />Pausar detalhes</button> : <button className="secondary-button" type="button" disabled={!syncReady || !rows.some((row) => row.caseId && row.detailSyncStatus !== "COMPLETE")} onClick={() => void archivePendingDetails()}><History size={15} />Arquivar detalhes pendentes</button>}
@@ -436,10 +458,10 @@ export function PnrInboxView({ profile }: { profile: AuthProfile }) {
 
       <div className="kpi-grid kpi-grid--six">
         <KpiCard label="Casos encontrados" value={formatNumber(rows.length)} detail={competence} icon={<Boxes size={19} />} />
-        <KpiCard label="Enviados para faturamento" value={formatNumber(billed)} detail="BILLED" icon={<CircleCheckBig size={19} />} tone="green" />
-        <KpiCard label="Anulados" value={formatNumber(cancelled)} detail="NOT_BILLED" icon={<Ban size={19} />} tone="red" />
-        <KpiCard label="Revisados" value={formatNumber(reviewed)} detail="reviewed" icon={<CircleCheckBig size={19} />} tone="green" />
-        <KpiCard label="Sem revisão" value={formatNumber(notReviewed)} detail="not_reviewed" icon={<History size={19} />} tone="amber" />
+        <KpiCard label="Enviados para faturamento" value={formatNumber(billed)} detail="Fechamento concluído" icon={<CircleCheckBig size={19} />} tone="green" />
+        <KpiCard label="Anulados" value={formatNumber(cancelled)} detail="Fechamento sem faturamento" icon={<Ban size={19} />} tone="red" />
+        <KpiCard label="Revisados" value={formatNumber(reviewed)} detail="Com revisão registrada" icon={<CircleCheckBig size={19} />} tone="green" />
+        <KpiCard label="Sem revisão" value={formatNumber(notReviewed)} detail="Sem revisão registrada" icon={<History size={19} />} tone="amber" />
         <KpiCard label="Valor total" value={formatCurrency(totalValue)} detail="Soma dos casos atuais" icon={<BadgeDollarSign size={19} />} tone="neutral" />
       </div>
 
@@ -461,7 +483,7 @@ export function PnrInboxView({ profile }: { profile: AuthProfile }) {
           {rows.length ? <div className="case-center-case-list">{rows.slice(0, 30).map((row) => <button type="button" key={row.caseId || `${row.batchId}-${row.shipmentId}`} onClick={() => void loadTimeline(row)} className={selectedCase?.caseId === row.caseId ? "is-active" : ""}><span><strong className="mono">{row.shipmentId}</strong><small>Caso {row.caseId || "—"} · {row.originStation || "Sem base"}</small></span><span><b>{row.status}</b><small>{caseCenterReviewLabel(row.reviewedStatus || "")} · {row.detailSyncStatus === "COMPLETE" ? "timeline arquivada" : "detalhes pendentes"}</small></span><strong>{formatCurrency(row.purchaseValue)}</strong></button>)}</div> : <NoResults title="Nenhum caso importado" detail="Use o botão de captura para trazer a competência selecionada." />}
         </Panel>
         <Panel title="Timeline do caso" subtitle={selectedCase ? `Caso ${selectedCase.caseId}` : "Selecione um caso ao lado"}>
-          {timelineLoading ? <div className="case-center-timeline-loading"><RefreshCw size={17} />Consultando timeline...</div> : timeline.length ? <ol className="case-center-timeline">{timeline.map((event) => <li key={event.eventId}><time>{new Date(event.dateCreated).toLocaleString("pt-BR")}</time><strong>{event.label}</strong>{event.actorName ? <small>{event.actorName}</small> : null}</li>)}</ol> : <NoResults title={selectedCase ? "Timeline ainda não disponível" : "Nenhum caso selecionado"} />}
+          {timelineLoading ? <div className="case-center-timeline-loading"><RefreshCw size={17} />Consultando timeline...</div> : timeline.length ? <ol className="case-center-timeline">{timeline.map((event) => <li key={event.eventId}><time>{new Date(event.dateCreated).toLocaleString("pt-BR")}</time><strong>{event.label}</strong>{event.actorName && !event.label.startsWith(event.actorName) ? <small>{event.actorName}</small> : null}</li>)}</ol> : <NoResults title={selectedCase ? "Timeline ainda não disponível" : "Nenhum caso selecionado"} />}
         </Panel>
       </div>
     </div>

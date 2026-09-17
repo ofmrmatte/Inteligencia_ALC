@@ -3,6 +3,8 @@ import {
   auditPnrClassification,
   normalizePnrBillingType,
   normalizePnrCancellationType,
+  pnrClassificationFamily,
+  pnrClassificationLabel,
 } from "@/lib/pnr-classification";
 import type { PnrRecord } from "@/lib/types";
 
@@ -54,5 +56,33 @@ describe("auditoria de classificação PNR", () => {
 
   it("marca conflito entre as duas famílias como inconsistência", () => {
     expect(auditPnrClassification(row({ billingType: "REVISADA MELI", cancellationType: "TONY" }))).toBe("INCONSISTENTE");
+  });
+
+  it.each([
+    ["BILLED", "reviewed", "FATURAMENTO", "REVISADA MELI"],
+    ["BILLED", "not_reviewed", "FATURAMENTO", "AUTOMÁTICA MELI"],
+    ["NOT_BILLED", "reviewed", "ANULAÇÃO", "REVISADA MELI"],
+  ])("deriva a classificação comprovada do Case Center", (subStatus, reviewedStatus, family, label) => {
+    const item = row({ sourceSystem: "case_center", classificationColumnsPresent: false, subStatus, reviewedStatus });
+    expect(auditPnrClassification(item)).toBe("CLASSIFICADO");
+    expect(pnrClassificationFamily(item)).toBe(family);
+    expect(pnrClassificationLabel(item)).toBe(label);
+  });
+
+  it("mantém casos abertos e combinações não comprovadas como pendentes", () => {
+    expect(auditPnrClassification(row({
+      sourceSystem: "case_center",
+      classificationColumnsPresent: false,
+      mainStatus: "IN_PROGRESS",
+      subStatus: "ON_REVIEW",
+      reviewedStatus: "",
+    }))).toBe("PENDENTE");
+    expect(auditPnrClassification(row({
+      sourceSystem: "case_center",
+      classificationColumnsPresent: false,
+      mainStatus: "CLOSED",
+      subStatus: "NOT_BILLED",
+      reviewedStatus: "not_reviewed",
+    }))).toBe("PENDENTE");
   });
 });

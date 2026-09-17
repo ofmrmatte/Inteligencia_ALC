@@ -21,13 +21,13 @@ export function PnrAuditView() {
   const scoped = scopeData(data, filters);
   const rows = latestPnrByShipment(scoped.pnr, data.imports);
 
-  const auditableRows = rows.filter((row) => row.classificationColumnsPresent);
-  const auditedRows = auditableRows.map((row) => ({
+  const auditedRows = rows.map((row) => ({
     row,
     audit: auditPnrClassification(row),
-    family: pnrClassificationFamily(row.status),
+    family: pnrClassificationFamily(row),
     label: pnrClassificationLabel(row),
-  }));
+  })).filter((item) => item.audit !== "NAO_APLICAVEL");
+  const auditableRows = auditedRows.map((item) => item.row);
 
   const classifiedRows = auditedRows.filter((item) => item.audit === "CLASSIFICADO");
   const pendingRows = auditedRows.filter((item) => item.audit === "PENDENTE");
@@ -70,7 +70,7 @@ export function PnrAuditView() {
         <KpiCard
           label="Classificados"
           value={formatNumber(classifiedRows.length)}
-          detail={auditableRows.length ? `${formatNumber(auditableRows.length)} casos habilitados para auditoria` : "Nenhuma PNR classificada importada"}
+          detail={auditableRows.length ? `${formatNumber(auditableRows.length)} casos avaliados no recorte` : "Nenhuma PNR disponível para auditoria"}
           icon={<ClipboardCheck size={19} />}
           tone="green"
         />
@@ -101,7 +101,7 @@ export function PnrAuditView() {
         title="Classificação financeira PNR"
         subtitle={auditableRows.length
           ? "Quantidade e valor são calculados diretamente dos IDs da PNR importada. As colunas de classificação apenas definem em qual grupo cada caso entra."
-          : "Aguardando uma PNR com as colunas TIPO DE FATURAMENTO e TIPO DE ANULAÇÃO. A auditoria permanece zerada até a primeira importação classificada."}
+          : "Aguardando casos PNR do Case Center ou do histórico por planilha."}
       >
         <div className="pnr-audit-classifications">
           {classificationData.map((item) => (
@@ -132,7 +132,7 @@ export function PnrAuditView() {
               </BarChart>
             </ResponsiveContainer>
           ) : (
-            <NoResults title="Classificações ainda não disponíveis" detail="O gráfico será preenchido automaticamente quando a nova PNR contiver as duas colunas de classificação." />
+            <NoResults title="Classificações ainda não disponíveis" detail="O gráfico será preenchido automaticamente pelos casos sincronizados ou pelo histórico classificado." />
           )}
         </Panel>
 
@@ -156,7 +156,7 @@ export function PnrAuditView() {
       <Panel title="Cobertura da auditoria" subtitle="Leitura resumida do recorte atual">
         <div className="pnr-audit-coverage">
           <div><Building2 size={18} /><span><strong>{formatNumber(classifiedBases.size)}</strong><small>Bases classificadas</small></span></div>
-          <div><ClipboardCheck size={18} /><span><strong>{formatNumber(auditableRows.length)}</strong><small>Casos com colunas de classificação</small></span></div>
+          <div><ClipboardCheck size={18} /><span><strong>{formatNumber(auditableRows.length)}</strong><small>Casos avaliados</small></span></div>
           <div><Tags size={18} /><span><strong>{formatNumber(classifiedRows.length)}</strong><small>Casos válidos para consolidação</small></span></div>
           <div><AlertTriangle size={18} /><span><strong>{formatNumber(pendingRows.length + inconsistentRows.length)}</strong><small>Casos que exigem conferência</small></span></div>
         </div>

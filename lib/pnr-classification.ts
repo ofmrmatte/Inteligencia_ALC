@@ -52,14 +52,31 @@ export function isValidPnrCancellationType(value: string) {
   return canonicalCancellationType(value) !== null;
 }
 
-export function pnrClassificationFamily(status: string): PnrClassificationFamily | null {
-  const normalized = normalizeText(status);
+function caseCenterClassification(row: PnrRecord) {
+  const subStatus = cleanText(row.subStatus).toUpperCase();
+  const reviewedStatus = cleanText(row.reviewedStatus).toLowerCase();
+  if (subStatus === "BILLED" && reviewedStatus === "reviewed") {
+    return { audit: "CLASSIFICADO" as const, family: "FATURAMENTO" as const, label: "REVISADA MELI" };
+  }
+  if (subStatus === "BILLED" && reviewedStatus === "not_reviewed") {
+    return { audit: "CLASSIFICADO" as const, family: "FATURAMENTO" as const, label: "AUTOMÁTICA MELI" };
+  }
+  if (subStatus === "NOT_BILLED" && reviewedStatus === "reviewed") {
+    return { audit: "CLASSIFICADO" as const, family: "ANULAÇÃO" as const, label: "REVISADA MELI" };
+  }
+  return { audit: "PENDENTE" as const, family: null, label: "" };
+}
+
+export function pnrClassificationFamily(value: string | PnrRecord): PnrClassificationFamily | null {
+  if (typeof value !== "string" && value.sourceSystem === "case_center") return caseCenterClassification(value).family;
+  const normalized = normalizeText(typeof value === "string" ? value : value.status);
   if (/ANULAD/.test(normalized)) return "ANULAÇÃO";
   if (/FATUR/.test(normalized)) return "FATURAMENTO";
   return null;
 }
 
 export function auditPnrClassification(row: PnrRecord): PnrClassificationAuditStatus {
+  if (row.sourceSystem === "case_center") return caseCenterClassification(row).audit;
   if (!row.classificationColumnsPresent) return "NAO_APLICAVEL";
 
   const billing = cleanText(row.billingType);
@@ -85,7 +102,8 @@ export function auditPnrClassification(row: PnrRecord): PnrClassificationAuditSt
 }
 
 export function pnrClassificationLabel(row: PnrRecord) {
-  const family = pnrClassificationFamily(row.status);
+  if (row.sourceSystem === "case_center") return caseCenterClassification(row).label;
+  const family = pnrClassificationFamily(row);
   if (family === "FATURAMENTO") return normalizePnrBillingType(row.billingType) || "";
   if (family === "ANULAÇÃO") return normalizePnrCancellationType(row.cancellationType) || "";
   return "";

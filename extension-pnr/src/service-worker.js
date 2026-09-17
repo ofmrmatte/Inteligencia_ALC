@@ -37,8 +37,93 @@ async function execute(tabId, func, args = []) {
   return result?.result;
 }
 
+async function waitForTabReady(tabId, timeoutMs = 20_000) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    const tab = await chrome.tabs.get(tabId);
+    if (tab.status === "complete" && tab.url?.startsWith("https://envios.adminml.com/logistics/case-center/cases")) return;
+    await new Promise((resolve) => setTimeout(resolve, 200));
+  }
+  throw Object.assign(new Error("A Bandeja Mercado Livre não terminou de carregar."), { code: "MERCADO_LIVRE_NOT_DETECTED" });
+}
+
+async function applyCaseCenterPeriodInTab({ period, year, month, half }) {
+  const normalize = (value) => String(value || "").replace(/\s+/g, " ").trim();
+  const visible = (element) => Boolean(element && (!element.getClientRects || element.getClientRects().length));
+  const deadline = Date.now() + 15_000;
+  const waitFor = async (find) => {
+    while (Date.now() < deadline) {
+      const value = find();
+      if (value) return value;
+      await new Promise((resolve) => setTimeout(resolve, 100));
+    }
+    throw new Error("O filtro de período do Case Center não ficou disponível.");
+  };
+  const buttons = (label) => [...document.querySelectorAll("button")]
+    .filter((element) => visible(element) && normalize(element.textContent) === label);
+  const periodButton = () => [...document.querySelectorAll("button")]
+    .find((element) => visible(element) && /^20\d{4}Q[12]$/.test(normalize(element.textContent)));
+  const pageHasPeriod = () => normalize(document.body?.innerText).includes(`Período ${period}`);
+
+  if (pageHasPeriod()) return { ok: true, period };
+
+  if (!periodButton()) {
+    const filterButton = await waitFor(() => buttons("Filtrar")[0]);
+    filterButton.click();
+  }
+  const currentPeriodButton = await waitFor(periodButton);
+  if (normalize(currentPeriodButton.textContent) !== period) currentPeriodButton.click();
+
+  const setDropdown = async (index, label) => {
+    const dropdown = await waitFor(() => {
+      const items = [...document.querySelectorAll('[role="combobox"][aria-label="dropdown-period-selector"]')]
+        .filter(visible);
+      return items.length >= 3 ? items[index] : null;
+    });
+    if (normalize(dropdown.textContent).includes(label)) return;
+    dropdown.click();
+    const option = await waitFor(() => [...document.querySelectorAll('[role="option"], [role="listbox"] > *')]
+      .filter(visible)
+      .find((element) => normalize(element.textContent) === label));
+    option.click();
+    await waitFor(() => {
+      const items = [...document.querySelectorAll('[role="combobox"][aria-label="dropdown-period-selector"]')]
+        .filter(visible);
+      return items[index] && normalize(items[index].textContent).includes(label);
+    });
+  };
+
+  if (normalize(currentPeriodButton.textContent) !== period) {
+    await setDropdown(0, year);
+    await setDropdown(1, month);
+    await setDropdown(2, half);
+    const selectorApply = await waitFor(() => buttons("Aplicar").at(-1));
+    selectorApply.click();
+    await waitFor(() => normalize(periodButton()?.textContent) === period);
+  }
+
+  const filterApply = await waitFor(() => buttons("Aplicar")[0]);
+  filterApply.click();
+  await waitFor(pageHasPeriod);
+  return { ok: true, period };
+}
+
 async function fetchCaseCenterPageInTab({ period, dateFrom, dateTo, page, size }) {
-  const store = globalThis._n?.ctx?.r?.appProps?.pageProps?.preloadedStore;
+  let store = globalThis._n?.ctx?.r?.appProps?.pageProps?.preloadedStore;
+  if (!store) {
+    const renderingContext = document.getElementById("__NORDIC_RENDERING_CTX__")?.textContent || "";
+    const marker = "_n.ctx.r=";
+    const assetsMarker = ";_n.ctx.r.assets";
+    const start = renderingContext.indexOf(marker);
+    const end = renderingContext.indexOf(assetsMarker, start + marker.length);
+    if (start >= 0 && end > start) {
+      try {
+        store = JSON.parse(renderingContext.slice(start + marker.length, end))?.appProps?.pageProps?.preloadedStore;
+      } catch {
+        store = null;
+      }
+    }
+  }
   const carrier = store?.RootReducer?.operator?.carrierData?.id
     ?? store?.operator?.carrierData?.id
     ?? new URL(location.href).searchParams.get("carrier");
@@ -52,7 +137,7 @@ async function fetchCaseCenterPageInTab({ period, dateFrom, dateTo, page, size }
     date_to: dateTo,
     order: "asc",
     sort: "date_created",
-    carrier,
+    carrier: String(carrier),
     period,
     billingPeriod: {},
     size,
@@ -64,17 +149,30 @@ async function fetchCaseCenterPageInTab({ period, dateFrom, dateTo, page, size }
     credentials: "include",
     headers,
     body: JSON.stringify({
-      data: {
-        searchParams: JSON.stringify(searchParams),
-        userType: "3PL",
-        application: "LOGISTICS_PNR",
-      },
+      searchParams: JSON.stringify(searchParams),
+      userType: "3PL",
+      application: "LOGISTICS_PNR",
     }),
   });
   if (response.status === 401 || response.status === 403) {
     return { ok: false, code: "MERCADO_LIVRE_SESSION_REQUIRED", message: "Sessão Mercado Livre expirada." };
   }
-  if (!response.ok) return { ok: false, code: "HTTP_ERROR", message: `Case Center respondeu HTTP ${response.status}.` };
+  if (!response.ok) {
+    const errorData = await response.json().catch(() => null);
+    const cause = Array.isArray(errorData?.cause)
+      ? errorData.cause.map((item) => typeof item === "string" ? item : item?.message).filter(Boolean).join("; ")
+      : errorData?.cause;
+    const detail = [cause, errorData?.error, errorData?.message]
+      .find((value) => typeof value === "string")
+      ?.replace(/\s+/g, " ")
+      .trim()
+      .slice(0, 160);
+    return {
+      ok: false,
+      code: "HTTP_ERROR",
+      message: `Case Center respondeu HTTP ${response.status}${detail ? `: ${detail}` : "."}`,
+    };
+  }
   const contentType = response.headers.get("content-type") || "";
   if (!contentType.includes("application/json")) {
     return { ok: false, code: "MERCADO_LIVRE_SESSION_REQUIRED", message: "Abra ou entre novamente na Bandeja de suporte do Mercado Livre." };
@@ -135,15 +233,40 @@ async function handle(message) {
     const version = chrome.runtime.getManifest().version;
     if (!tab?.id) return { ok: true, data: { installed: true, version, mlTabAvailable: false, sessionAvailable: false } };
     const now = new Date();
-    const competence = `${now.getUTCFullYear()}${String(now.getUTCMonth() + 1).padStart(2, "0")}Q${now.getUTCDate() <= 15 ? 1 : 2}`;
-    const result = await execute(tab.id, fetchCaseCenterPageInTab, [{ ...periodDetails(competence), page: 1, size: 1 }]);
+    const requestedCompetence = String(message.payload?.competence || "");
+    const competence = /^20\d{2}(0[1-9]|1[0-2])Q[12]$/.test(requestedCompetence)
+      ? requestedCompetence
+      : `${now.getUTCFullYear()}${String(now.getUTCMonth() + 1).padStart(2, "0")}Q${now.getUTCDate() <= 15 ? 1 : 2}`;
+    const result = await execute(tab.id, fetchCaseCenterPageInTab, [{ ...periodDetails(competence), page: 1, size: CASE_CENTER_PAGE_SIZE }]);
     return { ok: true, data: {
       installed: true,
       version,
       mlTabAvailable: true,
       sessionAvailable: Boolean(result?.ok),
-      ...(!result?.ok ? { sessionError: result?.code || "INVALID_RESPONSE" } : {}),
+      ...(!result?.ok ? {
+        sessionError: result?.code || "INVALID_RESPONSE",
+        sessionMessage: result?.message || "Falha ao consultar Case Center.",
+      } : {}),
     } };
+  }
+
+  if (message.type === "OPEN_CASE_CENTER") {
+    const details = periodDetails(String(message.payload?.competence || ""));
+    const match = /^(20\d{2})(0[1-9]|1[0-2])Q([12])$/.exec(details.period);
+    const months = ["Janeiro", "Fevereiro", "Março", "Abril", "Maio", "Junho", "Julho", "Agosto", "Setembro", "Outubro", "Novembro", "Dezembro"];
+    const target = tab?.id
+      ? await chrome.tabs.update(tab.id, { active: true })
+      : await chrome.tabs.create({ url: "https://envios.adminml.com/logistics/case-center/cases", active: true });
+    if (!target?.id || !match) return connectorError("INVALID_RESPONSE", "Não foi possível abrir a competência selecionada.");
+    await waitForTabReady(target.id);
+    const result = await execute(target.id, applyCaseCenterPeriodInTab, [{
+      period: details.period,
+      year: match[1],
+      month: months[Number(match[2]) - 1],
+      half: `Q${match[3]}`,
+    }]);
+    if (!result?.ok) return connectorError("INVALID_RESPONSE", "Não foi possível aplicar o período no Case Center.");
+    return { ok: true, data: result };
   }
 
   if (!tab?.id) return connectorError("MERCADO_LIVRE_NOT_DETECTED", "Abra a Bandeja de suporte do Mercado Livre.");
@@ -162,7 +285,15 @@ async function handle(message) {
     if (!/^\d{1,30}$/.test(caseId)) return connectorError("INVALID_RESPONSE", "Caso PNR inválido.");
     const result = await execute(tab.id, fetchCaseTimelineInTab, [caseId]);
     if (!result?.ok) return connectorError(result?.code || "INVALID_RESPONSE", result?.message || "Falha ao consultar timeline.");
-    return { ok: true, data: { caseId, events: normalizeCaseTimelineEvents(result.data.events), detail: result.data.detail } };
+    return {
+      ok: true,
+      data: {
+        caseId,
+        sourceEventCount: Array.isArray(result.data.events) ? result.data.events.length : 0,
+        events: normalizeCaseTimelineEvents(result.data.events),
+        detail: result.data.detail,
+      },
+    };
   }
 
   return connectorError("INVALID_RESPONSE", "Operação não reconhecida.");

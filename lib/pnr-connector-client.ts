@@ -2,7 +2,7 @@
 
 import connectorPackage from "@/extension-pnr/package.json";
 
-export const MINIMUM_SUPPORTED_CONNECTOR_VERSION = "1.1.0";
+export const MINIMUM_SUPPORTED_CONNECTOR_VERSION = "1.1.9";
 export const LATEST_CONNECTOR_VERSION = connectorPackage.version;
 export const CONNECTOR_DOWNLOAD_URL = `/downloads/alc-pnr-connector-v${LATEST_CONNECTOR_VERSION}.zip`;
 
@@ -12,6 +12,7 @@ export interface PnrConnectorHandshake {
   mlTabAvailable: boolean;
   sessionAvailable: boolean;
   sessionError?: string;
+  sessionMessage?: string;
 }
 
 export type PnrConnectorState = "checking" | "connected" | "outdated" | "unsupported" | "ml-missing" | "expired" | "extension-missing" | "error";
@@ -43,7 +44,7 @@ export function connectorStateFromHandshake(
   return compareConnectorVersions(handshake.version, versions.latestVersion) < 0 ? "outdated" : "connected";
 }
 
-export type PnrConnectorRequestType = "PING" | "FETCH_PAGE" | "FETCH_TIMELINE";
+export type PnrConnectorRequestType = "PING" | "OPEN_CASE_CENTER" | "FETCH_PAGE" | "FETCH_TIMELINE";
 export type PnrConnectorErrorCode =
   | "EXTENSION_NOT_FOUND"
   | "MERCADO_LIVRE_NOT_DETECTED"

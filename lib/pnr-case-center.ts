@@ -2,6 +2,7 @@ import { monthFromFortnight, normalizeFortnight } from "@/lib/competence";
 
 export const CASE_CENTER_PAGE_SIZE = 30;
 export const CASE_CENTER_MAX_PAGES = 500;
+export const CASE_CENTER_TIMELINE_PARSER_VERSION = 2;
 
 export interface CaseCenterCompetence {
   period: string;
@@ -70,30 +71,62 @@ export function parseCaseCenterCompetence(value: string): CaseCenterCompetence |
   };
 }
 
+export function getCaseCenterDisplayStatus({ mainStatus, subStatus }: { mainStatus: string; subStatus: string }) {
+  const main = mainStatus.trim().toUpperCase();
+  const sub = subStatus.trim().toUpperCase();
+  const code = [main, sub].filter(Boolean).join("_");
+  const known: Record<string, { label: string; category: string; terminal: boolean }> = {
+    CLOSED_BILLED: { label: "Enviado para faturamento", category: "billed", terminal: true },
+    CLOSED_NOT_BILLED: { label: "Anulado", category: "not_billed", terminal: true },
+    IN_PROGRESS_ON_REVIEW: { label: "Em revisão", category: "in_review", terminal: false },
+    NEW_WAITING_RECEIPT: { label: "Aguardando comprovante", category: "awaiting_receipt", terminal: false },
+    NEW_TO_BILL: { label: "Com penalidade", category: "penalty", terminal: false },
+  };
+  return known[code]
+    ? { code, ...known[code] }
+    : { code, label: code ? "Status não reconhecido" : "Sem status", category: "unknown", terminal: false };
+}
+
 export function caseCenterStatusLabel(mainStatus: string, subStatus: string) {
-  if (subStatus === "BILLED") return "Enviado para faturamento";
-  if (subStatus === "NOT_BILLED") return "Anulado";
-  return mainStatus || subStatus || "Sem status";
+  return getCaseCenterDisplayStatus({ mainStatus, subStatus }).label;
 }
 
 export function caseCenterReviewLabel(reviewedStatus: string) {
   if (reviewedStatus === "reviewed") return "Revisado";
   if (reviewedStatus === "not_reviewed") return "Sem revisão";
-  return reviewedStatus || "Sem revisão";
+  return reviewedStatus ? "Revisão não identificada" : "Sem revisão";
 }
 
-export function caseCenterEventLabel(eventType: string) {
+export function caseCenterEventLabel(eventType: string, actorName = "", reviewedStatus = "") {
+  const actor = actorName.trim();
+  if (eventType === "ATTACHED_RECEIPT") return actor ? `${actor} carregou comprovante.` : "Comprovante carregado.";
+  if (eventType === "NOT_ATTACHED_RECEIPT") return actor ? `${actor} não carregou comprovante.` : "Comprovante não carregado.";
+  if (eventType === "UPDATE_STATUS_TO_ON_REVIEW" || eventType === "UPDATE_STATUS_TO_IN_PROGRESS_ON_REVIEW") {
+    return actor ? `${actor} pediu uma revisão do caso.` : "Foi solicitada uma revisão do caso.";
+  }
+  if (eventType === "UPDATE_STATUS_TO_CLOSED_BILLED") {
+    return reviewedStatus === "not_reviewed" ? "Caso encerrado automaticamente." : "O caso foi revisado e enviado para faturamento.";
+  }
   const labels: Record<string, string> = {
-    CREATE_CASE_BY_CONSUMER: "Caso criado",
-    UPDATE_STATUS_TO_BILL: "Enviado para faturamento",
-    UPDATE_STATUS_TO_IN_PROGRESS_ON_REVIEW: "Enviado para revisão",
-    UPDATE_STATUS_TO_CLOSED_NOT_BILLED: "Caso revisado e anulado",
+    CREATE_CASE_BY_CONSUMER: "O caso foi criado.",
+    UPDATE_STATUS_TO_BILL: "O caso foi revisado e alterado para o status Com penalidade.",
+    UPDATE_STATUS_TO_CLOSED_NOT_BILLED: "O caso foi revisado e anulado.",
+    UPDATE_CASE_BILLED: "Envio para faturamento registrado.",
   };
-  return labels[eventType] ?? `Evento ${eventType}`;
+  return labels[eventType] ?? "Atualização do caso.";
+}
+
+export function caseCenterTimelineNeedsRefresh(rawSnapshot: unknown) {
+  if (!rawSnapshot || typeof rawSnapshot !== "object" || Array.isArray(rawSnapshot)) return true;
+  return Number((rawSnapshot as Record<string, unknown>).timelineParserVersion) !== CASE_CENTER_TIMELINE_PARSER_VERSION;
 }
 
 export function dedupeCaseCenterCases(records: NormalizedCaseCenterPnrCase[]) {
   return [...new Map(records.map((record) => [record.caseId, record])).values()];
+}
+
+export function dedupeCaseTimelineEvents<T extends { eventId: string }>(events: T[]) {
+  return [...new Map(events.map((event) => [event.eventId, event])).values()];
 }
 
 export function chunkCaseCenterRecords<T>(records: T[], size = 200) {

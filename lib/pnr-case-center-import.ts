@@ -1,7 +1,9 @@
 import { z } from "zod";
 import { normalizeText } from "@/lib/normalize";
 import {
+  CASE_CENTER_TIMELINE_PARSER_VERSION,
   caseCenterStatusLabel,
+  caseCenterTimelineNeedsRefresh,
   dedupeCaseCenterCases,
   parseCaseCenterCompetence,
   type NormalizedCaseCenterPnrCase,
@@ -65,7 +67,6 @@ export function mergeCaseCenterCase(
   const subStatus = keepText(record.subStatus, existing?.sub_status);
   const competence = parseCaseCenterCompetence(context.competence);
   if (!competence) throw new Error("Competência inválida.");
-  const detailStatus = text(existing?.detail_sync_status) === "COMPLETE" ? "COMPLETE" : "DETAIL_PENDING";
   const merged = {
     case_id: record.caseId,
     shipment_id: keepText(record.shipmentId, existing?.shipment_id),
@@ -90,14 +91,14 @@ export function mergeCaseCenterCase(
     base_key: station || text(existing?.base_key),
     sigla: station || text(existing?.sigla),
     case_capture_status: text(existing?.case_capture_status) === "COMPLETE" ? "COMPLETE" : "LIST_ONLY",
-    detail_sync_status: detailStatus,
+    detail_sync_status: "DETAIL_PENDING",
     timeline_synced_at: existing?.timeline_synced_at ?? null,
     first_captured_at: text(existing?.first_captured_at) || context.capturedAt,
     last_captured_at: context.capturedAt,
     source_last_seen_at: context.capturedAt,
     latest_batch_id: context.batchId,
     source_system: "case_center",
-    raw_snapshot_jsonb: record,
+    raw_snapshot_jsonb: { ...record, timelineParserVersion: CASE_CENTER_TIMELINE_PARSER_VERSION },
     updated_at: context.capturedAt,
   };
   const comparable = [
@@ -105,6 +106,11 @@ export function mergeCaseCenterCase(
     "purchase_value", "currency", "main_status", "sub_status", "reviewed_status", "case_type", "route_status", "priority",
   ];
   const changed = Boolean(existing) && comparable.some((key) => text(existing?.[key]) !== text(merged[key as keyof typeof merged]));
+  merged.detail_sync_status = text(existing?.detail_sync_status) === "COMPLETE"
+    && !changed
+    && !caseCenterTimelineNeedsRefresh(existing?.raw_snapshot_jsonb)
+    ? "COMPLETE"
+    : "DETAIL_PENDING";
   return { row: merged, change: existing ? (changed ? "updated" : "unchanged") : "new" } as const;
 }
 

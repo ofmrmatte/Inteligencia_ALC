@@ -5,7 +5,7 @@ import { hasFullAccess, isUserRole, type AuthProfile } from "@/lib/auth";
 import { fortnightFromDate, monthFromFortnight, normalizeFortnight } from "@/lib/competence";
 import { duplicateFileImportError, findDuplicateFileHash } from "@/lib/import-dedupe";
 import { normalizeText } from "@/lib/normalize";
-import { caseCenterStatusLabel } from "@/lib/pnr-case-center";
+import { caseCenterStatusLabel, caseCenterTimelineNeedsRefresh } from "@/lib/pnr-case-center";
 import {
   enrichPrefaturaRows,
   prefaturaIdentityKey,
@@ -246,7 +246,9 @@ function mapCaseCenterCase(row: DbRow): PnrRecord {
     priority: toStringValue(row.priority),
     sourceSystem: "case_center",
     caseCaptureStatus: toStringValue(row.case_capture_status) as PnrRecord["caseCaptureStatus"],
-    detailSyncStatus: toStringValue(row.detail_sync_status) as PnrRecord["detailSyncStatus"],
+    detailSyncStatus: caseCenterTimelineNeedsRefresh(row.raw_snapshot_jsonb)
+      ? "DETAIL_PENDING"
+      : toStringValue(row.detail_sync_status) as PnrRecord["detailSyncStatus"],
     timelineSyncedAt: toDateString(row.timeline_synced_at),
     firstCapturedAt: toStringValue(row.first_captured_at) || undefined,
     lastCapturedAt: toStringValue(row.last_captured_at) || undefined,

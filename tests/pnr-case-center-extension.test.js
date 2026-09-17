@@ -60,8 +60,26 @@ describe("normalizador da extensão PNR", () => {
       }] } } } },
     };
     const html = `<script>_n.ctx.r=${JSON.stringify(state)};_n.ctx.r.assets=[]</script>`;
-    expect(parseCaseTimelineHtml(html)[0]).toMatchObject({ eventId: "10", label: "Enviado para faturamento" });
+    expect(parseCaseTimelineHtml(html)[0]).toMatchObject({ eventId: "10", label: "O caso foi revisado e alterado para o status Com penalidade." });
     expect(() => parseCaseTimelineHtml("<html></html>")).toThrow("não encontrado");
+  });
+
+  it("preserva e ordena todos os eventos quando o Case Center repete id zero", () => {
+    const events = [
+      ["CREATE_CASE_BY_CONSUMER", "2026-09-14T11:48:51Z"],
+      ["ATTACHED_RECEIPT", "2026-09-14T22:25:12Z"],
+      ["UPDATE_STATUS_TO_ON_REVIEW", "2026-09-17T01:05:46Z"],
+      ["UPDATE_STATUS_TO_CLOSED_BILLED", "2026-09-17T01:06:27Z"],
+      ["UPDATE_CASE_BILLED", "2026-09-17T01:06:27Z"],
+    ].map(([event_type, date_created]) => ({ id: 0, event_type, date_created }));
+    const state = { appProps: { pageProps: { preloadedStore: { CaseDetail: { events: events.toReversed() } } } } };
+    const html = `<script>_n.ctx.r=${JSON.stringify(state)};_n.ctx.r.assets=[]</script>`;
+    const normalized = parseCaseTimelineHtml(html);
+
+    expect(normalized).toHaveLength(5);
+    expect(new Set(normalized.map((event) => event.eventId)).size).toBe(5);
+    expect(normalized.map((event) => event.dateCreated)).toEqual(normalized.map((event) => event.dateCreated).toSorted());
+    expect(new Set(normalized.map((event) => event.eventType))).toEqual(new Set(events.map((event) => event.event_type)));
   });
 
   it("gera o período Q2 até o último dia do mês", () => {

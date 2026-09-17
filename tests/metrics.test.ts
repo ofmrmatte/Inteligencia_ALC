@@ -90,6 +90,28 @@ describe("atualização de status PNR", () => {
     expect(rows).toHaveLength(1);
     expect(rows[0].status).toBe("Anulado");
   });
+
+  it("prefere o Case Center e preserva campos legados que ele não fornece", () => {
+    const pnr = [
+      { batchId: "sheet", shipmentId: "47086532633", status: "Aguardando comprovante", sourceSystem: "spreadsheet", products: "Produto legado", carrier: "ALC", driverId: "123" },
+      { batchId: "case", shipmentId: "47086532633", caseId: "198603700", status: "Anulado", sourceSystem: "case_center", products: "", carrier: "", driverId: "" },
+    ] as unknown as PnrRecord[];
+    const imports = [
+      { batchId: "sheet", importedAt: "2026-09-17T12:00:00.000Z" },
+      { batchId: "case", importedAt: "2026-09-17T11:00:00.000Z" },
+    ] as unknown as ImportEntry[];
+
+    expect(latestPnrByShipment(pnr, imports)).toEqual([
+      expect.objectContaining({
+        caseId: "198603700",
+        status: "Anulado",
+        sourceSystem: "case_center",
+        products: "Produto legado",
+        carrier: "ALC",
+        driverId: "123",
+      }),
+    ]);
+  });
 });
 
 describe("atividade operacional de bases e motoristas", () => {

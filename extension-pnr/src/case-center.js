@@ -87,32 +87,63 @@ export function periodDetails(competence) {
   };
 }
 
-export function eventLabel(eventType) {
+export function eventLabel(eventType, actorName = "") {
+  const actor = actorName.trim();
+  if (eventType === "ATTACHED_RECEIPT") return actor ? `${actor} carregou comprovante.` : "Comprovante carregado.";
+  if (eventType === "NOT_ATTACHED_RECEIPT") return actor ? `${actor} não carregou comprovante.` : "Comprovante não carregado.";
+  if (eventType === "UPDATE_STATUS_TO_ON_REVIEW" || eventType === "UPDATE_STATUS_TO_IN_PROGRESS_ON_REVIEW") {
+    return actor ? `${actor} pediu uma revisão do caso.` : "Foi solicitada uma revisão do caso.";
+  }
   return {
-    CREATE_CASE_BY_CONSUMER: "Caso criado",
-    UPDATE_STATUS_TO_BILL: "Enviado para faturamento",
-    UPDATE_STATUS_TO_IN_PROGRESS_ON_REVIEW: "Enviado para revisão",
-    UPDATE_STATUS_TO_CLOSED_NOT_BILLED: "Caso revisado e anulado",
-  }[eventType] ?? `Evento ${eventType}`;
+    CREATE_CASE_BY_CONSUMER: "O caso foi criado.",
+    UPDATE_STATUS_TO_BILL: "O caso foi revisado e alterado para o status Com penalidade.",
+    UPDATE_STATUS_TO_CLOSED_BILLED: "O caso foi revisado e enviado para faturamento.",
+    UPDATE_STATUS_TO_CLOSED_NOT_BILLED: "O caso foi revisado e anulado.",
+    UPDATE_CASE_BILLED: "Envio para faturamento registrado.",
+  }[eventType] ?? "Atualização do caso.";
+}
+
+function hashEvent(value) {
+  let hash = 2166136261;
+  for (let index = 0; index < value.length; index += 1) {
+    hash ^= value.charCodeAt(index);
+    hash = Math.imul(hash, 16777619);
+  }
+  return (hash >>> 0).toString(36);
 }
 
 export function normalizeCaseTimelineEvents(events) {
   if (!Array.isArray(events)) return [];
-  return events.flatMap((event) => {
-    const eventId = text(event?.id);
+  const normalized = events.flatMap((event, sourceIndex) => {
+    const sourceEventId = text(event?.id);
     const eventType = text(event?.event_type);
     const rawDate = text(event?.date_created);
     const date = new Date(rawDate);
-    if (!eventId || !eventType || !Number.isFinite(date.getTime())) return [];
+    if (!sourceEventId || !eventType || !Number.isFinite(date.getTime())) return [];
     const actorName = text(event?.created_by?.name).trim();
     return [{
-      eventId,
+      sourceEventId,
+      sourceIndex,
       eventType,
       dateCreated: date.toISOString(),
-      label: eventLabel(eventType),
+      label: eventLabel(eventType, actorName),
       ...(actorName ? { actorName } : {}),
     }];
   });
+  const idCounts = new Map();
+  normalized.forEach((event) => idCounts.set(event.sourceEventId, (idCounts.get(event.sourceEventId) ?? 0) + 1));
+  const fingerprints = new Map();
+  return normalized
+    .sort((left, right) => left.dateCreated.localeCompare(right.dateCreated) || left.sourceIndex - right.sourceIndex)
+    .map((normalizedEvent) => {
+      const { sourceEventId, eventType, dateCreated, label, actorName } = normalizedEvent;
+      const event = { eventType, dateCreated, label, ...(actorName ? { actorName } : {}) };
+      if (sourceEventId !== "0" && idCounts.get(sourceEventId) === 1) return { eventId: sourceEventId, ...event };
+      const fingerprint = `${sourceEventId}|${event.eventType}|${event.dateCreated}|${event.actorName ?? ""}`;
+      const occurrence = (fingerprints.get(fingerprint) ?? 0) + 1;
+      fingerprints.set(fingerprint, occurrence);
+      return { eventId: `${sourceEventId}:${hashEvent(`${fingerprint}|${occurrence}`)}`, ...event };
+    });
 }
 
 export function parseCaseTimelineHtml(html) {

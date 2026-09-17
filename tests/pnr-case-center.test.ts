@@ -1,8 +1,12 @@
 import { describe, expect, it } from "vitest";
 import { caseCenterImportSchema, mergeCaseCenterCase } from "@/lib/pnr-case-center-import";
 import {
+  CASE_CENTER_TIMELINE_PARSER_VERSION,
+  caseCenterEventLabel,
+  getCaseCenterDisplayStatus,
   chunkCaseCenterRecords,
   dedupeCaseCenterCases,
+  dedupeCaseTimelineEvents,
   parseCaseCenterCompetence,
   runCaseCenterPagination,
   type CaseCenterPage,
@@ -56,6 +60,34 @@ describe("Case Center PNR", () => {
     expect(records.find((item) => item.caseId === record.caseId)?.reviewedStatus).toBe("not_reviewed");
   });
 
+  it("deduplica eventos da timeline antes do upsert pela chave event_id", () => {
+    const events = dedupeCaseTimelineEvents([
+      { eventId: "10", eventType: "CREATE_CASE_BY_CONSUMER", dateCreated: "2026-08-05T14:00:00.000Z", actorName: "Operação" },
+      { eventId: "10", eventType: "CREATE_CASE_BY_CONSUMER", dateCreated: "2026-08-05T14:00:00.000Z", actorName: "Operação atualizada" },
+    ]);
+    expect(events).toEqual([
+      { eventId: "10", eventType: "CREATE_CASE_BY_CONSUMER", dateCreated: "2026-08-05T14:00:00.000Z", actorName: "Operação atualizada" },
+    ]);
+  });
+
+  it("traduz estados conhecidos e usa fallback legível sem vazar enum", () => {
+    expect(getCaseCenterDisplayStatus({ mainStatus: "NEW", subStatus: "TO_BILL" })).toMatchObject({
+      label: "Com penalidade",
+      terminal: false,
+    });
+    expect(getCaseCenterDisplayStatus({ mainStatus: "IN_PROGRESS", subStatus: "ON_REVIEW" }).label).toBe("Em revisão");
+    expect(getCaseCenterDisplayStatus({ mainStatus: "NEW", subStatus: "WAITING_RECEIPT" }).label).toBe("Aguardando comprovante");
+    expect(getCaseCenterDisplayStatus({ mainStatus: "UNKNOWN_TECHNICAL_STATE", subStatus: "" }).label).toBe("Status não reconhecido");
+  });
+
+  it("traduz eventos reais sem expor enums técnicos", () => {
+    expect(caseCenterEventLabel("ATTACHED_RECEIPT", "Nataly")).toBe("Nataly carregou comprovante.");
+    expect(caseCenterEventLabel("NOT_ATTACHED_RECEIPT", "Marisa")).toBe("Marisa não carregou comprovante.");
+    expect(caseCenterEventLabel("UPDATE_STATUS_TO_ON_REVIEW")).toBe("Foi solicitada uma revisão do caso.");
+    expect(caseCenterEventLabel("UPDATE_STATUS_TO_CLOSED_NOT_BILLED")).toBe("O caso foi revisado e anulado.");
+    expect(caseCenterEventLabel("UNMAPPED_EVENT")).toBe("Atualização do caso.");
+  });
+
   it("divide a ingestão sem perder registros", () => {
     const chunks = chunkCaseCenterRecords(Array.from({ length: 601 }, (_, index) => index), 200);
     expect(chunks.map((item) => item.length)).toEqual([200, 200, 200, 1]);
@@ -78,6 +110,7 @@ describe("Case Center PNR", () => {
       case_type: record.caseType,
       route_status: record.routeStatus,
       priority: record.priority,
+      raw_snapshot_jsonb: { timelineParserVersion: CASE_CENTER_TIMELINE_PARSER_VERSION },
       claim_id: "CLAIM-1",
       detail_sync_status: "COMPLETE",
       case_capture_status: "COMPLETE",
@@ -92,13 +125,35 @@ describe("Case Center PNR", () => {
     expect(result.row.claim_id).toBe("CLAIM-1");
     expect(result.row.purchase_value).toBe(0);
     expect(result.row.first_captured_at).toBe("2026-08-05T00:00:00.000Z");
-    expect(result.row.detail_sync_status).toBe("COMPLETE");
+    expect(result.row.detail_sync_status).toBe("DETAIL_PENDING");
     expect(result.change).toBe("updated");
     expect(mergeCaseCenterCase(result.row, { ...record, driverName: "", purchaseValue: 0 }, {
       batchId: "13ee00e7-c683-443d-bdec-3a6f393fd452",
       competence: "202608Q1",
       capturedAt: "2026-09-18T12:00:00.000Z",
     }).change).toBe("unchanged");
+  });
+
+  it("marca timeline antiga ou estado alterado para reprocessamento", () => {
+    const context = {
+      batchId: "13ee00e7-c683-443d-bdec-3a6f393fd452",
+      competence: "202608Q1",
+      capturedAt: "2026-09-18T12:00:00.000Z",
+    };
+    const existing = {
+      shipment_id: record.shipmentId,
+      main_status: record.mainStatus,
+      sub_status: record.subStatus,
+      reviewed_status: record.reviewedStatus,
+      detail_sync_status: "COMPLETE",
+      raw_snapshot_jsonb: { timelineParserVersion: CASE_CENTER_TIMELINE_PARSER_VERSION - 1 },
+    };
+
+    expect(mergeCaseCenterCase(existing, record, context).row.detail_sync_status).toBe("DETAIL_PENDING");
+    expect(mergeCaseCenterCase({
+      ...existing,
+      raw_snapshot_jsonb: { timelineParserVersion: CASE_CENTER_TIMELINE_PARSER_VERSION },
+    }, { ...record, subStatus: "NOT_BILLED" }, context).row.detail_sync_status).toBe("DETAIL_PENDING");
   });
 
   it("rejeita credenciais e campos fora do contrato normalizado", () => {

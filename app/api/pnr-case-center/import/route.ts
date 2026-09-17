@@ -81,17 +81,22 @@ export async function POST(request: Request) {
 
     const records = caseCenterPnrDatabaseRows(payload);
     const caseIds = records.map((record) => record.case_id);
+    const shipmentIds = [...new Set(records.map((record) => record.shipment_id).filter(Boolean))];
     const existingCases = new Map<string, DbRow>();
     const existingSnapshots = new Map<string, string>();
+    const legacyShipments = new Set<string>();
     if (caseIds.length) {
-      const [{ data: caseData, error: caseReadError }, { data: snapshotData, error: snapshotReadError }] = await Promise.all([
+      const [{ data: caseData, error: caseReadError }, { data: snapshotData, error: snapshotReadError }, { data: legacyData, error: legacyReadError }] = await Promise.all([
         admin.from("pnr_case_center_cases").select("*").in("case_id", caseIds),
         admin.from("pnr_records").select("case_id,capture_change").eq("batch_id", payload.syncId).in("case_id", caseIds),
+        admin.from("pnr_records").select("shipment_id").in("shipment_id", shipmentIds).or("source_system.is.null,source_system.eq.spreadsheet"),
       ]);
       if (caseReadError) throw new Error(`pnr_case_center_cases: ${caseReadError.message}`);
       if (snapshotReadError) throw new Error(`pnr_records: ${snapshotReadError.message}`);
+      if (legacyReadError) throw new Error(`pnr_records: ${legacyReadError.message}`);
       for (const row of (caseData ?? []) as DbRow[]) existingCases.set(text(row.case_id), row);
       for (const row of (snapshotData ?? []) as DbRow[]) existingSnapshots.set(text(row.case_id), text(row.capture_change));
+      for (const row of (legacyData ?? []) as DbRow[]) legacyShipments.add(text(row.shipment_id));
     }
 
     const sourceRecords = [...new Map(payload.records.map((record) => [record.caseId, record])).values()];
@@ -101,10 +106,31 @@ export async function POST(request: Request) {
         competence: payload.competence,
         capturedAt: now,
       });
-      return { ...result, change: existingSnapshots.get(record.caseId) || result.change };
+      return {
+        ...result,
+        row: {
+          ...result.row,
+          raw_snapshot_jsonb: {
+            ...result.row.raw_snapshot_jsonb,
+            originalSource: legacyShipments.has(record.shipmentId) ? "spreadsheet" : "case_center",
+            currentSource: "case_center",
+          },
+        },
+        change: legacyShipments.has(record.shipmentId)
+          ? "updated"
+          : existingSnapshots.get(record.caseId) || result.change,
+      };
     });
     const changes = new Map(merged.map((result) => [result.row.case_id, result.change]));
-    const snapshotRows = records.map((record) => ({ ...record, capture_change: changes.get(record.case_id) ?? "unchanged" }));
+    const snapshotRows = records.map((record) => ({
+      ...record,
+      capture_change: changes.get(record.case_id) ?? "unchanged",
+      original_payload: {
+        ...record.original_payload,
+        originalSource: legacyShipments.has(record.shipment_id) ? "spreadsheet" : "case_center",
+        currentSource: "case_center",
+      },
+    }));
 
     if (snapshotRows.length) {
       const { error: upsertError } = await admin
@@ -118,17 +144,19 @@ export async function POST(request: Request) {
       if (durableUpsertError) throw new Error(`pnr_case_center_cases: ${durableUpsertError.message}`);
     }
 
-    const [allCount, newCount, updatedCount, unchangedCount] = await Promise.all([
+    const [allCount, reconciledCount, newCount, updatedCount, unchangedCount] = await Promise.all([
       admin.from("pnr_records").select("id", { count: "exact", head: true }).eq("batch_id", payload.syncId),
+      admin.from("pnr_records").select("id", { count: "exact", head: true }).eq("batch_id", payload.syncId).contains("original_payload", { originalSource: "spreadsheet" }),
       admin.from("pnr_records").select("id", { count: "exact", head: true }).eq("batch_id", payload.syncId).eq("capture_change", "new"),
       admin.from("pnr_records").select("id", { count: "exact", head: true }).eq("batch_id", payload.syncId).eq("capture_change", "updated"),
       admin.from("pnr_records").select("id", { count: "exact", head: true }).eq("batch_id", payload.syncId).eq("capture_change", "unchanged"),
     ]);
-    const countError = allCount.error || newCount.error || updatedCount.error || unchangedCount.error;
+    const countError = allCount.error || reconciledCount.error || newCount.error || updatedCount.error || unchangedCount.error;
     if (countError) throw new Error(`pnr_records: ${countError.message}`);
     const persisted = allCount.count ?? 0;
+    const reconciled = reconciledCount.count ?? 0;
     const created = newCount.count ?? 0;
-    const updated = updatedCount.count ?? 0;
+    const updated = Math.max(0, (updatedCount.count ?? 0) - reconciled);
     const unchanged = unchangedCount.count ?? 0;
     const status = payload.completed ? (payload.errorCount ? "com-alertas" : "concluído") : "processando";
     const issues = payload.errorCount ? [`${payload.errorCount} registro(s) descartado(s) por contrato inválido.`] : [];
@@ -169,6 +197,7 @@ export async function POST(request: Request) {
         newCount: created,
         updatedCount: updated,
         unchangedCount: unchanged,
+        reconciledCount: reconciled,
         deletedCount: 0,
         errorCount: payload.errorCount,
         entry,
@@ -189,6 +218,7 @@ export async function POST(request: Request) {
           newCount: created,
           updatedCount: updated,
           unchangedCount: unchanged,
+          reconciledCount: reconciled,
           deletedCount: 0,
           errorCount: payload.errorCount,
           source: "case_center",
@@ -205,6 +235,7 @@ export async function POST(request: Request) {
       newCount: created,
       updatedCount: updated,
       unchangedCount: unchanged,
+      reconciledCount: reconciled,
       deletedCount: 0,
       errors: payload.errorCount,
       completed: payload.completed,

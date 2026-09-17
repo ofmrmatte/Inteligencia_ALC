@@ -117,6 +117,21 @@ export function latestPnrByShipment(records: PnrRecord[], imports: ImportEntry[]
   const importedAt = importTimeByBatch(imports);
   const latest = new Map<string, PnrRecord>();
 
+  const time = (record: PnrRecord) => importedAt.get(record.batchId) ?? (Date.parse(record.lastCapturedAt || "") || 0);
+  const enrich = (primary: PnrRecord, fallback: PnrRecord): PnrRecord => ({
+    ...primary,
+    products: primary.products || fallback.products,
+    carrier: primary.carrier || fallback.carrier,
+    originStation: primary.originStation || fallback.originStation,
+    baseName: primary.baseName || fallback.baseName,
+    baseKey: primary.baseKey || fallback.baseKey,
+    sigla: primary.sigla || fallback.sigla,
+    routeCode: primary.routeCode || fallback.routeCode,
+    routeId: primary.routeId || fallback.routeId,
+    driverId: primary.driverId || fallback.driverId,
+    driverName: primary.driverName || fallback.driverName,
+  });
+
   for (const record of records) {
     if (!record.shipmentId) continue;
     const current = latest.get(record.shipmentId);
@@ -125,9 +140,15 @@ export function latestPnrByShipment(records: PnrRecord[], imports: ImportEntry[]
       continue;
     }
 
-    const recordTime = importedAt.get(record.batchId) ?? (Date.parse(record.lastCapturedAt || "") || 0);
-    const currentTime = importedAt.get(current.batchId) ?? (Date.parse(current.lastCapturedAt || "") || 0);
-    if (recordTime > currentTime) latest.set(record.shipmentId, record);
+    if (record.sourceSystem !== current.sourceSystem) {
+      const caseCenter = record.sourceSystem === "case_center" ? record : current;
+      const spreadsheet = caseCenter === record ? current : record;
+      latest.set(record.shipmentId, enrich(caseCenter, spreadsheet));
+      continue;
+    }
+
+    const preferred = time(record) > time(current) ? record : current;
+    latest.set(record.shipmentId, enrich(preferred, preferred === record ? current : record));
   }
 
   return [...latest.values()];

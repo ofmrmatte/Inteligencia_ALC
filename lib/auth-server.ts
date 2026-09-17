@@ -1,7 +1,6 @@
 import { redirect } from "next/navigation";
 import { isUserRole, type AuthProfile } from "@/lib/auth";
 import { isSupabaseConfigured } from "@/lib/supabase/config";
-import { createAdminClient } from "@/lib/supabase/admin";
 import { createClient } from "@/lib/supabase/server";
 
 export async function getCurrentProfile(): Promise<AuthProfile | null> {
@@ -14,8 +13,7 @@ export async function getCurrentProfile(): Promise<AuthProfile | null> {
 
   if (claimsError || !userId) return null;
 
-  const admin = createAdminClient();
-  const { data: profile, error: profileError } = await admin
+  const { data: profile, error: profileError } = await supabase
     .from("profiles")
     .select("id,email,full_name,role,global_access,base_scope,sigla_scope,xpt_scope,module_scope,driver_management_scope,active")
     .eq("id", userId)
