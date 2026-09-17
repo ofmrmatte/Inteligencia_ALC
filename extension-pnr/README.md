@@ -20,4 +20,4 @@ O build local `npm run extension:build` também gera `extension-pnr/dist` para i
 - A extensão não usa `chrome.cookies`.
 - Cookie, CSRF e sessão do Mercado Livre permanecem na origem `envios.adminml.com`.
 - Somente casos PNR normalizados e a timeline operacional mínima chegam ao painel.
-- A ponte aceita apenas os dois domínios oficiais do painel e `localhost`/`127.0.0.1` para desenvolvimento.
+- A ponte aceita apenas os dois domínios oficiais, os previews Vercel deste projeto e `localhost`/`127.0.0.1` para desenvolvimento.

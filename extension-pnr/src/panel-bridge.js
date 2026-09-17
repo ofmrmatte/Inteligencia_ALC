@@ -6,10 +6,13 @@ const allowedOrigins = new Set([
   "http://localhost",
   "http://127.0.0.1",
 ]);
+const previewHost = /^alcpaineldeinteligencia-[a-z0-9]+(?:-[a-z0-9]+)*-mrmattes-projects\.vercel\.app$/;
 
 function allowed(origin) {
   const url = new URL(origin);
-  return allowedOrigins.has(url.origin) || (url.protocol === "http:" && (url.hostname === "localhost" || url.hostname === "127.0.0.1"));
+  return allowedOrigins.has(url.origin)
+    || (url.protocol === "https:" && previewHost.test(url.hostname))
+    || (url.protocol === "http:" && (url.hostname === "localhost" || url.hostname === "127.0.0.1"));
 }
 
 if (allowed(window.location.origin) && !globalThis.__alcPnrBridgeInstalled) {

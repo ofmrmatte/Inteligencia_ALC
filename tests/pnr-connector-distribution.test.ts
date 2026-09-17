@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import connectorManifest from "@/extension-pnr/src/manifest.json";
 import {
   connectorStateFromHandshake,
   compareConnectorVersions,
@@ -19,7 +20,8 @@ describe("distribuição do Conector PNR", () => {
     expect(connectorStateFromHandshake({ installed: true, version: "1.1.9", mlTabAvailable: false, sessionAvailable: false })).toBe("ml-missing");
     expect(connectorStateFromHandshake({ installed: true, version: "1.1.9", mlTabAvailable: true, sessionAvailable: false })).toBe("expired");
     expect(connectorStateFromHandshake({ installed: true, version: "1.1.9", mlTabAvailable: true, sessionAvailable: false, sessionError: "INVALID_RESPONSE" })).toBe("error");
-    expect(connectorStateFromHandshake({ installed: true, version: "1.1.9", mlTabAvailable: true, sessionAvailable: true })).toBe("connected");
+    expect(connectorStateFromHandshake({ installed: true, version: "1.1.9", mlTabAvailable: true, sessionAvailable: true })).toBe("outdated");
+    expect(connectorStateFromHandshake({ installed: true, version: "1.1.10", mlTabAvailable: true, sessionAvailable: true })).toBe("connected");
   });
 
   it("bloqueia versões anteriores ao mínimo e avisa quando há uma versão mais recente", () => {
@@ -28,7 +30,15 @@ describe("distribuição do Conector PNR", () => {
     expect(connectorStateFromHandshake({ ...ready, version: "1.1.8" }, { minimumSupportedVersion: "1.1.0", latestVersion: "1.2.0" })).toBe("outdated");
     expect(connectorStateFromHandshake({ ...ready, version: "invalid" })).toBe("unsupported");
     expect(connectorStateFromHandshake({ ...ready, version: "99999999999999999999.0.0" })).toBe("unsupported");
-    expect(LATEST_CONNECTOR_VERSION).toBe("1.1.9");
+    expect(LATEST_CONNECTOR_VERSION).toBe("1.1.10");
     expect(MINIMUM_SUPPORTED_CONNECTOR_VERSION).toBe("1.1.9");
+  });
+
+  it("inclui o preview Vercel do projeto na injeção declarativa", () => {
+    expect(connectorManifest.host_permissions).toContain("https://*.vercel.app/*");
+    expect(connectorManifest.content_scripts).toContainEqual(expect.objectContaining({
+      matches: ["https://*.vercel.app/*"],
+      include_globs: ["https://alcpaineldeinteligencia-*-mrmattes-projects.vercel.app/*"],
+    }));
   });
 });
