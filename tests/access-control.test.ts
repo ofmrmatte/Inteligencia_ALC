@@ -30,7 +30,8 @@ describe("matriz de acesso do painel", () => {
   it("mantém Supervisor Loss global no painel, mas sem Gestão de Motoristas", () => {
     const current = profile("loss_supervisor");
     expect(canAccessSection(current, "visao-geral")).toBe(true);
-    expect(canAccessSection(current, "gestao-pnr")).toBe(true);
+      expect(canAccessSection(current, "gestao-pnr")).toBe(true);
+      expect(canAccessSection(current, "bandeja-pnr")).toBe(true);
     expect(canAccessSection(current, "pre-faturamento")).toBe(true);
     expect(canAccessSection(current, "configuracoes")).toBe(true);
     expect(canAccessSection(current, "gestao-motoristas")).toBe(false);

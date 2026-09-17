@@ -10,6 +10,7 @@
     "lint": "eslint .",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
+    "extension:build": "npm --prefix extension-pnr run build",
     "prefatura:backfill": "tsx scripts/backfill-prefatura-enrichment.ts",
     "drivers:sync": "tsx scripts/sync-alc-drivers.ts",
     "test:watch": "vitest"

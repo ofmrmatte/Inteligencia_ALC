@@ -22,7 +22,7 @@ const SIDEBAR_EVENT = "alc-inteligencia:sidebar-change";
 const GLOBAL_SYNC_EVENT = "alc-inteligencia:global-data-sync";
 const GLOBAL_SYNC_INTERVAL_MS = 15_000;
 const ADMIN_SECTIONS: SectionId[] = ["gestao-motoristas", "configuracoes", "perfil"];
-const STANDALONE_SECTIONS: SectionId[] = ["gestao-descontos", ...ADMIN_SECTIONS];
+const STANDALONE_SECTIONS: SectionId[] = ["bandeja-pnr", "gestao-descontos", ...ADMIN_SECTIONS];
 
 function subscribeSidebarChange(callback: () => void) {
   window.addEventListener("storage", callback);
@@ -62,6 +62,8 @@ export function DashboardApp({ section, profile }: { section: SectionId; profile
   const canImport = canManageImports(profile);
   const canLoadOperationalData = canAccessOperationalData(profile);
   const standalone = STANDALONE_SECTIONS.includes(section);
+  const remountOnGlobalSync = section === "gestao-descontos";
+  const hasOperationalRows = data.hierarchy.length > 0 || data.prefatura.length > 0 || data.pnr.length > 0 || data.risk.length > 0 || data.drivers.length > 0;
   const cacheOwnerId = [
     profile.id,
     profile.role,
@@ -70,8 +72,8 @@ export function DashboardApp({ section, profile }: { section: SectionId; profile
     [...profile.siglaScope].sort().join(","),
   ].join("::");
   const initialDataLoad = canLoadOperationalData && !hydrated && !standalone;
-  const showEmptyState = canLoadOperationalData && hydrated && !loadError && data.imports.length === 0 && !standalone;
-  const showGlobalFilters = canLoadOperationalData && hydrated && data.imports.length > 0 && !standalone;
+  const showEmptyState = canLoadOperationalData && hydrated && !loadError && !hasOperationalRows && data.imports.length === 0 && !standalone;
+  const showGlobalFilters = canLoadOperationalData && hydrated && (hasOperationalRows || data.imports.length > 0) && !standalone;
 
   const requestImport = () => {
     if (!canImport) {
@@ -106,7 +108,7 @@ export function DashboardApp({ section, profile }: { section: SectionId; profile
         if (disposed) return;
         window.localStorage.setItem(revisionKey, String(revision));
         window.dispatchEvent(new CustomEvent(GLOBAL_SYNC_EVENT, { detail: { revision } }));
-        if (standalone) setViewRevision((current) => current + 1);
+        if (remountOnGlobalSync) setViewRevision((current) => current + 1);
       } catch {
         // A sincronização periódica não deve interromper o uso do painel.
       } finally {
@@ -133,7 +135,7 @@ export function DashboardApp({ section, profile }: { section: SectionId; profile
       window.removeEventListener("storage", handleStorage);
       document.removeEventListener("visibilitychange", handleVisibility);
     };
-  }, [hydrate, cacheOwnerId, canLoadOperationalData, standalone]);
+  }, [hydrate, cacheOwnerId, canLoadOperationalData, remountOnGlobalSync]);
 
   const toggleCollapsed = () => {
     window.localStorage.setItem(SIDEBAR_KEY, String(!collapsed));

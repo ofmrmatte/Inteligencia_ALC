@@ -125,8 +125,8 @@ export function latestPnrByShipment(records: PnrRecord[], imports: ImportEntry[]
       continue;
     }
 
-    const recordTime = importedAt.get(record.batchId) ?? 0;
-    const currentTime = importedAt.get(current.batchId) ?? 0;
+    const recordTime = importedAt.get(record.batchId) ?? (Date.parse(record.lastCapturedAt || "") || 0);
+    const currentTime = importedAt.get(current.batchId) ?? (Date.parse(current.lastCapturedAt || "") || 0);
     if (recordTime > currentTime) latest.set(record.shipmentId, record);
   }
 

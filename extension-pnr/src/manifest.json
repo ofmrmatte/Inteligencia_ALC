@@ -1,0 +1,24 @@
+{
+  "manifest_version": 3,
+  "name": "ALC PNR Connector",
+  "version": "1.0.0",
+  "description": "Conecta a Bandeja PNR autenticada do Mercado Livre ao Inteligência ALC.",
+  "permissions": ["tabs", "scripting"],
+  "host_permissions": ["https://envios.adminml.com/*"],
+  "background": {
+    "service_worker": "service-worker.js",
+    "type": "module"
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "https://inteligenciaalc.vercel.app/*",
+        "https://dashboardfatura.vercel.app/*",
+        "http://localhost/*",
+        "http://127.0.0.1/*"
+      ],
+      "js": ["panel-bridge.js"],
+      "run_at": "document_start"
+    }
+  ]
+}
