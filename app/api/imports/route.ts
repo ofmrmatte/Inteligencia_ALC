@@ -338,16 +338,32 @@ async function requireProfile(supabase: ServerClient): Promise<AuthProfile> {
   };
 }
 
+function isTransientDashboardReadError(message: string) {
+  return /statement timeout|canceling statement|connection reset|connection terminated|server closed the connection/i.test(message);
+}
+
 async function readTable(supabase: ServerClient, table: string, select = "*", orderColumn = "created_at", pageSize = 1000) {
   return readPaged<DbRow>(async (offset, size) => {
-    const { data, error, count } = await supabase
-      .from(table)
-      .select(select, { count: "exact" })
-      .order(orderColumn, { ascending: false })
-      .order("id", { ascending: false })
-      .range(offset, offset + size - 1);
-    if (error) throw new Error(`${table}: ${error.message}`);
-    return { rows: (data ?? []) as unknown as DbRow[], count: count ?? null };
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      const { data, error } = await supabase
+        .from(table)
+        .select(select)
+        .order(orderColumn, { ascending: false })
+        .order("id", { ascending: false })
+        .range(offset, offset + size - 1);
+
+      if (!error) {
+        return { rows: (data ?? []) as unknown as DbRow[], count: null };
+      }
+
+      if (!isTransientDashboardReadError(error.message) || attempt === 2) {
+        throw new Error(`${table}: ${error.message}`);
+      }
+
+      await new Promise((resolve) => setTimeout(resolve, 150 * (attempt + 1)));
+    }
+
+    return { rows: [], count: null };
   }, pageSize);
 }
 
