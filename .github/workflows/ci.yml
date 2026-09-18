@@ -34,3 +34,6 @@ jobs:
 
       - name: Tests
         run: npm test
+
+      - name: Static performance audit
+        run: npm run audit:perf
