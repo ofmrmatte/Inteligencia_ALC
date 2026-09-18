@@ -124,4 +124,30 @@ describe("auditoria de classificação PNR", () => {
       reviewedStatus: "not_reviewed",
     }))).toBe("PENDENTE");
   });
+
+  it("classifica os três cenários homologados sem depender de IDs de caso", () => {
+    const reviewEvent = [{ eventType: "UPDATE_STATUS_TO_ON_REVIEW", dateCreated: "2026-09-16T19:28:00.000Z" }];
+    expect(derivePnrFinancialClassification(row({
+      sourceSystem: "case_center",
+      classificationColumnsPresent: false,
+      subStatus: "BILLED",
+      reviewedStatus: "reviewed",
+      detailSyncStatus: "COMPLETE",
+    }), reviewEvent)).toMatchObject({ family: "FATURAMENTO", label: "REVISADA MELI" });
+    expect(derivePnrFinancialClassification(row({
+      sourceSystem: "case_center",
+      classificationColumnsPresent: false,
+      subStatus: "NOT_BILLED",
+      reviewedStatus: "reviewed",
+      detailSyncStatus: "COMPLETE",
+    }), reviewEvent)).toMatchObject({ family: "ANULAÇÃO", label: "REVISADA MELI" });
+    expect(derivePnrFinancialClassification(row({
+      sourceSystem: "case_center",
+      classificationColumnsPresent: false,
+      mainStatus: "NEW",
+      subStatus: "WAITING_RECEIPT",
+      reviewedStatus: "",
+      detailSyncStatus: "COMPLETE",
+    }), [{ eventType: "CREATE_CASE_BY_CONSUMER", dateCreated: "2026-09-17T20:36:00.000Z" }])).toMatchObject({ audit: "PENDENTE", label: "" });
+  });
 });

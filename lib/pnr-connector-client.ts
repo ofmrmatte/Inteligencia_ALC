@@ -2,7 +2,7 @@
 
 import connectorPackage from "@/extension-pnr/package.json";
 
-export const MINIMUM_SUPPORTED_CONNECTOR_VERSION = "1.1.11";
+export const MINIMUM_SUPPORTED_CONNECTOR_VERSION = "1.1.12";
 export const LATEST_CONNECTOR_VERSION = connectorPackage.version;
 export const CONNECTOR_DOWNLOAD_URL = `/downloads/alc-pnr-connector-v${LATEST_CONNECTOR_VERSION}.zip`;
 

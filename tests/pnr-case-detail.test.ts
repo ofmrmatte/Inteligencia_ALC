@@ -15,12 +15,14 @@ describe("histórico durável de detalhes PNR", () => {
       routeId: "ROTA-1",
       products: [{ id: "P1", title: "Produto A", price: 55 }],
       reviewEvidenceNames: ["comprovante-a.pdf"],
+      receiptEvidenceNames: ["entrega-a.png"],
     };
     expect(mergePnrCaseDetail(previous, {
       buyerName: "   ",
       routeId: "",
       products: [],
       reviewEvidenceNames: [],
+      receiptEvidenceNames: [],
     })).toEqual(previous);
     expect(mergePnrCaseDetail(previous, undefined)).toEqual(previous);
   });

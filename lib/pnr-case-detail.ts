@@ -32,15 +32,20 @@ export interface PnrCaseDetailSnapshot {
   reviewEvidenceNames?: string[];
   receiptStatus?: string;
   receiptActorName?: string;
+  receiptAt?: string;
   receiptMessage?: string;
+  receiptEvidenceNames?: string[];
   reviewOutcome?: string;
+  reviewOutcomeMessage?: string;
+  reviewOutcomeAt?: string;
 }
 
 const SCALAR_KEYS = [
   "claimId", "preInvoiceNumber", "billingPeriod", "driverId", "buyerName", "complaintMessage",
   "assignedReceiver", "trackingId", "deliveryAt", "receivedBy", "receiverName", "receiverDocument",
   "routeId", "carrierName", "driverName", "driverPhone", "reviewRequestedBy", "reviewRequestedAt",
-  "reviewMessage", "receiptStatus", "receiptActorName", "receiptMessage", "reviewOutcome",
+  "reviewMessage", "receiptStatus", "receiptActorName", "receiptAt", "receiptMessage", "reviewOutcome",
+  "reviewOutcomeMessage", "reviewOutcomeAt",
 ] as const satisfies ReadonlyArray<keyof PnrCaseDetailSnapshot>;
 
 function nonEmpty(value: unknown) {
@@ -92,6 +97,8 @@ export function mergePnrCaseDetail(
   if (products.length) merged.products = products;
   const evidence = mergeEvidence(previous?.reviewEvidenceNames, incoming?.reviewEvidenceNames);
   if (evidence.length) merged.reviewEvidenceNames = evidence;
+  const receiptEvidence = mergeEvidence(previous?.receiptEvidenceNames, incoming?.receiptEvidenceNames);
+  if (receiptEvidence.length) merged.receiptEvidenceNames = receiptEvidence;
   return merged;
 }
 

@@ -27,7 +27,7 @@ beforeAll(async () => {
   });
   vi.stubGlobal("chrome", {
     runtime: {
-      getManifest: () => ({ version: "1.1.11" }),
+      getManifest: () => ({ version: "1.1.12" }),
       onMessage: { addListener: (listener) => { onMessage = listener; } },
       onInstalled: { addListener: () => undefined },
     },

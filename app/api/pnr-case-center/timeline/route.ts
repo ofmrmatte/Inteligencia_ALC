@@ -54,8 +54,12 @@ const timelineSchema = z.object({
     reviewEvidenceNames: z.array(z.string().trim().min(1).max(300)).max(30).optional(),
     receiptStatus: z.string().trim().max(120).optional(),
     receiptActorName: z.string().trim().max(240).optional(),
+    receiptAt: z.string().trim().max(120).optional(),
     receiptMessage: z.string().trim().max(2000).optional(),
+    receiptEvidenceNames: z.array(z.string().trim().min(1).max(300)).max(30).optional(),
     reviewOutcome: z.string().trim().max(500).optional(),
+    reviewOutcomeMessage: z.string().trim().max(2000).optional(),
+    reviewOutcomeAt: z.string().trim().max(120).optional(),
   }).strict().optional(),
   sourceEventCount: z.number().int().min(0).max(200).optional(),
   events: z.array(z.object({

@@ -180,12 +180,16 @@ export function PnrCaseDetailDrawer({ row, onClose }: { row: PnrRecord | null; o
             <div className="pnr-detail-grid">
               <DetailField label="Situação do comprovante" value={detail?.receiptStatus} />
               <DetailField label="Responsável" value={receiptActor} />
+              <DetailField label="Data do comprovante" value={dateTime(detail?.receiptAt)} />
               <DetailField label="Pedido de revisão por" value={reviewActor} />
               <DetailField label="Data do pedido" value={dateTime(detail?.reviewRequestedAt)} />
             </div>
             <div className="pnr-detail-text"><span>Comprovante / evidência</span><p>{display(detail?.receiptMessage)}</p></div>
+            {detail?.receiptEvidenceNames?.length ? <div className="pnr-detail-tags">{detail.receiptEvidenceNames.map((name) => <span key={name}>{name}</span>)}</div> : null}
             <div className="pnr-detail-text"><span>Pedido de revisão</span><p>{display(detail?.reviewMessage)}</p></div>
             <div className="pnr-detail-text"><span>Resultado Méli</span><p>{display(detail?.reviewOutcome)}</p></div>
+            <div className="pnr-detail-text"><span>Mensagem do resultado</span><p>{display(detail?.reviewOutcomeMessage)}</p></div>
+            <div className="pnr-detail-grid"><DetailField label="Data do resultado" value={dateTime(detail?.reviewOutcomeAt)} /></div>
             {detail?.reviewEvidenceNames?.length ? <div className="pnr-detail-tags">{detail.reviewEvidenceNames.map((name) => <span key={name}>{name}</span>)}</div> : null}
           </DetailSection>
 
