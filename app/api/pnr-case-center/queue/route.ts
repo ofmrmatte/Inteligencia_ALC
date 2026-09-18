@@ -24,10 +24,34 @@ export async function GET() {
     }
 
     const supabase = await createClient();
+    const activeImportCutoff = new Date(Date.now() - 6 * 60 * 60 * 1000).toISOString();
+    const { data: activeImport, error: activeImportError } = await supabase
+      .from("import_batches")
+      .select("id,competence,started_at")
+      .eq("module", "case_center_pnr")
+      .eq("status", "processando")
+      .gte("started_at", activeImportCutoff)
+      .order("started_at", { ascending: false })
+      .limit(1)
+      .maybeSingle();
+
+    if (!activeImportError && activeImport) {
+      return json({
+        pending: 0,
+        cases: [],
+        case: null,
+        pausedForBulkImport: true,
+        activeImport: {
+          id: activeImport.id,
+          competence: activeImport.competence,
+        },
+      });
+    }
+
     const now = new Date().toISOString();
     const { data, error, count } = await supabase
       .from("pnr_case_center_cases")
-      .select("case_id,detail_sync_status,detail_parser_version,detail_last_success_at,main_status,source_last_seen_at", { count: "exact" })
+      .select("case_id,detail_sync_status,detail_parser_version,detail_last_success_at,main_status,source_last_seen_at", { count: "planned" })
       .or(`detail_next_sync_at.is.null,detail_next_sync_at.lte.${now}`)
       .order("detail_next_sync_at", { ascending: true, nullsFirst: true })
       .order("case_date", { ascending: false })

@@ -1,6 +1,7 @@
 import { createServerClient } from "@supabase/ssr";
 import { NextResponse, type NextRequest } from "next/server";
 import { isSupabaseConfigured, supabasePublishableKey, supabaseUrl } from "@/lib/supabase/config";
+import { retrySupabaseResult } from "@/lib/supabase/retry";
 
 const PUBLIC_PATHS = new Set(["/login", "/manifest.webmanifest"]);
 const LEGACY_DRIVER_PORTAL_PATHS = new Set(["/motorista", "/motorista/login"]);
@@ -58,7 +59,10 @@ export async function updateSession(request: NextRequest) {
     },
   });
 
-  const { data, error } = await supabase.auth.getClaims();
+  const { data, error } = await retrySupabaseResult(
+    () => supabase.auth.getClaims(),
+    [100, 250],
+  );
   const isAuthenticated = Boolean(data?.claims && !error);
 
   if (!isAuthenticated && !isPublicPath(pathname)) {

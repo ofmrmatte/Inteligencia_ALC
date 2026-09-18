@@ -2,22 +2,29 @@ import { redirect } from "next/navigation";
 import { isUserRole, type AuthProfile } from "@/lib/auth";
 import { isSupabaseConfigured } from "@/lib/supabase/config";
 import { createClient } from "@/lib/supabase/server";
+import { retrySupabaseResult } from "@/lib/supabase/retry";
 
 export async function getCurrentProfile(): Promise<AuthProfile | null> {
   if (!isSupabaseConfigured()) return null;
 
   const supabase = await createClient();
-  const { data: claimsData, error: claimsError } = await supabase.auth.getClaims();
+  const { data: claimsData, error: claimsError } = await retrySupabaseResult(
+    () => supabase.auth.getClaims(),
+    [150, 400],
+  );
   const claims = claimsData?.claims as { sub?: string; email?: string } | undefined;
   const userId = typeof claims?.sub === "string" ? claims.sub : "";
 
   if (claimsError || !userId) return null;
 
-  const { data: profile, error: profileError } = await supabase
-    .from("profiles")
-    .select("id,email,full_name,role,global_access,base_scope,sigla_scope,xpt_scope,module_scope,driver_management_scope,active")
-    .eq("id", userId)
-    .maybeSingle();
+  const { data: profile, error: profileError } = await retrySupabaseResult(
+    () => supabase
+      .from("profiles")
+      .select("id,email,full_name,role,global_access,base_scope,sigla_scope,xpt_scope,module_scope,driver_management_scope,active")
+      .eq("id", userId)
+      .maybeSingle(),
+    [250, 750],
+  );
 
   if (profileError || !profile || profile.active === false) return null;
   const role = isUserRole(profile.role) ? profile.role : null;

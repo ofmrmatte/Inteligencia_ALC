@@ -28,6 +28,7 @@ interface QueueResponse {
   pending: number;
   cases?: Array<{ caseId: string; priority: number }>;
   case: { caseId: string; priority: number } | null;
+  pausedForBulkImport?: boolean;
 }
 
 interface TimelineConnectorResult {
@@ -132,6 +133,16 @@ export function PnrCaseCenterBackgroundSync() {
       try {
         const acquired = await runWithPnrSyncLock(navigator.locks, async () => {
           const queue = await readQueue();
+          if (queue.pausedForBulkImport) {
+            nextDelayMs = 20_000;
+            publishPnrBackgroundSyncStatus({
+              phase: "paused",
+              pending: queue.pending,
+              message: "Sincronização de detalhes pausada durante importação PNR",
+            });
+            return;
+          }
+
           const queuedCases = queue.cases?.length ? queue.cases : queue.case ? [queue.case] : [];
           publishPnrBackgroundSyncStatus({ pending: queue.pending });
           if (!queuedCases.length) {
