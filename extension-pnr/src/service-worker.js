@@ -14,6 +14,8 @@ const panelOrigins = new Set([
   "http://127.0.0.1",
 ]);
 const previewHost = /^alcpaineldeinteligencia-[a-z0-9]+(?:-[a-z0-9]+)*-mrmattes-projects\.vercel\.app$/;
+const caseCenterListUrl = "https://envios.adminml.com/logistics/case-center/cases";
+const caseCenterListPath = "/logistics/case-center/cases";
 
 function allowedPanel(url) {
   try {
@@ -30,9 +32,17 @@ function connectorError(code, message) {
   return { ok: false, error: { code, message } };
 }
 
-async function caseCenterTab() {
+function isCaseCenterListTab(tab) {
+  try {
+    return Boolean(tab?.id) && new URL(tab.url).pathname === caseCenterListPath;
+  } catch {
+    return false;
+  }
+}
+
+async function caseCenterTabs() {
   const tabs = await chrome.tabs.query({ url: "https://envios.adminml.com/logistics/case-center/cases*" });
-  return tabs.find((tab) => tab.id) ?? null;
+  return tabs.filter((tab) => tab.id);
 }
 
 async function execute(tabId, func, args = []) {
@@ -44,14 +54,17 @@ async function waitForTabReady(tabId, timeoutMs = 20_000) {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
     const tab = await chrome.tabs.get(tabId);
-    if (tab.status === "complete" && tab.url?.startsWith("https://envios.adminml.com/logistics/case-center/cases")) return;
+    if (tab.status === "complete" && isCaseCenterListTab(tab)) return;
     await new Promise((resolve) => setTimeout(resolve, 200));
   }
   throw Object.assign(new Error("A Bandeja Mercado Livre não terminou de carregar."), { code: "MERCADO_LIVRE_NOT_DETECTED" });
 }
 
-async function applyCaseCenterPeriodInTab({ period, year, month, half }) {
+export async function applyCaseCenterPeriodInTab({ period, year, month, half }) {
   const normalize = (value) => String(value || "").replace(/\s+/g, " ").trim();
+  if (location.pathname !== "/logistics/case-center/cases") {
+    return { ok: false, code: "CASE_CENTER_LIST_REQUIRED", message: "Abra a listagem do Case Center para aplicar o período." };
+  }
   const visible = (element) => Boolean(element && (!element.getClientRects || element.getClientRects().length));
   const deadline = Date.now() + 15_000;
   const waitFor = async (find) => {
@@ -66,7 +79,8 @@ async function applyCaseCenterPeriodInTab({ period, year, month, half }) {
     .filter((element) => visible(element) && normalize(element.textContent) === label);
   const periodButton = () => [...document.querySelectorAll("button")]
     .find((element) => visible(element) && /^20\d{4}Q[12]$/.test(normalize(element.textContent)));
-  const pageHasPeriod = () => normalize(document.body?.innerText).includes(`Período ${period}`);
+  const pageHasPeriod = () => location.pathname === "/logistics/case-center/cases"
+    && normalize(document.body?.innerText).includes(`Período ${period}`);
 
   if (pageHasPeriod()) return { ok: true, period };
 
@@ -355,16 +369,17 @@ async function fetchCaseTimelineInTab(caseId) {
 }
 
 async function handle(message) {
-  const tab = await caseCenterTab();
+  const tabs = await caseCenterTabs();
+  const authenticatedTab = tabs[0] ?? null;
   if (message.type === "PING") {
     const version = chrome.runtime.getManifest().version;
-    if (!tab?.id) return { ok: true, data: { installed: true, version, mlTabAvailable: false, sessionAvailable: false } };
+    if (!authenticatedTab?.id) return { ok: true, data: { installed: true, version, mlTabAvailable: false, sessionAvailable: false } };
     const now = new Date();
     const requestedCompetence = String(message.payload?.competence || "");
     const competence = /^20\d{2}(0[1-9]|1[0-2])Q[12]$/.test(requestedCompetence)
       ? requestedCompetence
       : `${now.getUTCFullYear()}${String(now.getUTCMonth() + 1).padStart(2, "0")}Q${now.getUTCDate() <= 15 ? 1 : 2}`;
-    const result = await execute(tab.id, fetchCaseCenterPageInTab, [{ ...periodDetails(competence), page: 1, size: CASE_CENTER_PAGE_SIZE }]);
+    const result = await execute(authenticatedTab.id, fetchCaseCenterPageInTab, [{ ...periodDetails(competence), page: 1, size: CASE_CENTER_PAGE_SIZE }]);
     return { ok: true, data: {
       installed: true,
       version,
@@ -381,9 +396,12 @@ async function handle(message) {
     const details = periodDetails(String(message.payload?.competence || ""));
     const match = /^(20\d{2})(0[1-9]|1[0-2])Q([12])$/.exec(details.period);
     const months = ["Janeiro", "Fevereiro", "Março", "Abril", "Maio", "Junho", "Julho", "Agosto", "Setembro", "Outubro", "Novembro", "Dezembro"];
-    const target = tab?.id
-      ? await chrome.tabs.update(tab.id, { active: true })
-      : await chrome.tabs.create({ url: "https://envios.adminml.com/logistics/case-center/cases", active: true });
+    const listTab = tabs.find(isCaseCenterListTab);
+    const target = listTab?.id
+      ? await chrome.tabs.update(listTab.id, { active: true })
+      : authenticatedTab?.id
+        ? await chrome.tabs.update(authenticatedTab.id, { url: caseCenterListUrl, active: true })
+        : await chrome.tabs.create({ url: caseCenterListUrl, active: true });
     if (!target?.id || !match) return connectorError("INVALID_RESPONSE", "Não foi possível abrir a competência selecionada.");
     await waitForTabReady(target.id);
     const result = await execute(target.id, applyCaseCenterPeriodInTab, [{
@@ -396,13 +414,13 @@ async function handle(message) {
     return { ok: true, data: result };
   }
 
-  if (!tab?.id) return connectorError("MERCADO_LIVRE_NOT_DETECTED", "Abra a Bandeja de suporte do Mercado Livre.");
+  if (!authenticatedTab?.id) return connectorError("MERCADO_LIVRE_NOT_DETECTED", "Abra a Bandeja de suporte do Mercado Livre.");
 
   if (message.type === "FETCH_PAGE") {
     const page = Number(message.payload?.page);
     if (!Number.isInteger(page) || page < 1 || page > 500) return connectorError("INVALID_RESPONSE", "Página inválida.");
     const details = periodDetails(String(message.payload?.competence || ""));
-    const result = await execute(tab.id, fetchCaseCenterPageInTab, [{ ...details, page, size: CASE_CENTER_PAGE_SIZE }]);
+    const result = await execute(authenticatedTab.id, fetchCaseCenterPageInTab, [{ ...details, page, size: CASE_CENTER_PAGE_SIZE }]);
     if (!result?.ok) return connectorError(result?.code || "INVALID_RESPONSE", result?.message || "Falha ao consultar Case Center.");
     return { ok: true, data: normalizeCaseCenterPage(result.data, page) };
   }
@@ -410,7 +428,7 @@ async function handle(message) {
   if (message.type === "FETCH_TIMELINE") {
     const caseId = String(message.payload?.caseId || "");
     if (!/^\d{1,30}$/.test(caseId)) return connectorError("INVALID_RESPONSE", "Caso PNR inválido.");
-    const result = await execute(tab.id, fetchCaseTimelineInTab, [caseId]);
+    const result = await execute(authenticatedTab.id, fetchCaseTimelineInTab, [caseId]);
     if (!result?.ok) return connectorError(result?.code || "INVALID_RESPONSE", result?.message || "Falha ao consultar timeline.");
     return {
       ok: true,
