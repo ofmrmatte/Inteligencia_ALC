@@ -63,7 +63,7 @@ export async function POST(request: Request) {
       ignored_count: 0,
       error_count: payload.errorCount,
       started_at: now,
-      metadata: { source: "case_center", sourceCompetence: payload.competence },
+      metadata: { source: "case_center", sourceCompetence: payload.competence, lastProgressAt: now },
     }, { onConflict: "id", ignoreDuplicates: true });
     if (batchInsertError) throw new Error(`import_batches: ${batchInsertError.message}`);
 
@@ -200,6 +200,7 @@ export async function POST(request: Request) {
         reconciledCount: reconciled,
         deletedCount: 0,
         errorCount: payload.errorCount,
+        lastProgressAt: now,
         entry,
       },
     }).eq("id", payload.syncId);

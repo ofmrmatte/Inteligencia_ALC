@@ -99,17 +99,33 @@ export function derivePnrFinancialClassification(
 ): PnrFinancialClassification {
   const subStatus = cleanText(row.subStatus).toUpperCase();
   const reviewedStatus = cleanText(row.reviewedStatus).toLowerCase();
-  if (!(["BILLED", "NOT_BILLED"] as string[]).includes(subStatus) || row.detailSyncStatus !== "COMPLETE" || events.length === 0) {
+  if (!(["BILLED", "NOT_BILLED"] as string[]).includes(subStatus)) {
     return pendingCaseCenterClassification();
   }
+
+  // The Case Center list already carries the final BILLED / NOT_BILLED state and
+  // whether the case was reviewed. That is enough to classify the four primary
+  // financial outcomes immediately. Timeline enrichment only refines a billed
+  // case into the special Loss/Dispatcher bucket when that evidence exists.
   if (subStatus === "BILLED") {
-    if (isLossDispatcherBilling(row, events)) return classifiedCaseCenterClassification("FATURAMENTO", "MLP ALC - LOSS/DISPATCHER");
-    if (reviewedStatus === "reviewed" || hasReviewEvent(events)) return classifiedCaseCenterClassification("FATURAMENTO", "REVISADA MELI");
-    if (reviewedStatus === "not_reviewed" || reviewedStatus === "") return classifiedCaseCenterClassification("FATURAMENTO", "AUTOMÁTICA MELI");
+    if (events.length && isLossDispatcherBilling(row, events)) {
+      return classifiedCaseCenterClassification("FATURAMENTO", "MLP ALC - LOSS/DISPATCHER");
+    }
+    if (reviewedStatus === "reviewed" || hasReviewEvent(events)) {
+      return classifiedCaseCenterClassification("FATURAMENTO", "REVISADA MELI");
+    }
+    if (reviewedStatus === "not_reviewed" || reviewedStatus === "") {
+      return classifiedCaseCenterClassification("FATURAMENTO", "AUTOMÁTICA MELI");
+    }
     return pendingCaseCenterClassification();
   }
-  if (reviewedStatus === "reviewed" || hasReviewEvent(events)) return classifiedCaseCenterClassification("ANULAÇÃO", "REVISADA MELI");
-  if (reviewedStatus === "not_reviewed" || reviewedStatus === "") return classifiedCaseCenterClassification("ANULAÇÃO", "TONY");
+
+  if (reviewedStatus === "reviewed" || hasReviewEvent(events)) {
+    return classifiedCaseCenterClassification("ANULAÇÃO", "REVISADA MELI");
+  }
+  if (reviewedStatus === "not_reviewed" || reviewedStatus === "") {
+    return classifiedCaseCenterClassification("ANULAÇÃO", "TONY");
+  }
   return pendingCaseCenterClassification();
 }
 

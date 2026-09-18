@@ -98,9 +98,9 @@ describe("auditoria de classificação PNR", () => {
     expect(pnrClassificationLabel(classified)).toBe(label);
   });
 
-  it("mantém BILLED pendente sem timeline suficiente e reclassifica quando ela chega", () => {
+  it("classifica BILLED imediatamente e permite refinamento posterior pela timeline", () => {
     const item = row({ sourceSystem: "case_center", classificationColumnsPresent: false, subStatus: "BILLED", reviewedStatus: "not_reviewed", detailSyncStatus: "DETAIL_PENDING" });
-    expect(derivePnrFinancialClassification(item, [])).toMatchObject({ audit: "PENDENTE", label: "" });
+    expect(derivePnrFinancialClassification(item, [])).toMatchObject({ audit: "CLASSIFICADO", label: "AUTOMÁTICA MELI" });
     expect(derivePnrFinancialClassification({ ...item, detailSyncStatus: "COMPLETE" }, [
       { eventType: "CREATE_CASE_BY_CONSUMER", dateCreated: "2026-08-05T14:00:00.000Z" },
       { eventType: "UPDATE_STATUS_TO_CLOSED_BILLED", dateCreated: "2026-08-05T14:01:00.000Z" },
@@ -122,7 +122,7 @@ describe("auditoria de classificação PNR", () => {
       mainStatus: "CLOSED",
       subStatus: "NOT_BILLED",
       reviewedStatus: "not_reviewed",
-    }))).toBe("PENDENTE");
+    }))).toBe("CLASSIFICADO");
   });
 
   it("classifica os três cenários homologados sem depender de IDs de caso", () => {

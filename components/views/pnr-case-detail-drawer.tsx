@@ -6,6 +6,7 @@ import { formatCurrency, StatusBadge } from "@/components/ui";
 import type { PnrRecord } from "@/lib/types";
 import type { PnrCaseTimelineEvent } from "@/lib/pnr-case-center";
 import type { PnrCaseDetailSnapshot } from "@/lib/pnr-case-detail";
+import { requestPnrConnector } from "@/lib/pnr-connector-client";
 
 interface TimelineResponse {
   cached: boolean;
@@ -17,6 +18,46 @@ interface TimelineResponse {
   timelineSyncedAt?: string | null;
   detail?: PnrCaseDetailSnapshot;
   events: PnrCaseTimelineEvent[];
+}
+
+interface TimelineConnectorResult {
+  caseId: string;
+  sourceEventCount: number;
+  events: PnrCaseTimelineEvent[];
+  detail?: PnrCaseDetailSnapshot;
+}
+
+async function readArchivedTimeline(caseId: string) {
+  const response = await fetch(`/api/pnr-case-center/timeline?caseId=${encodeURIComponent(caseId)}`, { cache: "no-store" });
+  if (!response.ok) {
+    const body = await response.json().catch(() => ({})) as { error?: string };
+    throw new Error(body.error || "Falha ao carregar os detalhes arquivados.");
+  }
+  return response.json() as Promise<TimelineResponse>;
+}
+
+async function persistTimelineResult(caseId: string, result: TimelineConnectorResult) {
+  const response = await fetch("/api/pnr-case-center/timeline", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      caseId,
+      status: "COMPLETE",
+      detail: result.detail,
+      sourceEventCount: result.sourceEventCount,
+      events: result.events.map(({ eventId, eventType, dateCreated, actorName, actorUserId }) => ({
+        eventId,
+        eventType,
+        dateCreated,
+        ...(actorName ? { actorName } : {}),
+        ...(actorUserId ? { actorUserId } : {}),
+      })),
+    }),
+  });
+  if (!response.ok) {
+    const body = await response.json().catch(() => ({})) as { error?: string };
+    throw new Error(body.error || "Falha ao arquivar os detalhes atualizados.");
+  }
 }
 
 function display(value?: string | null) {
@@ -45,6 +86,7 @@ function DetailSection({ icon, title, children }: { icon: ReactNode; title: stri
 export function PnrCaseDetailDrawer({ row, onClose }: { row: PnrRecord | null; onClose: () => void }) {
   const [remote, setRemote] = useState<TimelineResponse | null>(null);
   const [loading, setLoading] = useState(Boolean(row?.caseId));
+  const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
@@ -57,17 +99,58 @@ export function PnrCaseDetailDrawer({ row, onClose }: { row: PnrRecord | null; o
   useEffect(() => {
     let cancelled = false;
     if (!row?.caseId) return;
-    fetch(`/api/pnr-case-center/timeline?caseId=${encodeURIComponent(row.caseId)}`, { cache: "no-store" })
-      .then(async (response) => {
-        if (!response.ok) {
-          const body = await response.json().catch(() => ({})) as { error?: string };
-          throw new Error(body.error || "Falha ao carregar os detalhes arquivados.");
+
+    setRemote(null);
+    setError(null);
+    setLoading(true);
+    setRefreshing(false);
+
+    const load = async () => {
+      let cached: TimelineResponse | null = null;
+      try {
+        cached = await readArchivedTimeline(row.caseId!);
+        if (!cancelled) {
+          setRemote(cached);
+          setLoading(false);
         }
-        return response.json() as Promise<TimelineResponse>;
-      })
-      .then((body) => { if (!cancelled) setRemote(body); })
-      .catch((requestError) => { if (!cancelled) setError(requestError instanceof Error ? requestError.message : "Falha ao carregar os detalhes."); })
-      .finally(() => { if (!cancelled) setLoading(false); });
+      } catch (requestError) {
+        if (!cancelled) {
+          setError(requestError instanceof Error ? requestError.message : "Falha ao carregar os detalhes.");
+          setLoading(false);
+        }
+        return;
+      }
+
+      const needsImmediateRefresh = row.sourceSystem === "case_center"
+        && (cached.detailSyncStatus !== "COMPLETE" || !cached.detail);
+      if (!needsImmediateRefresh || cancelled) return;
+
+      setRefreshing(true);
+      try {
+        const result = await requestPnrConnector<TimelineConnectorResult>("FETCH_TIMELINE", { caseId: row.caseId }, 30_000);
+        if (cancelled) return;
+        await persistTimelineResult(row.caseId!, result);
+        if (cancelled) return;
+        const refreshed = await readArchivedTimeline(row.caseId!);
+        if (!cancelled) {
+          setRemote(refreshed);
+          setError(null);
+        }
+      } catch (refreshError) {
+        // Cached data remains usable. The background queue will keep trying when
+        // the connector/session is available, so do not replace usable content
+        // with a hard error just because the live refresh could not run.
+        if (!cancelled && !cached.detail && !cached.events.length) {
+          setError(refreshError instanceof Error
+            ? refreshError.message
+            : "Detalhes ainda pendentes de enriquecimento.");
+        }
+      } finally {
+        if (!cancelled) setRefreshing(false);
+      }
+    };
+
+    void load();
     return () => { cancelled = true; };
   }, [row]);
 
@@ -118,6 +201,7 @@ export function PnrCaseDetailDrawer({ row, onClose }: { row: PnrRecord | null; o
 
         <div className="pnr-detail-drawer__content">
           {loading ? <div className="pnr-detail-note">Carregando detalhes arquivados…</div> : null}
+          {refreshing ? <div className="pnr-detail-note">Atualizando este caso diretamente no Case Center…</div> : null}
           {error ? <div className="pnr-detail-note pnr-detail-note--error">{error}</div> : null}
 
           <DetailSection icon={<FileText size={17} />} title="Resumo do caso">

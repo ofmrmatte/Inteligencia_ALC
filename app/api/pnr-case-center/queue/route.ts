@@ -24,18 +24,28 @@ export async function GET() {
     }
 
     const supabase = await createClient();
-    const activeImportCutoff = new Date(Date.now() - 6 * 60 * 60 * 1000).toISOString();
-    const { data: activeImport, error: activeImportError } = await supabase
+    const importLookback = new Date(Date.now() - 6 * 60 * 60 * 1000).toISOString();
+    const heartbeatCutoff = Date.now() - 2 * 60 * 1000;
+    const { data: processingImports, error: activeImportError } = await supabase
       .from("import_batches")
-      .select("id,competence,started_at")
+      .select("id,competence,started_at,metadata")
       .eq("module", "case_center_pnr")
       .eq("status", "processando")
-      .gte("started_at", activeImportCutoff)
+      .gte("started_at", importLookback)
       .order("started_at", { ascending: false })
-      .limit(1)
-      .maybeSingle();
+      .limit(20);
 
-    if (!activeImportError && activeImport) {
+    const activeImport = !activeImportError
+      ? (processingImports ?? []).find((batch) => {
+          const metadata = batch.metadata && typeof batch.metadata === "object" && !Array.isArray(batch.metadata)
+            ? batch.metadata as Record<string, unknown>
+            : {};
+          const lastProgressAt = typeof metadata.lastProgressAt === "string" ? Date.parse(metadata.lastProgressAt) : Number.NaN;
+          return Number.isFinite(lastProgressAt) && lastProgressAt >= heartbeatCutoff;
+        })
+      : null;
+
+    if (activeImport) {
       return json({
         pending: 0,
         cases: [],
