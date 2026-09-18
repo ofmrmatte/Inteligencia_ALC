@@ -29,7 +29,7 @@ export function isTransientSupabaseError(error: SupabaseErrorLike) {
 }
 
 export async function retrySupabaseResult<T extends { error: SupabaseErrorLike }>(
-  operation: () => Promise<T>,
+  operation: () => PromiseLike<T>,
   delaysMs: readonly number[] = [250, 750],
 ) {
   let result = await operation();
