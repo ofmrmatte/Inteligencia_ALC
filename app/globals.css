@@ -1016,3 +1016,20 @@ a { color: inherit; text-decoration: none; }
   .pnr-detail-drawer__status > small { margin-left: 0; text-align: left; }
   .pnr-detail-grid { grid-template-columns: 1fr; }
 }
+
+.pnr-table-pagination {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px 4px 2px;
+  color: var(--gray-700);
+  font-size: 9px;
+}
+.pnr-table-pagination > div { display: flex; align-items: center; gap: 8px; }
+.pnr-table-pagination strong { color: var(--gray-900); font-size: 9px; }
+.pnr-table-pagination .secondary-button { min-height: 30px; padding-inline: 10px; font-size: 9px; }
+@media (max-width: 620px) {
+  .pnr-table-pagination { align-items: stretch; flex-direction: column; }
+  .pnr-table-pagination > div { justify-content: space-between; }
+}
