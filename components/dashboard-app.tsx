@@ -7,6 +7,7 @@ import { toast } from "sonner";
 import { EmptyDashboard } from "@/components/empty-dashboard";
 import { DiscountFiltersBar } from "@/components/discount-filters-bar";
 import { GlobalFilters } from "@/components/global-filters";
+import { PnrInboxFiltersBar } from "@/components/pnr-inbox-filters-bar";
 import { ReportFiltersBar } from "@/components/report-filters-bar";
 import { Sidebar } from "@/components/sidebar";
 import { Topbar } from "@/components/topbar";
@@ -153,7 +154,11 @@ export function DashboardApp({ section, profile }: { section: SectionId; profile
       <Sidebar active={section} collapsed={collapsed} onToggle={toggleCollapsed} onImport={requestImport} canImport={canImport} profile={profile} />
       <div className="app-main">
         <Topbar section={section} profile={profile} canImport={canImport} onImport={requestImport} onMobileMenu={() => setMobileMenu(true)} />
-        {section === "gestao-descontos" ? <DiscountFiltersBar /> : showGlobalFilters && (section === "relatorios-pacotes" ? <ReportFiltersBar /> : <GlobalFilters />)}
+        {section === "gestao-descontos"
+          ? <DiscountFiltersBar />
+          : section === "bandeja-pnr"
+            ? <PnrInboxFiltersBar />
+            : showGlobalFilters && (section === "relatorios-pacotes" ? <ReportFiltersBar /> : <GlobalFilters />)}
         <main className="page-canvas">
           <div className="page-heading">
             <div><p>{meta.description}</p></div>

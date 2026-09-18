@@ -5,7 +5,7 @@ import { Bar, BarChart, CartesianGrid, Cell, Pie, PieChart, ResponsiveContainer,
 import { BadgeDollarSign, Ban, Boxes, CircleCheckBig, CloudDownload, Download, ExternalLink, History, Pause, Play, RefreshCw, XCircle } from "lucide-react";
 import { toast } from "sonner";
 import { canManageImports, type AuthProfile } from "@/lib/auth";
-import { normalizeFortnight } from "@/lib/competence";
+import { fortnightFromDate, halfFromFortnight, monthFromFortnight, normalizeFortnight, yearFromFortnight } from "@/lib/competence";
 import {
   caseCenterReviewLabel,
   type CaseCenterPage,
@@ -24,6 +24,8 @@ import {
   type PnrConnectorState,
 } from "@/lib/pnr-connector-client";
 import { useDashboardStore } from "@/lib/store";
+import { usePnrInboxFiltersStore } from "@/lib/pnr-inbox-filters-store";
+import { normalizeText } from "@/lib/normalize";
 import { retryPnrPersistence, runWithPnrImportLock } from "@/lib/pnr-case-sync";
 import {
   getPnrBackgroundSyncStatus,
@@ -89,9 +91,15 @@ export function PnrInboxView({ profile }: { profile: AuthProfile }) {
   const data = useDashboardStore((state) => state.data);
   const hydrate = useDashboardStore((state) => state.hydrate);
   const cacheOwnerId = useDashboardStore((state) => state.cacheOwnerId);
-  const [year, setYear] = useState(now.getFullYear());
-  const [month, setMonth] = useState(now.getMonth() + 1);
-  const [half, setHalf] = useState<1 | 2>(now.getDate() <= 15 ? 1 : 2);
+  const [captureYear, setCaptureYear] = useState(now.getFullYear());
+  const [captureMonth, setCaptureMonth] = useState(now.getMonth() + 1);
+  const [captureHalf, setCaptureHalf] = useState<1 | 2>(now.getDate() <= 15 ? 1 : 2);
+  const dataYear = usePnrInboxFiltersStore((state) => state.year);
+  const dataMonth = usePnrInboxFiltersStore((state) => state.month);
+  const dataFortnight = usePnrInboxFiltersStore((state) => state.fortnight);
+  const dataBase = usePnrInboxFiltersStore((state) => state.base);
+  const dataStatus = usePnrInboxFiltersStore((state) => state.status);
+  const dataSearch = usePnrInboxFiltersStore((state) => state.search);
   const [connection, setConnection] = useState<PnrConnectorState>("checking");
   const [connectionMessage, setConnectionMessage] = useState<string | null>(null);
   const [installedVersion, setInstalledVersion] = useState<string | null>(null);
@@ -111,14 +119,41 @@ export function PnrInboxView({ profile }: { profile: AuthProfile }) {
   const importPauseRef = useRef(false);
   const connectorCheckRef = useRef(0);
   const installDialogRef = useRef<HTMLDialogElement>(null);
-  const competence = `${year}${String(month).padStart(2, "0")}Q${half}`;
-  const fortnight = normalizeFortnight(competence);
+  const competence = `${captureYear}${String(captureMonth).padStart(2, "0")}Q${captureHalf}`;
   const resumeKey = `alc-pnr-case-center:${competence}`;
   const canImport = canManageImports(profile);
 
-  const rows = useMemo(() => data.pnr.filter(
-    (row) => row.sourceSystem === "case_center" && normalizeFortnight(row.billingPeriod) === fortnight,
-  ), [data.pnr, fortnight]);
+  const rows = useMemo(() => {
+    const search = normalizeText(dataSearch);
+    return data.pnr.filter((row) => {
+      if (row.sourceSystem !== "case_center") return false;
+      const rowFortnight = normalizeFortnight(row.billingPeriod) || fortnightFromDate(row.caseDate);
+      const rowYear = yearFromFortnight(rowFortnight);
+      const rowMonth = monthFromFortnight(rowFortnight).slice(-2);
+      const rowHalf = halfFromFortnight(rowFortnight);
+      const rowBase = row.originStation || row.sigla || row.baseKey || "Sem base";
+      if (dataYear !== "Todos" && rowYear !== dataYear) return false;
+      if (dataMonth !== "Todos" && rowMonth !== dataMonth) return false;
+      if (dataFortnight !== "Todas" && rowHalf !== (dataFortnight === "Q1" ? 1 : 2)) return false;
+      if (dataBase !== "Todas" && rowBase !== dataBase) return false;
+      if (dataStatus !== "Todos" && normalizeText(row.status) !== dataStatus) return false;
+      if (search) {
+        const haystack = normalizeText([
+          row.caseId,
+          row.shipmentId,
+          row.routeId,
+          row.routeCode,
+          row.driverId,
+          row.driverName,
+          row.originStation,
+          row.sigla,
+          row.status,
+        ].filter(Boolean).join(" "));
+        if (!haystack.includes(search)) return false;
+      }
+      return true;
+    });
+  }, [data.pnr, dataYear, dataMonth, dataFortnight, dataBase, dataStatus, dataSearch]);
 
   const billed = rows.filter((row) => row.subStatus === "BILLED").length;
   const cancelled = rows.filter((row) => row.subStatus === "NOT_BILLED").length;
@@ -141,7 +176,7 @@ export function PnrInboxView({ profile }: { profile: AuthProfile }) {
   const updateAvailable = connection !== "unsupported" && installedVersion !== null
     && /^\d{1,9}\.\d{1,9}\.\d{1,9}$/.test(installedVersion)
     && compareConnectorVersions(installedVersion, LATEST_CONNECTOR_VERSION) < 0;
-  const years = Array.from({ length: 4 }, (_, index) => now.getFullYear() - 2 + index);
+  const captureYears = Array.from({ length: 4 }, (_, index) => now.getFullYear() - 2 + index);
 
   useEffect(() => {
     queueMicrotask(() => setResumeAvailable(Boolean(window.localStorage.getItem(resumeKey))));
@@ -339,9 +374,9 @@ export function PnrInboxView({ profile }: { profile: AuthProfile }) {
             </div>
           </div>
           <div className="case-center-form">
-            <label><span>Ano</span><select value={year} onChange={(event) => setYear(Number(event.target.value))}>{years.map((item) => <option key={item}>{item}</option>)}</select></label>
-            <label><span>Mês</span><select value={month} onChange={(event) => setMonth(Number(event.target.value))}>{MONTHS.map((label, index) => <option key={label} value={index + 1}>{label}</option>)}</select></label>
-            <label><span>Quinzena</span><select value={half} onChange={(event) => setHalf(Number(event.target.value) as 1 | 2)}><option value={1}>Quinzena 1 / Q1</option><option value={2}>Quinzena 2 / Q2</option></select></label>
+            <label><span>Ano</span><select value={captureYear} onChange={(event) => setCaptureYear(Number(event.target.value))}>{captureYears.map((item) => <option key={item}>{item}</option>)}</select></label>
+            <label><span>Mês</span><select value={captureMonth} onChange={(event) => setCaptureMonth(Number(event.target.value))}>{MONTHS.map((label, index) => <option key={label} value={index + 1}>{label}</option>)}</select></label>
+            <label><span>Quinzena</span><select value={captureHalf} onChange={(event) => setCaptureHalf(Number(event.target.value) as 1 | 2)}><option value={1}>Quinzena 1 / Q1</option><option value={2}>Quinzena 2 / Q2</option></select></label>
             <div className="case-center-import-actions">
               <button className="primary-button" type="button" disabled={running || !canImport || !syncReady} onClick={() => void startSync()}><CloudDownload size={17} />Trazer Dados para Inteligência ALC</button>
               <button

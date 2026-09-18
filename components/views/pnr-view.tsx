@@ -2,10 +2,12 @@
 
 import { useState } from "react";
 import { Bar, BarChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
-import { BadgeDollarSign, Boxes, ChevronLeft, ChevronRight, CircleCheckBig, Eye, Link2, Search, TimerReset, X } from "lucide-react";
+import { BadgeDollarSign, Boxes, ChevronLeft, ChevronRight, CircleCheckBig, Download, Eye, Link2, Search, TimerReset, X } from "lucide-react";
 import { scopeData } from "@/lib/dashboard-scope";
 import { latestPnrByShipment } from "@/lib/metrics";
 import { cleanText, normalizeText } from "@/lib/normalize";
+import { normalizeFortnight } from "@/lib/competence";
+import { pnrClassificationFamily, pnrClassificationLabel } from "@/lib/pnr-classification";
 import { useDashboardStore } from "@/lib/store";
 import type { PnrRecord } from "@/lib/types";
 import { formatCurrency, formatNumber, formatPercent, KpiCard, Panel, PageIntro, StatusBadge } from "@/components/ui";
@@ -98,6 +100,63 @@ export function PnrView() {
   const currentPage = Math.min(page, pageCount);
   const pageRows = filteredRows.slice((currentPage - 1) * pageSize, currentPage * pageSize);
 
+  const exportFilteredRows = async () => {
+    if (!filteredRows.length) return;
+    const XLSX = await import("xlsx");
+    const competenceLabel = (value: string) => {
+      const normalized = normalizeFortnight(value);
+      const match = /^(0[12])Q(\d{2})(\d{4})$/.exec(normalized);
+      return match ? `${match[3]}${match[2]}Q${match[1] === "01" ? "1" : "2"}` : value || "";
+    };
+    const exported = filteredRows.map((row) => ({
+      "ID DO ENVIO": row.shipmentId,
+      "ID DO CASO": row.caseId || "",
+      "STATUS": pnrStatusLabel(row.status),
+      "DATA": row.caseDate ? new Date(`${row.caseDate}T12:00:00`).toLocaleDateString("pt-BR") : "",
+      "COMPETÊNCIA": competenceLabel(row.billingPeriod),
+      "BASE DE ORIGEM": row.originStation || row.sigla || row.baseKey || "",
+      "XPT": row.xptCode || "",
+      "MOTORISTA": row.driverName || "",
+      "ID MOTORISTA": row.driverId || "",
+      "ROTA": row.routeId || row.routeCode || "",
+      "VALOR": row.purchaseValue,
+      "FAMÍLIA FINANCEIRA": pnrClassificationFamily(row),
+      "CLASSIFICAÇÃO FINANCEIRA": pnrClassificationLabel(row),
+      "ORIGEM": row.sourceSystem === "case_center" ? "CASE CENTER" : "HISTÓRICO ALC",
+      "ÚLTIMA CAPTURA": row.lastCapturedAt ? new Date(row.lastCapturedAt).toLocaleString("pt-BR") : "",
+    }));
+
+    const workbook = XLSX.utils.book_new();
+    const sheet = XLSX.utils.json_to_sheet(exported);
+    sheet["!cols"] = [
+      { wch: 18 }, { wch: 14 }, { wch: 26 }, { wch: 12 }, { wch: 13 },
+      { wch: 24 }, { wch: 12 }, { wch: 28 }, { wch: 14 }, { wch: 16 },
+      { wch: 14 }, { wch: 20 }, { wch: 30 }, { wch: 16 }, { wch: 20 },
+    ];
+    sheet["!autofilter"] = { ref: `A1:O${exported.length + 1}` };
+    XLSX.utils.book_append_sheet(workbook, sheet, "Casos PNR");
+
+    const totalValue = filteredRows.reduce((sum, row) => sum + row.purchaseValue, 0);
+    const summary = XLSX.utils.aoa_to_sheet([
+      ["INTELIGÊNCIA ALC — CASOS E TRATATIVAS"],
+      [],
+      ["Gerado em", new Date().toLocaleString("pt-BR")],
+      ["Casos exportados", filteredRows.length],
+      ["Valor total", totalValue],
+      ["Status da tabela", statusFilter === "TODOS" ? "Todos" : statusOptions.find((option) => option.value === statusFilter)?.label || statusFilter],
+      ["Busca por ID", idSearch || "Sem filtro"],
+      ["Mês global", filters.month],
+      ["Quinzena global", filters.fortnight],
+      ["Base global", filters.base],
+      ["Sigla global", filters.sigla],
+    ]);
+    summary["!cols"] = [{ wch: 26 }, { wch: 32 }];
+    XLSX.utils.book_append_sheet(workbook, summary, "Resumo");
+
+    const stamp = new Date().toISOString().slice(0, 16).replace(/[-:T]/g, "");
+    XLSX.writeFile(workbook, `ALC_Casos_PNR_${stamp}.xlsx`, { compression: true });
+  };
+
   const idHeaderSearch = (
     <span style={{ display: "inline-flex", alignItems: "center", gap: 5, marginLeft: 6, verticalAlign: "middle" }}>
       <button
@@ -176,7 +235,18 @@ export function PnrView() {
         </Panel>
       </div>
 
-      <Panel title="Casos PNR" subtitle="Histórico legado e Case Center em uma única visão" action={<StatusBadge tone="neutral"><TimerReset size={13} /> {filteredRows.length} IDs</StatusBadge>}>
+      <Panel
+        title="Casos PNR"
+        subtitle="Histórico legado e Case Center em uma única visão"
+        action={(
+          <div className="pnr-panel-actions">
+            <StatusBadge tone="neutral"><TimerReset size={13} /> {filteredRows.length} IDs</StatusBadge>
+            <button className="secondary-button report-download-button" type="button" disabled={!filteredRows.length} onClick={() => void exportFilteredRows()}>
+              <Download size={14} />Exportar Excel
+            </button>
+          </div>
+        )}
+      >
         <TableWrap>
           <thead>
             <tr>
