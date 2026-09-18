@@ -7,10 +7,13 @@ export interface PnrBackgroundSyncStatus {
   processed: number;
   errors: number;
   lastSuccessAt: string | null;
+  manuallyPaused: boolean;
 }
 
 export const PNR_BACKGROUND_SYNC_NOW_EVENT = "alc-pnr-background-sync-now";
 export const PNR_BACKGROUND_SYNC_COMMITTED_EVENT = "alc-pnr-background-sync-committed";
+export const PNR_BACKGROUND_SYNC_PAUSE_EVENT = "alc-pnr-background-sync-pause";
+const PNR_BACKGROUND_SYNC_PAUSED_KEY = "alc-pnr-background-sync-paused";
 
 const initialStatus: PnrBackgroundSyncStatus = {
   phase: "idle",
@@ -19,6 +22,7 @@ const initialStatus: PnrBackgroundSyncStatus = {
   processed: 0,
   errors: 0,
   lastSuccessAt: null,
+  manuallyPaused: false,
 };
 
 let currentStatus = initialStatus;
@@ -44,4 +48,21 @@ export function publishPnrBackgroundSyncStatus(patch: Partial<PnrBackgroundSyncS
 
 export function requestPnrBackgroundSyncNow() {
   window.dispatchEvent(new Event(PNR_BACKGROUND_SYNC_NOW_EVENT));
+}
+
+export function hydratePnrBackgroundSyncPauseState() {
+  if (typeof window === "undefined") return;
+  const manuallyPaused = window.localStorage.getItem(PNR_BACKGROUND_SYNC_PAUSED_KEY) === "1";
+  publishPnrBackgroundSyncStatus({ manuallyPaused });
+}
+
+export function togglePnrBackgroundSyncPaused() {
+  if (typeof window === "undefined") return;
+  const manuallyPaused = !currentStatus.manuallyPaused;
+  window.localStorage.setItem(PNR_BACKGROUND_SYNC_PAUSED_KEY, manuallyPaused ? "1" : "0");
+  publishPnrBackgroundSyncStatus({
+    manuallyPaused,
+    ...(manuallyPaused ? { phase: "paused", message: "Pausada manualmente" } : {}),
+  });
+  window.dispatchEvent(new CustomEvent(PNR_BACKGROUND_SYNC_PAUSE_EVENT, { detail: { manuallyPaused } }));
 }

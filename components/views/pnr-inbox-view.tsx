@@ -30,6 +30,7 @@ import {
   getServerPnrBackgroundSyncStatus,
   requestPnrBackgroundSyncNow,
   subscribePnrBackgroundSync,
+  togglePnrBackgroundSyncPaused,
 } from "@/lib/pnr-background-sync-store";
 import type { PnrRecord } from "@/lib/types";
 import { formatCurrency, formatNumber, KpiCard, PageIntro, Panel, StatusBadge } from "@/components/ui";
@@ -95,7 +96,6 @@ export function PnrInboxView({ profile }: { profile: AuthProfile }) {
   const [connectionMessage, setConnectionMessage] = useState<string | null>(null);
   const [installedVersion, setInstalledVersion] = useState<string | null>(null);
   const [running, setRunning] = useState(false);
-  const [paused, setPaused] = useState(false);
   const [phase, setPhase] = useState("Pronto para sincronizar");
   const [progress, setProgress] = useState({ page: 0, totalPages: 0, processed: 0, totalElements: 0, errors: 0 });
   const [completion, setCompletion] = useState<CompletionState | null>(null);
@@ -108,7 +108,6 @@ export function PnrInboxView({ profile }: { profile: AuthProfile }) {
     getPnrBackgroundSyncStatus,
     getServerPnrBackgroundSyncStatus,
   );
-  const pauseRef = useRef(false);
   const connectorCheckRef = useRef(0);
   const installDialogRef = useRef<HTMLDialogElement>(null);
   const competence = `${year}${String(month).padStart(2, "0")}Q${half}`;
@@ -144,11 +143,7 @@ export function PnrInboxView({ profile }: { profile: AuthProfile }) {
   const years = Array.from({ length: 4 }, (_, index) => now.getFullYear() - 2 + index);
 
   useEffect(() => {
-    queueMicrotask(() => {
-      const hasResume = Boolean(window.localStorage.getItem(resumeKey));
-      setResumeAvailable(hasResume);
-      setPaused(hasResume);
-    });
+    queueMicrotask(() => setResumeAvailable(Boolean(window.localStorage.getItem(resumeKey))));
   }, [resumeKey]);
 
   const checkConnector = useCallback(async () => {
@@ -209,8 +204,6 @@ export function PnrInboxView({ profile }: { profile: AuthProfile }) {
       return;
     }
 
-    pauseRef.current = false;
-    setPaused(false);
     setRunning(true);
     setCompletion(null);
     setPhase("Iniciando captura...");
@@ -231,7 +224,6 @@ export function PnrInboxView({ profile }: { profile: AuthProfile }) {
         initialProcessed: resume.processed,
         initialErrors: resume.errors,
         delayMs: 0,
-        isCancelled: () => pauseRef.current,
         fetchPage: async (page) => {
           setPhase(`Consultando página ${page}${progress.totalPages ? ` de ${progress.totalPages}` : ""}`);
           return requestPnrConnector<CaseCenterPage>("FETCH_PAGE", { competence, page });
@@ -275,8 +267,7 @@ export function PnrInboxView({ profile }: { profile: AuthProfile }) {
 
       setResumeAvailable(!result.completed);
       if (result.cancelled) {
-        setPaused(true);
-        setPhase("Sincronização pausada. Clique em Play para continuar.");
+        setPhase("Captura interrompida. A retomada foi preservada.");
       } else {
         setPhase("Sincronização concluída");
         setCompletion({
@@ -289,7 +280,6 @@ export function PnrInboxView({ profile }: { profile: AuthProfile }) {
           deleted: lastCounts.deletedCount,
           errors: result.errors,
         });
-        setPaused(false);
         setResumeAvailable(false);
         await refreshDashboard();
       }
@@ -348,24 +338,7 @@ export function PnrInboxView({ profile }: { profile: AuthProfile }) {
             <label><span>Ano</span><select value={year} onChange={(event) => setYear(Number(event.target.value))}>{years.map((item) => <option key={item}>{item}</option>)}</select></label>
             <label><span>Mês</span><select value={month} onChange={(event) => setMonth(Number(event.target.value))}>{MONTHS.map((label, index) => <option key={label} value={index + 1}>{label}</option>)}</select></label>
             <label><span>Quinzena</span><select value={half} onChange={(event) => setHalf(Number(event.target.value) as 1 | 2)}><option value={1}>Quinzena 1 / Q1</option><option value={2}>Quinzena 2 / Q2</option></select></label>
-            <button className="primary-button" type="button" disabled={running || paused || !canImport || !syncReady} onClick={() => void startSync()}><CloudDownload size={17} />Trazer Dados para Inteligência ALC</button>
-            {running || paused || resumeAvailable ? (
-              <button
-                className="secondary-button"
-                type="button"
-                onClick={() => {
-                  if (running) {
-                    pauseRef.current = true;
-                    setPhase("Pausando após a página atual...");
-                    return;
-                  }
-                  void startSync();
-                }}
-              >
-                {running ? <Pause size={15} /> : <Play size={15} />}
-                {running ? "Pausar" : "Continuar"}
-              </button>
-            ) : null}
+            <button className="primary-button" type="button" disabled={running || !canImport || !syncReady} onClick={() => void startSync()}><CloudDownload size={17} />Trazer Dados para Inteligência ALC</button>
           </div>
           <div className="case-center-progress" aria-live="polite">
             <div><strong>{phase}</strong><span>{progress.page ? `Página ${progress.page}${progress.totalPages ? ` de ${progress.totalPages}` : ""}` : competence}</span></div>
@@ -373,7 +346,18 @@ export function PnrInboxView({ profile }: { profile: AuthProfile }) {
             {completion ? <div className="case-center-result"><span>{formatNumber(completion.received)} encontrados</span><span>{formatNumber(completion.reconciled)} reconciliados com histórico</span><span>{formatNumber(completion.created)} novos</span><span>{formatNumber(completion.updated)} atualizados</span><span>{formatNumber(completion.unchanged)} sem alteração</span><span>{formatNumber(completion.deleted)} excluídos</span><span>{formatNumber(completion.errors)} erros</span></div> : null}
             <div className="case-center-detail-sync">
               <span><strong>Sincronização de detalhes</strong> · {detailSync.message} · Pendentes: {formatNumber(detailSync.pending)} · Processados nesta sessão: {formatNumber(detailSync.processed)} · Erros: {formatNumber(detailSync.errors)}{detailSync.lastSuccessAt ? ` · Última: ${new Date(detailSync.lastSuccessAt).toLocaleTimeString("pt-BR")}` : ""}</span>
-              <button className="secondary-button" type="button" disabled={detailSync.phase === "active"} onClick={requestPnrBackgroundSyncNow}><History size={15} />Sincronizar agora</button>
+              <div className="case-center-detail-sync__actions">
+                <button className="secondary-button" type="button" disabled={detailSync.phase === "active" || detailSync.manuallyPaused} onClick={requestPnrBackgroundSyncNow}><History size={15} />Sincronizar agora</button>
+                <button
+                  className="icon-button"
+                  type="button"
+                  aria-label={detailSync.manuallyPaused ? "Retomar sincronização de detalhes" : "Pausar sincronização de detalhes"}
+                  title={detailSync.manuallyPaused ? "Retomar sincronização de detalhes" : "Pausar sincronização de detalhes"}
+                  onClick={togglePnrBackgroundSyncPaused}
+                >
+                  {detailSync.manuallyPaused ? <Play size={16} /> : <Pause size={16} />}
+                </button>
+              </div>
             </div>
           </div>
         </div>

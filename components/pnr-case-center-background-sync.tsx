@@ -11,8 +11,10 @@ import {
 } from "@/lib/pnr-case-sync";
 import {
   getPnrBackgroundSyncStatus,
+  hydratePnrBackgroundSyncPauseState,
   PNR_BACKGROUND_SYNC_COMMITTED_EVENT,
   PNR_BACKGROUND_SYNC_NOW_EVENT,
+  PNR_BACKGROUND_SYNC_PAUSE_EVENT,
   publishPnrBackgroundSyncStatus,
 } from "@/lib/pnr-background-sync-store";
 import {
@@ -89,6 +91,7 @@ function pausedMessage(error: unknown) {
 
 export function PnrCaseCenterBackgroundSync() {
   useEffect(() => {
+    hydratePnrBackgroundSyncPauseState();
     let disposed = false;
     let running = false;
     let timer: number | undefined;
@@ -101,6 +104,11 @@ export function PnrCaseCenterBackgroundSync() {
 
     const run = async (manual = false) => {
       if (disposed || running) {
+        schedule();
+        return;
+      }
+      if (getPnrBackgroundSyncStatus().manuallyPaused) {
+        publishPnrBackgroundSyncStatus({ phase: "paused", message: "Pausada manualmente" });
         schedule();
         return;
       }
@@ -137,7 +145,10 @@ export function PnrCaseCenterBackgroundSync() {
           let handled = 0;
           let successful = 0;
           for (const queuedCase of queuedCases.slice(0, PNR_DETAIL_SYNC_BATCH_SIZE)) {
-            if (disposed) break;
+            if (disposed || getPnrBackgroundSyncStatus().manuallyPaused) {
+              publishPnrBackgroundSyncStatus({ phase: "paused", message: "Pausada manualmente" });
+              break;
+            }
             const caseId = queuedCase.caseId;
             publishPnrBackgroundSyncStatus({ phase: "active", message: `Sincronizando caso ${caseId}` });
             await updateTimeline(caseId, "ATTEMPT");
@@ -167,7 +178,9 @@ export function PnrCaseCenterBackgroundSync() {
           }
 
           if (successful > 0) window.dispatchEvent(new Event(PNR_BACKGROUND_SYNC_COMMITTED_EVENT));
-          publishPnrBackgroundSyncStatus({ phase: "idle", message: "Lote de detalhes concluído; preparando o próximo" });
+          if (!getPnrBackgroundSyncStatus().manuallyPaused) {
+            publishPnrBackgroundSyncStatus({ phase: "idle", message: "Lote de detalhes concluído; preparando o próximo" });
+          }
         });
         if (!acquired) {
           publishPnrBackgroundSyncStatus({ phase: "paused", message: "Sincronização de detalhes pausada durante outra operação PNR" });
@@ -185,15 +198,26 @@ export function PnrCaseCenterBackgroundSync() {
     };
 
     const onManual = () => { void run(true); };
+    const onPauseChange = (event: Event) => {
+      const manuallyPaused = Boolean((event as CustomEvent<{ manuallyPaused?: boolean }>).detail?.manuallyPaused);
+      if (manuallyPaused) {
+        publishPnrBackgroundSyncStatus({ phase: "paused", message: "Pausada manualmente" });
+        return;
+      }
+      publishPnrBackgroundSyncStatus({ phase: "idle", message: "Retomando sincronização automática" });
+      void run(true);
+    };
     const onFocus = () => { void run(); };
     const initialTimer = window.setTimeout(() => { void run(); }, 2_000);
     window.addEventListener(PNR_BACKGROUND_SYNC_NOW_EVENT, onManual);
+    window.addEventListener(PNR_BACKGROUND_SYNC_PAUSE_EVENT, onPauseChange);
     window.addEventListener("focus", onFocus);
     return () => {
       disposed = true;
       window.clearTimeout(initialTimer);
       window.clearTimeout(timer);
       window.removeEventListener(PNR_BACKGROUND_SYNC_NOW_EVENT, onManual);
+      window.removeEventListener(PNR_BACKGROUND_SYNC_PAUSE_EVENT, onPauseChange);
       window.removeEventListener("focus", onFocus);
     };
   }, []);
