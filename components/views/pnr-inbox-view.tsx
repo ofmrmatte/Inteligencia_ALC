@@ -108,6 +108,7 @@ export function PnrInboxView({ profile }: { profile: AuthProfile }) {
     getPnrBackgroundSyncStatus,
     getServerPnrBackgroundSyncStatus,
   );
+  const importPauseRef = useRef(false);
   const connectorCheckRef = useRef(0);
   const installDialogRef = useRef<HTMLDialogElement>(null);
   const competence = `${year}${String(month).padStart(2, "0")}Q${half}`;
@@ -204,6 +205,7 @@ export function PnrInboxView({ profile }: { profile: AuthProfile }) {
       return;
     }
 
+    importPauseRef.current = false;
     setRunning(true);
     setCompletion(null);
     setPhase("Iniciando captura...");
@@ -224,6 +226,7 @@ export function PnrInboxView({ profile }: { profile: AuthProfile }) {
         initialProcessed: resume.processed,
         initialErrors: resume.errors,
         delayMs: 0,
+        isCancelled: () => importPauseRef.current,
         fetchPage: async (page) => {
           setPhase(`Consultando página ${page}${progress.totalPages ? ` de ${progress.totalPages}` : ""}`);
           return requestPnrConnector<CaseCenterPage>("FETCH_PAGE", { competence, page });
@@ -267,7 +270,8 @@ export function PnrInboxView({ profile }: { profile: AuthProfile }) {
 
       setResumeAvailable(!result.completed);
       if (result.cancelled) {
-        setPhase("Captura interrompida. A retomada foi preservada.");
+        setResumeAvailable(true);
+        setPhase("Captura pausada. Use Play para continuar.");
       } else {
         setPhase("Sincronização concluída");
         setCompletion({
@@ -338,7 +342,26 @@ export function PnrInboxView({ profile }: { profile: AuthProfile }) {
             <label><span>Ano</span><select value={year} onChange={(event) => setYear(Number(event.target.value))}>{years.map((item) => <option key={item}>{item}</option>)}</select></label>
             <label><span>Mês</span><select value={month} onChange={(event) => setMonth(Number(event.target.value))}>{MONTHS.map((label, index) => <option key={label} value={index + 1}>{label}</option>)}</select></label>
             <label><span>Quinzena</span><select value={half} onChange={(event) => setHalf(Number(event.target.value) as 1 | 2)}><option value={1}>Quinzena 1 / Q1</option><option value={2}>Quinzena 2 / Q2</option></select></label>
-            <button className="primary-button" type="button" disabled={running || !canImport || !syncReady} onClick={() => void startSync()}><CloudDownload size={17} />Trazer Dados para Inteligência ALC</button>
+            <div className="case-center-import-actions">
+              <button className="primary-button" type="button" disabled={running || !canImport || !syncReady} onClick={() => void startSync()}><CloudDownload size={17} />Trazer Dados para Inteligência ALC</button>
+              <button
+                className="icon-button"
+                type="button"
+                disabled={!canImport || !syncReady}
+                aria-label={running ? "Pausar captura do Case Center" : "Iniciar ou retomar captura do Case Center"}
+                title={running ? "Pausar captura" : "Iniciar ou retomar captura"}
+                onClick={() => {
+                  if (running) {
+                    importPauseRef.current = true;
+                    setPhase("Pausando após a página atual...");
+                    return;
+                  }
+                  void startSync();
+                }}
+              >
+                {running ? <Pause size={16} /> : <Play size={16} />}
+              </button>
+            </div>
           </div>
           <div className="case-center-progress" aria-live="polite">
             <div><strong>{phase}</strong><span>{progress.page ? `Página ${progress.page}${progress.totalPages ? ` de ${progress.totalPages}` : ""}` : competence}</span></div>
