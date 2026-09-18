@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import { Bar, BarChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
-import { BadgeDollarSign, Boxes, CircleCheckBig, Eye, Link2, Search, TimerReset, X } from "lucide-react";
+import { BadgeDollarSign, Boxes, ChevronLeft, ChevronRight, CircleCheckBig, Eye, Link2, Search, TimerReset, X } from "lucide-react";
 import { scopeData } from "@/lib/dashboard-scope";
 import { latestPnrByShipment } from "@/lib/metrics";
 import { cleanText, normalizeText } from "@/lib/normalize";
@@ -29,6 +29,7 @@ export function PnrView() {
   const [idSearchOpen, setIdSearchOpen] = useState(false);
   const [idSearch, setIdSearch] = useState("");
   const [valueSort, setValueSort] = useState("NONE");
+  const [page, setPage] = useState(1);
   const [selectedRow, setSelectedRow] = useState<PnrRecord | null>(null);
 
   const labels = new Map<string, string>();
@@ -71,6 +72,10 @@ export function PnrView() {
   const matched = filteredRows.filter((row) => prefaturaIds.has(row.shipmentId)).length;
   const divisor = filteredRows.length || 1;
   const caseCenterCount = filteredRows.filter((row) => row.sourceSystem === "case_center").length;
+  const pageSize = 50;
+  const pageCount = Math.max(1, Math.ceil(filteredRows.length / pageSize));
+  const currentPage = Math.min(page, pageCount);
+  const pageRows = filteredRows.slice((currentPage - 1) * pageSize, currentPage * pageSize);
 
   const idHeaderSearch = (
     <span style={{ display: "inline-flex", alignItems: "center", gap: 5, marginLeft: 6, verticalAlign: "middle" }}>
@@ -102,7 +107,7 @@ export function PnrView() {
           inputMode="numeric"
           placeholder="Buscar ID..."
           value={idSearch}
-          onChange={(event) => setIdSearch(event.target.value.replace(/\D/g, ""))}
+          onChange={(event) => { setIdSearch(event.target.value.replace(/\D/g, "")); setPage(1); }}
           style={{
             width: 128,
             height: 22,
@@ -157,14 +162,14 @@ export function PnrView() {
               <th>ID de envio {idHeaderSearch}</th>
               <th>
                 Status
-                <ColumnSelectFilter ariaLabel="Filtrar casos PNR por status" value={statusFilter} options={statusOptions} onChange={setStatusFilter} allLabel="Todos os status" />
+                <ColumnSelectFilter ariaLabel="Filtrar casos PNR por status" value={statusFilter} options={statusOptions} onChange={(value) => { setStatusFilter(value); setPage(1); }} allLabel="Todos os status" />
               </th>
               <th>Data</th><th>Base de origem</th><th>XPT</th><th>Motorista</th><th>Rota</th>
-              <th className="align-right">Valor <ColumnSelectFilter ariaLabel="Ordenar casos PNR por valor" value={valueSort} options={[{ value: "DESC", label: "Maior → menor" }, { value: "ASC", label: "Menor → maior" }]} onChange={setValueSort} allValue="NONE" allLabel="Ordenar" /></th>
+              <th className="align-right">Valor <ColumnSelectFilter ariaLabel="Ordenar casos PNR por valor" value={valueSort} options={[{ value: "DESC", label: "Maior → menor" }, { value: "ASC", label: "Menor → maior" }]} onChange={(value) => { setValueSort(value); setPage(1); }} allValue="NONE" allLabel="Ordenar" /></th>
               <th>Ações</th>
             </tr>
           </thead>
-          <tbody>{filteredRows.slice(0, 50).map((row) => (
+          <tbody>{pageRows.map((row) => (
             <tr key={`${row.batchId}-${row.shipmentId}`}>
               <td><strong className="mono">{row.shipmentId}</strong><small className="cell-subtitle">{row.sourceSystem === "case_center" ? `Case Center · Caso ${row.caseId || "—"}` : row.sourceFile}</small></td>
               <td><StatusBadge tone={/FATUR|PROCEDENTE|APROVADO/.test(normalizeText(row.status)) ? "green" : /ANALISE|PENDENTE|REVISAO|COMPROVANTE|PENALIDADE/.test(normalizeText(row.status)) ? "amber" : "neutral"}>{pnrStatusLabel(row.status)}</StatusBadge></td>
@@ -178,7 +183,16 @@ export function PnrView() {
             </tr>
           ))}</tbody>
         </TableWrap>
-        {!filteredRows.length ? <div style={{ padding: 20 }}><NoResults title="Nenhum caso corresponde à busca" detail="Limpe a pesquisa por ID ou altere o filtro de status." /></div> : null}
+        {!filteredRows.length ? <div style={{ padding: 20 }}><NoResults title="Nenhum caso corresponde à busca" detail="Limpe a pesquisa por ID ou altere o filtro de status." /></div> : (
+          <div className="pnr-table-pagination">
+            <span>Exibindo {formatNumber((currentPage - 1) * pageSize + 1)}–{formatNumber(Math.min(currentPage * pageSize, filteredRows.length))} de {formatNumber(filteredRows.length)} casos</span>
+            <div>
+              <button className="secondary-button" type="button" disabled={currentPage <= 1} onClick={() => setPage((value) => Math.max(1, value - 1))}><ChevronLeft size={14} />Anterior</button>
+              <strong>Página {currentPage} de {pageCount}</strong>
+              <button className="secondary-button" type="button" disabled={currentPage >= pageCount} onClick={() => setPage((value) => Math.min(pageCount, value + 1))}>Próxima<ChevronRight size={14} /></button>
+            </div>
+          </div>
+        )}
       </Panel>
 
       <PnrCaseDetailDrawer key={selectedRow?.caseId || selectedRow?.shipmentId || "closed"} row={selectedRow} onClose={() => setSelectedRow(null)} />
