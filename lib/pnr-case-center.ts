@@ -2,7 +2,7 @@ import { monthFromFortnight, normalizeFortnight } from "@/lib/competence";
 
 export const CASE_CENTER_PAGE_SIZE = 30;
 export const CASE_CENTER_MAX_PAGES = 500;
-export const CASE_CENTER_TIMELINE_PARSER_VERSION = 2;
+export const CASE_CENTER_TIMELINE_PARSER_VERSION = 3;
 
 export interface CaseCenterCompetence {
   period: string;
