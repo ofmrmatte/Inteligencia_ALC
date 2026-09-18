@@ -10,6 +10,12 @@ import {
   caseCenterTimelineNeedsRefresh,
   dedupeCaseTimelineEvents,
 } from "@/lib/pnr-case-center";
+import {
+  mergePnrCaseDetail,
+  uniquePnrCaseDetailSnapshots,
+  type PnrCaseDetailSnapshot,
+} from "@/lib/pnr-case-detail";
+import { pnrDetailNextSyncDelayMs, pnrDetailRetryDelayMs } from "@/lib/pnr-case-sync";
 import { createAdminClient } from "@/lib/supabase/admin";
 
 export const dynamic = "force-dynamic";
@@ -17,7 +23,8 @@ export const dynamic = "force-dynamic";
 const caseIdSchema = z.string().regex(/^\d{1,30}$/);
 const timelineSchema = z.object({
   caseId: caseIdSchema,
-  status: z.enum(["COMPLETE", "ERROR"]).default("COMPLETE"),
+  status: z.enum(["ATTEMPT", "COMPLETE", "ERROR"]).default("COMPLETE"),
+  errorMessage: z.string().trim().max(500).optional(),
   detail: z.object({
     claimId: z.string().trim().max(120).optional(),
     preInvoiceNumber: z.string().trim().max(120).optional(),
@@ -57,7 +64,7 @@ const timelineSchema = z.object({
     dateCreated: z.string().datetime({ offset: true }),
     actorName: z.string().trim().max(180).optional(),
     actorUserId: z.string().trim().max(80).regex(/^[A-Za-z0-9._:-]+$/).optional(),
-  }).strict()).max(200),
+  }).strict()).max(200).default([]),
 }).strict().superRefine((value, context) => {
   const uniqueEventCount = new Set(value.events.map((event) => event.eventId)).size;
   if (value.status === "COMPLETE" && (
@@ -77,10 +84,10 @@ function json(body: unknown, status = 200) {
   return NextResponse.json(body, { status, headers: { "Cache-Control": "no-store" } });
 }
 
-function detailSnapshot(raw: unknown) {
+function detailSnapshot(raw: unknown): PnrCaseDetailSnapshot | undefined {
   if (!raw || typeof raw !== "object" || Array.isArray(raw)) return undefined;
   const value = (raw as Record<string, unknown>).detailSnapshot;
-  return value && typeof value === "object" && !Array.isArray(value) ? value : undefined;
+  return value && typeof value === "object" && !Array.isArray(value) ? value as PnrCaseDetailSnapshot : undefined;
 }
 
 function errorStatus(message: string) {
@@ -99,7 +106,7 @@ async function authorizedCase(caseId: string) {
   const admin = createAdminClient();
   const { data, error } = await admin
     .from("pnr_case_center_cases")
-    .select("case_id,base_key,sigla,detail_sync_status,timeline_synced_at,claim_id,pre_invoice_number,billing_period,reviewed_status,raw_snapshot_jsonb")
+    .select("case_id,base_key,sigla,main_status,detail_sync_status,detail_sync_attempts,detail_last_attempt_at,detail_last_success_at,detail_next_sync_at,detail_last_error,detail_parser_version,timeline_synced_at,claim_id,pre_invoice_number,billing_period,reviewed_status,raw_snapshot_jsonb")
     .eq("case_id", caseId)
     .maybeSingle();
   if (error) throw new Error(`pnr_case_center_cases: ${error.message}`);
@@ -128,6 +135,10 @@ export async function GET(request: Request) {
       caseId: parsed.data,
       cached: record.detail_sync_status === "COMPLETE" && !caseCenterTimelineNeedsRefresh(record.raw_snapshot_jsonb),
       detailSyncStatus: record.detail_sync_status,
+      detailLastAttemptAt: record.detail_last_attempt_at,
+      detailLastSuccessAt: record.detail_last_success_at,
+      detailNextSyncAt: record.detail_next_sync_at,
+      detailLastError: record.detail_last_error,
       timelineSyncedAt: record.timeline_synced_at,
       detail: detailSnapshot(record.raw_snapshot_jsonb),
       events: (data ?? []).map((event) => ({
@@ -151,9 +162,22 @@ export async function POST(request: Request) {
     if (!parsed.success) return json({ error: "Timeline PNR inválida.", issues: parsed.error.issues }, 400);
     const { admin, profile, record } = await authorizedCase(parsed.data.caseId);
     const now = new Date().toISOString();
+    const attempts = Number(record.detail_sync_attempts || 0);
+    if (parsed.data.status === "ATTEMPT") {
+      const { error } = await admin.from("pnr_case_center_cases").update({
+        detail_last_attempt_at: now,
+        detail_sync_attempts: attempts + 1,
+        updated_at: now,
+      }).eq("case_id", parsed.data.caseId);
+      if (error) throw new Error(`pnr_case_center_cases: ${error.message}`);
+      return json({ caseId: parsed.data.caseId, attempt: attempts + 1 });
+    }
     if (parsed.data.status === "ERROR") {
       const { error } = await admin.from("pnr_case_center_cases").update({
         detail_sync_status: "ERROR",
+        detail_last_attempt_at: record.detail_last_attempt_at || now,
+        detail_next_sync_at: new Date(Date.now() + pnrDetailRetryDelayMs(attempts || 1)).toISOString(),
+        detail_last_error: parsed.data.errorMessage || "Falha temporária ao sincronizar detalhes.",
         updated_at: now,
       }).eq("case_id", parsed.data.caseId);
       if (error) throw new Error(`pnr_case_center_cases: ${error.message}`);
@@ -188,20 +212,38 @@ export async function POST(request: Request) {
     if (rows.length) {
       const { error } = await admin.from("pnr_case_events").upsert(rows, { onConflict: "case_id,event_id" });
       if (error) throw new Error(`pnr_case_events: ${error.message}`);
-      if (rows.some((row) => row.event_id.startsWith("0:"))) {
-        const { error: legacyEventError } = await admin
-          .from("pnr_case_events")
-          .delete()
-          .eq("case_id", parsed.data.caseId)
-          .eq("event_id", "0");
-        if (legacyEventError) throw new Error(`pnr_case_events: ${legacyEventError.message}`);
-      }
     }
 
-    const detail = parsed.data.detail;
+    const previousDetail = detailSnapshot(record.raw_snapshot_jsonb);
+    const detail = mergePnrCaseDetail(previousDetail, parsed.data.detail);
+    const snapshots = uniquePnrCaseDetailSnapshots([
+      ...(previousDetail ? [{ payload: previousDetail, capturedAt: record.timeline_synced_at || now }] : []),
+      ...(parsed.data.detail ? [{ payload: parsed.data.detail, capturedAt: now }] : []),
+    ]);
+    if (snapshots.length) {
+      const { error: snapshotError } = await admin.from("pnr_case_detail_snapshots").upsert(
+        snapshots.map((snapshot) => ({
+          case_id: parsed.data.caseId,
+          parser_version: CASE_CENTER_TIMELINE_PARSER_VERSION,
+          payload_jsonb: snapshot.payload,
+          payload_hash: snapshot.payloadHash,
+          captured_at: snapshot.capturedAt,
+          cached_by: profile.id,
+        })),
+        { onConflict: "case_id,payload_hash", ignoreDuplicates: true },
+      );
+      if (snapshotError) throw new Error(`pnr_case_detail_snapshots: ${snapshotError.message}`);
+    }
+
     const detailPatch: Record<string, unknown> = {
       case_capture_status: "COMPLETE",
       detail_sync_status: "COMPLETE",
+      detail_parser_version: CASE_CENTER_TIMELINE_PARSER_VERSION,
+      detail_last_attempt_at: record.detail_last_attempt_at || now,
+      detail_last_success_at: now,
+      detail_next_sync_at: new Date(Date.now() + pnrDetailNextSyncDelayMs(record.main_status)).toISOString(),
+      detail_sync_attempts: 0,
+      detail_last_error: null,
       timeline_synced_at: now,
       raw_snapshot_jsonb: {
         ...(record.raw_snapshot_jsonb && typeof record.raw_snapshot_jsonb === "object" ? record.raw_snapshot_jsonb : {}),
@@ -224,7 +266,7 @@ export async function POST(request: Request) {
       actor_id: profile.id,
       action: "case_center_pnr_timeline_archived",
       entity_table: "pnr_case_events",
-      after_data: { caseId: parsed.data.caseId, eventCount: rows.length },
+      after_data: { caseId: parsed.data.caseId, eventCount: rows.length, snapshotCount: snapshots.length },
     });
     if (auditError) throw new Error(`audit_events: ${auditError.message}`);
 

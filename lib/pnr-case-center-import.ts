@@ -1,7 +1,6 @@
 import { z } from "zod";
 import { normalizeText } from "@/lib/normalize";
 import {
-  CASE_CENTER_TIMELINE_PARSER_VERSION,
   caseCenterStatusLabel,
   caseCenterTimelineNeedsRefresh,
   dedupeCaseCenterCases,
@@ -103,7 +102,6 @@ export function mergeCaseCenterCase(
         ? existing.raw_snapshot_jsonb
         : {}),
       ...record,
-      timelineParserVersion: CASE_CENTER_TIMELINE_PARSER_VERSION,
     },
     updated_at: context.capturedAt,
   };
