@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import Link from "next/link";
 import { ChevronDown, ChevronLeft, ChevronRight, HardDriveUpload } from "lucide-react";
 import { Brand } from "@/components/brand";
@@ -28,10 +28,6 @@ export function Sidebar({
   const pnrChildren = visibleNavigation.filter((item) => item.parentId === "gestao-pnr");
   const pnrActive = active === "gestao-pnr" || pnrChildren.some((item) => item.id === active);
   const [pnrOpen, setPnrOpen] = useState(pnrActive);
-
-  useEffect(() => {
-    if (pnrActive) setPnrOpen(true);
-  }, [pnrActive]);
 
   return (
     <aside className={collapsed ? "sidebar sidebar--collapsed" : "sidebar"}>
