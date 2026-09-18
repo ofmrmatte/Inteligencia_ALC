@@ -27,7 +27,7 @@ beforeAll(async () => {
   });
   vi.stubGlobal("chrome", {
     runtime: {
-      getManifest: () => ({ version: "1.1.9" }),
+      getManifest: () => ({ version: "1.1.11" }),
       onMessage: { addListener: (listener) => { onMessage = listener; } },
       onInstalled: { addListener: () => undefined },
     },
@@ -86,8 +86,27 @@ describe("conector PNR na página atual do Mercado Livre", () => {
     const events = [
       { id: 0, event_type: "CREATE_CASE_BY_CONSUMER", date_created: "2026-09-14T11:48:51Z" },
       { id: 0, event_type: "ATTACHED_RECEIPT", date_created: "2026-09-14T22:25:12Z", created_by: { name: "Nataly" } },
+      { id: 0, event_type: "UPDATE_STATUS_TO_ON_REVIEW", date_created: "2026-09-15T10:00:00Z", created_by: { name: "Analista" } },
+      { id: 0, event_type: "UPDATE_STATUS_TO_CLOSED_BILLED", date_created: "2026-09-15T11:00:00Z" },
     ];
-    const state = { appProps: { pageProps: { preloadedStore: { CaseDetail: { events, caseDetail: {} } } } } };
+    const state = { appProps: { pageProps: { preloadedStore: { CaseDetail: {
+      events,
+      notes: [{ message: "Comprovante válido", date_created: "2026-09-15T10:00:00Z", files: [{ name: "evidencia.png" }] }],
+      caseDetail: {
+        reviewed_status: "reviewed",
+        preInvoiceNumber: "7324513",
+        billingPeriod: "202609Q2",
+        references: [{ type: "DRIVER_ID", value: "123" }, { type: "ROUTE_ID", value: "4419214733" }],
+        cards: [
+          { label: "Nombre del reclamante", value: "Comprador Teste" },
+          { label: "Nome completo", value: "Recebedor Teste" },
+          { label: "Documento", value: "123456" },
+          { label: "Transportadora", value: "ALC TRANSPORTES" },
+          { label: "Telefone", value: "31999999999" },
+        ],
+        product: { id: "P1", title: "Produto teste", payment: { amount: 23.9, currency: "BRL" } },
+      },
+    } } } } };
     fetchMock.mockImplementationOnce(async () => new Response(
       `<script>_n.ctx.r=${JSON.stringify(state)};_n.ctx.r.assets=[]</script>`,
       { status: 200, headers: { "content-type": "text/html" } },
@@ -99,8 +118,24 @@ describe("conector PNR na página atual do Mercado Livre", () => {
       resolve,
     ));
 
-    expect(response).toMatchObject({ ok: true, data: { caseId: "197162479", sourceEventCount: 2 } });
-    expect(response.data.events).toHaveLength(2);
-    expect(new Set(response.data.events.map((event) => event.eventId)).size).toBe(2);
+    expect(response).toMatchObject({ ok: true, data: { caseId: "197162479", sourceEventCount: 4 } });
+    expect(response.data.events).toHaveLength(4);
+    expect(new Set(response.data.events.map((event) => event.eventId)).size).toBe(4);
+    expect(response.data.detail).toMatchObject({
+      preInvoiceNumber: "7324513",
+      billingPeriod: "202609Q2",
+      driverId: "123",
+      routeId: "4419214733",
+      buyerName: "Comprador Teste",
+      receiverName: "Recebedor Teste",
+      receiverDocument: "123456",
+      carrierName: "ALC TRANSPORTES",
+      driverPhone: "31999999999",
+      reviewRequestedBy: "Analista",
+      reviewMessage: "Comprovante válido",
+      reviewEvidenceNames: ["evidencia.png"],
+      reviewOutcome: "Revisado pelo Mercado Livre e enviado para faturamento.",
+    });
+    expect(response.data.detail.products).toEqual([expect.objectContaining({ title: "Produto teste", price: 23.9, currency: "BRL" })]);
   });
 });
