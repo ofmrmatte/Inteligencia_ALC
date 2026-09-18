@@ -20,7 +20,7 @@ describe("distribuição do Conector PNR", () => {
     expect(connectorStateFromHandshake({ installed: true, version: "1.1.11", mlTabAvailable: false, sessionAvailable: false })).toBe("ml-missing");
     expect(connectorStateFromHandshake({ installed: true, version: "1.1.11", mlTabAvailable: true, sessionAvailable: false })).toBe("expired");
     expect(connectorStateFromHandshake({ installed: true, version: "1.1.11", mlTabAvailable: true, sessionAvailable: false, sessionError: "INVALID_RESPONSE" })).toBe("error");
-    expect(connectorStateFromHandshake({ installed: true, version: "1.1.11", mlTabAvailable: true, sessionAvailable: true })).toBe("outdated");
+    expect(connectorStateFromHandshake({ installed: true, version: "1.1.10", mlTabAvailable: true, sessionAvailable: true })).toBe("unsupported");
     expect(connectorStateFromHandshake({ installed: true, version: "1.1.11", mlTabAvailable: true, sessionAvailable: true })).toBe("connected");
   });
 
