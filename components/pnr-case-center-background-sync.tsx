@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect } from "react";
+import { usePathname } from "next/navigation";
 import type { PnrCaseDetailSnapshot } from "@/lib/pnr-case-detail";
 import type { PnrCaseTimelineEvent } from "@/lib/pnr-case-center";
 import {
@@ -46,8 +47,18 @@ async function readError(response: Response, fallback: string) {
   return body.error || fallback;
 }
 
+class PnrBackgroundAuthError extends Error {
+  constructor(public status: number, message: string) {
+    super(message);
+    this.name = "PnrBackgroundAuthError";
+  }
+}
+
 async function readQueue() {
   const response = await fetch("/api/pnr-case-center/queue", { cache: "no-store" });
+  if (response.status === 401 || response.status === 403) {
+    throw new PnrBackgroundAuthError(response.status, await readError(response, "Sessão administrativa indisponível."));
+  }
   if (!response.ok) throw new Error(await readError(response, "Falha ao consultar fila PNR."));
   return response.json() as Promise<QueueResponse>;
 }
@@ -90,14 +101,19 @@ function pausedMessage(error: unknown) {
 }
 
 export function PnrCaseCenterBackgroundSync() {
+  const pathname = usePathname();
+
   useEffect(() => {
+    if (pathname === "/login" || pathname.startsWith("/motorista")) return;
+
     hydratePnrBackgroundSyncPauseState();
     let disposed = false;
     let running = false;
+    let authBlocked = false;
     let timer: number | undefined;
 
     const schedule = () => {
-      if (disposed) return;
+      if (disposed || authBlocked) return;
       window.clearTimeout(timer);
       timer = window.setTimeout(() => { void run(); }, PNR_DETAIL_SYNC_INTERVAL_MS);
     };
@@ -186,6 +202,14 @@ export function PnrCaseCenterBackgroundSync() {
           publishPnrBackgroundSyncStatus({ phase: "paused", message: "Sincronização de detalhes pausada durante outra operação PNR" });
         }
       } catch (error) {
+        if (error instanceof PnrBackgroundAuthError) {
+          authBlocked = true;
+          publishPnrBackgroundSyncStatus({
+            phase: "paused",
+            message: "Sincronização de detalhes aguardando login",
+          });
+          return;
+        }
         const paused = pausedMessage(error);
         publishPnrBackgroundSyncStatus({
           phase: paused ? "paused" : "error",
@@ -220,7 +244,7 @@ export function PnrCaseCenterBackgroundSync() {
       window.removeEventListener(PNR_BACKGROUND_SYNC_PAUSE_EVENT, onPauseChange);
       window.removeEventListener("focus", onFocus);
     };
-  }, []);
+  }, [pathname]);
 
   return null;
 }
