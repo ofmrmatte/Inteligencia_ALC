@@ -231,22 +231,11 @@ async function handle(message) {
   const authenticatedTab = tabs[0] ?? null;
   if (message.type === "PING") {
     const version = chrome.runtime.getManifest().version;
-    if (!authenticatedTab?.id) return { ok: true, data: { installed: true, version, mlTabAvailable: false, sessionAvailable: false } };
-    const now = new Date();
-    const requestedCompetence = String(message.payload?.competence || "");
-    const competence = /^20\d{2}(0[1-9]|1[0-2])Q[12]$/.test(requestedCompetence)
-      ? requestedCompetence
-      : `${now.getUTCFullYear()}${String(now.getUTCMonth() + 1).padStart(2, "0")}Q${now.getUTCDate() <= 15 ? 1 : 2}`;
-    const result = await execute(authenticatedTab.id, fetchCaseCenterPageInTab, [{ ...periodDetails(competence), page: 1, size: CASE_CENTER_PAGE_SIZE }]);
     return { ok: true, data: {
       installed: true,
       version,
-      mlTabAvailable: true,
-      sessionAvailable: Boolean(result?.ok),
-      ...(!result?.ok ? {
-        sessionError: result?.code || "INVALID_RESPONSE",
-        sessionMessage: result?.message || "Falha ao consultar Case Center.",
-      } : {}),
+      mlTabAvailable: Boolean(authenticatedTab?.id),
+      sessionAvailable: Boolean(authenticatedTab?.id),
     } };
   }
 

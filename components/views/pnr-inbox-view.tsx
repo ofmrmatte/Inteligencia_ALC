@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { Bar, BarChart, CartesianGrid, Cell, Pie, PieChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
-import { BadgeDollarSign, Ban, Boxes, CircleCheckBig, CloudDownload, Download, ExternalLink, History, RefreshCw, Square, XCircle } from "lucide-react";
+import { BadgeDollarSign, Ban, Boxes, CircleCheckBig, CloudDownload, Download, ExternalLink, History, Pause, Play, RefreshCw, XCircle } from "lucide-react";
 import { toast } from "sonner";
 import { canManageImports, type AuthProfile } from "@/lib/auth";
 import { normalizeFortnight } from "@/lib/competence";
@@ -95,6 +95,7 @@ export function PnrInboxView({ profile }: { profile: AuthProfile }) {
   const [connectionMessage, setConnectionMessage] = useState<string | null>(null);
   const [installedVersion, setInstalledVersion] = useState<string | null>(null);
   const [running, setRunning] = useState(false);
+  const [paused, setPaused] = useState(false);
   const [phase, setPhase] = useState("Pronto para sincronizar");
   const [progress, setProgress] = useState({ page: 0, totalPages: 0, processed: 0, totalElements: 0, errors: 0 });
   const [completion, setCompletion] = useState<CompletionState | null>(null);
@@ -107,7 +108,7 @@ export function PnrInboxView({ profile }: { profile: AuthProfile }) {
     getPnrBackgroundSyncStatus,
     getServerPnrBackgroundSyncStatus,
   );
-  const cancelRef = useRef(false);
+  const pauseRef = useRef(false);
   const connectorCheckRef = useRef(0);
   const installDialogRef = useRef<HTMLDialogElement>(null);
   const competence = `${year}${String(month).padStart(2, "0")}Q${half}`;
@@ -143,7 +144,11 @@ export function PnrInboxView({ profile }: { profile: AuthProfile }) {
   const years = Array.from({ length: 4 }, (_, index) => now.getFullYear() - 2 + index);
 
   useEffect(() => {
-    queueMicrotask(() => setResumeAvailable(Boolean(window.localStorage.getItem(resumeKey))));
+    queueMicrotask(() => {
+      const hasResume = Boolean(window.localStorage.getItem(resumeKey));
+      setResumeAvailable(hasResume);
+      setPaused(hasResume);
+    });
   }, [resumeKey]);
 
   const checkConnector = useCallback(async () => {
@@ -174,11 +179,8 @@ export function PnrInboxView({ profile }: { profile: AuthProfile }) {
 
   useEffect(() => {
     queueMicrotask(() => void checkConnector());
-    const onFocus = () => { void checkConnector(); };
-    window.addEventListener("focus", onFocus);
     return () => {
       connectorCheckRef.current += 1;
-      window.removeEventListener("focus", onFocus);
     };
   }, [checkConnector]);
 
@@ -207,13 +209,14 @@ export function PnrInboxView({ profile }: { profile: AuthProfile }) {
       return;
     }
 
-    cancelRef.current = false;
+    pauseRef.current = false;
+    setPaused(false);
     setRunning(true);
     setCompletion(null);
-    setPhase("Conectando...");
+    setPhase("Iniciando captura...");
     try {
       await runWithPnrImportLock(navigator.locks, async () => {
-      const currentConnection = await checkConnector();
+      const currentConnection = syncReady ? connection : await checkConnector();
       if (currentConnection !== "connected" && currentConnection !== "outdated") {
         throw new Error(connectionPresentation(currentConnection).label);
       }
@@ -227,7 +230,8 @@ export function PnrInboxView({ profile }: { profile: AuthProfile }) {
         startPage: resume.nextPage,
         initialProcessed: resume.processed,
         initialErrors: resume.errors,
-        isCancelled: () => cancelRef.current,
+        delayMs: 0,
+        isCancelled: () => pauseRef.current,
         fetchPage: async (page) => {
           setPhase(`Consultando página ${page}${progress.totalPages ? ` de ${progress.totalPages}` : ""}`);
           return requestPnrConnector<CaseCenterPage>("FETCH_PAGE", { competence, page });
@@ -271,7 +275,8 @@ export function PnrInboxView({ profile }: { profile: AuthProfile }) {
 
       setResumeAvailable(!result.completed);
       if (result.cancelled) {
-        setPhase("Captura interrompida. A retomada foi preservada.");
+        setPaused(true);
+        setPhase("Sincronização pausada. Clique em Play para continuar.");
       } else {
         setPhase("Sincronização concluída");
         setCompletion({
@@ -284,6 +289,8 @@ export function PnrInboxView({ profile }: { profile: AuthProfile }) {
           deleted: lastCounts.deletedCount,
           errors: result.errors,
         });
+        setPaused(false);
+        setResumeAvailable(false);
         await refreshDashboard();
       }
       });
@@ -341,8 +348,24 @@ export function PnrInboxView({ profile }: { profile: AuthProfile }) {
             <label><span>Ano</span><select value={year} onChange={(event) => setYear(Number(event.target.value))}>{years.map((item) => <option key={item}>{item}</option>)}</select></label>
             <label><span>Mês</span><select value={month} onChange={(event) => setMonth(Number(event.target.value))}>{MONTHS.map((label, index) => <option key={label} value={index + 1}>{label}</option>)}</select></label>
             <label><span>Quinzena</span><select value={half} onChange={(event) => setHalf(Number(event.target.value) as 1 | 2)}><option value={1}>Quinzena 1 / Q1</option><option value={2}>Quinzena 2 / Q2</option></select></label>
-            <button className="primary-button" type="button" disabled={running || !canImport || !syncReady} onClick={() => void startSync()}><CloudDownload size={17} />Trazer Dados para Inteligência ALC</button>
-            {running ? <button className="secondary-button" type="button" onClick={() => { cancelRef.current = true; setPhase("Cancelando após a página atual..."); }}><Square size={14} />Cancelar</button> : null}
+            <button className="primary-button" type="button" disabled={running || paused || !canImport || !syncReady} onClick={() => void startSync()}><CloudDownload size={17} />Trazer Dados para Inteligência ALC</button>
+            {running || paused || resumeAvailable ? (
+              <button
+                className="secondary-button"
+                type="button"
+                onClick={() => {
+                  if (running) {
+                    pauseRef.current = true;
+                    setPhase("Pausando após a página atual...");
+                    return;
+                  }
+                  void startSync();
+                }}
+              >
+                {running ? <Pause size={15} /> : <Play size={15} />}
+                {running ? "Pausar" : "Continuar"}
+              </button>
+            ) : null}
           </div>
           <div className="case-center-progress" aria-live="polite">
             <div><strong>{phase}</strong><span>{progress.page ? `Página ${progress.page}${progress.totalPages ? ` de ${progress.totalPages}` : ""}` : competence}</span></div>
