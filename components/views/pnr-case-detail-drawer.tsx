@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { CircleDollarSign, FileText, History, MapPinned, PackageOpen, Route, UserRound, X } from "lucide-react";
 import { formatCurrency, StatusBadge } from "@/components/ui";
 import type { PnrRecord } from "@/lib/types";
@@ -55,7 +55,7 @@ function DetailField({ label, value, mono = false }: { label: string; value?: st
   return <div className="pnr-detail-field"><span>{label}</span><strong className={mono ? "mono" : undefined}>{display(value)}</strong></div>;
 }
 
-function DetailSection({ icon, title, children }: { icon: React.ReactNode; title: string; children: React.ReactNode }) {
+function DetailSection({ icon, title, children }: { icon: ReactNode; title: string; children: ReactNode }) {
   return (
     <section className="pnr-detail-section">
       <header>{icon}<h3>{title}</h3></header>
