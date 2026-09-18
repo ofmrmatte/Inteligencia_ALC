@@ -56,7 +56,33 @@ interface TimelineConnectorResult {
   caseId: string;
   sourceEventCount: number;
   events: PnrCaseTimelineEvent[];
-  detail?: { claimId?: string; preInvoiceNumber?: string; billingPeriod?: string; driverId?: string };
+  detail?: {
+    claimId?: string;
+    preInvoiceNumber?: string;
+    billingPeriod?: string;
+    driverId?: string;
+    buyerName?: string;
+    complaintMessage?: string;
+    assignedReceiver?: string;
+    trackingId?: string;
+    products?: Array<{ id?: string; title: string; price?: number; currency?: string }>;
+    deliveryAt?: string;
+    receivedBy?: string;
+    receiverName?: string;
+    receiverDocument?: string;
+    routeId?: string;
+    carrierName?: string;
+    driverName?: string;
+    driverPhone?: string;
+    reviewRequestedBy?: string;
+    reviewRequestedAt?: string;
+    reviewMessage?: string;
+    reviewEvidenceNames?: string[];
+    receiptStatus?: string;
+    receiptActorName?: string;
+    receiptMessage?: string;
+    reviewOutcome?: string;
+  };
 }
 
 function connectionPresentation(state: PnrConnectorState) {
