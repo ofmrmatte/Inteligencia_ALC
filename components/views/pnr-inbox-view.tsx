@@ -295,7 +295,7 @@ export function PnrInboxView({ profile }: { profile: AuthProfile }) {
         style={{ cursor: "pointer" }}
         onClick={(event) => {
           event.stopPropagation();
-          setTrendSelection((current) => current?.period === props.payload?.period && current.series === series
+          setTrendSelection((current) => current?.period === props.payload?.period && current?.series === series
             ? null
             : { period: props.payload?.period || "", series });
         }}
