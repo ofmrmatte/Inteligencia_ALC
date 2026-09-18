@@ -24,6 +24,7 @@ import {
   type PnrConnectorState,
 } from "@/lib/pnr-connector-client";
 import { useDashboardStore } from "@/lib/store";
+import { retryPnrPersistence, runWithPnrImportLock } from "@/lib/pnr-case-sync";
 import {
   getPnrBackgroundSyncStatus,
   getServerPnrBackgroundSyncStatus,
@@ -211,6 +212,7 @@ export function PnrInboxView({ profile }: { profile: AuthProfile }) {
     setCompletion(null);
     setPhase("Conectando...");
     try {
+      await runWithPnrImportLock(navigator.locks, async () => {
       const currentConnection = await checkConnector();
       if (currentConnection !== "connected" && currentConnection !== "outdated") {
         throw new Error(connectionPresentation(currentConnection).label);
@@ -231,23 +233,27 @@ export function PnrInboxView({ profile }: { profile: AuthProfile }) {
           return requestPnrConnector<CaseCenterPage>("FETCH_PAGE", { competence, page });
         },
         persistPage: async (pageResult, completed, processed, errors) => {
-          const response = await fetch("/api/pnr-case-center/import", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-              syncId: resume.syncId,
-              competence,
-              page: pageResult.page,
-              totalPages: pageResult.totalPages,
-              totalElements: pageResult.totalElements,
-              completed,
-              processed,
-              errorCount: errors,
-              records: pageResult.records,
-            }),
+          const body = await retryPnrPersistence(async () => {
+            const response = await fetch("/api/pnr-case-center/import", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({
+                syncId: resume.syncId,
+                competence,
+                page: pageResult.page,
+                totalPages: pageResult.totalPages,
+                totalElements: pageResult.totalElements,
+                completed,
+                processed,
+                errorCount: errors,
+                records: pageResult.records,
+              }),
+            });
+            if (!response.ok) throw new Error(await readError(response, "Falha ao persistir casos PNR."));
+            return response.json() as Promise<{ persisted: number; newCount: number; reconciledCount: number; updatedCount: number; unchangedCount: number; deletedCount: number }>;
+          }, (attempt) => {
+            setPhase(`Banco ocupado ao salvar página ${pageResult.page}. Nova tentativa ${attempt}/3...`);
           });
-          if (!response.ok) throw new Error(await readError(response, "Falha ao persistir casos PNR."));
-          const body = await response.json() as { persisted: number; newCount: number; reconciledCount: number; updatedCount: number; unchangedCount: number; deletedCount: number };
           lastPersisted = body.persisted;
           totalFound = pageResult.totalElements;
           lastCounts = body;
@@ -280,6 +286,7 @@ export function PnrInboxView({ profile }: { profile: AuthProfile }) {
         });
         await refreshDashboard();
       }
+      });
     } catch (error) {
       const state = connectionStateFromError(error);
       if (state !== "error") setConnection(state);

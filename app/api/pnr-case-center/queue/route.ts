@@ -1,7 +1,12 @@
 import { NextResponse } from "next/server";
 import { canAccessSection } from "@/lib/access-control";
 import { getCurrentProfile } from "@/lib/auth-server";
-import { pnrDetailQueuePriority, type PnrDetailQueueRecord } from "@/lib/pnr-case-sync";
+import {
+  PNR_DETAIL_QUEUE_CANDIDATE_LIMIT,
+  PNR_DETAIL_SYNC_BATCH_SIZE,
+  pnrDetailQueuePriority,
+  type PnrDetailQueueRecord,
+} from "@/lib/pnr-case-sync";
 import { createClient } from "@/lib/supabase/server";
 
 export const dynamic = "force-dynamic";
@@ -26,7 +31,7 @@ export async function GET() {
       .or(`detail_next_sync_at.is.null,detail_next_sync_at.lte.${now}`)
       .order("detail_next_sync_at", { ascending: true, nullsFirst: true })
       .order("case_date", { ascending: false })
-      .limit(500);
+      .limit(PNR_DETAIL_QUEUE_CANDIDATE_LIMIT);
     if (error) throw new Error(`pnr_case_center_cases: ${error.message}`);
 
     const candidates = (data ?? [])
@@ -34,9 +39,15 @@ export async function GET() {
       .filter((record): record is typeof record & { priority: number } => record.priority !== null)
       .sort((left, right) => left.priority - right.priority);
 
+    const cases = candidates.slice(0, PNR_DETAIL_SYNC_BATCH_SIZE).map((record) => ({
+      caseId: record.case_id,
+      priority: record.priority,
+    }));
+
     return json({
       pending: count ?? candidates.length,
-      case: candidates[0] ? { caseId: candidates[0].case_id, priority: candidates[0].priority } : null,
+      cases,
+      case: cases[0] ?? null,
     });
   } catch (error) {
     return json({ error: error instanceof Error ? error.message : "Falha ao consultar fila PNR." }, 400);

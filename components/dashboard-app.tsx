@@ -15,6 +15,7 @@ import { canManageImports, type AuthProfile } from "@/lib/auth";
 import { ViewRouter } from "@/components/views/view-router";
 import { SECTION_META, type SectionId } from "@/lib/navigation";
 import { useDashboardStore } from "@/lib/store";
+import { PNR_BACKGROUND_SYNC_COMMITTED_EVENT } from "@/lib/pnr-background-sync-store";
 
 const ImportPanel = dynamic(() => import("@/components/import-panel").then((module) => module.ImportPanel), { ssr: false });
 const SIDEBAR_KEY = "alc-inteligencia:sidebar-collapsed";
@@ -126,6 +127,7 @@ export function DashboardApp({ section, profile }: { section: SectionId; profile
 
     window.addEventListener("focus", handleFocus);
     window.addEventListener("storage", handleStorage);
+    window.addEventListener(PNR_BACKGROUND_SYNC_COMMITTED_EVENT, synchronize);
     document.addEventListener("visibilitychange", handleVisibility);
     return () => {
       disposed = true;
@@ -133,6 +135,7 @@ export function DashboardApp({ section, profile }: { section: SectionId; profile
       window.clearInterval(timer);
       window.removeEventListener("focus", handleFocus);
       window.removeEventListener("storage", handleStorage);
+      window.removeEventListener(PNR_BACKGROUND_SYNC_COMMITTED_EVENT, synchronize);
       document.removeEventListener("visibilitychange", handleVisibility);
     };
   }, [hydrate, cacheOwnerId, canLoadOperationalData, remountOnGlobalSync]);

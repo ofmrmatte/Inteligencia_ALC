@@ -13,6 +13,11 @@ import {
   type NormalizedCaseCenterPnrCase,
 } from "@/lib/pnr-case-center";
 import { connectorStatusFromCode, PnrConnectorError, requestPnrConnector } from "@/lib/pnr-connector-client";
+import {
+  isTransientPnrPersistenceError,
+  retryPnrPersistence,
+  runWithPnrImportLock,
+} from "@/lib/pnr-case-sync";
 
 const record: NormalizedCaseCenterPnrCase = {
   caseId: "169432521",
@@ -223,6 +228,40 @@ describe("Case Center PNR", () => {
     });
     expect(fetched).toEqual([2]);
     expect(result).toMatchObject({ completed: true, processed: 31, errors: 2 });
+  });
+
+  it("repete persistência quando o Postgres cancela por statement timeout", async () => {
+    let attempts = 0;
+    const retries: number[] = [];
+    const result = await retryPnrPersistence(async () => {
+      attempts += 1;
+      if (attempts < 3) throw new Error("pnr_case_center_cases: canceling statement due to statement timeout");
+      return "ok";
+    }, (attempt) => retries.push(attempt), {
+      delaysMs: [0, 0, 0],
+      wait: async () => undefined,
+    });
+
+    expect(result).toBe("ok");
+    expect(attempts).toBe(3);
+    expect(retries).toEqual([1, 2]);
+    expect(isTransientPnrPersistenceError(new Error("erro de contrato"))).toBe(false);
+  });
+
+  it("usa o mesmo lock exclusivo para impedir detalhe concorrente com importação", async () => {
+    const calls: string[] = [];
+    const locks = {
+      request: async <T,>(
+        name: string,
+        options: { mode: "exclusive" },
+        callback: (lock: unknown) => Promise<T>,
+      ) => {
+        calls.push(`${name}:${options.mode}`);
+        return callback({});
+      },
+    };
+    await expect(runWithPnrImportLock(locks, async () => "persistido")).resolves.toBe("persistido");
+    expect(calls).toEqual(["alc-pnr-case-detail-sync:exclusive"]);
   });
 
   it("falha de forma explícita quando a extensão não existe", async () => {

@@ -1,9 +1,10 @@
 import { CASE_CENTER_TIMELINE_PARSER_VERSION } from "@/lib/pnr-case-center";
 
 export const PNR_DETAIL_SYNC_LOCK = "alc-pnr-case-detail-sync";
-export const PNR_DETAIL_SYNC_BATCH_SIZE = 5;
-export const PNR_DETAIL_SYNC_INTERVAL_MS = 60_000;
-export const PNR_DETAIL_SYNC_CASE_DELAY_MS = 1_500;
+export const PNR_DETAIL_SYNC_BATCH_SIZE = 20;
+export const PNR_DETAIL_QUEUE_CANDIDATE_LIMIT = 500;
+export const PNR_DETAIL_SYNC_INTERVAL_MS = 5_000;
+export const PNR_DETAIL_SYNC_CASE_DELAY_MS = 400;
 
 export interface PnrDetailQueueRecord {
   detail_sync_status: string;
@@ -52,4 +53,58 @@ export async function runWithPnrSyncLock(
     await operation();
     return true;
   });
+}
+
+interface BlockingLockManagerLike {
+  request<T>(
+    name: string,
+    options: { mode: "exclusive" },
+    callback: (lock: unknown) => Promise<T>,
+  ): Promise<T>;
+}
+
+export async function runWithPnrImportLock<T>(
+  locks: BlockingLockManagerLike | undefined,
+  operation: () => Promise<T>,
+) {
+  if (!locks) return operation();
+  return locks.request(PNR_DETAIL_SYNC_LOCK, { mode: "exclusive" }, async () => operation());
+}
+
+const PNR_PERSIST_RETRY_DELAYS_MS = [750, 1_500, 3_000] as const;
+
+export function isTransientPnrPersistenceError(error: unknown) {
+  const message = (error instanceof Error ? error.message : String(error || "")).toLowerCase();
+  return [
+    "statement timeout",
+    "canceling statement due to statement timeout",
+    "lock timeout",
+    "deadlock detected",
+    "could not serialize access",
+    "failed to fetch",
+    "fetch failed",
+    "networkerror",
+  ].some((fragment) => message.includes(fragment));
+}
+
+export async function retryPnrPersistence<T>(
+  operation: () => Promise<T>,
+  onRetry?: (attempt: number, delayMs: number) => void,
+  options: {
+    delaysMs?: readonly number[];
+    wait?: (delayMs: number) => Promise<void>;
+  } = {},
+) {
+  const delaysMs = options.delaysMs ?? PNR_PERSIST_RETRY_DELAYS_MS;
+  const wait = options.wait ?? ((delayMs: number) => new Promise<void>((resolve) => setTimeout(resolve, delayMs)));
+  for (let attempt = 0; ; attempt += 1) {
+    try {
+      return await operation();
+    } catch (error) {
+      if (!isTransientPnrPersistenceError(error) || attempt >= delaysMs.length) throw error;
+      const delayMs = delaysMs[attempt];
+      onRetry?.(attempt + 1, delayMs);
+      await wait(delayMs);
+    }
+  }
 }

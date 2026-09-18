@@ -10,6 +10,7 @@ export interface PnrBackgroundSyncStatus {
 }
 
 export const PNR_BACKGROUND_SYNC_NOW_EVENT = "alc-pnr-background-sync-now";
+export const PNR_BACKGROUND_SYNC_COMMITTED_EVENT = "alc-pnr-background-sync-committed";
 
 const initialStatus: PnrBackgroundSyncStatus = {
   phase: "idle",

@@ -11,6 +11,7 @@ import {
 } from "@/lib/pnr-case-sync";
 import {
   getPnrBackgroundSyncStatus,
+  PNR_BACKGROUND_SYNC_COMMITTED_EVENT,
   PNR_BACKGROUND_SYNC_NOW_EVENT,
   publishPnrBackgroundSyncStatus,
 } from "@/lib/pnr-background-sync-store";
@@ -23,6 +24,7 @@ import {
 
 interface QueueResponse {
   pending: number;
+  cases?: Array<{ caseId: string; priority: number }>;
   case: { caseId: string; priority: number } | null;
 }
 
@@ -98,16 +100,17 @@ export function PnrCaseCenterBackgroundSync() {
     };
 
     const run = async (manual = false) => {
-      if (disposed || running || (!manual && document.visibilityState === "hidden")) {
+      if (disposed || running) {
         schedule();
         return;
       }
       running = true;
       try {
         const acquired = await runWithPnrSyncLock(navigator.locks, async () => {
-          let queue = await readQueue();
+          const queue = await readQueue();
+          const queuedCases = queue.cases?.length ? queue.cases : queue.case ? [queue.case] : [];
           publishPnrBackgroundSyncStatus({ pending: queue.pending });
-          if (!queue.case) {
+          if (!queuedCases.length) {
             publishPnrBackgroundSyncStatus({ phase: "idle", message: "Fila de detalhes atualizada" });
             return;
           }
@@ -131,13 +134,17 @@ export function PnrCaseCenterBackgroundSync() {
             throw new Error(handshake.sessionMessage || "Falha na conexão com o Mercado Livre.");
           }
 
-          for (let index = 0; index < PNR_DETAIL_SYNC_BATCH_SIZE && queue.case && !disposed; index += 1) {
-            const caseId = queue.case.caseId;
+          let handled = 0;
+          let successful = 0;
+          for (const queuedCase of queuedCases.slice(0, PNR_DETAIL_SYNC_BATCH_SIZE)) {
+            if (disposed) break;
+            const caseId = queuedCase.caseId;
             publishPnrBackgroundSyncStatus({ phase: "active", message: `Sincronizando caso ${caseId}` });
             await updateTimeline(caseId, "ATTEMPT");
             try {
               const result = await requestPnrConnector<TimelineConnectorResult>("FETCH_TIMELINE", { caseId });
               await updateTimeline(caseId, "COMPLETE", result);
+              successful += 1;
               const status = getPnrBackgroundSyncStatus();
               publishPnrBackgroundSyncStatus({
                 processed: status.processed + 1,
@@ -154,15 +161,16 @@ export function PnrCaseCenterBackgroundSync() {
                 return;
               }
             }
-            await wait(PNR_DETAIL_SYNC_CASE_DELAY_MS);
-            queue = await readQueue();
-            publishPnrBackgroundSyncStatus({ pending: queue.pending });
+            handled += 1;
+            publishPnrBackgroundSyncStatus({ pending: Math.max(0, queue.pending - handled) });
+            if (!disposed && handled < queuedCases.length) await wait(PNR_DETAIL_SYNC_CASE_DELAY_MS);
           }
 
-          publishPnrBackgroundSyncStatus({ phase: "idle", message: "Sincronização automática aguardando próximo lote" });
+          if (successful > 0) window.dispatchEvent(new Event(PNR_BACKGROUND_SYNC_COMMITTED_EVENT));
+          publishPnrBackgroundSyncStatus({ phase: "idle", message: "Lote de detalhes concluído; preparando o próximo" });
         });
         if (!acquired) {
-          publishPnrBackgroundSyncStatus({ phase: "paused", message: "Sincronização ativa em outra aba" });
+          publishPnrBackgroundSyncStatus({ phase: "paused", message: "Sincronização de detalhes pausada durante outra operação PNR" });
         }
       } catch (error) {
         const paused = pausedMessage(error);
