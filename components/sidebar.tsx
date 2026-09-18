@@ -1,7 +1,8 @@
 "use client";
 
+import { useState } from "react";
 import Link from "next/link";
-import { ChevronLeft, ChevronRight, HardDriveUpload } from "lucide-react";
+import { ChevronDown, ChevronLeft, ChevronRight, HardDriveUpload } from "lucide-react";
 import { Brand } from "@/components/brand";
 import { canAccessSection } from "@/lib/access-control";
 import type { AuthProfile } from "@/lib/auth";
@@ -24,6 +25,9 @@ export function Sidebar({
 }) {
   const groups = ["Análises", "Controle de dados", "Administração"] as const;
   const visibleNavigation = NAVIGATION.filter((item) => canAccessSection(profile, item.id));
+  const pnrChildren = visibleNavigation.filter((item) => item.parentId === "gestao-pnr");
+  const pnrActive = active === "gestao-pnr" || pnrChildren.some((item) => item.id === active);
+  const [pnrOpen, setPnrOpen] = useState(pnrActive);
 
   return (
     <aside className={collapsed ? "sidebar sidebar--collapsed" : "sidebar"}>
@@ -40,11 +44,61 @@ export function Sidebar({
                 const Icon = item.icon;
                 const children = visibleNavigation.filter((child) => child.parentId === item.id);
                 const childActive = children.some((child) => child.id === active);
+                const isPnrGroup = item.id === "gestao-pnr";
                 const itemClass = item.id === active
                   ? "sidebar__item is-active"
                   : childActive
                     ? "sidebar__item is-parent-active"
                     : "sidebar__item";
+
+                if (isPnrGroup) {
+                  const open = pnrOpen || pnrActive;
+                  return (
+                    <div className="sidebar__branch" key={item.id}>
+                      <button
+                        className={pnrActive ? "sidebar__item sidebar__group-toggle is-parent-active" : "sidebar__item sidebar__group-toggle"}
+                        type="button"
+                        title={collapsed ? item.label : undefined}
+                        aria-expanded={open}
+                        onClick={() => {
+                          if (collapsed) {
+                            onToggle();
+                            setPnrOpen(true);
+                            return;
+                          }
+                          setPnrOpen((current) => !current);
+                        }}
+                      >
+                        <Icon size={19} strokeWidth={1.9} />
+                        {!collapsed && <><span>{item.label}</span><ChevronDown className={open ? "sidebar__chevron is-open" : "sidebar__chevron"} size={15} /></>}
+                      </button>
+
+                      {!collapsed && open ? (
+                        <div className="sidebar__subnav" aria-label="Subcategorias de Gestão PNR">
+                          <Link
+                            className={active === "gestao-pnr" ? "sidebar__subitem is-active" : "sidebar__subitem"}
+                            href="/gestao-pnr"
+                          >
+                            <span>Casos e Tratativas</span>
+                          </Link>
+                          {children.map((child) => {
+                            const ChildIcon = child.icon;
+                            return (
+                              <Link
+                                className={child.id === active ? "sidebar__subitem is-active" : "sidebar__subitem"}
+                                href={child.href}
+                                key={child.id}
+                              >
+                                <ChildIcon size={14} strokeWidth={1.9} />
+                                <span>{child.label}</span>
+                              </Link>
+                            );
+                          })}
+                        </div>
+                      ) : null}
+                    </div>
+                  );
+                }
 
                 return (
                   <div className="sidebar__branch" key={item.id}>
