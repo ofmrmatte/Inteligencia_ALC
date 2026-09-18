@@ -8,6 +8,7 @@ const loading = () => <div className="view-loading"><span /><span /><span /></di
 const OverviewView = dynamic(() => import("./overview-view").then((module) => module.OverviewView), { loading });
 const PnrView = dynamic(() => import("./pnr-view").then((module) => module.PnrView), { loading });
 const PnrAuditView = dynamic(() => import("./pnr-audit-view").then((module) => module.PnrAuditView), { loading });
+const PnrInboxView = dynamic(() => import("./pnr-inbox-view").then((module) => module.PnrInboxView), { loading });
 const PrefaturaView = dynamic(() => import("./prefatura-view").then((module) => module.PrefaturaView), { loading });
 const DiscountManagementView = dynamic(() => import("./discount-management-view-v4").then((module) => module.DiscountManagementViewV4), { loading });
 const ReportsView = dynamic(() => import("./reports-view-v2").then((module) => module.ReportsView), { loading });
@@ -24,6 +25,7 @@ export function ViewRouter({ section, profile }: { section: SectionId; profile: 
   switch (section) {
     case "gestao-pnr": return <PnrView />;
     case "auditoria-pnr": return <PnrAuditView />;
+    case "bandeja-pnr": return <PnrInboxView profile={profile} />;
     case "pre-faturamento": return <PrefaturaView />;
     case "gestao-descontos": return <DiscountManagementView />;
     case "relatorios-pacotes": return <ReportsView />;

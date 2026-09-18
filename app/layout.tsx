@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import { Montserrat, Poppins } from "next/font/google";
 import { Toaster } from "sonner";
+import { PnrCaseCenterBackgroundSync } from "@/components/pnr-case-center-background-sync";
 import "./globals.css";
 
 const montserrat = Montserrat({ subsets: ["latin"], variable: "--font-heading", display: "swap" });
@@ -23,6 +24,7 @@ export default function RootLayout({ children }: Readonly<{ children: React.Reac
     <html lang="pt-BR" className={`${montserrat.variable} ${poppins.variable}`}>
       <body>
         {children}
+        <PnrCaseCenterBackgroundSync />
         <Toaster position="top-right" richColors closeButton />
       </body>
     </html>

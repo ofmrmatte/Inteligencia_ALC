@@ -46,6 +46,7 @@ export interface PrefaturaRecord extends SourceTrace, OperationalUnitFields {
 export type PrefaturaQualityStatus = "resolved" | "partial" | "needs_review" | "conflict";
 
 export interface PnrRecord extends SourceTrace, OperationalUnitFields {
+  caseId?: string;
   caseDate: string | null;
   status: string;
   billingPeriod: string;
@@ -57,8 +58,24 @@ export interface PnrRecord extends SourceTrace, OperationalUnitFields {
   baseName?: string;
   baseKey: string;
   sigla: string;
+  routeCode?: string;
   routeId: string;
   driverId: string;
+  driverName?: string;
+  currency?: string;
+  mainStatus?: string;
+  subStatus?: string;
+  reviewedStatus?: string;
+  caseType?: string;
+  routeStatus?: string;
+  priority?: string;
+  sourceSystem?: "spreadsheet" | "case_center";
+  caseCaptureStatus?: "LIST_ONLY" | "COMPLETE" | "ERROR";
+  detailSyncStatus?: "DETAIL_PENDING" | "COMPLETE" | "ERROR";
+  timelineSyncedAt?: string | null;
+  firstCapturedAt?: string;
+  lastCapturedAt?: string;
+  sourceLastSeenAt?: string;
   custom: string;
   billingType: string;
   cancellationType: string;
@@ -118,7 +135,7 @@ export interface ImportEntry {
   analysisExcluded?: boolean;
   duplicateOf?: string | null;
   size: number;
-  status: "concluído" | "com-alertas" | "erro" | "demonstração";
+  status: "processando" | "concluído" | "com-alertas" | "erro" | "demonstração";
   kinds: SourceKind[];
   workbookCount: number;
   rowCount: number;

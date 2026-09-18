@@ -5,6 +5,8 @@ import { hasFullAccess, isUserRole, type AuthProfile } from "@/lib/auth";
 import { fortnightFromDate, monthFromFortnight, normalizeFortnight } from "@/lib/competence";
 import { duplicateFileImportError, findDuplicateFileHash } from "@/lib/import-dedupe";
 import { normalizeText } from "@/lib/normalize";
+import { caseCenterStatusLabel, caseCenterTimelineNeedsRefresh } from "@/lib/pnr-case-center";
+import { derivePnrFinancialClassification, type PnrCaseCenterClassificationEvent } from "@/lib/pnr-classification";
 import {
   enrichPrefaturaRows,
   prefaturaIdentityKey,
@@ -116,7 +118,7 @@ function mapImportEntry(row: DbRow): ImportEntry {
   const entry = metadataEntry(row);
   const issues = Array.isArray(entry.issues) ? entry.issues.map(toStringValue) : [];
   const kinds = isSourceKindArray(entry.kinds) ? entry.kinds : [];
-  const status = entry.status === "com-alertas" || entry.status === "erro" || entry.status === "demonstração" ? entry.status : "concluído";
+  const status = entry.status === "processando" || entry.status === "com-alertas" || entry.status === "erro" || entry.status === "demonstração" ? entry.status : "concluído";
   return {
     id: toStringValue(entry.id || row.id),
     batchId: toStringValue(entry.batchId || row.id),
@@ -177,6 +179,7 @@ function mapPrefatura(row: DbRow): PrefaturaRecord {
 function mapPnr(row: DbRow): PnrRecord {
   return {
     ...sourceTrace(row),
+    caseId: toStringValue(row.case_id),
     caseDate: toDateString(row.case_date),
     status: toStringValue(row.status),
     billingPeriod: toStringValue(row.billing_period),
@@ -187,12 +190,80 @@ function mapPnr(row: DbRow): PnrRecord {
     originStation: toStringValue(row.origin_station),
     baseKey: toStringValue(row.base_key),
     sigla: toStringValue(row.sigla),
+    routeCode: toStringValue(row.route_code),
     routeId: toStringValue(row.route_id),
     driverId: toStringValue(row.driver_id),
+    driverName: toStringValue(row.driver_name),
+    currency: toStringValue(row.currency),
+    mainStatus: toStringValue(row.main_status),
+    subStatus: toStringValue(row.sub_status),
+    reviewedStatus: toStringValue(row.reviewed_status),
+    caseType: toStringValue(row.case_type),
+    routeStatus: toStringValue(row.route_status),
+    priority: toStringValue(row.priority),
+    sourceSystem: row.source_system === "case_center" ? "case_center" : "spreadsheet",
+    caseCaptureStatus: toStringValue(row.case_capture_status) as PnrRecord["caseCaptureStatus"],
+    detailSyncStatus: toStringValue(row.detail_sync_status) as PnrRecord["detailSyncStatus"],
+    timelineSyncedAt: toDateString(row.timeline_synced_at),
+    firstCapturedAt: toStringValue(row.first_captured_at) || undefined,
+    lastCapturedAt: toStringValue(row.last_captured_at) || undefined,
+    sourceLastSeenAt: toStringValue(row.source_last_seen_at) || undefined,
     custom: toStringValue(row.custom),
     billingType: toStringValue(row.billing_type),
     cancellationType: toStringValue(row.cancellation_type),
     classificationColumnsPresent: Boolean(row.classification_columns_present),
+  };
+}
+
+function mapCaseCenterCase(row: DbRow, timeline: PnrCaseCenterClassificationEvent[] = []): PnrRecord {
+  const caseId = toStringValue(row.case_id);
+  const competence = toStringValue(row.competence);
+  const detailSyncStatus = caseCenterTimelineNeedsRefresh(row.raw_snapshot_jsonb)
+    ? "DETAIL_PENDING"
+    : toStringValue(row.detail_sync_status) as PnrRecord["detailSyncStatus"];
+  const classification = derivePnrFinancialClassification({
+    subStatus: toStringValue(row.sub_status),
+    reviewedStatus: toStringValue(row.reviewed_status),
+    detailSyncStatus,
+  }, timeline);
+  return {
+    batchId: toStringValue(row.latest_batch_id) || `case-center:${caseId}`,
+    sourceFile: `Bandeja PNR — ${competence}`,
+    sourceSheet: "Histórico Case Center",
+    rowNumber: 0,
+    caseId,
+    caseDate: toDateString(row.case_date),
+    status: caseCenterStatusLabel(toStringValue(row.main_status), toStringValue(row.sub_status)),
+    billingPeriod: toStringValue(row.billing_period) || normalizeFortnight(competence),
+    shipmentId: toStringValue(row.shipment_id),
+    products: "",
+    purchaseValue: toNumberValue(row.purchase_value),
+    carrier: "",
+    originStation: toStringValue(row.svc_name),
+    baseKey: toStringValue(row.base_key),
+    sigla: toStringValue(row.sigla),
+    routeCode: toStringValue(row.route_code),
+    routeId: toStringValue(row.route_id),
+    driverId: toStringValue(row.driver_id),
+    driverName: toStringValue(row.driver_name),
+    currency: toStringValue(row.currency),
+    mainStatus: toStringValue(row.main_status),
+    subStatus: toStringValue(row.sub_status),
+    reviewedStatus: toStringValue(row.reviewed_status),
+    caseType: toStringValue(row.case_type),
+    routeStatus: toStringValue(row.route_status),
+    priority: toStringValue(row.priority),
+    sourceSystem: "case_center",
+    caseCaptureStatus: toStringValue(row.case_capture_status) as PnrRecord["caseCaptureStatus"],
+    detailSyncStatus,
+    timelineSyncedAt: toDateString(row.timeline_synced_at),
+    firstCapturedAt: toStringValue(row.first_captured_at) || undefined,
+    lastCapturedAt: toStringValue(row.last_captured_at) || undefined,
+    sourceLastSeenAt: toStringValue(row.source_last_seen_at) || undefined,
+    custom: "",
+    billingType: classification.family === "FATURAMENTO" ? classification.label : "",
+    cancellationType: classification.family === "ANULAÇÃO" ? classification.label : "",
+    classificationColumnsPresent: false,
   };
 }
 
@@ -295,11 +366,13 @@ async function readImportedFiles(supabase: ServerClient, batchId: string | null)
 
 async function loadDashboardData(supabase: ServerClient, profile: AuthProfile): Promise<DashboardData> {
   const accessScope = await getUserAccessScope(profile);
-  const [imports, hierarchy, prefatura, pnr, risk, drivers] = await Promise.all([
+  const [imports, hierarchy, prefatura, pnr, caseCenterCases, caseCenterEvents, risk, drivers] = await Promise.all([
     readTable(supabase, "import_batches", "*", "started_at"),
     readTable(supabase, "hierarchy_scopes"),
     readTable(supabase, "prefatura_records"),
     readTable(supabase, "pnr_records"),
+    readTable(supabase, "pnr_case_center_cases", "*", "last_captured_at"),
+    readTable(supabase, "pnr_case_events", "case_id,event_type,date_created,actor_name,actor_user_id", "date_created"),
     readTable(supabase, "risk_lm_records"),
     readTable(supabase, "driver_records"),
   ]);
@@ -308,7 +381,21 @@ async function loadDashboardData(supabase: ServerClient, profile: AuthProfile): 
   const activeBatchIds = new Set(mappedImports.filter((entry) => !entry.analysisExcluded).map((entry) => entry.batchId));
   const hierarchyRows = hierarchy.filter((row) => activeBatchIds.has(toStringValue(row.batch_id))).map(mapHierarchy);
   const prefaturaRows = prefatura.filter((row) => activeBatchIds.has(toStringValue(row.batch_id))).map(mapPrefatura);
-  const pnrRows = pnr.filter((row) => activeBatchIds.has(toStringValue(row.batch_id))).map(mapPnr);
+  const timelineByCase = new Map<string, PnrCaseCenterClassificationEvent[]>();
+  for (const event of caseCenterEvents) {
+    const caseId = toStringValue(event.case_id);
+    if (!caseId) continue;
+    timelineByCase.set(caseId, [...(timelineByCase.get(caseId) ?? []), {
+      eventType: toStringValue(event.event_type),
+      dateCreated: toStringValue(event.date_created),
+      actorName: toStringValue(event.actor_name) || undefined,
+      actorUserId: toStringValue(event.actor_user_id) || undefined,
+    }]);
+  }
+  const pnrRows = [
+    ...pnr.filter((row) => row.source_system !== "case_center" && activeBatchIds.has(toStringValue(row.batch_id))).map(mapPnr),
+    ...caseCenterCases.map((row) => mapCaseCenterCase(row, timelineByCase.get(toStringValue(row.case_id)) ?? [])),
+  ];
   const riskRows = risk.filter((row) => activeBatchIds.has(toStringValue(row.batch_id))).map(mapRisk);
 
   const scopedHierarchy = filterByAccessScope(accessScope, hierarchyRows);

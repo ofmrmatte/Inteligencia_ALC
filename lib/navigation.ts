@@ -9,6 +9,7 @@ import {
   FileClock,
   FileSpreadsheet,
   IdCard,
+  Inbox,
   Settings,
   UserRound,
   ReceiptText,
@@ -19,6 +20,7 @@ export const SECTION_IDS = [
   "visao-geral",
   "gestao-pnr",
   "auditoria-pnr",
+  "bandeja-pnr",
   "pre-faturamento",
   "gestao-descontos",
   "relatorios-pacotes",
@@ -47,7 +49,8 @@ export interface NavigationItem {
 export const NAVIGATION: NavigationItem[] = [
   { id: "visao-geral", label: "Visão Geral", shortLabel: "Visão geral", href: "/", icon: CircleGauge, group: "Análises" },
   { id: "gestao-pnr", label: "Gestão PNR", shortLabel: "Gestão PNR", href: "/gestao-pnr", icon: Boxes, group: "Análises" },
-  { id: "auditoria-pnr", label: "Auditoria PNR", shortLabel: "Auditoria PNR", href: "/auditoria-pnr", icon: ClipboardCheck, group: "Análises", parentId: "gestao-pnr" },
+  { id: "auditoria-pnr", label: "Classificação Financeira", shortLabel: "Classificação", href: "/auditoria-pnr", icon: ClipboardCheck, group: "Análises", parentId: "gestao-pnr" },
+  { id: "bandeja-pnr", label: "Sync PNR", shortLabel: "Sync PNR", href: "/bandeja-pnr", icon: Inbox, group: "Análises", parentId: "gestao-pnr" },
   { id: "pre-faturamento", label: "Pré-faturamento", shortLabel: "Pré-faturamento", href: "/pre-faturamento", icon: ReceiptText, group: "Análises" },
   { id: "gestao-descontos", label: "Gestão de Descontos", shortLabel: "Descontos", href: "/gestao-descontos", icon: BadgeDollarSign, group: "Análises" },
   { id: "relatorios-pacotes", label: "Relatórios de Pacotes", shortLabel: "Relatórios", href: "/relatorios-pacotes", icon: FileSpreadsheet, group: "Análises" },
@@ -63,8 +66,9 @@ export const NAVIGATION: NavigationItem[] = [
 
 export const SECTION_META: Record<SectionId, { title: string; eyebrow: string; description: string }> = {
   "visao-geral": { title: "Visão Geral", eyebrow: "Monitoramento executivo", description: "Leitura consolidada de pacotes, descontos, risco e nível de entrega." },
-  "gestao-pnr": { title: "Gestão PNR", eyebrow: "Casos e tratativas", description: "Acompanhe status, valores e cruzamentos dos casos PNR por pacote." },
-  "auditoria-pnr": { title: "Auditoria PNR", eyebrow: "Classificação financeira", description: "Audite tipos de faturamento e anulação por ID, com quantidades e valores calculados diretamente da PNR." },
+  "gestao-pnr": { title: "Casos e Tratativas", eyebrow: "Gestão PNR", description: "Consulte todos os casos PNR, incluindo histórico legado e dados sincronizados do Case Center." },
+  "auditoria-pnr": { title: "Classificação Financeira", eyebrow: "Gestão PNR", description: "Acompanhe faturamentos e anulações classificados a partir do histórico consolidado de PNR." },
+  "bandeja-pnr": { title: "Sync PNR", eyebrow: "Gestão PNR", description: "Sincronize os casos da Bandeja de suporte do Mercado Livre com o Inteligência ALC." },
   "pre-faturamento": { title: "Pré-faturamento", eyebrow: "Conferência financeira", description: "Analise descontos SVC, XPT e PNR sem duplicar IDs de pacote." },
   "gestao-descontos": { title: "Gestão de Descontos", eyebrow: "Direcionamento financeiro", description: "Centralize decisões de desconto ou absorção por ID e cruze automaticamente com Pré-fatura e PNR." },
   "relatorios-pacotes": { title: "Relatórios de Pacotes", eyebrow: "Relatórios gerenciais", description: "Gere relatórios ALC de PNR e Pacotes Perdidos por competência, datas e escopo operacional." },
