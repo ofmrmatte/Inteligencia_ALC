@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState, type ReactNode } from "react";
-import { CircleDollarSign, FileText, History, MapPinned, PackageOpen, Route, UserRound, X } from "lucide-react";
+import { CircleDollarSign, FileText, History, LoaderCircle, MapPinned, PackageOpen, RefreshCw, Route, UserRound, X } from "lucide-react";
 import { formatCurrency, StatusBadge } from "@/components/ui";
 import type { PnrRecord } from "@/lib/types";
 import type { PnrCaseTimelineEvent } from "@/lib/pnr-case-center";
@@ -88,6 +88,25 @@ export function PnrCaseDetailDrawer({ row, onClose }: { row: PnrRecord | null; o
   const [loading, setLoading] = useState(Boolean(row?.caseId));
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  const refreshCaseNow = async () => {
+    if (!row?.caseId || refreshing) return;
+    setRefreshing(true);
+    setError(null);
+    try {
+      const result = await requestPnrConnector<TimelineConnectorResult>("FETCH_TIMELINE", { caseId: row.caseId }, 30_000);
+      await persistTimelineResult(row.caseId, result);
+      const refreshed = await readArchivedTimeline(row.caseId);
+      setRemote(refreshed);
+      setError(null);
+    } catch (refreshError) {
+      setError(refreshError instanceof Error
+        ? refreshError.message
+        : "Não foi possível receber os dados deste caso agora.");
+    } finally {
+      setRefreshing(false);
+    }
+  };
 
   useEffect(() => {
     if (!row) return;
@@ -190,7 +209,21 @@ export function PnrCaseDetailDrawer({ row, onClose }: { row: PnrRecord | null; o
             <h2>{row.caseId ? `Caso ${row.caseId}` : `Envio ${row.shipmentId}`}</h2>
             <p>{row.originStation || "Base não identificada"} · {row.shipmentId}</p>
           </div>
-          <button className="icon-button" type="button" aria-label="Fechar detalhes" onClick={onClose}><X size={18} /></button>
+          <div className="pnr-detail-drawer__actions">
+            {row.sourceSystem === "case_center" && row.caseId ? (
+              <button
+                className="pnr-detail-refresh-button"
+                type="button"
+                onClick={() => { void refreshCaseNow(); }}
+                disabled={refreshing}
+                aria-label="Receber dados deste caso agora"
+              >
+                {refreshing ? <LoaderCircle size={14} className="is-spinning" /> : <RefreshCw size={14} />}
+                <span>{refreshing ? "Recebendo..." : "Receber dados"}</span>
+              </button>
+            ) : null}
+            <button className="icon-button" type="button" aria-label="Fechar detalhes" onClick={onClose}><X size={18} /></button>
+          </div>
         </div>
 
         <div className="pnr-detail-drawer__status">
