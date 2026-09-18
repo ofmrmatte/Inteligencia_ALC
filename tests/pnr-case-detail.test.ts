@@ -93,12 +93,14 @@ describe("histórico durável de detalhes PNR", () => {
     await expect(first).resolves.toBe(true);
   });
 
-  it("mantém drawer local e worker fora da tela Sync PNR", () => {
+  it("mantém worker global e permite priorizar imediatamente o caso aberto no drawer", () => {
     const drawer = readFileSync("components/views/pnr-case-detail-drawer.tsx", "utf8");
     const layout = readFileSync("app/layout.tsx", "utf8");
     const backgroundSync = readFileSync("components/pnr-case-center-background-sync.tsx", "utf8");
     expect(drawer).toContain("/api/pnr-case-center/timeline");
-    expect(drawer).not.toContain("requestPnrConnector");
+    expect(drawer).toContain("requestPnrConnector");
+    expect(drawer).toContain('"FETCH_TIMELINE"');
+    expect(drawer).toContain("Atualizando este caso diretamente no Case Center");
     expect(layout).toContain("<PnrCaseCenterBackgroundSync />");
     expect(backgroundSync).toContain('if (pathname === "/login" || pathname.startsWith("/motorista")) return;');
   });
