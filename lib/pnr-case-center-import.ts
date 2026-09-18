@@ -98,7 +98,13 @@ export function mergeCaseCenterCase(
     source_last_seen_at: context.capturedAt,
     latest_batch_id: context.batchId,
     source_system: "case_center",
-    raw_snapshot_jsonb: { ...record, timelineParserVersion: CASE_CENTER_TIMELINE_PARSER_VERSION },
+    raw_snapshot_jsonb: {
+      ...(existing?.raw_snapshot_jsonb && typeof existing.raw_snapshot_jsonb === "object" && !Array.isArray(existing.raw_snapshot_jsonb)
+        ? existing.raw_snapshot_jsonb
+        : {}),
+      ...record,
+      timelineParserVersion: CASE_CENTER_TIMELINE_PARSER_VERSION,
+    },
     updated_at: context.capturedAt,
   };
   const comparable = [
