@@ -116,6 +116,30 @@ export function PnrCaseDetailDrawer({ row, onClose }: { row: PnrRecord | null; o
   }, [row, onClose]);
 
   useEffect(() => {
+    if (!row) return;
+
+    const body = document.body;
+    const html = document.documentElement;
+    const previousOverflow = body.style.overflow;
+    const previousPaddingRight = body.style.paddingRight;
+    const previousOverscroll = html.style.overscrollBehavior;
+    const scrollbarWidth = Math.max(0, window.innerWidth - html.clientWidth);
+    const computedPaddingRight = Number.parseFloat(window.getComputedStyle(body).paddingRight) || 0;
+
+    body.style.overflow = "hidden";
+    if (scrollbarWidth > 0) {
+      body.style.paddingRight = `${computedPaddingRight + scrollbarWidth}px`;
+    }
+    html.style.overscrollBehavior = "none";
+
+    return () => {
+      body.style.overflow = previousOverflow;
+      body.style.paddingRight = previousPaddingRight;
+      html.style.overscrollBehavior = previousOverscroll;
+    };
+  }, [row]);
+
+  useEffect(() => {
     let cancelled = false;
     if (!row?.caseId) return;
 
