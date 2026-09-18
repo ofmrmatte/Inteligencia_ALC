@@ -23,6 +23,32 @@ const timelineSchema = z.object({
     preInvoiceNumber: z.string().trim().max(120).optional(),
     billingPeriod: z.string().trim().max(120).optional(),
     driverId: z.string().trim().max(120).optional(),
+    buyerName: z.string().trim().max(240).optional(),
+    complaintMessage: z.string().trim().max(2000).optional(),
+    assignedReceiver: z.string().trim().max(240).optional(),
+    trackingId: z.string().trim().max(160).optional(),
+    products: z.array(z.object({
+      id: z.string().trim().max(120).optional(),
+      title: z.string().trim().min(1).max(500),
+      price: z.number().min(0).max(100000000).optional(),
+      currency: z.string().trim().max(12).optional(),
+    }).strict()).max(30).optional(),
+    deliveryAt: z.string().trim().max(120).optional(),
+    receivedBy: z.string().trim().max(160).optional(),
+    receiverName: z.string().trim().max(240).optional(),
+    receiverDocument: z.string().trim().max(120).optional(),
+    routeId: z.string().trim().max(120).optional(),
+    carrierName: z.string().trim().max(240).optional(),
+    driverName: z.string().trim().max(240).optional(),
+    driverPhone: z.string().trim().max(80).optional(),
+    reviewRequestedBy: z.string().trim().max(240).optional(),
+    reviewRequestedAt: z.string().trim().max(120).optional(),
+    reviewMessage: z.string().trim().max(2000).optional(),
+    reviewEvidenceNames: z.array(z.string().trim().min(1).max(300)).max(30).optional(),
+    receiptStatus: z.string().trim().max(120).optional(),
+    receiptActorName: z.string().trim().max(240).optional(),
+    receiptMessage: z.string().trim().max(2000).optional(),
+    reviewOutcome: z.string().trim().max(500).optional(),
   }).strict().optional(),
   sourceEventCount: z.number().int().min(0).max(200).optional(),
   events: z.array(z.object({
@@ -49,6 +75,12 @@ const timelineSchema = z.object({
 
 function json(body: unknown, status = 200) {
   return NextResponse.json(body, { status, headers: { "Cache-Control": "no-store" } });
+}
+
+function detailSnapshot(raw: unknown) {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return undefined;
+  const value = (raw as Record<string, unknown>).detailSnapshot;
+  return value && typeof value === "object" && !Array.isArray(value) ? value : undefined;
 }
 
 function errorStatus(message: string) {
@@ -97,6 +129,7 @@ export async function GET(request: Request) {
       cached: record.detail_sync_status === "COMPLETE" && !caseCenterTimelineNeedsRefresh(record.raw_snapshot_jsonb),
       detailSyncStatus: record.detail_sync_status,
       timelineSyncedAt: record.timeline_synced_at,
+      detail: detailSnapshot(record.raw_snapshot_jsonb),
       events: (data ?? []).map((event) => ({
         eventId: event.event_id,
         eventType: event.event_type,
@@ -172,6 +205,7 @@ export async function POST(request: Request) {
       timeline_synced_at: now,
       raw_snapshot_jsonb: {
         ...(record.raw_snapshot_jsonb && typeof record.raw_snapshot_jsonb === "object" ? record.raw_snapshot_jsonb : {}),
+        ...(detail ? { detailSnapshot: detail } : {}),
         timelineParserVersion: CASE_CENTER_TIMELINE_PARSER_VERSION,
       },
       updated_at: now,
