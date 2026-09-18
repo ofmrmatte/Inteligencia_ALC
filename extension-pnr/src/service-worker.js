@@ -205,28 +205,150 @@ async function fetchCaseTimelineInTab(caseId) {
   if (start < 0 || end < 0) return { ok: false, code: "INVALID_RESPONSE", message: "Timeline não encontrada no detalhe do caso." };
   const state = JSON.parse(html.slice(jsonStart, end));
   const caseState = state?.appProps?.pageProps?.preloadedStore?.CaseDetail;
-  const events = caseState?.events;
+  const events = Array.isArray(caseState?.events) ? caseState.events : [];
   const detail = caseState?.caseDetail;
   const safeText = (value) => typeof value === "string" || typeof value === "number" ? String(value) : "";
+  const trimText = (value, max = 2000) => safeText(value).replace(/\s+/g, " ").trim().slice(0, max);
+  const normalizeKey = (value) => safeText(value).normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
+  const pairs = new Map();
+  const seen = new Set();
+  const walkPairs = (value, depth = 0) => {
+    if (depth > 8 || value == null || typeof value !== "object" || seen.has(value)) return;
+    seen.add(value);
+    if (Array.isArray(value)) {
+      value.slice(0, 250).forEach((item) => walkPairs(item, depth + 1));
+      return;
+    }
+    const label = safeText(value.label ?? value.key ?? value.name);
+    const rawValue = value.value ?? value.text ?? value.content;
+    const scalar = typeof rawValue === "string" || typeof rawValue === "number" ? trimText(rawValue, 1000) : "";
+    if (label && scalar) pairs.set(normalizeKey(label), scalar);
+    Object.values(value).forEach((item) => walkPairs(item, depth + 1));
+  };
+  walkPairs(caseState);
+
+  const pairValue = (...aliases) => {
+    for (const alias of aliases) {
+      const hit = pairs.get(normalizeKey(alias));
+      if (hit) return hit;
+    }
+    return "";
+  };
+
+  const deepFind = (root, aliases, depth = 0, visited = new Set()) => {
+    if (depth > 8 || root == null || typeof root !== "object" || visited.has(root)) return "";
+    visited.add(root);
+    if (Array.isArray(root)) {
+      for (const item of root.slice(0, 250)) {
+        const hit = deepFind(item, aliases, depth + 1, visited);
+        if (hit) return hit;
+      }
+      return "";
+    }
+    const normalizedAliases = new Set(aliases.map(normalizeKey));
+    for (const [key, value] of Object.entries(root)) {
+      if (normalizedAliases.has(normalizeKey(key)) && (typeof value === "string" || typeof value === "number")) {
+        const hit = trimText(value, 2000);
+        if (hit) return hit;
+      }
+    }
+    for (const value of Object.values(root)) {
+      const hit = deepFind(value, aliases, depth + 1, visited);
+      if (hit) return hit;
+    }
+    return "";
+  };
+
   const references = Array.isArray(detail?.references) ? detail.references : [];
   const reference = (type) => references.find((item) => safeText(item?.type ?? item?.key).toUpperCase() === type);
-  const driverReference = reference("DRIVER_ID");
+  const referenceValue = (type) => {
+    const item = reference(type);
+    return safeText(item?.value ?? item?.id ?? item?.reference);
+  };
+
+  const products = [];
+  const productSeen = new Set();
+  const collectProducts = (value, depth = 0, visited = new Set()) => {
+    if (depth > 8 || value == null || typeof value !== "object" || visited.has(value)) return;
+    visited.add(value);
+    if (Array.isArray(value)) {
+      value.slice(0, 100).forEach((item) => collectProducts(item, depth + 1, visited));
+      return;
+    }
+    const title = trimText(value.title, 500);
+    const payment = value.payment && typeof value.payment === "object" ? value.payment : null;
+    const priceValue = payment?.amount ?? value.price?.amount ?? value.price;
+    const price = Number(priceValue);
+    if (title && (payment || value.product_id || value.productId || (value.id && Number.isFinite(price)))) {
+      const key = `${safeText(value.id)}|${title}`;
+      if (!productSeen.has(key)) {
+        productSeen.add(key);
+        products.push({
+          ...(safeText(value.id) ? { id: safeText(value.id) } : {}),
+          title,
+          ...(Number.isFinite(price) && price >= 0 ? { price } : {}),
+          ...(safeText(payment?.currency ?? value.price?.currency) ? { currency: safeText(payment?.currency ?? value.price?.currency) } : {}),
+        });
+      }
+    }
+    Object.values(value).forEach((item) => collectProducts(item, depth + 1, visited));
+  };
+  collectProducts(caseState);
+
+  const notes = Array.isArray(caseState?.notes) ? caseState.notes : [];
+  const reviewEvent = events.find((event) => /ON_REVIEW/.test(safeText(event?.event_type)));
+  const reviewNote = [...notes].reverse().find((note) => trimText(note?.message));
+  const receiptEvent = [...events].reverse().find((event) => ["ATTACHED_RECEIPT", "NOT_ATTACHED_RECEIPT"].includes(safeText(event?.event_type)));
+  const reviewedStatus = safeText(detail?.reviewedStatus ?? detail?.reviewed_status).toLowerCase();
+  const closedBilled = events.some((event) => ["UPDATE_STATUS_TO_CLOSED_BILLED", "UPDATE_CASE_BILLED"].includes(safeText(event?.event_type)));
+  const closedNotBilled = events.some((event) => safeText(event?.event_type) === "UPDATE_STATUS_TO_CLOSED_NOT_BILLED");
+  const reviewOutcome = closedBilled
+    ? (reviewedStatus === "reviewed" || reviewEvent ? "Revisado pelo Mercado Livre e enviado para faturamento." : "Enviado para faturamento.")
+    : closedNotBilled
+      ? (reviewedStatus === "reviewed" || reviewEvent ? "Revisado pelo Mercado Livre e anulado." : "Caso encerrado e anulado.")
+      : "";
+
+  const evidenceNames = Array.isArray(reviewNote?.files)
+    ? reviewNote.files.map((file) => trimText(file?.name ?? file?.fileName ?? file?.filename, 300)).filter(Boolean).slice(0, 30)
+    : [];
+
   return {
     ok: true,
     data: {
-      events: Array.isArray(events) ? events.map((event) => ({
+      events: events.map((event) => ({
         id: event?.id,
         event_type: event?.event_type,
         date_created: event?.date_created,
         created_by: event?.created_by?.name || event?.created_by?.user_id
-          ? { ...(event.created_by.name ? { name: event.created_by.name } : {}), ...(event.created_by.user_id != null ? { user_id: safeText(event.created_by.user_id) } : {}) }
+          ? { ...(event.created_by.name ? { name: trimText(event.created_by.name, 180) } : {}), ...(event.created_by.user_id != null ? { user_id: safeText(event.created_by.user_id) } : {}) }
           : undefined,
-      })) : [],
+      })),
       detail: {
-        claimId: safeText(detail?.claimId ?? detail?.claim_id ?? caseState?.pnrClaim?.claimId),
+        claimId: safeText(detail?.claimId ?? detail?.claim_id ?? caseState?.pnrClaim?.claimId ?? referenceValue("CLAIM_ID")),
         preInvoiceNumber: safeText(detail?.preInvoiceNumber ?? detail?.pre_invoice_number),
         billingPeriod: safeText(detail?.billingPeriod?.id ?? detail?.billingPeriod?.value ?? detail?.billingPeriod ?? detail?.billing_period),
-        driverId: safeText(driverReference?.value ?? driverReference?.id ?? driverReference?.reference),
+        driverId: referenceValue("DRIVER_ID"),
+        buyerName: deepFind(caseState, ["claimantName", "buyerName", "complainantName"]) || pairValue("Nombre del reclamante", "Nome do reclamante", "Comprador"),
+        complaintMessage: pairValue("Mensaje del reclamo", "Mensagem da reclamação") || deepFind(caseState, ["claimMessage", "complaintMessage"]),
+        assignedReceiver: pairValue("Designado para recibir", "Designado para receber"),
+        trackingId: pairValue("ID de seguimiento", "ID de seguimento"),
+        products: products.slice(0, 30),
+        deliveryAt: pairValue("Data de entrega", "Fecha de entrega"),
+        receivedBy: pairValue("Recebeu", "Recibió", "Recibio"),
+        receiverName: pairValue("Nome completo", "Nombre completo"),
+        receiverDocument: pairValue("Documento"),
+        routeId: referenceValue("ROUTE_ID") || pairValue("Rota", "Ruta"),
+        carrierName: pairValue("Transportadora", "Transportista"),
+        driverName: pairValue("Transportador", "Motorista", "Conductor") || deepFind(caseState, ["driverName"]),
+        driverPhone: pairValue("Telefone", "Teléfono", "Telefono"),
+        reviewRequestedBy: trimText(reviewEvent?.created_by?.name ?? reviewNote?.created_by?.name, 240),
+        reviewRequestedAt: safeText(reviewEvent?.date_created ?? reviewNote?.date_created),
+        reviewMessage: trimText(reviewNote?.message, 2000),
+        reviewEvidenceNames: evidenceNames,
+        receiptStatus: safeText(receiptEvent?.event_type) === "ATTACHED_RECEIPT" ? "Comprovante carregado" : safeText(receiptEvent?.event_type) === "NOT_ATTACHED_RECEIPT" ? "Sem comprovante carregado" : "",
+        receiptActorName: trimText(receiptEvent?.created_by?.name, 240),
+        receiptMessage: trimText(receiptEvent?.note?.message, 2000),
+        reviewOutcome,
       },
     },
   };
