@@ -111,7 +111,10 @@ describe("Case Center PNR", () => {
       case_type: record.caseType,
       route_status: record.routeStatus,
       priority: record.priority,
-      raw_snapshot_jsonb: { timelineParserVersion: CASE_CENTER_TIMELINE_PARSER_VERSION },
+      raw_snapshot_jsonb: {
+        timelineParserVersion: CASE_CENTER_TIMELINE_PARSER_VERSION,
+        detailSnapshot: { buyerName: "Comprador preservado", routeId: "9001" },
+      },
       claim_id: "CLAIM-1",
       detail_sync_status: "COMPLETE",
       case_capture_status: "COMPLETE",
@@ -126,6 +129,9 @@ describe("Case Center PNR", () => {
     expect(result.row.claim_id).toBe("CLAIM-1");
     expect(result.row.purchase_value).toBe(0);
     expect(result.row.first_captured_at).toBe("2026-08-05T00:00:00.000Z");
+    expect(result.row.raw_snapshot_jsonb).toMatchObject({
+      detailSnapshot: { buyerName: "Comprador preservado", routeId: "9001" },
+    });
     expect(result.row.detail_sync_status).toBe("DETAIL_PENDING");
     expect(result.change).toBe("updated");
     expect(mergeCaseCenterCase(result.row, { ...record, driverName: "", purchaseValue: 0 }, {
