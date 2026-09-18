@@ -143,12 +143,14 @@ export function PnrCaseDetailDrawer({ row, onClose }: { row: PnrRecord | null; o
     let cancelled = false;
     if (!row?.caseId) return;
 
-    setRemote(null);
-    setError(null);
-    setLoading(true);
-    setRefreshing(false);
-
     const load = async () => {
+      await Promise.resolve();
+      if (cancelled) return;
+      setRemote(null);
+      setError(null);
+      setLoading(true);
+      setRefreshing(false);
+
       let cached: TimelineResponse | null = null;
       try {
         cached = await readArchivedTimeline(row.caseId!);

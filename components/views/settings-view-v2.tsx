@@ -2,24 +2,19 @@
 
 import { useEffect, useMemo, useState, type FormEvent } from "react";
 import {
-  CheckCircle2,
   Edit3,
   Save,
   Search,
   ShieldCheck,
-  Smartphone,
-  ToggleLeft,
-  ToggleRight,
   Trash2,
   UserPlus,
   UsersRound,
   X,
 } from "lucide-react";
-import { roleDriverManagementCap, roleModuleCap, type DriverManagementTab } from "@/lib/access-control";
+import { roleModuleCap } from "@/lib/access-control";
 import { MANAGED_USER_ROLES, ROLE_LABELS, canManageUsers, type AuthProfile, type UserRole } from "@/lib/auth";
-import { canManageDriverPortalBaseSettings } from "@/lib/driver-portal-base-access";
 import { NAVIGATION, type SectionId } from "@/lib/navigation";
-import { KpiCard, Panel, PageIntro, StatusBadge, formatNumber } from "@/components/ui";
+import { Panel, PageIntro, StatusBadge } from "@/components/ui";
 import { TableWrap } from "./shared";
 import styles from "./settings-view-v2.module.css";
 
@@ -35,7 +30,6 @@ interface ManagedUser {
   baseScope: string[];
   xptScope: string[];
   moduleScope: string[];
-  driverManagementScope: string[];
 }
 interface UsersPayload { users: ManagedUser[]; bases: BaseOption[]; xpts: XptOption[] }
 interface UserDraft {
@@ -48,43 +42,16 @@ interface UserDraft {
   baseScope: string[];
   xptScope: string[];
   moduleScope: string[];
-  driverManagementScope: string[];
-}
-interface PortalBaseRow {
-  baseKey: string;
-  baseName: string;
-  sigla: string;
-  enabled: boolean;
-  status: "LIBERADO" | "BLOQUEADO";
-  changedAt: string;
-  changedBy: string;
-  counts: { total: number; eligible: number; activated: number; blocked: number; activeSessions: number };
-}
-interface PortalPayload {
-  summary: { bases: number; enabled: number; blocked: number; eligibleDrivers: number; activatedDrivers: number; blockedDrivers: number };
-  rows: PortalBaseRow[];
 }
 
-type SettingsSection = "users" | "portal" | "hierarchy";
+type SettingsSection = "users" | "hierarchy";
 
 const MODULE_LABELS = new Map(NAVIGATION.map((item) => [item.id, item.label]));
-const TAB_LABELS: Record<DriverManagementTab, string> = {
-  overview: "Visão geral",
-  pilot: "Piloto do Portal",
-  drivers: "Motoristas",
-  tickets: "Pendências",
-  payments: "Pagamentos",
-  disputes: "Contestações",
-  admins: "Administrativos e bases",
-};
-
 const ROLE_DETAILS: Partial<Record<UserRole, string>> = {
   director: "Visão total do painel, de todas as SVCs/bases e de todos os XPTs.",
   developer: "Acesso técnico e administrativo total.",
-  loss_supervisor: "Visão operacional total de SVCs/bases e XPTs, sem Gestão de Motoristas.",
+  loss_supervisor: "Visão operacional total de SVCs/bases e XPTs.",
   loss_admin: "Visão operacional global de SVCs/bases e XPTs, com permissão de importação.",
-  administration_supervisor: "Toda a Gestão de Motoristas e todas as bases administrativas.",
-  admin: "Somente Pagamentos e Contestações das SVCs/bases atribuídas.",
   coordinator: "Somente módulos operacionais e SVCs/bases e/ou XPTs coordenados.",
   supervisor: "Somente módulos operacionais e SVCs/bases e/ou XPTs supervisionados.",
 };
@@ -98,7 +65,7 @@ function isGlobalOperationalRole(role: UserRole) {
 }
 
 function hasGlobalBaseScope(role: UserRole) {
-  return isGlobalOperationalRole(role) || role === "administration_supervisor";
+  return isGlobalOperationalRole(role);
 }
 
 function supportsXptScope(role: UserRole) {
@@ -120,7 +87,6 @@ function blankDraft(): UserDraft {
     baseScope: [],
     xptScope: [],
     moduleScope: roleModuleCap(role),
-    driverManagementScope: roleDriverManagementCap(role),
   };
 }
 
@@ -131,7 +97,6 @@ function roleChanged(draft: UserDraft, role: UserRole): UserDraft {
     baseScope: hasGlobalBaseScope(role) ? [] : draft.baseScope,
     xptScope: supportsXptScope(role) ? draft.xptScope : [],
     moduleScope: roleModuleCap(role),
-    driverManagementScope: roleDriverManagementCap(role),
   };
 }
 
@@ -149,7 +114,6 @@ export function SettingsViewV2({ profile }: { profile: AuthProfile }) {
   const sections = useMemo(() => {
     const next: Array<{ id: SettingsSection; title: string; description: string }> = [];
     if (canManageUsers(profile)) next.push({ id: "users", title: "Usuários e permissões", description: "Cargos, módulos, SVC/bases e XPTs responsáveis" });
-    if (canManageDriverPortalBaseSettings(profile)) next.push({ id: "portal", title: "Portal dos Motoristas", description: "Liberação e bloqueio por base" });
     next.push({ id: "hierarchy", title: "Hierarquia e regras", description: "Limites máximos de cada função" });
     return next;
   }, [profile]);
@@ -174,7 +138,7 @@ export function SettingsViewV2({ profile }: { profile: AuthProfile }) {
             aria-current={resolvedActiveSection === section.id ? "page" : undefined}
           >
             <span className={styles.navIcon}>
-              {section.id === "users" ? <UsersRound size={18} /> : section.id === "portal" ? <Smartphone size={18} /> : <ShieldCheck size={18} />}
+              {section.id === "users" ? <UsersRound size={18} /> : <ShieldCheck size={18} />}
             </span>
             <span className={styles.navText}><strong>{section.title}</strong><small>{section.description}</small></span>
           </button>
@@ -182,12 +146,10 @@ export function SettingsViewV2({ profile }: { profile: AuthProfile }) {
       </nav>
 
       {resolvedActiveSection === "users" && canManageUsers(profile) ? <UserManagementPanel currentUserId={profile.id} /> : null}
-      {resolvedActiveSection === "portal" && canManageDriverPortalBaseSettings(profile) ? <PortalBaseAccessPanel /> : null}
       {resolvedActiveSection === "hierarchy" ? <HierarchyPanel /> : null}
     </div>
   );
 }
-
 function HierarchyPanel() {
   return (
     <Panel title="Hierarquia de acesso" subtitle="Regras máximas por função; permissões específicas nunca podem ultrapassar estes limites">
@@ -198,7 +160,6 @@ function HierarchyPanel() {
             <span>{ROLE_DETAILS[role] ?? "Escopo definido pela matriz de permissões."}</span>
             <div className={styles.roleMeta}>
               <span>{roleModuleCap(role).length} módulo(s)</span>
-              {roleDriverManagementCap(role).length ? <span>{roleDriverManagementCap(role).length} aba(s) de motoristas</span> : <span>Sem Gestão de Motoristas</span>}
             </div>
           </div>
         ))}
@@ -206,7 +167,6 @@ function HierarchyPanel() {
     </Panel>
   );
 }
-
 function UserManagementPanel({ currentUserId }: { currentUserId: string }) {
   const [payload, setPayload] = useState<UsersPayload>({ users: [], bases: [], xpts: [] });
   const [draft, setDraft] = useState<UserDraft>(blankDraft);
@@ -286,8 +246,6 @@ function UserManagementPanel({ currentUserId }: { currentUserId: string }) {
 
   const scopeSummary = (userDraft: UserDraft) => {
     if (isGlobalOperationalRole(userDraft.role)) return "todas as SVCs/bases e todos os XPTs";
-    if (userDraft.role === "administration_supervisor") return "todas as bases administrativas";
-    if (userDraft.role === "admin") return `${userDraft.baseScope.length} SVC/base(s)`;
     return `${userDraft.baseScope.length} SVC/base(s) · ${userDraft.xptScope.length} XPT(s)`;
   };
 
@@ -357,7 +315,6 @@ function UserManagementPanel({ currentUserId }: { currentUserId: string }) {
 
 function AccessEditor({ draft, setDraft, bases, xpts }: { draft: UserDraft; setDraft: (draft: UserDraft) => void; bases: BaseOption[]; xpts: XptOption[] }) {
   const moduleCap = roleModuleCap(draft.role);
-  const tabCap = roleDriverManagementCap(draft.role);
   const full = isFullRole(draft.role);
   const allBases = hasGlobalBaseScope(draft.role);
   const allXpts = isGlobalOperationalRole(draft.role);
@@ -367,8 +324,8 @@ function AccessEditor({ draft, setDraft, bases, xpts }: { draft: UserDraft; setD
   const visibleBases = bases.filter((base) => `${base.sigla} ${base.baseName} ${base.baseKey}`.toLowerCase().includes(baseSearch.toLowerCase()));
   const visibleXpts = xpts.filter((xpt) => `${xpt.xptCode} ${xpt.label}`.toLowerCase().includes(xptSearch.toLowerCase()));
 
-  const setAllModules = () => setDraft({ ...draft, moduleScope: [...moduleCap], driverManagementScope: [...tabCap] });
-  const clearModules = () => setDraft({ ...draft, moduleScope: [], driverManagementScope: [] });
+  const setAllModules = () => setDraft({ ...draft, moduleScope: [...moduleCap] });
+  const clearModules = () => setDraft({ ...draft, moduleScope: [] });
   const setAllBases = () => setDraft({ ...draft, baseScope: bases.map((base) => base.baseKey) });
   const clearBases = () => setDraft({ ...draft, baseScope: [] });
   const setAllXpts = () => setDraft({ ...draft, xptScope: xpts.map((xpt) => xpt.xptCode) });
@@ -393,15 +350,6 @@ function AccessEditor({ draft, setDraft, bases, xpts }: { draft: UserDraft; setD
           })}
         </div>
 
-        {draft.moduleScope.includes("gestao-motoristas") && tabCap.length ? (
-          <div className={styles.subAccess}>
-            <div className={styles.panelHeader}><div><span className={styles.legend}>Gestão de Motoristas</span><small>Abas disponíveis para esta função</small></div></div>
-            <div className={styles.checkGrid}>{tabCap.map((tab) => {
-              const checked = full || draft.driverManagementScope.includes(tab);
-              return <label className={`${styles.checkItem} ${checked ? styles.checkItemActive : ""}`} key={tab}><input disabled={full} type="checkbox" checked={checked} onChange={() => setDraft({ ...draft, driverManagementScope: toggleValue(draft.driverManagementScope, tab) })} /><span>{TAB_LABELS[tab]}</span></label>;
-            })}</div>
-          </div>
-        ) : null}
       </div>
 
       <div style={{ display: "grid", gap: 12, alignContent: "start", minWidth: 0 }}>
@@ -446,64 +394,5 @@ function AccessEditor({ draft, setDraft, bases, xpts }: { draft: UserDraft; setD
         </div>
       </div>
     </div>
-  );
-}
-
-function PortalBaseAccessPanel() {
-  const [payload, setPayload] = useState<PortalPayload | null>(null);
-  const [selected, setSelected] = useState<string[]>([]);
-  const [search, setSearch] = useState("");
-  const [status, setStatus] = useState("Todas");
-  const [saving, setSaving] = useState(false);
-  const [message, setMessage] = useState("");
-
-  async function load() {
-    try {
-      const body = await readJson(await fetch("/api/settings/driver-portal-bases", { cache: "no-store" }), "Falha ao carregar controle do portal.");
-      setPayload(body);
-    } catch (error) {
-      setMessage(error instanceof Error ? error.message : "Falha ao carregar controle do portal.");
-    }
-  }
-  useEffect(() => { queueMicrotask(() => void load()); }, []);
-
-  const rows = useMemo(() => (payload?.rows ?? []).filter((row) => {
-    if (status === "Liberadas" && !row.enabled) return false;
-    if (status === "Bloqueadas" && row.enabled) return false;
-    return `${row.baseKey} ${row.sigla} ${row.baseName}`.toLowerCase().includes(search.toLowerCase());
-  }), [payload, search, status]);
-
-  async function changeAccess(baseKeys: string[], enabled: boolean) {
-    if (!baseKeys.length) return;
-    if (!window.confirm(`${enabled ? "Liberar" : "Bloquear"} Portal do Motorista para ${baseKeys.length} base(s)?`)) return;
-    setSaving(true);
-    try {
-      const body = await readJson(await fetch("/api/settings/driver-portal-bases", { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ baseKeys, enabled }) }), "Falha ao alterar bases.");
-      setPayload(body);
-      setSelected([]);
-      setMessage(enabled ? "Bases liberadas." : "Bases bloqueadas e sessões revogadas.");
-    } catch (error) {
-      setMessage(error instanceof Error ? error.message : "Falha ao alterar bases.");
-    } finally {
-      setSaving(false);
-    }
-  }
-
-  const summary = payload?.summary;
-  return (
-    <Panel title="Portal dos Motoristas" subtitle="Controle central de liberação por base operacional">
-      <div className={styles.summaryRow}>
-        <KpiCard label="Bases" value={formatNumber(summary?.bases ?? 0)} detail="cadastradas" icon={<ShieldCheck size={17} />} />
-        <KpiCard label="Liberadas" value={formatNumber(summary?.enabled ?? 0)} detail="portal ativo" icon={<ToggleRight size={17} />} tone="green" />
-        <KpiCard label="Bloqueadas" value={formatNumber(summary?.blocked ?? 0)} detail="portal bloqueado" icon={<ToggleLeft size={17} />} tone="amber" />
-        <KpiCard label="Habilitados" value={formatNumber(summary?.eligibleDrivers ?? 0)} detail="motoristas" icon={<CheckCircle2 size={17} />} />
-        <KpiCard label="Ativados" value={formatNumber(summary?.activatedDrivers ?? 0)} detail="PIN criado" icon={<CheckCircle2 size={17} />} tone="green" />
-        <KpiCard label="Bloqueados" value={formatNumber(summary?.blockedDrivers ?? 0)} detail="individualmente" icon={<ToggleLeft size={17} />} tone="red" />
-      </div>
-      <div className={styles.toolbar}><label className={styles.field}><span>Buscar base</span><input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="SSP5 ou Barueri" /></label><label className={styles.field}><span>Status</span><select value={status} onChange={(event) => setStatus(event.target.value)}><option>Todas</option><option>Liberadas</option><option>Bloqueadas</option></select></label><button className="secondary-button primary-button--small" disabled={!selected.length || saving} onClick={() => void changeAccess(selected, true)}><ToggleRight size={15} />Liberar selecionadas</button><button className="danger-button" disabled={!selected.length || saving} onClick={() => void changeAccess(selected, false)}><ToggleLeft size={15} />Bloquear selecionadas</button></div>
-      {message ? <p className="admin-message">{message}</p> : null}
-      <div className={`${styles.portalRow} ${styles.portalHead}`}><span></span><span>Base</span><span>Sigla</span><span>Status</span><span>Motoristas</span><span>Ativados</span><span>Alterado por</span><span>Ação</span></div>
-      {rows.map((row) => <div className={styles.portalRow} key={row.baseKey}><input type="checkbox" checked={selected.includes(row.baseKey)} onChange={() => setSelected(toggleValue(selected, row.baseKey))} /><span><strong>{row.baseName}</strong><small className="cell-subtitle">{row.baseKey}</small></span><span>{row.sigla}</span><StatusBadge tone={row.enabled ? "green" : "amber"}>{row.status}</StatusBadge><span>{row.counts.total}</span><span>{row.counts.activated}</span><span>{row.changedBy || "-"}</span><button className={row.enabled ? "danger-button" : "primary-button primary-button--small"} disabled={saving} onClick={() => void changeAccess([row.baseKey], !row.enabled)}>{row.enabled ? "Bloquear" : "Liberar"}</button></div>)}
-    </Panel>
   );
 }

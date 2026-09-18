@@ -4,7 +4,6 @@ import { isSupabaseConfigured, supabasePublishableKey, supabaseUrl } from "@/lib
 import { isTransientSupabaseError } from "@/lib/supabase/retry";
 
 const PUBLIC_PATHS = new Set(["/login", "/manifest.webmanifest"]);
-const LEGACY_DRIVER_PORTAL_PATHS = new Set(["/motorista", "/motorista/login"]);
 
 function isPublicPath(pathname: string) {
   return PUBLIC_PATHS.has(pathname);
@@ -23,23 +22,8 @@ function preserveSessionCookies(target: NextResponse, source: NextResponse) {
   return target;
 }
 
-export function legacyDriverPortalTarget(pathname: string) {
-  if (!LEGACY_DRIVER_PORTAL_PATHS.has(pathname)) return null;
-  const base = process.env.NEXT_PUBLIC_DRIVER_PORTAL_URL?.trim().replace(/\/+$/, "");
-  if (!base) return "";
-  return pathname === "/motorista/login" ? `${base}/login` : base;
-}
-
 export async function updateSession(request: NextRequest) {
   const { pathname } = request.nextUrl;
-  const legacyPortalTarget = legacyDriverPortalTarget(pathname);
-  if (legacyPortalTarget !== null) {
-    if (!legacyPortalTarget) {
-      return NextResponse.json({ error: "Portal do Motorista não configurado." }, { status: 503 });
-    }
-    return NextResponse.redirect(legacyPortalTarget);
-  }
-
   if (!isSupabaseConfigured() || !supabaseUrl || !supabasePublishableKey) {
     if (isApiPath(pathname)) {
       return NextResponse.json({ error: "Supabase não configurado." }, { status: 503 });

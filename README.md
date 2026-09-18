@@ -21,7 +21,6 @@ O projeto foi estruturado para substituir fluxos manuais e cruzamentos descentra
 - Conciliação de IDs e tratamento de duplicidades.
 - Histórico de importações e rastreabilidade dos dados.
 - Controle de acesso por perfil e escopo operacional.
-- Integração com portal externo para motoristas.
 - Persistência de dados e arquivos no Supabase.
 
 ## Regras de negócio relevantes
@@ -71,16 +70,6 @@ scripts/      rotinas auxiliares e sincronizações
 supabase/     migrations e configuração de banco
 tests/        testes automatizados
 ```
-
-## Portal do Motorista
-
-A solução também possui integração com um portal mobile-first voltado ao motorista, com fluxos de autenticação, pagamentos, documentos, notificações e contestações.
-
-Rotas principais:
-
-- `/gestao-motoristas` — gestão interna.
-- `/motorista/login` — autenticação e primeiro acesso.
-- `/motorista` — experiência mobile do motorista.
 
 ## Execução local
 

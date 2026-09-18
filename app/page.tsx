@@ -6,7 +6,6 @@ import { redirect } from "next/navigation";
 
 export default async function HomePage() {
   const profile = await requireCurrentProfile();
-  if (profile.role === "driver") redirect("/motorista");
   if (!canAccessSection(profile, "visao-geral")) {
     const first = firstAllowedSection(profile);
     const href = NAVIGATION.find((item) => item.id === first)?.href;

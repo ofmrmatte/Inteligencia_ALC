@@ -15,11 +15,9 @@ export const MANAGED_USER_ROLES = [
   "director",
   "coordinator",
   "supervisor",
-  "admin",
   "developer",
   "loss_supervisor",
   "loss_admin",
-  "administration_supervisor",
 ] as const;
 
 export type UserRole = (typeof USER_ROLES)[number];
@@ -34,7 +32,6 @@ export interface AuthProfile {
   siglaScope: string[];
   xptScope?: string[];
   moduleScope?: string[];
-  driverManagementScope?: string[];
 }
 
 export const ROLE_LABELS: Record<UserRole, string> = {
@@ -59,14 +56,6 @@ export function isUserRole(value: unknown): value is UserRole {
 
 export function hasFullAccess(profile: Pick<AuthProfile, "role" | "globalAccess">) {
   return GLOBAL_OPERATIONAL_ROLES.includes(profile.role);
-}
-
-export function hasDriverManagementAccess(profile: Pick<AuthProfile, "role">) {
-  return ["director", "developer", "super_admin", "administration_supervisor", "admin"].includes(profile.role);
-}
-
-export function isDriverProfile(profile: Pick<AuthProfile, "role">) {
-  return profile.role === "driver";
 }
 
 export function canManageImports(profile: Pick<AuthProfile, "role" | "globalAccess">) {

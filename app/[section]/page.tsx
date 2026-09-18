@@ -8,7 +8,6 @@ export default async function SectionPage({ params }: { params: Promise<{ sectio
   const { section } = await params;
   if (!SECTION_IDS.includes(section as SectionId) || section === "visao-geral") notFound();
   const profile = await requireCurrentProfile();
-  if (profile.role === "driver") redirect("/motorista");
   const sectionId = section as SectionId;
   if (!canAccessSection(profile, sectionId)) {
     const first = firstAllowedSection(profile);

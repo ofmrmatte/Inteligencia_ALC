@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { DRIVER_MANAGEMENT_TABS, roleDriverManagementCap, roleModuleCap } from "@/lib/access-control";
+import { roleModuleCap } from "@/lib/access-control";
 import { canManageUsers, isUserRole, MANAGED_USER_ROLES, type UserRole } from "@/lib/auth";
 import { getCurrentProfile } from "@/lib/auth-server";
 import { normalizeText } from "@/lib/normalize";
@@ -44,16 +44,8 @@ function globalOperationalRole(role: UserRole) {
   return ["director", "developer", "loss_supervisor", "loss_admin"].includes(role);
 }
 
-function globalBaseScopeRole(role: UserRole) {
-  return globalOperationalRole(role) || role === "administration_supervisor";
-}
-
 function supportsXptScope(role: UserRole) {
   return role === "coordinator" || role === "supervisor";
-}
-
-function requiresBaseScope(role: UserRole) {
-  return role === "admin";
 }
 
 function requiresOperationalScope(role: UserRole) {
@@ -78,11 +70,8 @@ function parseUserPayload(payload: DbRow, requirePassword: boolean) {
   if (requirePassword && password.length < 6) throw new Error("A senha inicial precisa ter pelo menos 6 caracteres.");
 
   const moduleCap = roleModuleCap(role);
-  const tabCap = roleDriverManagementCap(role);
   const hasModules = hasPayloadField(payload, "moduleScope", "module_scope");
-  const hasTabs = hasPayloadField(payload, "driverManagementScope", "driver_management_scope");
   const requestedModules = toStringArray(payload.moduleScope ?? payload.module_scope);
-  const requestedTabs = toStringArray(payload.driverManagementScope ?? payload.driver_management_scope);
 
   const moduleScope = fullRole(role)
     ? moduleCap
@@ -92,16 +81,6 @@ function parseUserPayload(payload: DbRow, requirePassword: boolean) {
     throw new Error("Selecione ao menos um módulo permitido para o usuário.");
   }
 
-  const driverManagementScope = fullRole(role)
-    ? tabCap
-    : moduleScope.includes("gestao-motoristas")
-      ? allowedSubset(hasTabs ? requestedTabs : tabCap, tabCap)
-      : [];
-
-  if (!fullRole(role) && moduleScope.includes("gestao-motoristas") && tabCap.length > 0 && driverManagementScope.length === 0) {
-    throw new Error("Selecione ao menos uma aba da Gestão de Motoristas.");
-  }
-
   return {
     email,
     password,
@@ -109,10 +88,9 @@ function parseUserPayload(payload: DbRow, requirePassword: boolean) {
     role,
     globalAccess: globalOperationalRole(role),
     active: payload.active !== false,
-    baseScope: globalBaseScopeRole(role) ? [] : toStringArray(payload.baseScope ?? payload.base_scope),
+    baseScope: globalOperationalRole(role) ? [] : toStringArray(payload.baseScope ?? payload.base_scope),
     xptScope: supportsXptScope(role) ? toStringArray(payload.xptScope ?? payload.xpt_scope) : [],
     moduleScope,
-    driverManagementScope,
   };
 }
 
@@ -157,7 +135,7 @@ function canonicalBaseFor(requested: string, bases: DbRow[], siglaHints: string[
 }
 
 async function resolveBaseScopes(admin: AdminClient, requested: string[], role: UserRole, preloadedBases?: DbRow[]) {
-  if (!requested.length) return { baseScope: [] as string[], siglaScope: [] as string[], adminBaseScope: [] as string[] };
+  if (!requested.length) return { baseScope: [] as string[], siglaScope: [] as string[] };
   const bases = preloadedBases ?? await loadBaseRows(admin);
   const resolved = requested.map((value) => canonicalBaseFor(value, bases));
   const unresolved = requested.filter((_, index) => !resolved[index]);
@@ -167,7 +145,6 @@ async function resolveBaseScopes(admin: AdminClient, requested: string[], role: 
   return {
     baseScope: [...new Set(rows.map((row) => toStringValue(useUnitKey ? row.unit_key : row.base_key)).filter(Boolean))],
     siglaScope: [...new Set(rows.map((row) => toStringValue(row.sigla)).filter(Boolean))],
-    adminBaseScope: [...new Set(rows.map((row) => toStringValue(row.base_key)).filter(Boolean))],
   };
 }
 
@@ -209,7 +186,6 @@ function mapManagedUser(row: DbRow, bases: DbRow[], xpts: DbRow[]) {
     baseScope: canonicalizeStoredBaseScope(toStringArray(row.base_scope), siglaScope, bases),
     xptScope: canonicalizeStoredXptScope(toStringArray(row.xpt_scope), xpts),
     moduleScope: toStringArray(row.module_scope),
-    driverManagementScope: toStringArray(row.driver_management_scope),
     createdAt: toStringValue(row.created_at),
     updatedAt: toStringValue(row.updated_at),
   };
@@ -222,77 +198,6 @@ async function requireUserManager() {
   return profile;
 }
 
-async function syncAdministrationAssignments(
-  admin: AdminClient,
-  actorId: string,
-  userId: string,
-  role: UserRole,
-  selectedBases: string[],
-) {
-  const desired = new Set(role === "admin" ? selectedBases : []);
-  const { data, error } = await admin
-    .from("admin_base_assignments")
-    .select("*")
-    .eq("admin_id", userId);
-  if (error) throw new Error(error.message);
-
-  const existing = (data ?? []) as DbRow[];
-  const byBase = new Map(existing.map((row) => [toStringValue(row.base_key), row]));
-  const historyRows: DbRow[] = [];
-
-  for (const row of existing) {
-    const baseKey = toStringValue(row.base_key);
-    const shouldBeActive = desired.has(baseKey);
-    const isActive = row.active !== false;
-    if (shouldBeActive === isActive) {
-      desired.delete(baseKey);
-      continue;
-    }
-
-    const { data: updated, error: updateError } = await admin
-      .from("admin_base_assignments")
-      .update({ active: shouldBeActive, assigned_by: actorId, updated_at: new Date().toISOString() })
-      .eq("id", toStringValue(row.id))
-      .select()
-      .single();
-    if (updateError) throw new Error(updateError.message);
-    historyRows.push({
-      assignment_id: updated.id,
-      admin_id: userId,
-      base_key: baseKey,
-      action: shouldBeActive ? "reactivated" : "removed",
-      actor_id: actorId,
-      before_data: row,
-      after_data: updated,
-    });
-    desired.delete(baseKey);
-  }
-
-  for (const baseKey of desired) {
-    const previous = byBase.get(baseKey);
-    const { data: assignment, error: assignmentError } = await admin
-      .from("admin_base_assignments")
-      .upsert({ admin_id: userId, base_key: baseKey, assigned_by: actorId, active: true, updated_at: new Date().toISOString() }, { onConflict: "admin_id,base_key" })
-      .select()
-      .single();
-    if (assignmentError) throw new Error(assignmentError.message);
-    historyRows.push({
-      assignment_id: assignment.id,
-      admin_id: userId,
-      base_key: baseKey,
-      action: previous ? "reactivated" : "assigned",
-      actor_id: actorId,
-      before_data: previous ?? null,
-      after_data: assignment,
-    });
-  }
-
-  if (historyRows.length) {
-    const { error: historyError } = await admin.from("admin_base_assignment_history").insert(historyRows);
-    if (historyError) throw new Error(historyError.message);
-  }
-}
-
 async function responsePayload() {
   const admin = createAdminClient();
   const [usersResult, bases, xpts] = await Promise.all([
@@ -303,7 +208,6 @@ async function responsePayload() {
   if (usersResult.error) throw new Error(usersResult.error.message);
   return NextResponse.json({
     roles: MANAGED_USER_ROLES,
-    driverManagementTabs: DRIVER_MANAGEMENT_TABS,
     users: ((usersResult.data ?? []) as DbRow[]).map((row) => mapManagedUser(row, bases, xpts)),
     bases: bases.map((row) => ({
       baseKey: toStringValue(row.unit_key),
@@ -331,16 +235,13 @@ export async function GET() {
 
 export async function POST(request: Request) {
   try {
-    const manager = await requireUserManager();
+    await requireUserManager();
     const admin = createAdminClient();
     const payload = parseUserPayload((await request.json()) as DbRow, true);
     const [scopes, xptScope] = await Promise.all([
       resolveBaseScopes(admin, payload.baseScope, payload.role),
       resolveXptScope(admin, payload.xptScope, payload.role),
     ]);
-    if (requiresBaseScope(payload.role) && scopes.baseScope.length === 0) {
-      throw new Error("Selecione ao menos uma SVC/base responsável para este cargo.");
-    }
     if (requiresOperationalScope(payload.role) && scopes.baseScope.length === 0 && xptScope.length === 0) {
       throw new Error("Selecione ao menos uma SVC/base ou um XPT responsável para este cargo.");
     }
@@ -365,12 +266,10 @@ export async function POST(request: Request) {
       sigla_scope: scopes.siglaScope,
       xpt_scope: xptScope,
       module_scope: payload.moduleScope,
-      driver_management_scope: payload.driverManagementScope,
       updated_at: new Date().toISOString(),
     });
     if (profileError) throw new Error(profileError.message);
 
-    await syncAdministrationAssignments(admin, manager.id, created.user.id, payload.role, scopes.adminBaseScope);
     return await responsePayload();
   } catch (error) {
     const message = error instanceof Error ? error.message : "Falha ao cadastrar usuário.";
@@ -391,9 +290,6 @@ export async function PATCH(request: Request) {
       resolveBaseScopes(admin, payload.baseScope, payload.role),
       resolveXptScope(admin, payload.xptScope, payload.role),
     ]);
-    if (requiresBaseScope(payload.role) && scopes.baseScope.length === 0) {
-      throw new Error("Selecione ao menos uma SVC/base responsável para este cargo.");
-    }
     if (requiresOperationalScope(payload.role) && scopes.baseScope.length === 0 && xptScope.length === 0) {
       throw new Error("Selecione ao menos uma SVC/base ou um XPT responsável para este cargo.");
     }
@@ -408,12 +304,9 @@ export async function PATCH(request: Request) {
       sigla_scope: scopes.siglaScope,
       xpt_scope: xptScope,
       module_scope: payload.moduleScope,
-      driver_management_scope: payload.driverManagementScope,
       updated_at: new Date().toISOString(),
     }).eq("id", id);
     if (profileError) throw new Error(profileError.message);
-
-    await syncAdministrationAssignments(admin, manager.id, id, payload.role, scopes.adminBaseScope);
 
     const updateAuth: { email?: string; password?: string; user_metadata?: { full_name: string } } = {
       email: payload.email,

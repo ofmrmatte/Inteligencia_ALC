@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState, type ChangeEvent } from "react";
+import { useCallback, useEffect, useMemo, useState, type ChangeEvent } from "react";
 import {
   BadgeDollarSign,
   Building2,
@@ -242,25 +242,25 @@ export function DiscountManagementViewV3() {
   const [importingSheet, setImportingSheet] = useState(false);
 
   function updateFilters(next: Parameters<typeof setFilters>[0]) {
+    setPage(1);
     setFilters(next);
   }
 
-  async function loadRows(showToast = false, force = false) {
+  const loadRows = useCallback(async (showToast = false, force = false) => {
     try {
       await loadSharedRows(force);
       if (showToast) toast.success("Gestão de Descontos atualizada.");
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "Falha ao carregar a Gestão de Descontos.");
     }
-  }
+  }, [loadSharedRows]);
 
-  useEffect(() => { queueMicrotask(() => void loadRows(false, false)); }, []);
-  useEffect(() => { setPage(1); }, [filters]);
+  useEffect(() => { queueMicrotask(() => void loadRows(false, false)); }, [loadRows]);
   useEffect(() => {
     const refresh = () => void loadRows(false, true);
     window.addEventListener("alc-inteligencia:global-data-sync", refresh);
     return () => window.removeEventListener("alc-inteligencia:global-data-sync", refresh);
-  }, []);
+  }, [loadRows]);
 
   const shipmentCounts = useMemo(() => {
     const map = new Map<string, number>();
@@ -477,7 +477,7 @@ export function DiscountManagementViewV3() {
       </div>
 
       <Panel title="Pesquisa e ações" subtitle="Mês, quinzena, base, XPT, motorista, direcionamento e Status PNR ficam na barra superior e filtram toda a Gestão de Descontos." action={<div className={styles.panelAction}>
-        <button className={styles.secondaryButton} onClick={resetFilters}>Limpar filtros</button>
+        <button className={styles.secondaryButton} onClick={() => { setPage(1); resetFilters(); }}>Limpar filtros</button>
         <label className={styles.secondaryButton} aria-disabled={importingSheet}><UploadCloud size={15} />{importingSheet ? "Importando…" : "Importar planilha"}<input hidden type="file" accept=".xlsx,.xlsm,.xls" disabled={importingSheet} onChange={(event) => void importSpreadsheet(event)} /></label>
         <button className={styles.primaryButton} onClick={() => { const month = filters.month !== ALL ? filters.month : currentMonth(); setNewOpen(true); setLookupMatch(null); setLookupInfo({ existingCount: 0, allocatedTotal: 0, existingEntries: [] }); setLookupId(""); setNewForm(emptyForm(month)); }}><Plus size={15} />Novo direcionamento</button>
       </div>}>

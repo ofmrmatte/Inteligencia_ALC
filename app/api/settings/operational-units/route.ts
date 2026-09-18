@@ -52,7 +52,7 @@ async function allRows(table: string, select: string, orderColumn: string) {
 }
 
 function unitVisible(profile: Awaited<ReturnType<typeof requireProfile>>, row: DbRow) {
-  if (hasFullAccess(profile) || profile.role === "administration_supervisor") return true;
+  if (hasFullAccess(profile)) return true;
   const unitKey = normalized(row.unit_key);
   const baseKey = normalized(row.base_key);
   const sigla = normalized(row.sigla);
@@ -63,7 +63,6 @@ function unitVisible(profile: Awaited<ReturnType<typeof requireProfile>>, row: D
     if (allowedBases.has(unitKey)) return true;
     return allowedBases.has(baseKey) && (allowedSiglas.size === 0 || allowedSiglas.has(sigla));
   }
-  if (profile.role === "admin") return allowedBases.has(baseKey) || allowedBases.has(unitKey);
   return false;
 }
 

@@ -14,7 +14,6 @@ const DiscountManagementView = dynamic(() => import("./discount-management-view-
 const ReportsView = dynamic(() => import("./reports-view-v2").then((module) => module.ReportsView), { loading });
 const RiskView = dynamic(() => import("./risk-view").then((module) => module.RiskView), { loading });
 const DriversView = dynamic(() => import("./drivers-view").then((module) => module.DriversView), { loading });
-const DriverManagementView = dynamic(() => import("./driver-management-view-v3").then((module) => module.DriverManagementViewV3), { loading });
 const ReconciliationView = dynamic(() => import("./reconciliation-view").then((module) => module.ReconciliationView), { loading });
 const QualityView = dynamic(() => import("./quality-view").then((module) => module.QualityView), { loading });
 const ImportsView = dynamic(() => import("./imports-view").then((module) => module.ImportsView), { loading });
@@ -31,7 +30,6 @@ export function ViewRouter({ section, profile }: { section: SectionId; profile: 
     case "relatorios-pacotes": return <ReportsView />;
     case "risco-lm": return <RiskView />;
     case "motoristas": return <DriversView />;
-    case "gestao-motoristas": return <DriverManagementView profile={profile} />;
     case "conciliacao-ids": return <ReconciliationView />;
     case "qualidade-dados": return <QualityView />;
     case "importacoes": return <ImportsView />;

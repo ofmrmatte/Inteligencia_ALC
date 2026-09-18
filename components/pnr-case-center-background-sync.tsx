@@ -104,7 +104,7 @@ export function PnrCaseCenterBackgroundSync() {
   const pathname = usePathname();
 
   useEffect(() => {
-    if (pathname === "/login" || pathname.startsWith("/motorista")) return;
+    if (pathname === "/login") return;
 
     hydratePnrBackgroundSyncPauseState();
     let disposed = false;
@@ -118,7 +118,7 @@ export function PnrCaseCenterBackgroundSync() {
       timer = window.setTimeout(() => { void run(); }, delayMs);
     };
 
-    const run = async (manual = false) => {
+    const run = async () => {
       if (disposed || running) {
         schedule();
         return;
@@ -171,7 +171,6 @@ export function PnrCaseCenterBackgroundSync() {
           }
 
           let handled = 0;
-          let successful = 0;
           for (const queuedCase of queuedCases.slice(0, PNR_DETAIL_SYNC_BATCH_SIZE)) {
             if (disposed || getPnrBackgroundSyncStatus().manuallyPaused) {
               publishPnrBackgroundSyncStatus({ phase: "paused", message: "Pausada manualmente" });
@@ -183,7 +182,6 @@ export function PnrCaseCenterBackgroundSync() {
             try {
               const result = await requestPnrConnector<TimelineConnectorResult>("FETCH_TIMELINE", { caseId });
               await updateTimeline(caseId, "COMPLETE", result);
-              successful += 1;
               const status = getPnrBackgroundSyncStatus();
               publishPnrBackgroundSyncStatus({
                 processed: status.processed + 1,
@@ -232,7 +230,7 @@ export function PnrCaseCenterBackgroundSync() {
       }
     };
 
-    const onManual = () => { void run(true); };
+    const onManual = () => { void run(); };
     const onPauseChange = (event: Event) => {
       const manuallyPaused = Boolean((event as CustomEvent<{ manuallyPaused?: boolean }>).detail?.manuallyPaused);
       if (manuallyPaused) {
@@ -240,7 +238,7 @@ export function PnrCaseCenterBackgroundSync() {
         return;
       }
       publishPnrBackgroundSyncStatus({ phase: "idle", message: "Retomando sincronização automática" });
-      void run(true);
+      void run();
     };
     const onFocus = () => { void run(); };
     const initialTimer = window.setTimeout(() => { void run(); }, 2_000);

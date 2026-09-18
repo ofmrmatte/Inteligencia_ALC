@@ -75,25 +75,6 @@ jobs:
               "  useEffect(() => { queueMicrotask(() => void loadRows()); const refresh = () => void loadRows(); window.addEventListener(\"alc-inteligencia:global-data-sync\", refresh); return () => window.removeEventListener(\"alc-inteligencia:global-data-sync\", refresh); }, []);",
           )
 
-          # Gestão de Motoristas: carga inicial fora da fase síncrona do effect e
-          # fallbacks estáveis para dependências de memoização.
-          path = Path("components/views/driver-management-view-v3.tsx")
-          text = path.read_text(encoding="utf-8")
-          marker = "interface ReviewBatch { batchId: string; counts: { identified: number; unidentified: number; duplicate: number; error: number } }\n"
-          if text.count(marker) != 1:
-              raise SystemExit("driver-management-view-v3: ReviewBatch marker changed unexpectedly")
-          text = text.replace(marker, marker + "\nconst EMPTY_DRIVERS: DriverRow[] = [];\nconst EMPTY_DOCUMENTS: DocumentRow[] = [];\n")
-          old = "  useEffect(() => { void loadTab(tab); }, [tab]);"
-          if text.count(old) != 1:
-              raise SystemExit("driver-management-view-v3: load effect changed unexpectedly")
-          text = text.replace(old, "  useEffect(() => { queueMicrotask(() => void loadTab(tab)); }, [tab]);")
-          old = "  const bases = data.bases ?? []; const drivers = data.drivers ?? []; const tickets = data.tickets ?? []; const documents = data.documents ?? []; const disputes = data.disputes ?? []; const assignments = data.assignments ?? [];"
-          if text.count(old) != 1:
-              raise SystemExit("driver-management-view-v3: payload fallback line changed unexpectedly")
-          new = "  const bases = data.bases ?? []; const drivers = data.drivers ?? EMPTY_DRIVERS; const tickets = data.tickets ?? []; const documents = data.documents ?? EMPTY_DOCUMENTS; const disputes = data.disputes ?? []; const assignments = data.assignments ?? [];"
-          text = text.replace(old, new)
-          path.write_text(text, encoding="utf-8")
-
           # Painel de unidades: a primeira sincronização ocorre após o commit do effect.
           replace_exact(
               "components/views/operational-units-panel.tsx",

@@ -1,9 +1,6 @@
 import type { AuthProfile, UserRole } from "@/lib/auth";
 import type { SectionId } from "@/lib/navigation";
 
-export const DRIVER_MANAGEMENT_TABS = ["overview", "pilot", "drivers", "tickets", "payments", "disputes", "admins"] as const;
-export type DriverManagementTab = (typeof DRIVER_MANAGEMENT_TABS)[number];
-
 const ALL_MODULES: SectionId[] = [
   "visao-geral",
   "gestao-pnr",
@@ -12,7 +9,6 @@ const ALL_MODULES: SectionId[] = [
   "relatorios-pacotes",
   "risco-lm",
   "motoristas",
-  "gestao-motoristas",
   "conciliacao-ids",
   "qualidade-dados",
   "importacoes",
@@ -31,7 +27,7 @@ const OPERATIONAL_MODULES: SectionId[] = [
   "perfil",
 ];
 
-const LOSS_MODULES: SectionId[] = ALL_MODULES.filter((section) => section !== "gestao-motoristas");
+const LOSS_MODULES: SectionId[] = [...ALL_MODULES];
 const LOSS_ADMIN_MODULES: SectionId[] = [...OPERATIONAL_MODULES, "importacoes"];
 const FULL_PANEL_ROLES = new Set<UserRole>(["director", "developer", "loss_supervisor", "loss_admin", "super_admin"]);
 
@@ -41,23 +37,10 @@ const ROLE_MODULE_CAP: Record<UserRole, SectionId[]> = {
   loss_supervisor: LOSS_MODULES,
   loss_admin: LOSS_ADMIN_MODULES,
   super_admin: ALL_MODULES,
-  administration_supervisor: ["gestao-motoristas"],
-  admin: ["gestao-motoristas"],
+  administration_supervisor: [],
+  admin: [],
   coordinator: OPERATIONAL_MODULES,
   supervisor: OPERATIONAL_MODULES,
-  driver: [],
-};
-
-const ROLE_DRIVER_MANAGEMENT_CAP: Record<UserRole, DriverManagementTab[]> = {
-  director: [...DRIVER_MANAGEMENT_TABS],
-  developer: [...DRIVER_MANAGEMENT_TABS],
-  loss_supervisor: [],
-  loss_admin: [],
-  super_admin: [...DRIVER_MANAGEMENT_TABS],
-  administration_supervisor: [...DRIVER_MANAGEMENT_TABS],
-  admin: ["payments", "disputes"],
-  coordinator: [],
-  supervisor: [],
   driver: [],
 };
 
@@ -91,23 +74,9 @@ export function firstAllowedSection(profile: Pick<AuthProfile, "role" | "moduleS
 }
 
 export function canAccessOperationalData(profile: Pick<AuthProfile, "role" | "moduleScope">) {
-  return modulesForProfile(profile).some((section) => section !== "gestao-motoristas" && section !== "configuracoes" && section !== "perfil");
-}
-
-export function driverManagementTabsForProfile(profile: Pick<AuthProfile, "role" | "driverManagementScope">): DriverManagementTab[] {
-  const cap = ROLE_DRIVER_MANAGEMENT_CAP[profile.role] ?? [];
-  if (isFullPanelRole(profile.role)) return [...cap];
-  return configuredScope(profile.driverManagementScope, cap);
-}
-
-export function canAccessDriverManagementTab(profile: Pick<AuthProfile, "role" | "driverManagementScope">, tab: DriverManagementTab) {
-  return driverManagementTabsForProfile(profile).includes(tab);
+  return modulesForProfile(profile).some((section) => section !== "configuracoes" && section !== "perfil");
 }
 
 export function roleModuleCap(role: UserRole) {
   return [...(ROLE_MODULE_CAP[role] ?? [])];
-}
-
-export function roleDriverManagementCap(role: UserRole) {
-  return [...(ROLE_DRIVER_MANAGEMENT_CAP[role] ?? [])];
 }

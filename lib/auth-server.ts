@@ -23,7 +23,7 @@ async function resolveCurrentProfile(): Promise<ProfileResolution> {
   const { data: profile, error: profileError } = await retrySupabaseResult(
     () => supabase
       .from("profiles")
-      .select("id,email,full_name,role,global_access,base_scope,sigla_scope,xpt_scope,module_scope,driver_management_scope,active")
+      .select("id,email,full_name,role,global_access,base_scope,sigla_scope,xpt_scope,module_scope,active")
       .eq("id", userId)
       .maybeSingle(),
     [200],
@@ -46,7 +46,6 @@ async function resolveCurrentProfile(): Promise<ProfileResolution> {
       siglaScope: Array.isArray(profile.sigla_scope) ? profile.sigla_scope : [],
       xptScope: Array.isArray(profile.xpt_scope) ? profile.xpt_scope : [],
       moduleScope: Array.isArray(profile.module_scope) ? profile.module_scope : [],
-      driverManagementScope: Array.isArray(profile.driver_management_scope) ? profile.driver_management_scope : [],
     },
   };
 }

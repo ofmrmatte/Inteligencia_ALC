@@ -21,7 +21,7 @@ type QualityDetail = {
 function actionForRule(rule: string) {
   const normalized = rule.toLocaleLowerCase("pt-BR");
   if (normalized.includes("base/sigla")) return { href: "/configuracoes?quality=base-unmatched", label: "Vincular base", title: "Abrir cadastro de bases para corrigir o vínculo" };
-  if (normalized.includes("motorista sem id")) return { href: "/gestao-motoristas?quality=driver-unmatched", label: "Conciliar motorista", title: "Abrir Gestão de Motoristas para conciliar o cadastro" };
+  if (normalized.includes("motorista sem id")) return { href: "/conciliacao-ids?quality=driver-unmatched", label: "Conciliar motorista", title: "Abrir Conciliação de IDs" };
   if (normalized.includes("pacote repetido")) return { href: "/conciliacao-ids?status=Duplicado", label: "Analisar duplicados", title: "Abrir Conciliação de IDs já filtrada em Duplicados" };
   if (normalized.includes("id obrigatório") || normalized.includes("id obrigatorio")) return { href: "/importacoes?quality=missing-id", label: "Ver origem", title: "Abrir Histórico de Importações para localizar as linhas" };
   if (normalized.includes("supervisão") || normalized.includes("supervisao")) return { href: "/configuracoes?quality=shared-supervisor", label: "Revisar hierarquia", title: "Abrir configurações da hierarquia" };

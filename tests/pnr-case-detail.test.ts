@@ -104,6 +104,6 @@ describe("histórico durável de detalhes PNR", () => {
     expect(drawer).toContain("refreshCaseNow");
     expect(drawer).toContain("Atualizando este caso diretamente no Case Center");
     expect(layout).toContain("<PnrCaseCenterBackgroundSync />");
-    expect(backgroundSync).toContain('if (pathname === "/login" || pathname.startsWith("/motorista")) return;');
+    expect(backgroundSync).toContain('if (pathname === "/login") return;');
   });
 });

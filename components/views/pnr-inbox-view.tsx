@@ -253,18 +253,16 @@ export function PnrInboxView({ profile }: { profile: AuthProfile }) {
     return [...periodMap.values()].sort((a, b) => a.sortKey - b.sortKey);
   }, [rows]);
 
-  useEffect(() => {
-    if (trendSelection && !trendData.some((point) => point.period === trendSelection.period)) {
-      setTrendSelection(null);
-    }
-  }, [trendData, trendSelection]);
+  const activeTrendSelection = trendSelection && trendData.some((point) => point.period === trendSelection.period)
+    ? trendSelection
+    : null;
 
-  const selectedTrendIndex = trendSelection
-    ? trendData.findIndex((point) => point.period === trendSelection.period)
+  const selectedTrendIndex = activeTrendSelection
+    ? trendData.findIndex((point) => point.period === activeTrendSelection.period)
     : Math.max(0, trendData.length - 1);
   const selectedTrendPoint = trendData[selectedTrendIndex] ?? null;
   const previousTrendPoint = selectedTrendIndex > 0 ? trendData[selectedTrendIndex - 1] : null;
-  const selectedTrendSeries = trendSelection?.series ?? null;
+  const selectedTrendSeries = activeTrendSelection?.series ?? null;
   const selectedTrendLabel = selectedTrendSeries ? TREND_SERIES[selectedTrendSeries].label : "Total de casos";
   const selectedTrendColor = selectedTrendSeries ? TREND_SERIES[selectedTrendSeries].color : "#333333";
 
@@ -296,26 +294,29 @@ export function PnrInboxView({ profile }: { profile: AuthProfile }) {
     ? "Sem período anterior"
     : `${value >= 0 ? "+" : ""}${new Intl.NumberFormat("pt-BR", { style: "percent", minimumFractionDigits: 1, maximumFractionDigits: 1 }).format(value)}`;
 
-  const renderTrendDot = (series: TrendSeriesKey) => (props: { cx?: number; cy?: number; payload?: TrendPoint }) => {
-    if (props.cx === undefined || props.cy === undefined || !props.payload) return <g />;
-    const selected = trendSelection?.period === props.payload.period && trendSelection.series === series;
-    return (
-      <circle
-        cx={props.cx}
-        cy={props.cy}
-        r={selected ? 5 : 3.5}
-        fill={TREND_SERIES[series].color}
-        stroke="#fff"
-        strokeWidth={selected ? 2.5 : 1.5}
-        style={{ cursor: "pointer" }}
-        onClick={(event) => {
-          event.stopPropagation();
-          setTrendSelection((current) => current?.period === props.payload?.period && current?.series === series
-            ? null
-            : { period: props.payload?.period || "", series });
-        }}
-      />
-    );
+  const renderTrendDot = (series: TrendSeriesKey) => {
+    function TrendDot(props: { cx?: number; cy?: number; payload?: TrendPoint }) {
+      if (props.cx === undefined || props.cy === undefined || !props.payload) return <g />;
+      const selected = activeTrendSelection?.period === props.payload.period && activeTrendSelection.series === series;
+      return (
+        <circle
+          cx={props.cx}
+          cy={props.cy}
+          r={selected ? 5 : 3.5}
+          fill={TREND_SERIES[series].color}
+          stroke="#fff"
+          strokeWidth={selected ? 2.5 : 1.5}
+          style={{ cursor: "pointer" }}
+          onClick={(event) => {
+            event.stopPropagation();
+            setTrendSelection((current) => current?.period === props.payload?.period && current?.series === series
+              ? null
+              : { period: props.payload?.period || "", series });
+          }}
+        />
+      );
+    }
+    return TrendDot;
   };
 
   const baseMap = new Map<string, { base: string; cases: number; value: number }>();
@@ -621,7 +622,7 @@ export function PnrInboxView({ profile }: { profile: AuthProfile }) {
             <>
               <div className="pnr-trend-legend">
                 {(Object.entries(TREND_SERIES) as Array<[TrendSeriesKey, (typeof TREND_SERIES)[TrendSeriesKey]]>).map(([key, item]) => (
-                  <span key={key} className={trendSelection?.series === key ? "is-selected" : ""}>
+                  <span key={key} className={activeTrendSelection?.series === key ? "is-selected" : ""}>
                     <i style={{ background: item.color }} />{item.label}
                   </span>
                 ))}
@@ -648,7 +649,7 @@ export function PnrInboxView({ profile }: { profile: AuthProfile }) {
                       dataKey={metricField(key, trendMetric)}
                       name={item.label}
                       stroke={item.color}
-                      strokeWidth={trendSelection?.series === key ? 3 : 2}
+                      strokeWidth={activeTrendSelection?.series === key ? 3 : 2}
                       dot={renderTrendDot(key)}
                       activeDot={{ r: 6, strokeWidth: 2, fill: item.color, stroke: "#fff" }}
                       connectNulls
@@ -661,12 +662,12 @@ export function PnrInboxView({ profile }: { profile: AuthProfile }) {
         </Panel>
 
         <Panel
-          title={trendSelection ? `Comparação — ${selectedTrendLabel}` : "Comparação geral"}
+          title={activeTrendSelection ? `Comparação — ${selectedTrendLabel}` : "Comparação geral"}
           subtitle={selectedTrendPoint
             ? `${selectedTrendPoint.label}${previousTrendPoint ? ` x ${previousTrendPoint.label}` : " · sem período anterior no recorte"}`
             : "Selecione um ponto no gráfico ao lado"}
           className="panel--chart"
-          action={trendSelection ? <button className="table-action pnr-trend-clear" type="button" onClick={() => setTrendSelection(null)}><XCircle size={13} />Limpar</button> : null}
+          action={activeTrendSelection ? <button className="table-action pnr-trend-clear" type="button" onClick={() => setTrendSelection(null)}><XCircle size={13} />Limpar</button> : null}
         >
           {selectedTrendPoint ? (
             <div className="pnr-comparison">
@@ -698,7 +699,7 @@ export function PnrInboxView({ profile }: { profile: AuthProfile }) {
                   <small>{previousTrendPoint ? `${new Intl.NumberFormat("pt-BR", { signDisplay: "always", minimumFractionDigits: 1, maximumFractionDigits: 1 }).format((currentShare - previousShare) * 100)} p.p.` : "Sem período anterior"}</small>
                 </div>
               </div>
-              <p className="pnr-comparison-hint">{trendSelection ? "Clique novamente no ponto selecionado ou use Limpar para voltar à comparação geral." : "Clique em qualquer ponto do gráfico de linhas para comparar uma classificação específica."}</p>
+              <p className="pnr-comparison-hint">{activeTrendSelection ? "Clique novamente no ponto selecionado ou use Limpar para voltar à comparação geral." : "Clique em qualquer ponto do gráfico de linhas para comparar uma classificação específica."}</p>
             </div>
           ) : <NoResults title="Sem dados para comparação" />}
         </Panel>

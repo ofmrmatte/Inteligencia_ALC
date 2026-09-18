@@ -446,7 +446,6 @@ export function ReportsView() {
   const dateEnd = useReportFiltersStore((state) => state.dateEnd);
   const statusFilter = useReportFiltersStore((state) => state.statusFilter);
   const exportRequest = useReportFiltersStore((state) => state.exportRequest);
-  const exporting = useReportFiltersStore((state) => state.exporting);
   const setExporting = useReportFiltersStore((state) => state.setExporting);
   const lastExportRequest = useRef(exportRequest);
   const scoped = scopeData(data, filters);
@@ -510,7 +509,6 @@ export function ReportsView() {
   const operationAnalysis = useMemo(() => groupAnalysis(filtered, (row) => kind === "PNR" ? row.status : row.operation, totalValue), [filtered, kind, totalValue]);
   const analysis = kind === "PNR" ? operationAnalysis : baseAnalysis;
   const topImpact = analysis[0];
-  const topBase = baseAnalysis[0];
   const statusTrend = useMemo(() => buildStatusTrend(filtered, kind), [filtered, kind]);
 
 

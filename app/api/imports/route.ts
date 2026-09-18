@@ -876,7 +876,13 @@ export async function GET() {
       },
     });
   } catch (error) {
-    return jsonError(error instanceof Error ? error.message : "Falha ao carregar dados online.", 401);
+    const message = error instanceof Error ? error.message : "Falha ao carregar dados online.";
+    const status = message.includes("Sessão expirada")
+      ? 401
+      : isTransientDashboardReadError(message)
+        ? 503
+        : 500;
+    return jsonError(message, status);
   }
 }
 
