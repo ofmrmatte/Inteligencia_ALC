@@ -15,7 +15,7 @@ const previewUrl = "https://alcpaineldeinteligencia-5pv5ezaem-mrmattes-projects.
 beforeAll(async () => {
   vi.stubGlobal("chrome", {
     runtime: {
-      getManifest: () => ({ version: "1.1.10" }),
+      getManifest: () => ({ version: "1.1.11" }),
       onMessage: { addListener: (listener) => { onMessage = listener; } },
       onInstalled: { addListener: (listener) => { onInstalled = listener; } },
     },
@@ -55,7 +55,7 @@ describe("handshake do Conector PNR", () => {
   it("identifica a extensão mesmo sem aba Mercado Livre", async () => {
     tabs = [];
     expect(await ping()).toEqual({ ok: true, data: {
-      installed: true, version: "1.1.10", mlTabAvailable: false, sessionAvailable: false,
+      installed: true, version: "1.1.11", mlTabAvailable: false, sessionAvailable: false,
     } });
   });
 
@@ -63,7 +63,7 @@ describe("handshake do Conector PNR", () => {
     tabs = [{ id: 7 }];
     probeResult = { ok: true, data: { cookie: "não deve retornar" } };
     expect(await ping()).toEqual({ ok: true, data: {
-      installed: true, version: "1.1.10", mlTabAvailable: true, sessionAvailable: true,
+      installed: true, version: "1.1.11", mlTabAvailable: true, sessionAvailable: true,
     } });
     expect(probeArgs).toMatchObject({
       period: "202608Q2",
@@ -74,7 +74,7 @@ describe("handshake do Conector PNR", () => {
     });
     probeResult = { ok: false, code: "MERCADO_LIVRE_SESSION_REQUIRED", message: "Sessão Mercado Livre expirada." };
     expect(await ping()).toEqual({ ok: true, data: {
-      installed: true, version: "1.1.10", mlTabAvailable: true, sessionAvailable: false,
+      installed: true, version: "1.1.11", mlTabAvailable: true, sessionAvailable: false,
       sessionError: "MERCADO_LIVRE_SESSION_REQUIRED",
       sessionMessage: "Sessão Mercado Livre expirada.",
     } });
@@ -108,7 +108,7 @@ describe("handshake do Conector PNR", () => {
       { url },
       resolve,
     ));
-    expect((await sendFrom(previewUrl)).data).toMatchObject({ installed: true, version: "1.1.10" });
+    expect((await sendFrom(previewUrl)).data).toMatchObject({ installed: true, version: "1.1.11" });
     expect(await sendFrom("https://alcpaineldeinteligencia-test-other-team.vercel.app/bandeja-pnr"))
       .toMatchObject({ ok: false, error: { code: "INVALID_RESPONSE" } });
   });
