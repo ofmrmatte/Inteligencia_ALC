@@ -230,10 +230,24 @@ export function PnrInboxView({ profile }: { profile: AuthProfile }) {
 
       point.totalCases += 1;
       point.totalValue += row.purchaseValue;
-      const casesKey = `${series}Cases` as keyof TrendPoint;
-      const valueKey = `${series}Value` as keyof TrendPoint;
-      point[casesKey] = Number(point[casesKey] || 0) + 1;
-      point[valueKey] = Number(point[valueKey] || 0) + row.purchaseValue;
+      switch (series) {
+        case "billedReviewed":
+          point.billedReviewedCases += 1;
+          point.billedReviewedValue += row.purchaseValue;
+          break;
+        case "cancelledReviewed":
+          point.cancelledReviewedCases += 1;
+          point.cancelledReviewedValue += row.purchaseValue;
+          break;
+        case "cancelledTony":
+          point.cancelledTonyCases += 1;
+          point.cancelledTonyValue += row.purchaseValue;
+          break;
+        case "billedAutomatic":
+          point.billedAutomaticCases += 1;
+          point.billedAutomaticValue += row.purchaseValue;
+          break;
+      }
       periodMap.set(period, point);
     });
     return [...periodMap.values()].sort((a, b) => a.sortKey - b.sortKey);
