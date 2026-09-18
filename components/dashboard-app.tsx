@@ -16,15 +16,15 @@ import { canManageImports, type AuthProfile } from "@/lib/auth";
 import { ViewRouter } from "@/components/views/view-router";
 import { SECTION_META, type SectionId } from "@/lib/navigation";
 import { useDashboardStore } from "@/lib/store";
-import { PNR_BACKGROUND_SYNC_COMMITTED_EVENT } from "@/lib/pnr-background-sync-store";
 
 const ImportPanel = dynamic(() => import("@/components/import-panel").then((module) => module.ImportPanel), { ssr: false });
 const SIDEBAR_KEY = "alc-inteligencia:sidebar-collapsed";
 const SIDEBAR_EVENT = "alc-inteligencia:sidebar-change";
 const GLOBAL_SYNC_EVENT = "alc-inteligencia:global-data-sync";
-const GLOBAL_SYNC_INTERVAL_MS = 15_000;
+const GLOBAL_SYNC_INTERVAL_MS = 60_000;
 const ADMIN_SECTIONS: SectionId[] = ["gestao-motoristas", "configuracoes", "perfil"];
 const STANDALONE_SECTIONS: SectionId[] = ["bandeja-pnr", "gestao-descontos", ...ADMIN_SECTIONS];
+const NO_GLOBAL_DATA_SECTIONS: SectionId[] = ["gestao-descontos", ...ADMIN_SECTIONS];
 
 function subscribeSidebarChange(callback: () => void) {
   window.addEventListener("storage", callback);
@@ -65,6 +65,8 @@ export function DashboardApp({ section, profile }: { section: SectionId; profile
   const canLoadOperationalData = canAccessOperationalData(profile);
   const standalone = STANDALONE_SECTIONS.includes(section);
   const remountOnGlobalSync = section === "gestao-descontos";
+  const shouldLoadGlobalData = canLoadOperationalData && !NO_GLOBAL_DATA_SECTIONS.includes(section);
+  const shouldPollGlobalRevision = shouldLoadGlobalData || remountOnGlobalSync;
   const hasOperationalRows = data.hierarchy.length > 0 || data.prefatura.length > 0 || data.pnr.length > 0 || data.risk.length > 0 || data.drivers.length > 0;
   const cacheOwnerId = [
     profile.id,
@@ -73,7 +75,7 @@ export function DashboardApp({ section, profile }: { section: SectionId; profile
     [...profile.baseScope].sort().join(","),
     [...profile.siglaScope].sort().join(","),
   ].join("::");
-  const initialDataLoad = canLoadOperationalData && !hydrated && !standalone;
+  const initialDataLoad = shouldLoadGlobalData && !hydrated && !standalone;
   const showEmptyState = canLoadOperationalData && hydrated && !loadError && !hasOperationalRows && data.imports.length === 0 && !standalone;
   const showGlobalFilters = canLoadOperationalData && hydrated && (hasOperationalRows || data.imports.length > 0) && !standalone;
 
@@ -85,9 +87,13 @@ export function DashboardApp({ section, profile }: { section: SectionId; profile
     setImportOpen(true);
   };
 
-  useEffect(() => { void hydrate(cacheOwnerId, canLoadOperationalData); }, [hydrate, cacheOwnerId, canLoadOperationalData]);
+  useEffect(() => {
+    if (shouldLoadGlobalData) void hydrate(cacheOwnerId, true);
+  }, [hydrate, cacheOwnerId, shouldLoadGlobalData]);
 
   useEffect(() => {
+    if (!shouldPollGlobalRevision) return;
+
     let disposed = false;
     let syncing = false;
     const revisionKey = `alc-inteligencia:global-revision:${cacheOwnerId}`;
@@ -101,7 +107,7 @@ export function DashboardApp({ section, profile }: { section: SectionId; profile
         const knownRevision = window.localStorage.getItem(revisionKey);
         if (knownRevision === String(revision)) return;
 
-        if (canLoadOperationalData) {
+        if (shouldLoadGlobalData) {
           useDashboardStore.setState({ lastSyncedAt: 0 });
           await hydrate(cacheOwnerId, true);
           if (useDashboardStore.getState().loadError) return;
@@ -128,7 +134,6 @@ export function DashboardApp({ section, profile }: { section: SectionId; profile
 
     window.addEventListener("focus", handleFocus);
     window.addEventListener("storage", handleStorage);
-    window.addEventListener(PNR_BACKGROUND_SYNC_COMMITTED_EVENT, synchronize);
     document.addEventListener("visibilitychange", handleVisibility);
     return () => {
       disposed = true;
@@ -136,10 +141,9 @@ export function DashboardApp({ section, profile }: { section: SectionId; profile
       window.clearInterval(timer);
       window.removeEventListener("focus", handleFocus);
       window.removeEventListener("storage", handleStorage);
-      window.removeEventListener(PNR_BACKGROUND_SYNC_COMMITTED_EVENT, synchronize);
       document.removeEventListener("visibilitychange", handleVisibility);
     };
-  }, [hydrate, cacheOwnerId, canLoadOperationalData, remountOnGlobalSync]);
+  }, [hydrate, cacheOwnerId, shouldLoadGlobalData, shouldPollGlobalRevision, remountOnGlobalSync]);
 
   const toggleCollapsed = () => {
     window.localStorage.setItem(SIDEBAR_KEY, String(!collapsed));

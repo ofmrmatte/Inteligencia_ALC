@@ -342,6 +342,14 @@ function isTransientDashboardReadError(message: string) {
   return /statement timeout|canceling statement|connection reset|connection terminated|server closed the connection/i.test(message);
 }
 
+const IMPORT_BATCH_SELECT = "id,name,metadata,finished_at,started_at,fortnight,month,competence,fortnights,months,analysis_excluded,duplicate_of,row_count";
+const HIERARCHY_SELECT = "batch_id,source_file,source_sheet,source_row,coordinator_name,supervisor_name,sigla,base_name,base_key";
+const PREFATURA_SELECT = "batch_id,source_file,source_sheet,source_row,period,base_label,base_name,base_key,sigla,driver_id,driver_name,plate,description,route_date,shipment_id,route_id,value,operation,quality_status,enrichment_source,base_source,driver_name_source,driver_id_source";
+const PNR_SELECT = "batch_id,source_file,source_sheet,source_row,case_id,case_date,status,billing_period,shipment_id,products,purchase_value,carrier,origin_station,base_key,sigla,route_code,route_id,driver_id,driver_name,currency,main_status,sub_status,reviewed_status,case_type,route_status,priority,source_system,case_capture_status,detail_sync_status,timeline_synced_at,first_captured_at,last_captured_at,source_last_seen_at,custom,billing_type,cancellation_type,classification_columns_present";
+const CASE_CENTER_SELECT = "case_id,competence,latest_batch_id,case_date,main_status,sub_status,billing_period,shipment_id,purchase_value,svc_name,base_key,sigla,route_code,route_id,driver_id,driver_name,currency,reviewed_status,case_type,route_status,priority,case_capture_status,detail_sync_status,timeline_synced_at,first_captured_at,last_captured_at,source_last_seen_at,raw_snapshot_jsonb";
+const RISK_SELECT = "batch_id,source_file,source_sheet,source_row,failure_date,shipment_id,item_description,driver_id,facility_id,destination_type,carrier_name,failure_reason,last_substatus,route_id,route_status,destination_facility_id,vehicle_type,quantity,stopped_days,gmv_usd,gmv_brl,base_key,sigla";
+const DRIVER_SELECT = "batch_id,source_file,source_sheet,source_row,driver_id,name,experience,incidents,last_updated,state,shipped,delivered,undelivered,unvisited,penalized,contradictory_pnr,empty_boxes,lost,stolen";
+
 async function readTable(supabase: ServerClient, table: string, select = "*", orderColumn = "created_at", pageSize = 1000) {
   return readPaged<DbRow>(async (offset, size) => {
     for (let attempt = 0; attempt < 3; attempt += 1) {
@@ -367,30 +375,51 @@ async function readTable(supabase: ServerClient, table: string, select = "*", or
   }, pageSize);
 }
 
+async function readLegacyPnrTable(supabase: ServerClient, pageSize = 1000) {
+  return readPaged<DbRow>(async (offset, size) => {
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      const { data, error } = await supabase
+        .from("pnr_records")
+        .select(PNR_SELECT)
+        .neq("source_system", "case_center")
+        .order("created_at", { ascending: false })
+        .order("id", { ascending: false })
+        .range(offset, offset + size - 1);
+
+      if (!error) return { rows: (data ?? []) as unknown as DbRow[], count: null };
+      if (!isTransientDashboardReadError(error.message) || attempt === 2) {
+        throw new Error(`pnr_records: ${error.message}`);
+      }
+      await new Promise((resolve) => setTimeout(resolve, 150 * (attempt + 1)));
+    }
+    return { rows: [], count: null };
+  }, pageSize);
+}
+
 async function readImportedFiles(supabase: ServerClient, batchId: string | null) {
   return readPaged<DbRow>(async (offset, size) => {
     let query = supabase
       .from("imported_files")
-      .select("storage_path", { count: "exact" })
+      .select("storage_path")
       .order("id", { ascending: false });
     if (batchId) query = query.eq("batch_id", batchId);
-    const { data, error, count } = await query.range(offset, offset + size - 1);
+    const { data, error } = await query.range(offset, offset + size - 1);
     if (error) throw new Error(`imported_files: ${error.message}`);
-    return { rows: (data ?? []) as unknown as DbRow[], count: count ?? null };
+    return { rows: (data ?? []) as unknown as DbRow[], count: null };
   });
 }
 
 async function loadDashboardData(supabase: ServerClient, profile: AuthProfile): Promise<DashboardData> {
   const accessScope = await getUserAccessScope(profile);
   const [imports, hierarchy, prefatura, pnr, caseCenterCases, caseCenterEvents, risk, drivers] = await Promise.all([
-    readTable(supabase, "import_batches", "*", "started_at"),
-    readTable(supabase, "hierarchy_scopes"),
-    readTable(supabase, "prefatura_records"),
-    readTable(supabase, "pnr_records"),
-    readTable(supabase, "pnr_case_center_cases", "*", "last_captured_at"),
+    readTable(supabase, "import_batches", IMPORT_BATCH_SELECT, "started_at"),
+    readTable(supabase, "hierarchy_scopes", HIERARCHY_SELECT),
+    readTable(supabase, "prefatura_records", PREFATURA_SELECT),
+    readLegacyPnrTable(supabase),
+    readTable(supabase, "pnr_case_center_cases", CASE_CENTER_SELECT, "last_captured_at"),
     readTable(supabase, "pnr_case_events", "case_id,event_type,date_created,actor_name,actor_user_id", "date_created"),
-    readTable(supabase, "risk_lm_records"),
-    readTable(supabase, "driver_records"),
+    readTable(supabase, "risk_lm_records", RISK_SELECT),
+    readTable(supabase, "driver_records", DRIVER_SELECT),
   ]);
 
   const mappedImports = imports.map(mapImportEntry);
@@ -409,7 +438,7 @@ async function loadDashboardData(supabase: ServerClient, profile: AuthProfile): 
     }]);
   }
   const pnrRows = [
-    ...pnr.filter((row) => row.source_system !== "case_center" && activeBatchIds.has(toStringValue(row.batch_id))).map(mapPnr),
+    ...pnr.filter((row) => activeBatchIds.has(toStringValue(row.batch_id))).map(mapPnr),
     ...caseCenterCases.map((row) => mapCaseCenterCase(row, timelineByCase.get(toStringValue(row.case_id)) ?? [])),
   ];
   const riskRows = risk.filter((row) => activeBatchIds.has(toStringValue(row.batch_id))).map(mapRisk);
@@ -833,10 +862,19 @@ async function persistBatch(supabase: ServerClient, profile: AuthProfile, batch:
 }
 
 export async function GET() {
+  const startedAt = performance.now();
   try {
     const supabase = await createClient();
     const profile = await requireProfile(supabase);
-    return NextResponse.json(await loadDashboardData(supabase, profile));
+    const data = await loadDashboardData(supabase, profile);
+    const durationMs = performance.now() - startedAt;
+    const rowCount = data.hierarchy.length + data.prefatura.length + data.pnr.length + data.risk.length + data.drivers.length + data.imports.length;
+    return NextResponse.json(data, {
+      headers: {
+        "Server-Timing": `dashboard;dur=${durationMs.toFixed(1)}`,
+        "X-ALC-Data-Rows": String(rowCount),
+      },
+    });
   } catch (error) {
     return jsonError(error instanceof Error ? error.message : "Falha ao carregar dados online.", 401);
   }

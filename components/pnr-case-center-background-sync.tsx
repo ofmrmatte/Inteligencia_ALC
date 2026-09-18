@@ -13,7 +13,6 @@ import {
 import {
   getPnrBackgroundSyncStatus,
   hydratePnrBackgroundSyncPauseState,
-  PNR_BACKGROUND_SYNC_COMMITTED_EVENT,
   PNR_BACKGROUND_SYNC_NOW_EVENT,
   PNR_BACKGROUND_SYNC_PAUSE_EVENT,
   publishPnrBackgroundSyncStatus,
@@ -112,10 +111,10 @@ export function PnrCaseCenterBackgroundSync() {
     let authBlocked = false;
     let timer: number | undefined;
 
-    const schedule = () => {
-      if (disposed || authBlocked) return;
+    const schedule = (delayMs = PNR_DETAIL_SYNC_INTERVAL_MS) => {
+      if (disposed || authBlocked || getPnrBackgroundSyncStatus().manuallyPaused) return;
       window.clearTimeout(timer);
-      timer = window.setTimeout(() => { void run(); }, PNR_DETAIL_SYNC_INTERVAL_MS);
+      timer = window.setTimeout(() => { void run(); }, delayMs);
     };
 
     const run = async (manual = false) => {
@@ -128,6 +127,7 @@ export function PnrCaseCenterBackgroundSync() {
         schedule();
         return;
       }
+      let nextDelayMs = PNR_DETAIL_SYNC_INTERVAL_MS;
       running = true;
       try {
         const acquired = await runWithPnrSyncLock(navigator.locks, async () => {
@@ -135,6 +135,7 @@ export function PnrCaseCenterBackgroundSync() {
           const queuedCases = queue.cases?.length ? queue.cases : queue.case ? [queue.case] : [];
           publishPnrBackgroundSyncStatus({ pending: queue.pending });
           if (!queuedCases.length) {
+            nextDelayMs = 30_000;
             publishPnrBackgroundSyncStatus({ phase: "idle", message: "Fila de detalhes atualizada" });
             return;
           }
@@ -193,7 +194,6 @@ export function PnrCaseCenterBackgroundSync() {
             if (!disposed && handled < queuedCases.length) await wait(PNR_DETAIL_SYNC_CASE_DELAY_MS);
           }
 
-          if (successful > 0) window.dispatchEvent(new Event(PNR_BACKGROUND_SYNC_COMMITTED_EVENT));
           if (!getPnrBackgroundSyncStatus().manuallyPaused) {
             publishPnrBackgroundSyncStatus({ phase: "idle", message: "Lote de detalhes concluído; preparando o próximo" });
           }
@@ -217,7 +217,7 @@ export function PnrCaseCenterBackgroundSync() {
         });
       } finally {
         running = false;
-        schedule();
+        schedule(nextDelayMs);
       }
     };
 
