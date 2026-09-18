@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import Link from "next/link";
-import { ChevronDown, ChevronLeft, ChevronRight, HardDriveUpload } from "lucide-react";
+import { ChevronDown, ChevronLeft, ChevronRight, ClipboardList, HardDriveUpload } from "lucide-react";
 import { Brand } from "@/components/brand";
 import { canAccessSection } from "@/lib/access-control";
 import type { AuthProfile } from "@/lib/auth";
@@ -79,6 +79,7 @@ export function Sidebar({
                             className={active === "gestao-pnr" ? "sidebar__subitem is-active" : "sidebar__subitem"}
                             href="/gestao-pnr"
                           >
+                            <ClipboardList size={14} strokeWidth={1.9} />
                             <span>Casos e Tratativas</span>
                           </Link>
                           {children.map((child) => {
