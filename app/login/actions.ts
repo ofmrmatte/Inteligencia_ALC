@@ -4,7 +4,6 @@ import { redirect } from "next/navigation";
 import { z } from "zod";
 import { isSupabaseConfigured } from "@/lib/supabase/config";
 import { createClient } from "@/lib/supabase/server";
-import { isTransientSupabaseError, retrySupabaseResult } from "@/lib/supabase/retry";
 
 export interface LoginState {
   error?: string;
@@ -30,16 +29,18 @@ export async function signInAction(_state: LoginState, formData: FormData): Prom
   }
 
   const supabase = await createClient();
-  const { error } = await retrySupabaseResult(
-    () => supabase.auth.signInWithPassword(parsed.data),
-    [250, 750],
-  );
+  const { data, error } = await supabase.auth.signInWithPassword(parsed.data);
 
   if (error) {
-    if (isTransientSupabaseError(error)) {
-      return { error: "O serviço de autenticação está temporariamente sobrecarregado. Tente novamente em alguns segundos." };
+    if (error.code === "invalid_credentials") {
+      return { error: "E-mail ou senha inválidos." };
     }
-    return { error: "E-mail ou senha inválidos, ou usuário sem acesso liberado." };
+
+    return { error: "Não foi possível concluir o acesso agora. Tente novamente em alguns instantes." };
+  }
+
+  if (!data.session) {
+    return { error: "Não foi possível concluir o acesso agora. Tente novamente em alguns instantes." };
   }
 
   redirect("/");

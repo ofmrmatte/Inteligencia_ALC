@@ -96,8 +96,10 @@ describe("histórico durável de detalhes PNR", () => {
   it("mantém drawer local e worker fora da tela Sync PNR", () => {
     const drawer = readFileSync("components/views/pnr-case-detail-drawer.tsx", "utf8");
     const layout = readFileSync("app/layout.tsx", "utf8");
+    const backgroundSync = readFileSync("components/pnr-case-center-background-sync.tsx", "utf8");
     expect(drawer).toContain("/api/pnr-case-center/timeline");
     expect(drawer).not.toContain("requestPnrConnector");
     expect(layout).toContain("<PnrCaseCenterBackgroundSync />");
+    expect(backgroundSync).toContain('if (pathname === "/login" || pathname.startsWith("/motorista")) return;');
   });
 });

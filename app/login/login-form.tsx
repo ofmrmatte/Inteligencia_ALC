@@ -15,7 +15,7 @@ function SubmitButton() {
   );
 }
 
-export function LoginForm({ supabaseReady }: { supabaseReady: boolean }) {
+export function LoginForm({ supabaseReady, initialError }: { supabaseReady: boolean; initialError?: string }) {
   const [state, action] = useActionState<LoginState, FormData>(signInAction, {});
 
   return (
@@ -34,7 +34,7 @@ export function LoginForm({ supabaseReady }: { supabaseReady: boolean }) {
           <input name="password" type="password" autoComplete="current-password" placeholder="Senha de acesso" disabled={!supabaseReady} required />
         </div>
       </label>
-      {state.error ? <p className="login-error">{state.error}</p> : null}
+      {state.error ?? initialError ? <p className="login-error">{state.error ?? initialError}</p> : null}
       {!supabaseReady ? <p className="login-error">Autenticação do painel ainda não configurada neste ambiente.</p> : null}
       <SubmitButton />
     </form>

@@ -13,7 +13,8 @@ vi.mock("@/lib/supabase/config", () => ({ isSupabaseConfigured: () => true }));
 vi.mock("@/lib/supabase/server", () => ({ createClient }));
 vi.mock("next/navigation", () => ({ redirect: vi.fn() }));
 
-import { getCurrentProfile } from "@/lib/auth-server";
+import { getCurrentProfile, requireCurrentProfile } from "@/lib/auth-server";
+import { redirect } from "next/navigation";
 
 describe("perfil autenticado", () => {
   beforeEach(() => {
@@ -42,6 +43,21 @@ describe("perfil autenticado", () => {
     expect(await getCurrentProfile()).toBeNull();
 
     maybeSingle.mockResolvedValueOnce({ data: null, error: { message: "denied" } });
-    expect(await getCurrentProfile()).toBeNull();
+    await expect(getCurrentProfile()).rejects.toThrow("PROFILE_LOOKUP_FAILED");
+  });
+
+  it("não transforma indisponibilidade temporária do perfil em logout", async () => {
+    maybeSingle.mockResolvedValue({ data: null, error: { message: "connection timeout", status: 503 } });
+
+    await expect(requireCurrentProfile()).rejects.toThrow("PROFILE_LOOKUP_FAILED");
+    expect(redirect).not.toHaveBeenCalled();
+  });
+
+  it("distingue perfil sem acesso de sessão ausente", async () => {
+    maybeSingle.mockResolvedValue({ data: { role: "developer", active: false }, error: null });
+
+    await requireCurrentProfile();
+
+    expect(redirect).toHaveBeenCalledWith("/login?error=access");
   });
 });
