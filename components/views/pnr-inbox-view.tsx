@@ -43,10 +43,10 @@ const MONTHS = [
   "Julho", "Agosto", "Setembro", "Outubro", "Novembro", "Dezembro",
 ];
 const TREND_SERIES = {
-  billed: { label: "Enviados para faturamento", color: "#16845b" },
-  cancelled: { label: "Anulados", color: "#e30613" },
-  reviewed: { label: "Revisados", color: "#2563eb" },
-  notReviewed: { label: "Sem revisão", color: "#d98b12" },
+  billedReviewed: { label: "Faturada revisada", color: "#16845b" },
+  cancelledReviewed: { label: "Anulada revisada", color: "#2563eb" },
+  cancelledTony: { label: "Anulada Tony", color: "#e30613" },
+  billedAutomatic: { label: "Faturada automática", color: "#d98b12" },
 } as const;
 
 type TrendSeriesKey = keyof typeof TREND_SERIES;
@@ -58,14 +58,14 @@ interface TrendPoint {
   sortKey: number;
   totalCases: number;
   totalValue: number;
-  billedCases: number;
-  billedValue: number;
-  cancelledCases: number;
-  cancelledValue: number;
-  reviewedCases: number;
-  reviewedValue: number;
-  notReviewedCases: number;
-  notReviewedValue: number;
+  billedReviewedCases: number;
+  billedReviewedValue: number;
+  cancelledReviewedCases: number;
+  cancelledReviewedValue: number;
+  cancelledTonyCases: number;
+  cancelledTonyValue: number;
+  billedAutomaticCases: number;
+  billedAutomaticValue: number;
 }
 
 interface ResumeState {
@@ -206,33 +206,34 @@ export function PnrInboxView({ profile }: { profile: AuthProfile }) {
         sortKey: year * 1000 + month * 10 + half,
         totalCases: 0,
         totalValue: 0,
-        billedCases: 0,
-        billedValue: 0,
-        cancelledCases: 0,
-        cancelledValue: 0,
-        reviewedCases: 0,
-        reviewedValue: 0,
-        notReviewedCases: 0,
-        notReviewedValue: 0,
+        billedReviewedCases: 0,
+        billedReviewedValue: 0,
+        cancelledReviewedCases: 0,
+        cancelledReviewedValue: 0,
+        cancelledTonyCases: 0,
+        cancelledTonyValue: 0,
+        billedAutomaticCases: 0,
+        billedAutomaticValue: 0,
       };
+      const reviewed = row.reviewedStatus === "reviewed"
+        || normalizeText(row.billingType).includes("REVISADA MELI")
+        || normalizeText(row.cancellationType).includes("REVISADA MELI");
+
+      let series: TrendSeriesKey | null = null;
+      if (row.subStatus === "BILLED") {
+        series = reviewed ? "billedReviewed" : "billedAutomatic";
+      } else if (row.subStatus === "NOT_BILLED") {
+        series = reviewed ? "cancelledReviewed" : "cancelledTony";
+      }
+
+      if (!series) return;
+
       point.totalCases += 1;
       point.totalValue += row.purchaseValue;
-      if (row.subStatus === "BILLED") {
-        point.billedCases += 1;
-        point.billedValue += row.purchaseValue;
-      }
-      if (row.subStatus === "NOT_BILLED") {
-        point.cancelledCases += 1;
-        point.cancelledValue += row.purchaseValue;
-      }
-      if (row.reviewedStatus === "reviewed") {
-        point.reviewedCases += 1;
-        point.reviewedValue += row.purchaseValue;
-      }
-      if (row.reviewedStatus === "not_reviewed") {
-        point.notReviewedCases += 1;
-        point.notReviewedValue += row.purchaseValue;
-      }
+      const casesKey = `${series}Cases` as keyof TrendPoint;
+      const valueKey = `${series}Value` as keyof TrendPoint;
+      point[casesKey] = Number(point[casesKey] || 0) + 1;
+      point[valueKey] = Number(point[valueKey] || 0) + row.purchaseValue;
       periodMap.set(period, point);
     });
     return [...periodMap.values()].sort((a, b) => a.sortKey - b.sortKey);
@@ -593,7 +594,7 @@ export function PnrInboxView({ profile }: { profile: AuthProfile }) {
       <div className="content-grid content-grid--wide">
         <Panel
           title="Evolução das classificações"
-          subtitle="Clique em um ponto para comparar a classificação com a competência anterior"
+          subtitle="Faturada revisada, Anulada revisada, Anulada Tony e Faturada automática"
           className="panel--chart"
           action={(
             <div className="pnr-trend-toggle" aria-label="Métrica do gráfico">
