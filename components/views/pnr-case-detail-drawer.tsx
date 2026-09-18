@@ -66,7 +66,7 @@ function DetailSection({ icon, title, children }: { icon: ReactNode; title: stri
 
 export function PnrCaseDetailDrawer({ row, onClose }: { row: PnrRecord | null; onClose: () => void }) {
   const [remote, setRemote] = useState<TimelineResponse | null>(null);
-  const [loading, setLoading] = useState(false);
+  const [loading, setLoading] = useState(Boolean(row?.caseId));
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
@@ -78,10 +78,7 @@ export function PnrCaseDetailDrawer({ row, onClose }: { row: PnrRecord | null; o
 
   useEffect(() => {
     let cancelled = false;
-    setRemote(null);
-    setError(null);
     if (!row?.caseId) return;
-    setLoading(true);
     fetch(`/api/pnr-case-center/timeline?caseId=${encodeURIComponent(row.caseId)}`, { cache: "no-store" })
       .then(async (response) => {
         if (!response.ok) {
