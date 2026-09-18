@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
-import { Bar, BarChart, CartesianGrid, Cell, Pie, PieChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
+import { Bar, BarChart, CartesianGrid, Cell, Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
 import { BadgeDollarSign, Ban, Boxes, CircleCheckBig, CloudDownload, Download, ExternalLink, History, Pause, Play, RefreshCw, XCircle } from "lucide-react";
 import { toast } from "sonner";
 import { canManageImports, type AuthProfile } from "@/lib/auth";
@@ -42,7 +42,31 @@ const MONTHS = [
   "Janeiro", "Fevereiro", "Março", "Abril", "Maio", "Junho",
   "Julho", "Agosto", "Setembro", "Outubro", "Novembro", "Dezembro",
 ];
-const COLORS = ["#16845b", "#e30613"];
+const TREND_SERIES = {
+  billed: { label: "Enviados para faturamento", color: "#16845b" },
+  cancelled: { label: "Anulados", color: "#e30613" },
+  reviewed: { label: "Revisados", color: "#2563eb" },
+  notReviewed: { label: "Sem revisão", color: "#d98b12" },
+} as const;
+
+type TrendSeriesKey = keyof typeof TREND_SERIES;
+type TrendMetric = "cases" | "value";
+
+interface TrendPoint {
+  period: string;
+  label: string;
+  sortKey: number;
+  totalCases: number;
+  totalValue: number;
+  billedCases: number;
+  billedValue: number;
+  cancelledCases: number;
+  cancelledValue: number;
+  reviewedCases: number;
+  reviewedValue: number;
+  notReviewedCases: number;
+  notReviewedValue: number;
+}
 
 interface ResumeState {
   syncId: string;
@@ -111,6 +135,8 @@ export function PnrInboxView({ profile }: { profile: AuthProfile }) {
   const [selectedCase, setSelectedCase] = useState<PnrRecord | null>(null);
   const [timeline, setTimeline] = useState<PnrCaseTimelineEvent[]>([]);
   const [timelineLoading, setTimelineLoading] = useState(false);
+  const [trendMetric, setTrendMetric] = useState<TrendMetric>("cases");
+  const [trendSelection, setTrendSelection] = useState<{ period: string; series: TrendSeriesKey } | null>(null);
   const detailSync = useSyncExternalStore(
     subscribePnrBackgroundSync,
     getPnrBackgroundSyncStatus,
@@ -160,8 +186,123 @@ export function PnrInboxView({ profile }: { profile: AuthProfile }) {
   const reviewed = rows.filter((row) => row.reviewedStatus === "reviewed").length;
   const notReviewed = rows.filter((row) => row.reviewedStatus === "not_reviewed").length;
   const totalValue = rows.reduce((sum, row) => sum + row.purchaseValue, 0);
-  const closure = [{ name: "Enviados para faturamento", cases: billed }, { name: "Anulados", cases: cancelled }];
-  const review = [{ name: "Revisados", cases: reviewed }, { name: "Sem revisão", cases: notReviewed }];
+
+  const trendData = useMemo(() => {
+    const periodMap = new Map<string, TrendPoint>();
+    rows.forEach((row) => {
+      const normalized = normalizeFortnight(row.billingPeriod) || fortnightFromDate(row.caseDate);
+      const match = /^(0[12])Q(\d{2})(\d{4})$/.exec(normalized);
+      if (!match) return;
+      const half = match[1] === "01" ? 1 : 2;
+      const month = Number(match[2]);
+      const year = Number(match[3]);
+      const period = `${year}${String(month).padStart(2, "0")}Q${half}`;
+      const shortMonth = new Intl.DateTimeFormat("pt-BR", { month: "short" })
+        .format(new Date(year, month - 1, 1))
+        .replace(".", "");
+      const point = periodMap.get(period) ?? {
+        period,
+        label: `${shortMonth.charAt(0).toUpperCase() + shortMonth.slice(1)} Q${half}`,
+        sortKey: year * 1000 + month * 10 + half,
+        totalCases: 0,
+        totalValue: 0,
+        billedCases: 0,
+        billedValue: 0,
+        cancelledCases: 0,
+        cancelledValue: 0,
+        reviewedCases: 0,
+        reviewedValue: 0,
+        notReviewedCases: 0,
+        notReviewedValue: 0,
+      };
+      point.totalCases += 1;
+      point.totalValue += row.purchaseValue;
+      if (row.subStatus === "BILLED") {
+        point.billedCases += 1;
+        point.billedValue += row.purchaseValue;
+      }
+      if (row.subStatus === "NOT_BILLED") {
+        point.cancelledCases += 1;
+        point.cancelledValue += row.purchaseValue;
+      }
+      if (row.reviewedStatus === "reviewed") {
+        point.reviewedCases += 1;
+        point.reviewedValue += row.purchaseValue;
+      }
+      if (row.reviewedStatus === "not_reviewed") {
+        point.notReviewedCases += 1;
+        point.notReviewedValue += row.purchaseValue;
+      }
+      periodMap.set(period, point);
+    });
+    return [...periodMap.values()].sort((a, b) => a.sortKey - b.sortKey);
+  }, [rows]);
+
+  useEffect(() => {
+    if (trendSelection && !trendData.some((point) => point.period === trendSelection.period)) {
+      setTrendSelection(null);
+    }
+  }, [trendData, trendSelection]);
+
+  const selectedTrendIndex = trendSelection
+    ? trendData.findIndex((point) => point.period === trendSelection.period)
+    : Math.max(0, trendData.length - 1);
+  const selectedTrendPoint = trendData[selectedTrendIndex] ?? null;
+  const previousTrendPoint = selectedTrendIndex > 0 ? trendData[selectedTrendIndex - 1] : null;
+  const selectedTrendSeries = trendSelection?.series ?? null;
+  const selectedTrendLabel = selectedTrendSeries ? TREND_SERIES[selectedTrendSeries].label : "Total de casos";
+  const selectedTrendColor = selectedTrendSeries ? TREND_SERIES[selectedTrendSeries].color : "#333333";
+
+  const metricField = (series: TrendSeriesKey, metric: TrendMetric) => `${series}${metric === "cases" ? "Cases" : "Value"}` as keyof TrendPoint;
+  const comparisonValue = (point: TrendPoint | null, metric: TrendMetric) => {
+    if (!point) return 0;
+    if (!selectedTrendSeries) return metric === "cases" ? point.totalCases : point.totalValue;
+    return Number(point[metricField(selectedTrendSeries, metric)] || 0);
+  };
+  const currentCases = comparisonValue(selectedTrendPoint, "cases");
+  const previousCases = comparisonValue(previousTrendPoint, "cases");
+  const currentValue = comparisonValue(selectedTrendPoint, "value");
+  const previousValue = comparisonValue(previousTrendPoint, "value");
+  const caseDelta = previousCases ? (currentCases - previousCases) / previousCases : null;
+  const valueDelta = previousValue ? (currentValue - previousValue) / previousValue : null;
+  const currentShare = selectedTrendPoint && selectedTrendSeries
+    ? currentCases / Math.max(1, selectedTrendPoint.totalCases)
+    : selectedTrendPoint ? 1 : 0;
+  const previousShare = previousTrendPoint && selectedTrendSeries
+    ? previousCases / Math.max(1, previousTrendPoint.totalCases)
+    : previousTrendPoint ? 1 : 0;
+  const comparisonBars = [
+    ...(previousTrendPoint ? [{ period: previousTrendPoint.label, value: comparisonValue(previousTrendPoint, trendMetric), current: false }] : []),
+    ...(selectedTrendPoint ? [{ period: selectedTrendPoint.label, value: comparisonValue(selectedTrendPoint, trendMetric), current: true }] : []),
+  ];
+
+  const formatTrendValue = (value: number) => trendMetric === "value" ? formatCurrency(value) : formatNumber(value);
+  const formatDelta = (value: number | null) => value === null
+    ? "Sem período anterior"
+    : `${value >= 0 ? "+" : ""}${new Intl.NumberFormat("pt-BR", { style: "percent", minimumFractionDigits: 1, maximumFractionDigits: 1 }).format(value)}`;
+
+  const renderTrendDot = (series: TrendSeriesKey) => (props: { cx?: number; cy?: number; payload?: TrendPoint }) => {
+    if (props.cx === undefined || props.cy === undefined || !props.payload) return <g />;
+    const selected = trendSelection?.period === props.payload.period && trendSelection.series === series;
+    return (
+      <circle
+        cx={props.cx}
+        cy={props.cy}
+        r={selected ? 5 : 3.5}
+        fill={TREND_SERIES[series].color}
+        stroke="#fff"
+        strokeWidth={selected ? 2.5 : 1.5}
+        style={{ cursor: "pointer" }}
+        onClick={(event) => {
+          event.stopPropagation();
+          setTrendSelection((current) => current?.period === props.payload?.period && current.series === series
+            ? null
+            : { period: props.payload?.period || "", series });
+        }}
+      />
+    );
+  };
+
   const baseMap = new Map<string, { base: string; cases: number; value: number }>();
   rows.forEach((row) => {
     const base = row.originStation || row.sigla || "Sem base";
@@ -450,11 +591,101 @@ export function PnrInboxView({ profile }: { profile: AuthProfile }) {
       </div>
 
       <div className="content-grid content-grid--wide">
-        <Panel title="Fechamento" subtitle="Enviado para faturamento x Anulado" className="panel--chart">
-          {rows.length ? <ResponsiveContainer width="100%" height={260}><PieChart><Pie data={closure} dataKey="cases" nameKey="name" innerRadius={58} outerRadius={88} paddingAngle={3}>{closure.map((item, index) => <Cell key={item.name} fill={COLORS[index]} />)}</Pie><Tooltip content={<ChartTooltip />} /></PieChart></ResponsiveContainer> : <NoResults title="Sem casos nesta competência" />}
+        <Panel
+          title="Evolução das classificações"
+          subtitle="Clique em um ponto para comparar a classificação com a competência anterior"
+          className="panel--chart"
+          action={(
+            <div className="pnr-trend-toggle" aria-label="Métrica do gráfico">
+              <button type="button" className={trendMetric === "cases" ? "is-active" : ""} onClick={() => setTrendMetric("cases")}>Casos</button>
+              <button type="button" className={trendMetric === "value" ? "is-active" : ""} onClick={() => setTrendMetric("value")}>Valor</button>
+            </div>
+          )}
+        >
+          {trendData.length ? (
+            <>
+              <div className="pnr-trend-legend">
+                {(Object.entries(TREND_SERIES) as Array<[TrendSeriesKey, (typeof TREND_SERIES)[TrendSeriesKey]]>).map(([key, item]) => (
+                  <span key={key} className={trendSelection?.series === key ? "is-selected" : ""}>
+                    <i style={{ background: item.color }} />{item.label}
+                  </span>
+                ))}
+              </div>
+              <ResponsiveContainer width="100%" height={286}>
+                <LineChart data={trendData} margin={{ left: 4, right: 18, top: 14, bottom: 4 }}>
+                  <CartesianGrid stroke="#ECEDEF" vertical={false} />
+                  <XAxis dataKey="label" axisLine={false} tickLine={false} tick={{ fontSize: 9, fill: "#73767d" }} />
+                  <YAxis
+                    axisLine={false}
+                    tickLine={false}
+                    allowDecimals={trendMetric === "value"}
+                    tick={{ fontSize: 9, fill: "#73767d" }}
+                    tickFormatter={(value) => trendMetric === "value" ? `R$ ${formatNumber(Number(value) / 1000)}k` : formatNumber(Number(value))}
+                  />
+                  <Tooltip
+                    formatter={(value, name) => [formatTrendValue(Number(value)), String(name)]}
+                    labelFormatter={(label) => `Competência ${String(label)}`}
+                  />
+                  {(Object.entries(TREND_SERIES) as Array<[TrendSeriesKey, (typeof TREND_SERIES)[TrendSeriesKey]]>).map(([key, item]) => (
+                    <Line
+                      key={key}
+                      type="monotone"
+                      dataKey={metricField(key, trendMetric)}
+                      name={item.label}
+                      stroke={item.color}
+                      strokeWidth={trendSelection?.series === key ? 3 : 2}
+                      dot={renderTrendDot(key)}
+                      activeDot={{ r: 6, strokeWidth: 2, fill: item.color, stroke: "#fff" }}
+                      connectNulls
+                    />
+                  ))}
+                </LineChart>
+              </ResponsiveContainer>
+            </>
+          ) : <NoResults title="Sem histórico suficiente para evolução" />}
         </Panel>
-        <Panel title="Revisão" subtitle="Revisado x Sem revisão" className="panel--chart">
-          {rows.length ? <ResponsiveContainer width="100%" height={260}><BarChart data={review} margin={{ left: 8, right: 12, top: 8 }}><CartesianGrid stroke="#ECEDEF" vertical={false} /><XAxis dataKey="name" axisLine={false} tickLine={false} tick={{ fontSize: 10 }} /><YAxis axisLine={false} tickLine={false} allowDecimals={false} tick={{ fontSize: 10 }} /><Tooltip content={<ChartTooltip />} /><Bar dataKey="cases" name="Casos" fill="#333333" radius={[4, 4, 0, 0]} maxBarSize={54} /></BarChart></ResponsiveContainer> : <NoResults title="Sem revisão nesta competência" />}
+
+        <Panel
+          title={trendSelection ? `Comparação — ${selectedTrendLabel}` : "Comparação geral"}
+          subtitle={selectedTrendPoint
+            ? `${selectedTrendPoint.label}${previousTrendPoint ? ` x ${previousTrendPoint.label}` : " · sem período anterior no recorte"}`
+            : "Selecione um ponto no gráfico ao lado"}
+          className="panel--chart"
+          action={trendSelection ? <button className="table-action pnr-trend-clear" type="button" onClick={() => setTrendSelection(null)}><XCircle size={13} />Limpar</button> : null}
+        >
+          {selectedTrendPoint ? (
+            <div className="pnr-comparison">
+              <ResponsiveContainer width="100%" height={174}>
+                <BarChart data={comparisonBars} margin={{ left: 0, right: 6, top: 12, bottom: 0 }}>
+                  <CartesianGrid stroke="#ECEDEF" vertical={false} />
+                  <XAxis dataKey="period" axisLine={false} tickLine={false} tick={{ fontSize: 9 }} />
+                  <YAxis axisLine={false} tickLine={false} tick={{ fontSize: 9 }} allowDecimals={trendMetric === "value"} tickFormatter={(value) => trendMetric === "value" ? `R$ ${formatNumber(Number(value) / 1000)}k` : formatNumber(Number(value))} />
+                  <Tooltip formatter={(value) => [formatTrendValue(Number(value)), trendMetric === "value" ? "Valor" : "Casos"]} />
+                  <Bar dataKey="value" name={trendMetric === "value" ? "Valor" : "Casos"} radius={[4, 4, 0, 0]} maxBarSize={54}>
+                    {comparisonBars.map((item) => <Cell key={item.period} fill={item.current ? selectedTrendColor : "#a7a9ad"} />)}
+                  </Bar>
+                </BarChart>
+              </ResponsiveContainer>
+              <div className="pnr-comparison-summary">
+                <div>
+                  <span>Casos</span>
+                  <strong>{formatNumber(currentCases)}</strong>
+                  <small className={caseDelta !== null && caseDelta < 0 ? "is-down" : caseDelta !== null ? "is-up" : ""}>{formatDelta(caseDelta)}</small>
+                </div>
+                <div>
+                  <span>Valor</span>
+                  <strong>{formatCurrency(currentValue)}</strong>
+                  <small className={valueDelta !== null && valueDelta < 0 ? "is-down" : valueDelta !== null ? "is-up" : ""}>{formatDelta(valueDelta)}</small>
+                </div>
+                <div>
+                  <span>Participação</span>
+                  <strong>{new Intl.NumberFormat("pt-BR", { style: "percent", minimumFractionDigits: 1 }).format(currentShare)}</strong>
+                  <small>{previousTrendPoint ? `${new Intl.NumberFormat("pt-BR", { signDisplay: "always", minimumFractionDigits: 1, maximumFractionDigits: 1 }).format((currentShare - previousShare) * 100)} p.p.` : "Sem período anterior"}</small>
+                </div>
+              </div>
+              <p className="pnr-comparison-hint">{trendSelection ? "Clique novamente no ponto selecionado ou use Limpar para voltar à comparação geral." : "Clique em qualquer ponto do gráfico de linhas para comparar uma classificação específica."}</p>
+            </div>
+          ) : <NoResults title="Sem dados para comparação" />}
         </Panel>
       </div>
 
