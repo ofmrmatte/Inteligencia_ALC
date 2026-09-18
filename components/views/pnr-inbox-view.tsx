@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { Bar, BarChart, CartesianGrid, Cell, Pie, PieChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
 import { BadgeDollarSign, Ban, Boxes, CircleCheckBig, CloudDownload, Download, ExternalLink, History, RefreshCw, Square, XCircle } from "lucide-react";
 import { toast } from "sonner";
@@ -24,6 +24,12 @@ import {
   type PnrConnectorState,
 } from "@/lib/pnr-connector-client";
 import { useDashboardStore } from "@/lib/store";
+import {
+  getPnrBackgroundSyncStatus,
+  getServerPnrBackgroundSyncStatus,
+  requestPnrBackgroundSyncNow,
+  subscribePnrBackgroundSync,
+} from "@/lib/pnr-background-sync-store";
 import type { PnrRecord } from "@/lib/types";
 import { formatCurrency, formatNumber, KpiCard, PageIntro, Panel, StatusBadge } from "@/components/ui";
 import { ChartTooltip, NoResults } from "./shared";
@@ -52,39 +58,6 @@ interface CompletionState {
   errors: number;
 }
 
-interface TimelineConnectorResult {
-  caseId: string;
-  sourceEventCount: number;
-  events: PnrCaseTimelineEvent[];
-  detail?: {
-    claimId?: string;
-    preInvoiceNumber?: string;
-    billingPeriod?: string;
-    driverId?: string;
-    buyerName?: string;
-    complaintMessage?: string;
-    assignedReceiver?: string;
-    trackingId?: string;
-    products?: Array<{ id?: string; title: string; price?: number; currency?: string }>;
-    deliveryAt?: string;
-    receivedBy?: string;
-    receiverName?: string;
-    receiverDocument?: string;
-    routeId?: string;
-    carrierName?: string;
-    driverName?: string;
-    driverPhone?: string;
-    reviewRequestedBy?: string;
-    reviewRequestedAt?: string;
-    reviewMessage?: string;
-    reviewEvidenceNames?: string[];
-    receiptStatus?: string;
-    receiptActorName?: string;
-    receiptMessage?: string;
-    reviewOutcome?: string;
-  };
-}
-
 function connectionPresentation(state: PnrConnectorState) {
   if (state === "connected") return { label: "Conector Mercado Livre conectado", tone: "green" as const };
   if (state === "outdated") return { label: "Existe uma versão mais recente do Conector PNR.", tone: "amber" as const };
@@ -109,41 +82,6 @@ async function readError(response: Response, fallback: string) {
   return body.error || fallback;
 }
 
-async function persistTimeline(caseId: string, result?: TimelineConnectorResult, status: "COMPLETE" | "ERROR" = "COMPLETE") {
-  const response = await fetch("/api/pnr-case-center/timeline", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      caseId,
-      status,
-      detail: result?.detail,
-      sourceEventCount: result?.sourceEventCount,
-      events: (result?.events ?? []).map(({ eventId, eventType, dateCreated, actorName, actorUserId }) => ({
-        eventId,
-        eventType,
-        dateCreated,
-        ...(actorName ? { actorName } : {}),
-        ...(actorUserId ? { actorUserId } : {}),
-      })),
-    }),
-  });
-  if (!response.ok) throw new Error(await readError(response, "Falha ao arquivar timeline."));
-  return response.json() as Promise<{ events: PnrCaseTimelineEvent[] }>;
-}
-
-async function fetchTimelineWithRetry(caseId: string) {
-  let lastError: unknown;
-  for (let attempt = 0; attempt < 2; attempt += 1) {
-    try {
-      return await requestPnrConnector<TimelineConnectorResult>("FETCH_TIMELINE", { caseId });
-    } catch (error) {
-      lastError = error;
-      if (attempt === 0) await new Promise((resolve) => window.setTimeout(resolve, 500));
-    }
-  }
-  throw lastError;
-}
-
 export function PnrInboxView({ profile }: { profile: AuthProfile }) {
   const now = new Date();
   const data = useDashboardStore((state) => state.data);
@@ -163,10 +101,12 @@ export function PnrInboxView({ profile }: { profile: AuthProfile }) {
   const [selectedCase, setSelectedCase] = useState<PnrRecord | null>(null);
   const [timeline, setTimeline] = useState<PnrCaseTimelineEvent[]>([]);
   const [timelineLoading, setTimelineLoading] = useState(false);
-  const [detailRunning, setDetailRunning] = useState(false);
-  const [detailProgress, setDetailProgress] = useState({ done: 0, total: 0, errors: 0 });
+  const detailSync = useSyncExternalStore(
+    subscribePnrBackgroundSync,
+    getPnrBackgroundSyncStatus,
+    getServerPnrBackgroundSyncStatus,
+  );
   const cancelRef = useRef(false);
-  const detailCancelRef = useRef(false);
   const connectorCheckRef = useRef(0);
   const installDialogRef = useRef<HTMLDialogElement>(null);
   const competence = `${year}${String(month).padStart(2, "0")}Q${half}`;
@@ -352,48 +292,6 @@ export function PnrInboxView({ profile }: { profile: AuthProfile }) {
     }
   };
 
-  const archivePendingDetails = async (candidates: PnrRecord[] = rows) => {
-    if (detailRunning) return;
-    const pending = candidates.filter((row) => (
-      row.sourceSystem === "case_center"
-      && normalizeFortnight(row.billingPeriod) === fortnight
-      && row.caseId
-      && row.detailSyncStatus !== "COMPLETE"
-    ));
-    if (pending.length === 0) return;
-
-    detailCancelRef.current = false;
-    setDetailRunning(true);
-    setDetailProgress({ done: 0, total: pending.length, errors: 0 });
-    let done = 0;
-    let errors = 0;
-    try {
-      for (const row of pending) {
-        if (detailCancelRef.current || !row.caseId) break;
-        try {
-          const remote = await fetchTimelineWithRetry(row.caseId);
-          await persistTimeline(row.caseId, remote);
-          done += 1;
-        } catch (error) {
-          const state = connectionStateFromError(error);
-          if (state !== "error") {
-            setConnection(state);
-            toast.error("Conector Mercado Livre indisponível para atualização. O histórico local permanece acessível.");
-            break;
-          }
-          errors += 1;
-          done += 1;
-          await persistTimeline(row.caseId, undefined, "ERROR").catch(() => undefined);
-        }
-        setDetailProgress({ done, total: pending.length, errors });
-        await new Promise((resolve) => window.setTimeout(resolve, 250));
-      }
-    } finally {
-      setDetailRunning(false);
-      await refreshDashboard();
-    }
-  };
-
   const loadTimeline = async (row: PnrRecord) => {
     if (!row.caseId) return;
     setSelectedCase(row);
@@ -402,22 +300,9 @@ export function PnrInboxView({ profile }: { profile: AuthProfile }) {
     try {
       const cachedResponse = await fetch(`/api/pnr-case-center/timeline?caseId=${encodeURIComponent(row.caseId)}`, { cache: "no-store" });
       if (!cachedResponse.ok) throw new Error(await readError(cachedResponse, "Falha ao consultar timeline."));
-      const cached = await cachedResponse.json() as { cached: boolean; events: PnrCaseTimelineEvent[] };
+      const cached = await cachedResponse.json() as { events: PnrCaseTimelineEvent[] };
       setTimeline(cached.events);
-      if (cached.cached) {
-        return;
-      }
-      if (!syncReady) {
-        toast.message("Conector necessário apenas para sincronização com o Mercado Livre.");
-        return;
-      }
-
-      const remote = await fetchTimelineWithRetry(row.caseId);
-      const persisted = await persistTimeline(row.caseId, remote);
-      setTimeline(persisted.events);
     } catch (error) {
-      const state = connectionStateFromError(error);
-      if (state !== "error") setConnection(state);
       toast.error(error instanceof Error ? error.message : "Falha ao carregar timeline.");
     } finally {
       setTimelineLoading(false);
@@ -457,8 +342,8 @@ export function PnrInboxView({ profile }: { profile: AuthProfile }) {
             <div className="case-center-progress__track"><i style={{ width: `${progress.totalElements ? Math.min(100, (progress.processed / progress.totalElements) * 100) : 0}%` }} /></div>
             {completion ? <div className="case-center-result"><span>{formatNumber(completion.received)} encontrados</span><span>{formatNumber(completion.reconciled)} reconciliados com histórico</span><span>{formatNumber(completion.created)} novos</span><span>{formatNumber(completion.updated)} atualizados</span><span>{formatNumber(completion.unchanged)} sem alteração</span><span>{formatNumber(completion.deleted)} excluídos</span><span>{formatNumber(completion.errors)} erros</span></div> : null}
             <div className="case-center-detail-sync">
-              <span>{detailProgress.total ? `Detalhes arquivados: ${formatNumber(detailProgress.done)} / ${formatNumber(detailProgress.total)}${detailProgress.errors ? ` · ${formatNumber(detailProgress.errors)} erros` : ""}` : "As timelines pendentes podem ser arquivadas sem bloquear o painel."}</span>
-              {detailRunning ? <button className="secondary-button" type="button" onClick={() => { detailCancelRef.current = true; }}><Square size={14} />Pausar detalhes</button> : <button className="secondary-button" type="button" disabled={!syncReady || !rows.some((row) => row.caseId && row.detailSyncStatus !== "COMPLETE")} onClick={() => void archivePendingDetails()}><History size={15} />Arquivar detalhes pendentes</button>}
+              <span><strong>Sincronização de detalhes</strong> · {detailSync.message} · Pendentes: {formatNumber(detailSync.pending)} · Processados nesta sessão: {formatNumber(detailSync.processed)} · Erros: {formatNumber(detailSync.errors)}{detailSync.lastSuccessAt ? ` · Última: ${new Date(detailSync.lastSuccessAt).toLocaleTimeString("pt-BR")}` : ""}</span>
+              <button className="secondary-button" type="button" disabled={detailSync.phase === "active"} onClick={requestPnrBackgroundSyncNow}><History size={15} />Sincronizar agora</button>
             </div>
           </div>
         </div>
@@ -506,7 +391,7 @@ export function PnrInboxView({ profile }: { profile: AuthProfile }) {
       </Panel>
 
       <div className="content-grid content-grid--wide">
-        <Panel title="Casos recentes" subtitle="Selecione um caso para consultar a timeline sob demanda">
+        <Panel title="Casos recentes" subtitle="Selecione um caso para consultar a timeline arquivada">
           {rows.length ? <div className="case-center-case-list">{rows.slice(0, 30).map((row) => <button type="button" key={row.caseId || `${row.batchId}-${row.shipmentId}`} onClick={() => void loadTimeline(row)} className={selectedCase?.caseId === row.caseId ? "is-active" : ""}><span><strong className="mono">{row.shipmentId}</strong><small>Caso {row.caseId || "—"} · {row.originStation || "Sem base"}</small></span><span><b>{row.status}</b><small>{caseCenterReviewLabel(row.reviewedStatus || "")} · {row.detailSyncStatus === "COMPLETE" ? "timeline arquivada" : "detalhes pendentes"}</small></span><strong>{formatCurrency(row.purchaseValue)}</strong></button>)}</div> : <NoResults title="Nenhum caso importado" detail="Use o botão de captura para trazer a competência selecionada." />}
         </Panel>
         <Panel title="Timeline do caso" subtitle={selectedCase ? `Caso ${selectedCase.caseId}` : "Selecione um caso ao lado"}>

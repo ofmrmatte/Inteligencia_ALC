@@ -5,39 +5,17 @@ import { CircleDollarSign, FileText, History, MapPinned, PackageOpen, Route, Use
 import { formatCurrency, StatusBadge } from "@/components/ui";
 import type { PnrRecord } from "@/lib/types";
 import type { PnrCaseTimelineEvent } from "@/lib/pnr-case-center";
-
-interface CaseDetailSnapshot {
-  claimId?: string;
-  preInvoiceNumber?: string;
-  billingPeriod?: string;
-  buyerName?: string;
-  complaintMessage?: string;
-  assignedReceiver?: string;
-  trackingId?: string;
-  products?: Array<{ id?: string; title: string; price?: number; currency?: string }>;
-  deliveryAt?: string;
-  receivedBy?: string;
-  receiverName?: string;
-  receiverDocument?: string;
-  routeId?: string;
-  carrierName?: string;
-  driverName?: string;
-  driverPhone?: string;
-  reviewRequestedBy?: string;
-  reviewRequestedAt?: string;
-  reviewMessage?: string;
-  reviewEvidenceNames?: string[];
-  receiptStatus?: string;
-  receiptActorName?: string;
-  receiptMessage?: string;
-  reviewOutcome?: string;
-}
+import type { PnrCaseDetailSnapshot } from "@/lib/pnr-case-detail";
 
 interface TimelineResponse {
   cached: boolean;
   detailSyncStatus: string;
+  detailLastAttemptAt?: string | null;
+  detailLastSuccessAt?: string | null;
+  detailNextSyncAt?: string | null;
+  detailLastError?: string | null;
   timelineSyncedAt?: string | null;
-  detail?: CaseDetailSnapshot;
+  detail?: PnrCaseDetailSnapshot;
   events: PnrCaseTimelineEvent[];
 }
 
@@ -111,6 +89,14 @@ export function PnrCaseDetailDrawer({ row, onClose }: { row: PnrRecord | null; o
     || events.find((event) => /ON_REVIEW/.test(event.eventType) && event.actorName)?.actorName;
   const receiptActor = detail?.receiptActorName
     || events.find((event) => (event.eventType === "ATTACHED_RECEIPT" || event.eventType === "NOT_ATTACHED_RECEIPT") && event.actorName)?.actorName;
+  const archivedAt = remote?.detailLastSuccessAt || remote?.timelineSyncedAt;
+  const archiveStatus = remote?.detailSyncStatus === "ERROR"
+    ? "Dados arquivados no ALC · atualização com erro"
+    : remote?.cached
+      ? "Dados arquivados no ALC · sincronização atualizada"
+      : detail || events.length
+        ? "Dados arquivados no ALC · nova sincronização pendente"
+        : "Detalhes ainda pendentes de enriquecimento";
 
   return (
     <div className="pnr-detail-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose(); }}>
@@ -127,7 +113,7 @@ export function PnrCaseDetailDrawer({ row, onClose }: { row: PnrRecord | null; o
         <div className="pnr-detail-drawer__status">
           <StatusBadge tone={/FATUR|BILLED/i.test(row.status) ? "green" : /ANUL/i.test(row.status) ? "red" : "amber"}>{row.status || "Sem status"}</StatusBadge>
           <span>{classification}</span>
-          {row.sourceSystem === "case_center" ? <small>{remote?.cached ? "Detalhes arquivados no ALC" : row.detailSyncStatus === "COMPLETE" ? "Histórico local disponível" : "Detalhes ainda pendentes de enriquecimento"}</small> : <small>Histórico legado por planilha</small>}
+          {row.sourceSystem === "case_center" ? <small>{archiveStatus}{archivedAt ? ` · ${dateTime(archivedAt)}` : ""}</small> : <small>Histórico legado por planilha</small>}
         </div>
 
         <div className="pnr-detail-drawer__content">
@@ -141,7 +127,7 @@ export function PnrCaseDetailDrawer({ row, onClose }: { row: PnrRecord | null; o
               <DetailField label="Status atual" value={row.status} />
               <DetailField label="Competência" value={detail?.billingPeriod || row.billingPeriod} />
               <DetailField label="Data do caso" value={row.caseDate ? new Date(`${row.caseDate}T12:00:00`).toLocaleDateString("pt-BR") : null} />
-              <DetailField label="Última atualização" value={dateTime(row.lastCapturedAt)} />
+              <DetailField label="Última sincronização" value={dateTime(archivedAt)} />
               <DetailField label="Base / estação" value={row.originStation} />
               <DetailField label="XPT" value={row.xptCode} />
               <DetailField label="Motorista" value={detail?.driverName || row.driverName || row.driverId} />
@@ -184,7 +170,7 @@ export function PnrCaseDetailDrawer({ row, onClose }: { row: PnrRecord | null; o
               <DetailField label="Rota" value={detail?.routeId || row.routeId} mono />
               <DetailField label="Transportadora" value={detail?.carrierName || row.carrier} />
               <DetailField label="Motorista" value={detail?.driverName || row.driverName} />
-              <DetailField label="ID do motorista" value={row.driverId} mono />
+              <DetailField label="ID do motorista" value={detail?.driverId || row.driverId} mono />
               <DetailField label="Telefone" value={detail?.driverPhone} />
               <DetailField label="Base / estação" value={row.originStation} />
             </div>
