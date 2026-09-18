@@ -29,6 +29,7 @@ export function PnrView() {
   const [idSearchOpen, setIdSearchOpen] = useState(false);
   const [idSearch, setIdSearch] = useState("");
   const [valueSort, setValueSort] = useState("NONE");
+  const [dateSort, setDateSort] = useState("NONE");
   const [page, setPage] = useState(1);
   const [selectedRow, setSelectedRow] = useState<PnrRecord | null>(null);
 
@@ -48,11 +49,31 @@ export function PnrView() {
     if (search && !row.shipmentId.includes(search)) return false;
     return true;
   });
-  const filteredRows = valueSort === "DESC"
-    ? [...matchingRows].sort((a, b) => b.purchaseValue - a.purchaseValue)
-    : valueSort === "ASC"
-      ? [...matchingRows].sort((a, b) => a.purchaseValue - b.purchaseValue)
-      : matchingRows;
+  const dateValue = (row: PnrRecord) => {
+    const value = row.caseDate ? new Date(`${row.caseDate}T12:00:00`).getTime() : Number.NaN;
+    return Number.isFinite(value) ? value : null;
+  };
+  const filteredRows = dateSort === "DESC"
+    ? [...matchingRows].sort((a, b) => {
+        const left = dateValue(a);
+        const right = dateValue(b);
+        if (left === null) return right === null ? 0 : 1;
+        if (right === null) return -1;
+        return right - left;
+      })
+    : dateSort === "ASC"
+      ? [...matchingRows].sort((a, b) => {
+          const left = dateValue(a);
+          const right = dateValue(b);
+          if (left === null) return right === null ? 0 : 1;
+          if (right === null) return -1;
+          return left - right;
+        })
+      : valueSort === "DESC"
+        ? [...matchingRows].sort((a, b) => b.purchaseValue - a.purchaseValue)
+        : valueSort === "ASC"
+          ? [...matchingRows].sort((a, b) => a.purchaseValue - b.purchaseValue)
+          : matchingRows;
 
   if (!rows.length) return <NoResults title="Nenhum caso PNR neste recorte" />;
 
@@ -164,8 +185,25 @@ export function PnrView() {
                 Status
                 <ColumnSelectFilter ariaLabel="Filtrar casos PNR por status" value={statusFilter} options={statusOptions} onChange={(value) => { setStatusFilter(value); setPage(1); }} allLabel="Todos os status" />
               </th>
-              <th>Data</th><th>Base de origem</th><th>XPT</th><th>Motorista</th><th>Rota</th>
-              <th className="align-right">Valor <ColumnSelectFilter ariaLabel="Ordenar casos PNR por valor" value={valueSort} options={[{ value: "DESC", label: "Maior → menor" }, { value: "ASC", label: "Menor → maior" }]} onChange={(value) => { setValueSort(value); setPage(1); }} allValue="NONE" allLabel="Ordenar" /></th>
+              <th>
+                Data
+                <ColumnSelectFilter
+                  ariaLabel="Ordenar casos PNR por data"
+                  value={dateSort}
+                  options={[
+                    { value: "DESC", label: "Mais recentes" },
+                    { value: "ASC", label: "Mais antigas" },
+                  ]}
+                  onChange={(value) => {
+                    setDateSort(value);
+                    if (value !== "NONE") setValueSort("NONE");
+                    setPage(1);
+                  }}
+                  allValue="NONE"
+                  allLabel="Ordenar"
+                />
+              </th><th>Base de origem</th><th>XPT</th><th>Motorista</th><th>Rota</th>
+              <th className="align-right">Valor <ColumnSelectFilter ariaLabel="Ordenar casos PNR por valor" value={valueSort} options={[{ value: "DESC", label: "Maior → menor" }, { value: "ASC", label: "Menor → maior" }]} onChange={(value) => { setValueSort(value); if (value !== "NONE") setDateSort("NONE"); setPage(1); }} allValue="NONE" allLabel="Ordenar" /></th>
               <th>Ações</th>
             </tr>
           </thead>
