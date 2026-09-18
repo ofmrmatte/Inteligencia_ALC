@@ -52,7 +52,7 @@ export function Sidebar({
                     : "sidebar__item";
 
                 if (isPnrGroup) {
-                  const open = pnrOpen || pnrActive;
+                  const open = pnrOpen;
                   return (
                     <div className="sidebar__branch" key={item.id}>
                       <button
