@@ -181,7 +181,7 @@ export function PnrView() {
         {!filteredRows.length ? <div style={{ padding: 20 }}><NoResults title="Nenhum caso corresponde à busca" detail="Limpe a pesquisa por ID ou altere o filtro de status." /></div> : null}
       </Panel>
 
-      <PnrCaseDetailDrawer row={selectedRow} onClose={() => setSelectedRow(null)} />
+      <PnrCaseDetailDrawer key={selectedRow?.caseId || selectedRow?.shipmentId || "closed"} row={selectedRow} onClose={() => setSelectedRow(null)} />
     </div>
   );
 }
