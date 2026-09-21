@@ -18,7 +18,7 @@ const detailUrl = `${listUrl}/198912360`;
 beforeAll(async () => {
   vi.stubGlobal("chrome", {
     runtime: {
-      getManifest: () => ({ version: "1.1.13" }),
+      getManifest: () => ({ version: "1.1.14" }),
       onMessage: { addListener: (listener) => { onMessage = listener; } },
       onInstalled: { addListener: (listener) => { onInstalled = listener; } },
     },
@@ -74,14 +74,14 @@ describe("handshake do Conector PNR", () => {
   it("identifica a extensão mesmo sem aba Mercado Livre", async () => {
     tabs = [];
     expect(await ping()).toEqual({ ok: true, data: {
-      installed: true, version: "1.1.13", mlTabAvailable: false, sessionAvailable: false,
+      installed: true, version: "1.1.14", mlTabAvailable: false, sessionAvailable: false,
     } });
   });
 
   it("faz PING leve sem consultar uma página do Case Center", async () => {
     tabs = [{ id: 7, status: "complete", url: detailUrl }];
     expect(await ping()).toEqual({ ok: true, data: {
-      installed: true, version: "1.1.13", mlTabAvailable: true, sessionAvailable: true,
+      installed: true, version: "1.1.14", mlTabAvailable: true, sessionAvailable: true,
     } });
     expect(probeArgs).toBeUndefined();
   });
@@ -162,7 +162,7 @@ describe("handshake do Conector PNR", () => {
       { url },
       resolve,
     ));
-    expect((await sendFrom(previewUrl)).data).toMatchObject({ installed: true, version: "1.1.13" });
+    expect((await sendFrom(previewUrl)).data).toMatchObject({ installed: true, version: "1.1.14" });
     expect(await sendFrom("https://alcpaineldeinteligencia-test-other-team.vercel.app/bandeja-pnr"))
       .toMatchObject({ ok: false, error: { code: "INVALID_RESPONSE" } });
   });

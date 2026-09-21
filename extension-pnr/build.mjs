@@ -12,13 +12,35 @@ if (relative(root, resolvedOutput).startsWith(`..${sep}`) || relative(root, reso
 const manifest = JSON.parse(await readFile(join(root, "src", "manifest.json"), "utf8"));
 const { version } = JSON.parse(await readFile(join(root, "package.json"), "utf8"));
 if (manifest.version !== version) throw new Error("Versões do manifest e package.json divergem.");
-const files = ["manifest.json", "panel-bridge.js", "case-center.js", "service-worker.js"];
+
+// Chrome MV3 supports module service workers, but a single classic worker is
+// more resilient for unpacked/user-installed builds. Keep source modules for
+// tests and bundle only the distributed artifact.
+const distributedManifest = structuredClone(manifest);
+delete distributedManifest.background?.type;
+
+const caseCenterSource = await readFile(join(root, "src", "case-center.js"), "utf8");
+const serviceWorkerSource = await readFile(join(root, "src", "service-worker.js"), "utf8");
+const bundledCaseCenter = caseCenterSource.replace(/^export\s+/gm, "");
+const bundledWorker = serviceWorkerSource
+  .replace(/import\s*\{[\s\S]*?\}\s*from\s*["']\.\/case-center\.js["'];\s*/m, "")
+  .replace(/^export\s+/gm, "");
+const serviceWorkerBundle = `${bundledCaseCenter}\n\n${bundledWorker}`;
+
+// Validate syntax during the application build without executing Chrome APIs.
+new Function(serviceWorkerBundle);
+
+const distributedFiles = new Map([
+  ["manifest.json", Buffer.from(JSON.stringify(distributedManifest, null, 2) + "\n")],
+  ["panel-bridge.js", await readFile(join(root, "src", "panel-bridge.js"))],
+  ["case-center.js", Buffer.from(caseCenterSource)],
+  ["service-worker.js", Buffer.from(serviceWorkerBundle)],
+]);
 const archive = {};
 
 await rm(output, { recursive: true, force: true });
 await mkdir(output, { recursive: true });
-for (const file of files) {
-  const content = await readFile(join(root, "src", file));
+for (const [file, content] of distributedFiles) {
   await writeFile(join(output, file), content);
   archive[`alc-pnr-connector/${file}`] = new Uint8Array(content);
 }
