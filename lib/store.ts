@@ -12,6 +12,7 @@ const STORAGE_KEY_PREFIX = "alc-inteligencia:v4";
 const DATA_STALE_AFTER_MS = 24 * 60 * 60 * 1000;
 type HydrationMode = "bootstrap" | "full";
 const hydrationTasks = new Map<string, Promise<void>>();
+const memoryCaches = new Map<string, DashboardCache>();
 
 interface DashboardCache {
   data: DashboardData;
@@ -43,9 +44,21 @@ function storageKey(cacheOwnerId: string, mode: HydrationMode) {
 }
 
 async function save(data: DashboardData, cacheOwnerId: string, mode: HydrationMode, savedAt = Date.now()) {
-  if (typeof window !== "undefined" && cacheOwnerId) {
-    await set(storageKey(cacheOwnerId, mode), { data, savedAt } satisfies DashboardCache);
-  }
+  if (typeof window === "undefined" || !cacheOwnerId) return;
+  const key = storageKey(cacheOwnerId, mode);
+  const cache = { data, savedAt } satisfies DashboardCache;
+  memoryCaches.set(key, cache);
+  await set(key, cache);
+}
+
+async function readCachedDashboard(cacheOwnerId: string, mode: HydrationMode) {
+  const key = storageKey(cacheOwnerId, mode);
+  const inMemory = memoryCaches.get(key);
+  if (inMemory) return inMemory;
+
+  const persisted = await get<DashboardCache>(key);
+  if (persisted?.data) memoryCaches.set(key, persisted);
+  return persisted ?? null;
 }
 
 async function readError(response: Response, fallback: string) {
@@ -176,7 +189,7 @@ export const useDashboardStore = create<DashboardStore>((storeSet, getState) => 
 
       if (!cacheWasLoaded) {
         try {
-          const cached = await get<DashboardCache>(storageKey(cacheOwnerId, mode));
+          const cached = await readCachedDashboard(cacheOwnerId, mode);
           if (cached?.data) {
             cacheWasLoaded = true;
             const cacheIsFresh = Date.now() - cached.savedAt < DATA_STALE_AFTER_MS;
@@ -273,7 +286,13 @@ export const useDashboardStore = create<DashboardStore>((storeSet, getState) => 
     if (!response.ok) throw new Error(await readError(response, "Falha ao limpar dados online."));
     storeSet({ data: EMPTY_DATA, filters: EMPTY_FILTERS, hydrated: true, refreshing: false, lastSyncedAt: Date.now(), loadError: "" });
     const owner = getState().cacheOwnerId;
-    if (owner) await Promise.all([del(storageKey(owner, "bootstrap")), del(storageKey(owner, "full"))]);
+    if (owner) {
+      const bootstrapKey = storageKey(owner, "bootstrap");
+      const fullKey = storageKey(owner, "full");
+      memoryCaches.delete(bootstrapKey);
+      memoryCaches.delete(fullKey);
+      await Promise.all([del(bootstrapKey), del(fullKey)]);
+    }
   },
   loadDemo: async () => {
     const data = createDemoData();
