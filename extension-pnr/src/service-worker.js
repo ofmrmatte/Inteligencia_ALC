@@ -226,6 +226,59 @@ async function fetchCaseDetailStateInTab(caseId) {
   return { ok: true, data: { caseState } };
 }
 
+async function fetchCaseDetailStatesInTab({ caseIds, concurrency }) {
+  const ids = [...new Set((Array.isArray(caseIds) ? caseIds : []).map((value) => String(value)))];
+  const workerCount = Math.max(1, Math.min(Number(concurrency) || 1, 8, ids.length || 1));
+  const results = new Array(ids.length);
+  let cursor = 0;
+
+  const fetchOne = async (caseId) => {
+    const response = await fetch(`/logistics/case-center/cases/${encodeURIComponent(caseId)}`, { credentials: "include" });
+    if (response.status === 401 || response.status === 403) {
+      return { ok: false, code: "MERCADO_LIVRE_SESSION_REQUIRED", message: "Sessão Mercado Livre expirada." };
+    }
+    if (!response.ok) return { ok: false, code: "HTTP_ERROR", message: `Case Center respondeu HTTP ${response.status}.` };
+    if (response.redirected && !new URL(response.url).pathname.startsWith("/logistics/case-center/cases/")) {
+      return { ok: false, code: "MERCADO_LIVRE_SESSION_REQUIRED", message: "Abra ou entre novamente na Bandeja de suporte do Mercado Livre." };
+    }
+
+    const html = await response.text();
+    const marker = "_n.ctx.r=";
+    const start = html.indexOf(marker);
+    const jsonStart = start + marker.length;
+    const end = html.indexOf(";_n.ctx.r.assets", jsonStart);
+    if (start < 0 || end < 0) return { ok: false, code: "INVALID_RESPONSE", message: "Timeline não encontrada no detalhe do caso." };
+    const state = JSON.parse(html.slice(jsonStart, end));
+    const caseState = state?.appProps?.pageProps?.preloadedStore?.CaseDetail;
+    if (!caseState || typeof caseState !== "object" || Array.isArray(caseState)) {
+      return { ok: false, code: "INVALID_RESPONSE", message: "Detalhes do caso não encontrados no estado SSR." };
+    }
+    return { ok: true, data: { caseState } };
+  };
+
+  const worker = async () => {
+    while (true) {
+      const index = cursor;
+      cursor += 1;
+      if (index >= ids.length) return;
+      const caseId = ids[index];
+      try {
+        results[index] = { caseId, ...(await fetchOne(caseId)) };
+      } catch (error) {
+        results[index] = {
+          caseId,
+          ok: false,
+          code: error?.code || "INVALID_RESPONSE",
+          message: error?.message || "Falha ao consultar timeline.",
+        };
+      }
+    }
+  };
+
+  await Promise.all(Array.from({ length: workerCount }, () => worker()));
+  return results;
+}
+
 async function handle(message) {
   const tabs = await caseCenterTabs();
   const authenticatedTab = tabs[0] ?? null;
@@ -270,6 +323,44 @@ async function handle(message) {
     const result = await execute(authenticatedTab.id, fetchCaseCenterPageInTab, [{ ...details, page, size: CASE_CENTER_PAGE_SIZE }]);
     if (!result?.ok) return connectorError(result?.code || "INVALID_RESPONSE", result?.message || "Falha ao consultar Case Center.");
     return { ok: true, data: normalizeCaseCenterPage(result.data, page) };
+  }
+
+  if (message.type === "FETCH_TIMELINES") {
+    const rawCaseIds = Array.isArray(message.payload?.caseIds) ? message.payload.caseIds : [];
+    const caseIds = [...new Set(rawCaseIds.map((value) => String(value)))];
+    if (!caseIds.length || caseIds.length > 50 || caseIds.some((caseId) => !/^\d{1,30}$/.test(caseId))) {
+      return connectorError("INVALID_RESPONSE", "Lote de casos PNR inválido.");
+    }
+    const concurrency = Math.max(1, Math.min(Number(message.payload?.concurrency) || 1, 8));
+    const batch = await execute(authenticatedTab.id, fetchCaseDetailStatesInTab, [{ caseIds, concurrency }]);
+    if (!Array.isArray(batch)) return connectorError("INVALID_RESPONSE", "Resposta em lote do Case Center inválida.");
+
+    const results = batch.map((item) => {
+      const caseId = String(item?.caseId || "");
+      if (!item?.ok) {
+        return {
+          caseId,
+          ok: false,
+          error: {
+            code: item?.code || "INVALID_RESPONSE",
+            message: item?.message || "Falha ao consultar timeline.",
+          },
+        };
+      }
+      const caseState = item.data?.caseState;
+      const events = Array.isArray(caseState?.events) ? caseState.events : [];
+      return {
+        caseId,
+        ok: true,
+        data: {
+          caseId,
+          sourceEventCount: events.length,
+          events: normalizeCaseTimelineEvents(events),
+          detail: extractCaseCenterDetail(caseState),
+        },
+      };
+    });
+    return { ok: true, data: { results } };
   }
 
   if (message.type === "FETCH_TIMELINE") {
