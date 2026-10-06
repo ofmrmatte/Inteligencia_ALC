@@ -562,7 +562,7 @@ export function PnrInboxView({ profile }: { profile: AuthProfile }) {
             <div className="case-center-detail-sync">
               <span><strong>Sincronização de detalhes</strong> · {detailSync.message} · Pendentes: {formatNumber(detailSync.pending)} · Processados nesta sessão: {formatNumber(detailSync.processed)} · Erros: {formatNumber(detailSync.errors)}{detailSync.lastSuccessAt ? ` · Última: ${new Date(detailSync.lastSuccessAt).toLocaleTimeString("pt-BR")}` : ""}</span>
               <div className="case-center-detail-sync__actions">
-                <button className="secondary-button" type="button" disabled={detailSync.phase === "active" || detailSync.manuallyPaused} onClick={requestPnrBackgroundSyncNow}><History size={15} />Sincronizar agora</button>
+                <button className="secondary-button" type="button" disabled={detailSync.phase === "active" || detailSync.manuallyPaused} onClick={requestPnrBackgroundSyncNow}><History size={15} />Sincronizar todos</button>
                 <button
                   className="icon-button"
                   type="button"
