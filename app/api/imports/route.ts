@@ -357,114 +357,112 @@ const CLASSIFICATION_EVENT_TYPES = [
   "UPDATE_STATUS_TO_CLOSED_BILLED",
   "UPDATE_CASE_BILLED",
 ] as const;
-const DASHBOARD_PAGE_CONCURRENCY = 8;
-let dashboardPageActive = 0;
-const dashboardPageWaiters: Array<() => void> = [];
+const DASHBOARD_QUERY_CONCURRENCY = 4;
+const DASHBOARD_MAX_CURSOR_PAGES = 5000;
+let dashboardQueryActive = 0;
+const dashboardQueryWaiters: Array<() => void> = [];
 
-async function withDashboardPageSlot<T>(operation: () => Promise<T>) {
-  if (dashboardPageActive >= DASHBOARD_PAGE_CONCURRENCY) {
-    await new Promise<void>((resolve) => dashboardPageWaiters.push(resolve));
+async function withDashboardQuerySlot<T>(operation: () => Promise<T>) {
+  if (dashboardQueryActive >= DASHBOARD_QUERY_CONCURRENCY) {
+    await new Promise<void>((resolve) => dashboardQueryWaiters.push(resolve));
   }
-  dashboardPageActive += 1;
+  dashboardQueryActive += 1;
   try {
     return await operation();
   } finally {
-    dashboardPageActive -= 1;
-    dashboardPageWaiters.shift()?.();
+    dashboardQueryActive -= 1;
+    dashboardQueryWaiters.shift()?.();
   }
 }
 
-async function runPageWorkers<T>(total: number, pageSize: number, workerCount: number, fetchPage: (offset: number, size: number) => Promise<T[]>) {
-  if (total <= 0) return [] as T[];
-  const offsets = Array.from({ length: Math.ceil(total / pageSize) }, (_, index) => index * pageSize);
-  const pages = new Array<T[]>(offsets.length);
-  let cursor = 0;
-
-  const worker = async () => {
-    while (true) {
-      const pageIndex = cursor;
-      cursor += 1;
-      if (pageIndex >= offsets.length) return;
-      pages[pageIndex] = await fetchPage(offsets[pageIndex], pageSize);
-    }
-  };
-
-  await Promise.all(Array.from({ length: Math.min(workerCount, offsets.length) }, () => worker()));
-  return pages.flat();
+function selectWithCursorId(select: string) {
+  if (select === "*") return select;
+  const columns = select.split(",").map((column) => column.trim());
+  return columns.includes("id") ? select : `id,${select}`;
 }
 
 async function retryDashboardPage<T>(label: string, operation: () => Promise<{ data: T[] | null; error: { message: string } | null }>) {
   for (let attempt = 0; attempt < 3; attempt += 1) {
-    const { data, error } = await withDashboardPageSlot(operation);
+    const { data, error } = await withDashboardQuerySlot(operation);
     if (!error) return (data ?? []) as T[];
     if (!isTransientDashboardReadError(error.message) || attempt === 2) {
       throw new Error(`${label}: ${error.message}`);
     }
-    await new Promise((resolve) => setTimeout(resolve, 250 * (attempt + 1)));
+    await new Promise((resolve) => setTimeout(resolve, 300 * (attempt + 1)));
   }
   return [];
 }
 
-async function readTable(supabase: ServerClient, table: string, select = "*", orderColumn = "created_at", pageSize = 1000) {
-  const counted = await supabase.from(table).select("id", { count: "exact", head: true });
-  if (counted.error) throw new Error(`${table}: ${counted.error.message}`);
-  const total = counted.count ?? 0;
+async function readCursorPaged(
+  label: string,
+  fetchPage: (cursor: string, pageSize: number) => Promise<DbRow[]>,
+  pageSize = 1000,
+) {
+  const rows: DbRow[] = [];
+  let cursor = "";
 
-  return runPageWorkers<DbRow>(total, pageSize, DASHBOARD_PAGE_CONCURRENCY, (offset, size) =>
+  for (let page = 0; page < DASHBOARD_MAX_CURSOR_PAGES; page += 1) {
+    const pageRows = await fetchPage(cursor, pageSize);
+    if (pageRows.length === 0) return rows;
+
+    rows.push(...pageRows);
+    const nextCursor = toStringValue(pageRows[pageRows.length - 1]?.id);
+    if (!nextCursor || nextCursor === cursor) {
+      throw new Error(`${label}: cursor de paginação inválido.`);
+    }
+    cursor = nextCursor;
+
+    if (pageRows.length < pageSize) return rows;
+  }
+
+  throw new Error(`${label}: paginação excedeu o limite de segurança.`);
+}
+
+async function readTable(supabase: ServerClient, table: string, select = "*", _orderColumn = "created_at", pageSize = 1000) {
+  const pageSelect = selectWithCursorId(select);
+  return readCursorPaged(table, async (cursor, size) =>
     retryDashboardPage<DbRow>(table, async () => {
-      const result = await supabase
+      let query = supabase
         .from(table)
-        .select(select)
-        .order(orderColumn, { ascending: false })
-        .order("id", { ascending: false })
-        .range(offset, offset + size - 1);
+        .select(pageSelect);
+      if (cursor) query = query.gt("id", cursor);
+      const result = await query
+        .order("id", { ascending: true })
+        .limit(size);
       return { data: result.data as unknown as DbRow[] | null, error: result.error };
-    }),
-  );
+    }), pageSize);
 }
 
 async function readLegacyPnrTable(supabase: ServerClient, pageSize = 1000) {
-  const counted = await supabase
-    .from("pnr_records")
-    .select("id", { count: "exact", head: true })
-    .neq("source_system", "case_center");
-  if (counted.error) throw new Error(`pnr_records: ${counted.error.message}`);
-  const total = counted.count ?? 0;
-
-  return runPageWorkers<DbRow>(total, pageSize, DASHBOARD_PAGE_CONCURRENCY, (offset, size) =>
+  const pageSelect = selectWithCursorId(PNR_SELECT);
+  return readCursorPaged("pnr_records", async (cursor, size) =>
     retryDashboardPage<DbRow>("pnr_records", async () => {
-      const result = await supabase
+      let query = supabase
         .from("pnr_records")
-        .select(PNR_SELECT)
-        .neq("source_system", "case_center")
-        .order("created_at", { ascending: false })
-        .order("id", { ascending: false })
-        .range(offset, offset + size - 1);
+        .select(pageSelect)
+        .neq("source_system", "case_center");
+      if (cursor) query = query.gt("id", cursor);
+      const result = await query
+        .order("id", { ascending: true })
+        .limit(size);
       return { data: result.data as unknown as DbRow[] | null, error: result.error };
-    }),
-  );
+    }), pageSize);
 }
 
 async function readCaseCenterClassificationEvents(supabase: ServerClient, pageSize = 1000) {
-  const counted = await supabase
-    .from("pnr_case_events")
-    .select("id", { count: "exact", head: true })
-    .in("event_type", [...CLASSIFICATION_EVENT_TYPES]);
-  if (counted.error) throw new Error(`pnr_case_events: ${counted.error.message}`);
-  const total = counted.count ?? 0;
-
-  return runPageWorkers<DbRow>(total, pageSize, DASHBOARD_PAGE_CONCURRENCY, (offset, size) =>
+  const pageSelect = selectWithCursorId("case_id,event_type,date_created,actor_name,actor_user_id");
+  return readCursorPaged("pnr_case_events", async (cursor, size) =>
     retryDashboardPage<DbRow>("pnr_case_events", async () => {
-      const result = await supabase
+      let query = supabase
         .from("pnr_case_events")
-        .select("case_id,event_type,date_created,actor_name,actor_user_id")
-        .in("event_type", [...CLASSIFICATION_EVENT_TYPES])
-        .order("date_created", { ascending: false })
-        .order("id", { ascending: false })
-        .range(offset, offset + size - 1);
+        .select(pageSelect)
+        .in("event_type", [...CLASSIFICATION_EVENT_TYPES]);
+      if (cursor) query = query.gt("id", cursor);
+      const result = await query
+        .order("id", { ascending: true })
+        .limit(size);
       return { data: result.data as unknown as DbRow[] | null, error: result.error };
-    }),
-  );
+    }), pageSize);
 }
 
 async function readImportedFiles(supabase: ServerClient, batchId: string | null) {
@@ -493,7 +491,7 @@ async function loadDashboardData(supabase: ServerClient, profile: AuthProfile): 
     readTable(supabase, "driver_records", DRIVER_SELECT),
   ]);
 
-  const mappedImports = imports.map(mapImportEntry);
+  const mappedImports = imports.map(mapImportEntry).sort((a, b) => Date.parse(b.importedAt) - Date.parse(a.importedAt));
   const activeBatchIds = new Set(mappedImports.filter((entry) => !entry.analysisExcluded).map((entry) => entry.batchId));
   const hierarchyRows = hierarchy.filter((row) => activeBatchIds.has(toStringValue(row.batch_id))).map(mapHierarchy);
   const prefaturaRows = prefatura.filter((row) => activeBatchIds.has(toStringValue(row.batch_id))).map(mapPrefatura);
@@ -507,6 +505,9 @@ async function loadDashboardData(supabase: ServerClient, profile: AuthProfile): 
       actorName: toStringValue(event.actor_name) || undefined,
       actorUserId: toStringValue(event.actor_user_id) || undefined,
     }]);
+  }
+  for (const events of timelineByCase.values()) {
+    events.sort((a, b) => Date.parse(b.dateCreated) - Date.parse(a.dateCreated));
   }
   const pnrRows = [
     ...pnr.filter((row) => activeBatchIds.has(toStringValue(row.batch_id))).map(mapPnr),
