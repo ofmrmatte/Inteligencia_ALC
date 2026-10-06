@@ -38,6 +38,8 @@ import type { PnrRecord } from "@/lib/types";
 import { formatCurrency, formatNumber, KpiCard, PageIntro, Panel, StatusBadge } from "@/components/ui";
 import { ChartTooltip, NoResults } from "./shared";
 
+const CASE_CENTER_URL = "https://envios.adminml.com/logistics/case-center/cases";
+
 const TREND_SERIES = {
   billedReviewed: { label: "Faturada revisada", color: "#16845b" },
   cancelledReviewed: { label: "Anulada revisada", color: "#2563eb" },
@@ -369,18 +371,19 @@ export function PnrInboxView({ profile }: { profile: AuthProfile }) {
     await hydrate(cacheOwnerId, true);
   };
 
-  const openCaseCenter = async () => {
-    setConnection("checking");
-    setConnectionMessage(null);
-    try {
-      await requestPnrConnector("OPEN_CASE_CENTER", { competence }, 30_000);
-      await checkConnector();
-    } catch (error) {
-      const state = connectionStateFromError(error);
-      setConnection(state);
-      setConnectionMessage(error instanceof Error ? error.message : null);
-      toast.error(error instanceof Error ? error.message : "Falha ao abrir a Bandeja Mercado Livre.");
+  const openCaseCenter = () => {
+    const opened = window.open(CASE_CENTER_URL, "_blank");
+    if (!opened) {
+      toast.error("O navegador bloqueou a abertura do Case Center. Permita pop-ups para este site.");
+      return;
     }
+    try {
+      opened.opener = null;
+    } catch {
+      // A nova aba é cross-origin; não precisamos manter referência a ela.
+    }
+    setPhase("Case Center aberto sem filtros.");
+    window.setTimeout(() => void checkConnector(), 1_500);
   };
 
   const startSync = async () => {
@@ -525,8 +528,7 @@ export function PnrInboxView({ profile }: { profile: AuthProfile }) {
             <button
               className="secondary-button case-center-main-action"
               type="button"
-              disabled={connection === "checking"}
-              onClick={() => void openCaseCenter()}
+              onClick={openCaseCenter}
             >
               <ExternalLink size={17} />
               Abrir Case Center

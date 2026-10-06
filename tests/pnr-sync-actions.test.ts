@@ -18,4 +18,10 @@ describe("PNR sync actions", () => {
     expect(view).not.toContain("<span>Mês</span>");
     expect(view).not.toContain("<span>Quinzena</span>");
   });
+  it("abre o Case Center sem enviar competência ou aplicar filtro", () => {
+    expect(view).toContain('const CASE_CENTER_URL = "https://envios.adminml.com/logistics/case-center/cases"');
+    expect(view).toContain('window.open(CASE_CENTER_URL, "_blank")');
+    expect(view).not.toContain('requestPnrConnector("OPEN_CASE_CENTER"');
+  });
+
 });
