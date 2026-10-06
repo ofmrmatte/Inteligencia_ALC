@@ -16,6 +16,7 @@ import {
 } from "@/lib/prefatura-enrichment";
 import type { DriverOperationalEvidence } from "@/lib/driver-identity-resolver";
 import { readPaged } from "@/lib/pagination";
+import { createAdminClient } from "@/lib/supabase/admin";
 import { createClient } from "@/lib/supabase/server";
 import type {
   DashboardData,
@@ -866,7 +867,7 @@ export async function GET() {
   try {
     const supabase = await createClient();
     const profile = await requireProfile(supabase);
-    const data = await loadDashboardData(supabase, profile);
+    const data = await loadDashboardData(createAdminClient(), profile);
     const durationMs = performance.now() - startedAt;
     const rowCount = data.hierarchy.length + data.prefatura.length + data.pnr.length + data.risk.length + data.drivers.length + data.imports.length;
     return NextResponse.json(data, {
@@ -919,7 +920,7 @@ export async function POST(request: Request) {
       await persistBatch(supabase, profile, batch, batchFiles);
     }
 
-    return NextResponse.json(await loadDashboardData(supabase, profile));
+    return NextResponse.json(await loadDashboardData(createAdminClient(), profile));
   } catch (error) {
     return jsonError(error instanceof Error ? error.message : "Falha ao salvar dados online.", 500);
   }
@@ -943,7 +944,7 @@ export async function DELETE(request: Request) {
     const { error: deleteError } = await deleteQuery;
     if (deleteError) throw new Error(`import_batches: ${deleteError.message}`);
 
-    return NextResponse.json(batchId ? await loadDashboardData(supabase, profile) : EMPTY_DATA);
+    return NextResponse.json(batchId ? await loadDashboardData(createAdminClient(), profile) : EMPTY_DATA);
   } catch (error) {
     return jsonError(error instanceof Error ? error.message : "Falha ao excluir dados online.", 500);
   }
