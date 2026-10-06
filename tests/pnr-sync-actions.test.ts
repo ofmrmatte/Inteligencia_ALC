@@ -4,8 +4,9 @@ import { describe, expect, it } from "vitest";
 describe("PNR sync actions", () => {
   const view = readFileSync("components/views/pnr-inbox-view.tsx", "utf8");
 
-  it("usa a competência atual automaticamente", () => {
-    expect(view).toContain("const competence =");
+  it("lê a competência selecionada diretamente no Case Center", () => {
+    expect(view).toContain('"READ_CASE_CENTER_PERIOD"');
+    expect(view).toContain("const competence = await readCaseCenterCompetence()");
     expect(view).not.toContain("captureYear");
     expect(view).not.toContain("captureMonth");
     expect(view).not.toContain("captureHalf");
@@ -22,6 +23,11 @@ describe("PNR sync actions", () => {
     expect(view).toContain('const CASE_CENTER_URL = "https://envios.adminml.com/logistics/case-center/cases"');
     expect(view).toContain('window.open(CASE_CENTER_URL, "_blank")');
     expect(view).not.toContain('requestPnrConnector("OPEN_CASE_CENTER"');
+  });
+
+  it("mantém a competência do Case Center fixa durante a captura iniciada", () => {
+    expect(view).toContain('requestPnrConnector<CaseCenterPage>("FETCH_PAGE", { competence, page })');
+    expect(view).toContain("activeResumeKey = resumeKeyFor(competence)");
   });
 
 });

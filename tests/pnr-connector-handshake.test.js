@@ -18,7 +18,7 @@ const detailUrl = `${listUrl}/198912360`;
 beforeAll(async () => {
   vi.stubGlobal("chrome", {
     runtime: {
-      getManifest: () => ({ version: "1.1.15" }),
+      getManifest: () => ({ version: "1.1.16" }),
       onMessage: { addListener: (listener) => { onMessage = listener; } },
       onInstalled: { addListener: (listener) => { onInstalled = listener; } },
     },
@@ -74,16 +74,28 @@ describe("handshake do Conector PNR", () => {
   it("identifica a extensão mesmo sem aba Mercado Livre", async () => {
     tabs = [];
     expect(await ping()).toEqual({ ok: true, data: {
-      installed: true, version: "1.1.15", mlTabAvailable: false, sessionAvailable: false,
+      installed: true, version: "1.1.16", mlTabAvailable: false, sessionAvailable: false,
     } });
   });
 
   it("faz PING leve sem consultar uma página do Case Center", async () => {
     tabs = [{ id: 7, status: "complete", url: detailUrl }];
     expect(await ping()).toEqual({ ok: true, data: {
-      installed: true, version: "1.1.15", mlTabAvailable: true, sessionAvailable: true,
+      installed: true, version: "1.1.16", mlTabAvailable: true, sessionAvailable: true,
     } });
     expect(probeArgs).toBeUndefined();
+  });
+
+  it("lê a competência atualmente selecionada sem alterar filtros", async () => {
+    tabs = [{ id: 9, status: "complete", url: listUrl, active: true }];
+    probeResult = { ok: true, period: "202609Q2" };
+    const response = await new Promise((resolve) => onMessage(
+      { source: "alc-pnr-panel", type: "READ_CASE_CENTER_PERIOD", payload: {} },
+      { url: "https://inteligenciaalc-production.up.railway.app/bandeja-pnr" },
+      resolve,
+    ));
+    expect(response).toEqual({ ok: true, data: { competence: "202609Q2" } });
+    expect(updatedTab).toBeUndefined();
   });
 
   it("navega um detalhe para a listagem antes de aplicar a competência", async () => {
@@ -190,7 +202,7 @@ describe("handshake do Conector PNR", () => {
       { url: "https://inteligenciaalc-production.up.railway.app/bandeja-pnr" },
       resolve,
     ));
-    expect(response).toMatchObject({ ok: true, data: { installed: true, version: "1.1.15" } });
+    expect(response).toMatchObject({ ok: true, data: { installed: true, version: "1.1.16" } });
   });
 
   it("aceita o preview deste projeto e rejeita previews de terceiros", async () => {
@@ -200,7 +212,7 @@ describe("handshake do Conector PNR", () => {
       { url },
       resolve,
     ));
-    expect((await sendFrom(previewUrl)).data).toMatchObject({ installed: true, version: "1.1.15" });
+    expect((await sendFrom(previewUrl)).data).toMatchObject({ installed: true, version: "1.1.16" });
     expect(await sendFrom("https://alcpaineldeinteligencia-test-other-team.vercel.app/bandeja-pnr"))
       .toMatchObject({ ok: false, error: { code: "INVALID_RESPONSE" } });
   });

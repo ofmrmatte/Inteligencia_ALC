@@ -62,6 +62,29 @@ async function waitForTabReady(tabId, timeoutMs = 20_000) {
   throw Object.assign(new Error("A Bandeja Mercado Livre não terminou de carregar."), { code: "MERCADO_LIVRE_NOT_DETECTED" });
 }
 
+export function readCaseCenterPeriodInTab() {
+  const normalize = (value) => String(value || "").replace(/\s+/g, " ").trim();
+  if (location.pathname !== "/logistics/case-center/cases") {
+    return { ok: false, code: "CASE_CENTER_LIST_REQUIRED", message: "Abra a listagem do Case Center." };
+  }
+  const visible = (element) => Boolean(element && (!element.getClientRects || element.getClientRects().length));
+  const direct = [...document.querySelectorAll("button")]
+    .filter(visible)
+    .map((element) => normalize(element.textContent))
+    .find((value) => /^20\d{4}Q[12]$/.test(value));
+  if (direct) return { ok: true, period: direct };
+
+  const body = normalize(document.body?.innerText);
+  const match = body.match(/(?:^|\s)(20\d{4}Q[12])(?:\s|$)/);
+  if (match?.[1]) return { ok: true, period: match[1] };
+
+  return {
+    ok: false,
+    code: "CASE_CENTER_PERIOD_NOT_FOUND",
+    message: "Não foi possível identificar a competência selecionada no Case Center.",
+  };
+}
+
 export async function applyCaseCenterPeriodInTab({ period, year, month, half }) {
   const normalize = (value) => String(value || "").replace(/\s+/g, " ").trim();
   if (location.pathname !== "/logistics/case-center/cases") {
@@ -291,6 +314,21 @@ async function handle(message) {
       mlTabAvailable: Boolean(authenticatedTab?.id),
       sessionAvailable: Boolean(authenticatedTab?.id),
     } };
+  }
+
+  if (message.type === "READ_CASE_CENTER_PERIOD") {
+    const listTab = tabs.find((tab) => tab.active && isCaseCenterListTab(tab))
+      ?? tabs.find(isCaseCenterListTab)
+      ?? null;
+    if (!listTab?.id) {
+      return connectorError("MERCADO_LIVRE_NOT_DETECTED", "Abra a listagem do Case Center.");
+    }
+    await waitForTabReady(listTab.id);
+    const result = await execute(listTab.id, readCaseCenterPeriodInTab);
+    if (!result?.ok || !/^20\d{4}Q[12]$/.test(String(result.period || ""))) {
+      return connectorError(result?.code || "INVALID_RESPONSE", result?.message || "Competência do Case Center não identificada.");
+    }
+    return { ok: true, data: { competence: result.period } };
   }
 
   if (message.type === "OPEN_CASE_CENTER") {

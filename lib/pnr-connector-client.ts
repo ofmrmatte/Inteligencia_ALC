@@ -2,7 +2,7 @@
 
 import connectorPackage from "@/extension-pnr/package.json";
 
-export const MINIMUM_SUPPORTED_CONNECTOR_VERSION = "1.1.15";
+export const MINIMUM_SUPPORTED_CONNECTOR_VERSION = "1.1.16";
 export const LATEST_CONNECTOR_VERSION = connectorPackage.version;
 export const CONNECTOR_DOWNLOAD_URL = `/downloads/alc-pnr-connector-v${LATEST_CONNECTOR_VERSION}.zip`;
 
@@ -44,12 +44,14 @@ export function connectorStateFromHandshake(
   return compareConnectorVersions(handshake.version, versions.latestVersion) < 0 ? "outdated" : "connected";
 }
 
-export type PnrConnectorRequestType = "PING" | "OPEN_CASE_CENTER" | "FETCH_PAGE" | "FETCH_TIMELINE" | "FETCH_TIMELINES";
+export type PnrConnectorRequestType = "PING" | "OPEN_CASE_CENTER" | "READ_CASE_CENTER_PERIOD" | "FETCH_PAGE" | "FETCH_TIMELINE" | "FETCH_TIMELINES";
 export type PnrConnectorErrorCode =
   | "EXTENSION_NOT_FOUND"
   | "MERCADO_LIVRE_NOT_DETECTED"
   | "MERCADO_LIVRE_SESSION_REQUIRED"
   | "CARRIER_NOT_FOUND"
+  | "CASE_CENTER_LIST_REQUIRED"
+  | "CASE_CENTER_PERIOD_NOT_FOUND"
   | "HTTP_ERROR"
   | "INVALID_RESPONSE";
 
