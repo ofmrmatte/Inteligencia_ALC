@@ -1,7 +1,7 @@
 import { createServerClient } from "@supabase/ssr";
 import { NextResponse, type NextRequest } from "next/server";
 import { isSupabaseConfigured, supabasePublishableKey, supabaseUrl } from "@/lib/supabase/config";
-import { isTransientSupabaseError } from "@/lib/supabase/retry";
+import { isTransientSupabaseError, retrySupabaseResult } from "@/lib/supabase/retry";
 
 const PUBLIC_PATHS = new Set(["/login", "/manifest.webmanifest"]);
 
@@ -57,14 +57,23 @@ export async function updateSession(request: NextRequest) {
     },
   });
 
-  const { data, error } = await supabase.auth.getClaims();
+  const { data, error } = await retrySupabaseResult(() => supabase.auth.getClaims(), [250, 750]);
   const isAuthenticated = Boolean(data?.claims && !error);
 
   if (error && isTransientSupabaseError(error)) {
-    return preserveSessionCookies(
-      NextResponse.json({ error: "Autenticação temporariamente indisponível." }, { status: 503 }),
-      response,
-    );
+    if (isApiPath(pathname)) {
+      return preserveSessionCookies(
+        NextResponse.json({ error: "Autenticação temporariamente indisponível." }, { status: 503 }),
+        response,
+      );
+    }
+
+    const recoveryUrl = request.nextUrl.clone();
+    recoveryUrl.pathname = "/login";
+    recoveryUrl.search = "";
+    recoveryUrl.searchParams.set("error", "auth_temp");
+    recoveryUrl.searchParams.set("next", pathname);
+    return preserveSessionCookies(NextResponse.redirect(recoveryUrl), response);
   }
 
   if (!isAuthenticated) {
