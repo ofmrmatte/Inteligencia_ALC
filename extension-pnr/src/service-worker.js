@@ -11,6 +11,7 @@ import {
 const panelOrigins = new Set([
   "https://inteligenciaalc.vercel.app",
   "https://dashboardfatura.vercel.app",
+  "https://inteligenciaalc-production.up.railway.app",
   "http://localhost",
   "http://127.0.0.1",
 ]);
@@ -399,6 +400,7 @@ chrome.runtime.onInstalled.addListener(() => {
   chrome.tabs.query({ url: [
     "https://inteligenciaalc.vercel.app/*",
     "https://dashboardfatura.vercel.app/*",
+    "https://inteligenciaalc-production.up.railway.app/*",
     "https://*.vercel.app/*",
     "http://localhost/*",
     "http://127.0.0.1/*",
