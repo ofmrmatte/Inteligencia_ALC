@@ -13,7 +13,7 @@ async function resolveCurrentProfile(): Promise<ProfileResolution> {
   if (!isSupabaseConfigured()) return { status: "unauthenticated" };
 
   const supabase = await createClient();
-  const { data: claimsData, error: claimsError } = await supabase.auth.getClaims();
+  const { data: claimsData, error: claimsError } = await retrySupabaseResult(() => supabase.auth.getClaims(), [250, 750]);
   const claims = claimsData?.claims as { sub?: string; email?: string } | undefined;
   const userId = typeof claims?.sub === "string" ? claims.sub : "";
 
