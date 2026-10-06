@@ -30,4 +30,15 @@ describe("PNR sync actions", () => {
     expect(view).toContain("activeResumeKey = resumeKeyFor(competence)");
   });
 
+  it("exibe ação explícita de retomada quando existe captura pausada", () => {
+    expect(view).toContain('"Continuar importação"');
+    expect(view).toContain('resumeAvailable ? <Play size={17} />');
+    expect(view).toContain("resumeKeyFor(selected)");
+    expect(view).toContain("Pronta para continuar da página");
+  });
+
+  it("reconfere a competência ao voltar do Case Center", () => {
+    expect(view).toContain('window.addEventListener("focus", refreshResumeState)');
+  });
+
 });
