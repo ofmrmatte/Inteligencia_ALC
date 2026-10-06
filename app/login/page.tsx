@@ -19,7 +19,13 @@ export default async function LoginPage({ searchParams }: { searchParams: Promis
         </div>
         <LoginForm
           supabaseReady={isSupabaseConfigured()}
-          initialError={error === "access" ? "Seu usuário está autenticado, mas não possui acesso administrativo liberado." : undefined}
+          initialError={
+            error === "access"
+              ? "Seu usuário está autenticado, mas não possui acesso administrativo liberado."
+              : error === "auth_temp"
+                ? "A autenticação está temporariamente instável. Sua sessão foi preservada; aguarde alguns segundos e recarregue."
+                : undefined
+          }
         />
       </section>
       <aside className="login-aside" aria-label="Inteligência ALC">
