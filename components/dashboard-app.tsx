@@ -67,6 +67,7 @@ export function DashboardApp({ section, profile }: { section: SectionId; profile
   const remountOnGlobalSync = section === "gestao-descontos";
   const shouldLoadGlobalData = canLoadOperationalData && !NO_GLOBAL_DATA_SECTIONS.includes(section);
   const shouldPollGlobalRevision = shouldLoadGlobalData || remountOnGlobalSync;
+  const hydrationMode = section === "visao-geral" ? "bootstrap" as const : "full" as const;
   const hasOperationalRows = data.hierarchy.length > 0 || data.prefatura.length > 0 || data.pnr.length > 0 || data.risk.length > 0 || data.drivers.length > 0;
   const cacheOwnerId = [
     profile.id,
@@ -88,8 +89,8 @@ export function DashboardApp({ section, profile }: { section: SectionId; profile
   };
 
   useEffect(() => {
-    if (shouldLoadGlobalData) void hydrate(cacheOwnerId, true);
-  }, [hydrate, cacheOwnerId, shouldLoadGlobalData]);
+    if (shouldLoadGlobalData) void hydrate(cacheOwnerId, true, hydrationMode);
+  }, [hydrate, cacheOwnerId, shouldLoadGlobalData, hydrationMode]);
 
   useEffect(() => {
     if (!shouldPollGlobalRevision) return;
@@ -109,7 +110,7 @@ export function DashboardApp({ section, profile }: { section: SectionId; profile
 
         if (shouldLoadGlobalData) {
           useDashboardStore.setState({ lastSyncedAt: 0 });
-          await hydrate(cacheOwnerId, true);
+          await hydrate(cacheOwnerId, true, hydrationMode);
           if (useDashboardStore.getState().loadError) return;
         }
 
@@ -143,7 +144,7 @@ export function DashboardApp({ section, profile }: { section: SectionId; profile
       window.removeEventListener("storage", handleStorage);
       document.removeEventListener("visibilitychange", handleVisibility);
     };
-  }, [hydrate, cacheOwnerId, shouldLoadGlobalData, shouldPollGlobalRevision, remountOnGlobalSync]);
+  }, [hydrate, cacheOwnerId, shouldLoadGlobalData, shouldPollGlobalRevision, remountOnGlobalSync, hydrationMode]);
 
   const toggleCollapsed = () => {
     window.localStorage.setItem(SIDEBAR_KEY, String(!collapsed));

@@ -9,7 +9,8 @@ import type { DashboardData, DashboardFilters, ParsedBatch } from "@/lib/types";
 import { EMPTY_DATA, EMPTY_FILTERS } from "@/lib/types";
 
 const STORAGE_KEY_PREFIX = "alc-inteligencia:v4";
-const DATA_STALE_AFTER_MS = 2 * 60 * 1000;
+const DATA_STALE_AFTER_MS = 24 * 60 * 60 * 1000;
+type HydrationMode = "bootstrap" | "full";
 const hydrationTasks = new Map<string, Promise<void>>();
 
 interface DashboardCache {
@@ -24,9 +25,10 @@ interface DashboardStore {
   refreshing: boolean;
   importing: boolean;
   cacheOwnerId: string;
+  dataMode: HydrationMode;
   lastSyncedAt: number | null;
   loadError: string;
-  hydrate: (cacheOwnerId: string, loadOperationalData?: boolean) => Promise<void>;
+  hydrate: (cacheOwnerId: string, loadOperationalData?: boolean, mode?: HydrationMode) => Promise<void>;
   setImporting: (value: boolean) => void;
   addBatches: (batches: ParsedBatch[], files?: File[]) => Promise<void>;
   removeBatch: (batchId: string) => Promise<void>;
@@ -36,13 +38,13 @@ interface DashboardStore {
   resetFilters: () => void;
 }
 
-function storageKey(cacheOwnerId: string) {
-  return `${STORAGE_KEY_PREFIX}:${cacheOwnerId || "anonymous"}`;
+function storageKey(cacheOwnerId: string, mode: HydrationMode) {
+  return `${STORAGE_KEY_PREFIX}:${cacheOwnerId || "anonymous"}:${mode}`;
 }
 
-async function save(data: DashboardData, cacheOwnerId: string, savedAt = Date.now()) {
+async function save(data: DashboardData, cacheOwnerId: string, mode: HydrationMode, savedAt = Date.now()) {
   if (typeof window !== "undefined" && cacheOwnerId) {
-    await set(storageKey(cacheOwnerId), { data, savedAt } satisfies DashboardCache);
+    await set(storageKey(cacheOwnerId, mode), { data, savedAt } satisfies DashboardCache);
   }
 }
 
@@ -62,11 +64,12 @@ async function applyOnlineDirectory(data: DashboardData) {
   return applyOperationalDirectory(data, directory);
 }
 
-async function fetchOnlineData() {
-  const response = await fetch("/api/imports", { cache: "no-store" });
+async function fetchOnlineData(mode: HydrationMode) {
+  const url = mode === "bootstrap" ? "/api/imports?mode=bootstrap" : "/api/imports";
+  const response = await fetch(url, { cache: "no-store" });
   if (!response.ok) throw new Error(await readError(response, "Falha ao carregar dados online."));
   const data = (await response.json()) as DashboardData;
-  return applyOnlineDirectory(data);
+  return mode === "bootstrap" ? data : applyOnlineDirectory(data);
 }
 
 function safeStorageName(name: string) {
@@ -119,9 +122,10 @@ export const useDashboardStore = create<DashboardStore>((storeSet, getState) => 
   refreshing: false,
   importing: false,
   cacheOwnerId: "",
+  dataMode: "full",
   lastSyncedAt: null,
   loadError: "",
-  hydrate: async (cacheOwnerId, loadOperationalData = true) => {
+  hydrate: async (cacheOwnerId, loadOperationalData = true, mode: HydrationMode = "full") => {
     if (!loadOperationalData) {
       storeSet({
         data: EMPTY_DATA,
@@ -129,19 +133,23 @@ export const useDashboardStore = create<DashboardStore>((storeSet, getState) => 
         hydrated: true,
         refreshing: false,
         cacheOwnerId,
+        dataMode: mode,
         lastSyncedAt: null,
         loadError: "",
       });
       return;
     }
 
-    const running = hydrationTasks.get(cacheOwnerId);
+    const taskKey = `${cacheOwnerId}::${mode}`;
+    const running = hydrationTasks.get(taskKey);
     if (running) return running;
 
     const current = getState();
     const sameOwner = current.cacheOwnerId === cacheOwnerId;
+    const sameMode = current.dataMode === mode;
     if (
       sameOwner
+      && sameMode
       && current.hydrated
       && !current.refreshing
       && current.lastSyncedAt
@@ -151,15 +159,16 @@ export const useDashboardStore = create<DashboardStore>((storeSet, getState) => 
     }
 
     const task = (async () => {
-      let cacheWasLoaded = sameOwner && current.hydrated;
+      let cacheWasLoaded = sameOwner && sameMode && current.hydrated;
 
-      if (!sameOwner) {
+      if (!sameOwner || !sameMode) {
         storeSet({
           data: EMPTY_DATA,
-          filters: EMPTY_FILTERS,
+          filters: sameOwner ? current.filters : EMPTY_FILTERS,
           hydrated: false,
           refreshing: false,
           cacheOwnerId,
+          dataMode: mode,
           lastSyncedAt: null,
           loadError: "",
         });
@@ -167,7 +176,7 @@ export const useDashboardStore = create<DashboardStore>((storeSet, getState) => 
 
       if (!cacheWasLoaded) {
         try {
-          const cached = await get<DashboardCache>(storageKey(cacheOwnerId));
+          const cached = await get<DashboardCache>(storageKey(cacheOwnerId, mode));
           if (cached?.data) {
             cacheWasLoaded = true;
             const cacheIsFresh = Date.now() - cached.savedAt < DATA_STALE_AFTER_MS;
@@ -176,6 +185,7 @@ export const useDashboardStore = create<DashboardStore>((storeSet, getState) => 
               hydrated: true,
               refreshing: !cacheIsFresh,
               cacheOwnerId,
+              dataMode: mode,
               lastSyncedAt: cached.savedAt,
               loadError: "",
             });
@@ -189,20 +199,23 @@ export const useDashboardStore = create<DashboardStore>((storeSet, getState) => 
       storeSet({ refreshing: true, loadError: "" });
 
       try {
-        const online = await fetchOnlineData();
+        const online = await fetchOnlineData(mode);
         const syncedAt = Date.now();
-        if (getState().cacheOwnerId !== cacheOwnerId) return;
+        const latest = getState();
+        if (latest.cacheOwnerId !== cacheOwnerId || latest.dataMode !== mode) return;
         storeSet({
           data: online,
           hydrated: true,
           refreshing: false,
           cacheOwnerId,
+          dataMode: mode,
           lastSyncedAt: syncedAt,
           loadError: "",
         });
-        await save(online, cacheOwnerId, syncedAt);
+        await save(online, cacheOwnerId, mode, syncedAt);
       } catch (error) {
-        if (getState().cacheOwnerId !== cacheOwnerId) return;
+        const latest = getState();
+        if (latest.cacheOwnerId !== cacheOwnerId || latest.dataMode !== mode) return;
         storeSet({
           hydrated: true,
           refreshing: false,
@@ -210,10 +223,10 @@ export const useDashboardStore = create<DashboardStore>((storeSet, getState) => 
         });
       }
     })().finally(() => {
-      hydrationTasks.delete(cacheOwnerId);
+      hydrationTasks.delete(taskKey);
     });
 
-    hydrationTasks.set(cacheOwnerId, task);
+    hydrationTasks.set(taskKey, task);
     return task;
   },
   setImporting: (importing) => storeSet({ importing }),
@@ -228,8 +241,8 @@ export const useDashboardStore = create<DashboardStore>((storeSet, getState) => 
       if (!response.ok) throw new Error(await readError(response, "Falha ao salvar dados online."));
       const next = await applyOnlineDirectory((await response.json()) as DashboardData);
       const syncedAt = Date.now();
-      storeSet({ data: next, hydrated: true, refreshing: false, lastSyncedAt: syncedAt, loadError: "" });
-      await save(next, getState().cacheOwnerId, syncedAt);
+      storeSet({ data: next, hydrated: true, refreshing: false, dataMode: "full", lastSyncedAt: syncedAt, loadError: "" });
+      await save(next, getState().cacheOwnerId, "full", syncedAt);
     } catch (error) {
       await removeUploaded(uploaded.map((file) => file.storagePath));
       throw error;
@@ -251,21 +264,22 @@ export const useDashboardStore = create<DashboardStore>((storeSet, getState) => 
       drivers: current.drivers.filter((row) => row.batchId !== batchId),
     };
     const syncedAt = Date.now();
+    const mode = getState().dataMode;
     storeSet({ data: next, hydrated: true, refreshing: false, lastSyncedAt: syncedAt, loadError: "" });
-    await save(next, getState().cacheOwnerId, syncedAt);
+    await save(next, getState().cacheOwnerId, mode, syncedAt);
   },
   clearData: async () => {
     const response = await fetch("/api/imports", { method: "DELETE" });
     if (!response.ok) throw new Error(await readError(response, "Falha ao limpar dados online."));
     storeSet({ data: EMPTY_DATA, filters: EMPTY_FILTERS, hydrated: true, refreshing: false, lastSyncedAt: Date.now(), loadError: "" });
     const owner = getState().cacheOwnerId;
-    if (owner) await del(storageKey(owner));
+    if (owner) await Promise.all([del(storageKey(owner, "bootstrap")), del(storageKey(owner, "full"))]);
   },
   loadDemo: async () => {
     const data = createDemoData();
     const syncedAt = Date.now();
-    storeSet({ data, filters: EMPTY_FILTERS, hydrated: true, refreshing: false, lastSyncedAt: syncedAt, loadError: "" });
-    await save(data, getState().cacheOwnerId, syncedAt);
+    storeSet({ data, filters: EMPTY_FILTERS, hydrated: true, refreshing: false, dataMode: "full", lastSyncedAt: syncedAt, loadError: "" });
+    await save(data, getState().cacheOwnerId, "full", syncedAt);
   },
   setFilter: (key, value) => {
     const currentFilters = getState().filters;
