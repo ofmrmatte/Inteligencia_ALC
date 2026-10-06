@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import { Montserrat, Poppins } from "next/font/google";
 import { Toaster } from "sonner";
 import { PnrCaseCenterBackgroundSync } from "@/components/pnr-case-center-background-sync";
+import { PrivacyConsent } from "@/components/privacy-consent";
 import "./globals.css";
 
 const montserrat = Montserrat({ subsets: ["latin"], variable: "--font-heading", display: "swap" });
@@ -25,6 +26,7 @@ export default function RootLayout({ children }: Readonly<{ children: React.Reac
       <body>
         {children}
         <PnrCaseCenterBackgroundSync />
+        <PrivacyConsent />
         <Toaster position="top-right" richColors closeButton />
       </body>
     </html>
