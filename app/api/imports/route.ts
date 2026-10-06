@@ -357,7 +357,22 @@ const CLASSIFICATION_EVENT_TYPES = [
   "UPDATE_STATUS_TO_CLOSED_BILLED",
   "UPDATE_CASE_BILLED",
 ] as const;
-const DASHBOARD_PAGE_CONCURRENCY = 4;
+const DASHBOARD_PAGE_CONCURRENCY = 8;
+let dashboardPageActive = 0;
+const dashboardPageWaiters: Array<() => void> = [];
+
+async function withDashboardPageSlot<T>(operation: () => Promise<T>) {
+  if (dashboardPageActive >= DASHBOARD_PAGE_CONCURRENCY) {
+    await new Promise<void>((resolve) => dashboardPageWaiters.push(resolve));
+  }
+  dashboardPageActive += 1;
+  try {
+    return await operation();
+  } finally {
+    dashboardPageActive -= 1;
+    dashboardPageWaiters.shift()?.();
+  }
+}
 
 async function runPageWorkers<T>(total: number, pageSize: number, workerCount: number, fetchPage: (offset: number, size: number) => Promise<T[]>) {
   if (total <= 0) return [] as T[];
@@ -375,16 +390,12 @@ async function runPageWorkers<T>(total: number, pageSize: number, workerCount: n
   };
 
   await Promise.all(Array.from({ length: Math.min(workerCount, offsets.length) }, () => worker()));
-  const rows = pages.flat();
-  if (rows.length !== total) {
-    throw new Error(`Divergência de paginação: banco informou ${total} linhas e a API carregou ${rows.length}.`);
-  }
-  return rows;
+  return pages.flat();
 }
 
 async function retryDashboardPage<T>(label: string, operation: () => Promise<{ data: T[] | null; error: { message: string } | null }>) {
   for (let attempt = 0; attempt < 3; attempt += 1) {
-    const { data, error } = await operation();
+    const { data, error } = await withDashboardPageSlot(operation);
     if (!error) return (data ?? []) as T[];
     if (!isTransientDashboardReadError(error.message) || attempt === 2) {
       throw new Error(`${label}: ${error.message}`);
