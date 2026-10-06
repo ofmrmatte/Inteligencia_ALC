@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { canAccessScopedRecord, filterByAccessScope } from "@/lib/access-scope";
+import { filterByAccessScope } from "@/lib/access-scope";
 import { getUserAccessScope } from "@/lib/access-scope-server";
 import { hasFullAccess, isUserRole, type AuthProfile } from "@/lib/auth";
 import { fortnightFromDate, monthFromFortnight, normalizeFortnight } from "@/lib/competence";
@@ -528,14 +528,6 @@ async function loadDashboardBootstrap(supabase: ServerClient, profile: AuthProfi
   }
 
   const driverRows: DriverRecord[] = drivers
-    .filter((row) => canAccessScopedRecord({
-      profileId: profile.id,
-      fullAccess: true,
-      allowedBaseKeys: [],
-      allowedSiglas: [],
-      allowedPairs: [],
-      safeSiglaOnly: [],
-    }, { baseKey: toStringValue(row.base_key), sigla: toStringValue(row.sigla) }))
     .map((row, index) => ({
       batchId: "driver-directory",
       sourceFile: "Cadastro de motoristas",
