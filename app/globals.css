@@ -315,14 +315,11 @@ a { color: inherit; text-decoration: none; }
 .case-center-install-dialog code { padding: 2px 4px; background: var(--gray-100); border-radius: 3px; }
 .case-center-install-dialog__actions { display: flex; flex-wrap: wrap; gap: 8px; }
 .case-center-install-dialog__actions .primary-button, .case-center-install-dialog__actions .secondary-button { font-size: 11px; }
-.case-center-form { display: grid; grid-template-columns: 120px 170px 170px minmax(250px, 1fr); align-items: end; gap: 9px; }
-.case-center-import-actions { min-width: 0; display: flex; align-items: center; gap: 8px; flex-wrap: nowrap; }
-.case-center-import-actions .primary-button { min-width: 0; flex: 1 1 auto; }
-.case-center-import-actions .icon-button { width: 39px; height: 39px; flex: 0 0 39px; }
-.case-center-form label { min-width: 0; display: grid; gap: 5px; }
-.case-center-form label > span { color: var(--gray-500); font-size: 8px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; }
-.case-center-form select { width: 100%; height: 39px; min-width: 0; padding: 0 10px; color: var(--gray-900); background: #fafafa; border: 1px solid var(--gray-200); border-radius: 7px; outline: 0; }
-.case-center-form select:focus { border-color: var(--red); background: #fff; box-shadow: 0 0 0 2px rgba(227, 6, 19, .08); }
+.case-center-form { display: grid; gap: 9px; }
+.case-center-form--actions { grid-template-columns: minmax(180px, .42fr) minmax(300px, 1fr); align-items: stretch; }
+.case-center-main-action { min-height: 42px; justify-content: center; }
+.case-center-form--actions .secondary-button { color: var(--gray-900); background: #fff; border-color: var(--gray-300); }
+.case-center-form--actions .secondary-button:hover { color: var(--red); border-color: #efb9bd; background: #fff7f8; }
 .case-center-progress { display: grid; gap: 8px; padding-top: 12px; border-top: 1px solid var(--gray-200); }
 .case-center-progress > div:first-child { display: flex; align-items: center; justify-content: space-between; gap: 14px; color: var(--gray-700); font-size: 10px; }
 .case-center-progress > div:first-child strong { color: var(--gray-900); }
@@ -530,8 +527,7 @@ a { color: inherit; text-decoration: none; }
   .content-grid--wide { grid-template-columns: minmax(0, 1.3fr) minmax(300px, .8fr); }
   .filter-control select { max-width: 126px; }
   .user-admin-form { grid-template-columns: repeat(3, minmax(0, 1fr)); }
-  .case-center-form { grid-template-columns: repeat(3, minmax(0, 1fr)); }
-  .case-center-import-actions { grid-column: span 2; }
+  .case-center-form--actions { grid-template-columns: minmax(170px, .45fr) minmax(260px, 1fr); }
   .case-center-connector { align-items: flex-start; flex-direction: column; }
   .case-center-connector__actions { justify-content: flex-start; }
 }
@@ -579,8 +575,7 @@ a { color: inherit; text-decoration: none; }
   .page-intro { align-items: flex-start; flex-direction: column; }
   .page-intro > div { justify-content: flex-start; }
   .kpi-grid--six, .kpi-grid--four { grid-template-columns: 1fr; }
-  .case-center-form { grid-template-columns: 1fr; }
-  .case-center-import-actions { grid-column: auto; }
+  .case-center-form--actions { grid-template-columns: 1fr; }
   .case-center-connector__actions, .case-center-connector__actions .secondary-button, .case-center-install-dialog__actions > * { width: 100%; }
   .case-center-progress > div:first-child, .case-center-result, .case-center-detail-sync { align-items: flex-start; flex-direction: column; gap: 5px; }
   .case-center-case-list button { grid-template-columns: 1fr auto; }
