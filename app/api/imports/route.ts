@@ -424,11 +424,11 @@ async function readTable(supabase: ServerClient, table: string, select = "*", _o
     retryDashboardPage<DbRow>(table, async () => {
       let query = supabase
         .from(table)
-        .select(pageSelect)
+        .select(pageSelect);
+      if (cursor) query = query.gt("id", cursor);
+      const result = await query
         .order("id", { ascending: true })
         .limit(size);
-      if (cursor) query = query.gt("id", cursor);
-      const result = await query;
       return { data: result.data as unknown as DbRow[] | null, error: result.error };
     }), pageSize);
 }
@@ -440,11 +440,11 @@ async function readLegacyPnrTable(supabase: ServerClient, pageSize = 1000) {
       let query = supabase
         .from("pnr_records")
         .select(pageSelect)
-        .neq("source_system", "case_center")
+        .neq("source_system", "case_center");
+      if (cursor) query = query.gt("id", cursor);
+      const result = await query
         .order("id", { ascending: true })
         .limit(size);
-      if (cursor) query = query.gt("id", cursor);
-      const result = await query;
       return { data: result.data as unknown as DbRow[] | null, error: result.error };
     }), pageSize);
 }
@@ -456,11 +456,11 @@ async function readCaseCenterClassificationEvents(supabase: ServerClient, pageSi
       let query = supabase
         .from("pnr_case_events")
         .select(pageSelect)
-        .in("event_type", [...CLASSIFICATION_EVENT_TYPES])
+        .in("event_type", [...CLASSIFICATION_EVENT_TYPES]);
+      if (cursor) query = query.gt("id", cursor);
+      const result = await query
         .order("id", { ascending: true })
         .limit(size);
-      if (cursor) query = query.gt("id", cursor);
-      const result = await query;
       return { data: result.data as unknown as DbRow[] | null, error: result.error };
     }), pageSize);
 }
