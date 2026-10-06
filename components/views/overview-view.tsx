@@ -54,7 +54,14 @@ export function OverviewView() {
   const [summary, setSummary] = useState<OverviewSummary>(EMPTY_SUMMARY);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
+  const [globalRevision, setGlobalRevision] = useState(0);
   const requestUrl = useMemo(() => overviewUrl(filters), [filters]);
+
+  useEffect(() => {
+    const refresh = () => setGlobalRevision((current) => current + 1);
+    window.addEventListener("alc-inteligencia:global-data-sync", refresh);
+    return () => window.removeEventListener("alc-inteligencia:global-data-sync", refresh);
+  }, []);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -78,7 +85,7 @@ export function OverviewView() {
       window.clearTimeout(timer);
       controller.abort();
     };
-  }, [requestUrl]);
+  }, [requestUrl, globalRevision]);
 
   if (loading && summary.rowCount === 0) {
     return <div className="view-loading" role="status" aria-live="polite" aria-label="Carregando indicadores"><span /><span /><span /></div>;
