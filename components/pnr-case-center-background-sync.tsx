@@ -107,7 +107,12 @@ async function persistTimelineBatch(items: TimelinePersistPayload[]) {
     throw new PnrBackgroundAuthError(response.status, await readError(response, "Sessão administrativa indisponível."));
   }
   if (!response.ok) throw new Error(await readError(response, "Falha ao persistir lote de timelines PNR."));
-  return response.json() as Promise<BulkPersistResponse>;
+  const body = await response.json() as BulkPersistResponse;
+  const authFailure = body.results?.find((item) => item.status === 401 || item.status === 403);
+  if (authFailure) {
+    throw new PnrBackgroundAuthError(authFailure.status, authFailure.error || "Sessão administrativa indisponível.");
+  }
+  return body;
 }
 
 function pausedMessage(error: unknown) {
@@ -255,6 +260,7 @@ export function PnrCaseCenterBackgroundSync() {
           const handshake = await requestPnrConnector<PnrConnectorHandshake>("PING", {}, 10_000);
           const connectorState = connectorStateFromHandshake(handshake);
           if (connectorState === "unsupported") {
+            nextDelayMs = 300_000;
             publishPnrBackgroundSyncStatus({ phase: "paused", message: "Pausada — atualize o Conector PNR" });
             return;
           }
