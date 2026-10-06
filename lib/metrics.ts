@@ -323,21 +323,34 @@ export function filterOptions(data: DashboardData, filters: DashboardFilters) {
   const afterBase = afterSigla.filter((row) => filters.base === "Todas" || row.base === filters.base);
   const scoped = scopeData(data, { ...filters, driver: "Todos" });
   const namesFromIds = new Map(data.drivers.map((driver) => [driver.driverId, driver.name]));
-  const driverNames = unique([
+  const derivedDriverNames = unique([
     ...scoped.prefatura.map((row) => row.driverName),
     ...scoped.pnr.map((row) => namesFromIds.get(row.driverId) ?? row.driverId),
     ...scoped.risk.map((row) => namesFromIds.get(row.driverId) ?? row.driverId),
-  ].filter(Boolean)).sort((a, b) => a.localeCompare(b, "pt-BR"));
-  const availableFortnights = [
+  ].filter(Boolean));
+  const driverNames = (derivedDriverNames.length ? derivedDriverNames : data.drivers.map((row) => row.name).filter(Boolean))
+    .sort((a, b) => a.localeCompare(b, "pt-BR"));
+
+  const operationalFortnights = [
     ...data.prefatura.map((row) => recordFortnight(importFortnights, row, row.period, row.routeDate)),
     ...data.pnr.map((row) => recordFortnight(importFortnights, row, row.billingPeriod, row.caseDate)),
     ...data.risk.map((row) => recordFortnight(importFortnights, row, undefined, row.failureDate)),
   ].filter(Boolean);
+  const importedFortnights = data.imports.flatMap((entry) => [
+    ...(entry.fortnights ?? []),
+    ...(entry.fortnight ? [entry.fortnight] : []),
+  ]).filter(Boolean);
+  const availableFortnights = operationalFortnights.length ? operationalFortnights : importedFortnights;
   const fortnights = [
     ...(availableFortnights.some((value) => value.startsWith("01Q")) ? ["Q1"] : []),
     ...(availableFortnights.some((value) => value.startsWith("02Q")) ? ["Q2"] : []),
   ];
-  const months = unique(availableFortnights.map(monthFromFortnight).filter(Boolean)).sort();
+  const operationalMonths = unique(availableFortnights.map(monthFromFortnight).filter(Boolean));
+  const importedMonths = unique(data.imports.flatMap((entry) => [
+    ...(entry.months ?? []),
+    ...(entry.month ? [entry.month] : []),
+  ]).filter(Boolean));
+  const months = (operationalMonths.length ? operationalMonths : importedMonths).sort();
 
   return {
     months,
