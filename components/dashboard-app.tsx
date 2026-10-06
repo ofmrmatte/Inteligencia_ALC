@@ -21,7 +21,7 @@ const ImportPanel = dynamic(() => import("@/components/import-panel").then((modu
 const SIDEBAR_KEY = "alc-inteligencia:sidebar-collapsed";
 const SIDEBAR_EVENT = "alc-inteligencia:sidebar-change";
 const GLOBAL_SYNC_EVENT = "alc-inteligencia:global-data-sync";
-const GLOBAL_SYNC_INTERVAL_MS = 60_000;
+const GLOBAL_SYNC_INTERVAL_MS = 300_000;
 const ADMIN_SECTIONS: SectionId[] = ["configuracoes", "perfil"];
 const STANDALONE_SECTIONS: SectionId[] = ["bandeja-pnr", "gestao-descontos", ...ADMIN_SECTIONS];
 const NO_GLOBAL_DATA_SECTIONS: SectionId[] = ["gestao-descontos", ...ADMIN_SECTIONS];
