@@ -38,10 +38,6 @@ import type { PnrRecord } from "@/lib/types";
 import { formatCurrency, formatNumber, KpiCard, PageIntro, Panel, StatusBadge } from "@/components/ui";
 import { ChartTooltip, NoResults } from "./shared";
 
-const MONTHS = [
-  "Janeiro", "Fevereiro", "Março", "Abril", "Maio", "Junho",
-  "Julho", "Agosto", "Setembro", "Outubro", "Novembro", "Dezembro",
-];
 const TREND_SERIES = {
   billedReviewed: { label: "Faturada revisada", color: "#16845b" },
   cancelledReviewed: { label: "Anulada revisada", color: "#2563eb" },
@@ -115,9 +111,6 @@ export function PnrInboxView({ profile }: { profile: AuthProfile }) {
   const data = useDashboardStore((state) => state.data);
   const hydrate = useDashboardStore((state) => state.hydrate);
   const cacheOwnerId = useDashboardStore((state) => state.cacheOwnerId);
-  const [captureYear, setCaptureYear] = useState(now.getFullYear());
-  const [captureMonth, setCaptureMonth] = useState(now.getMonth() + 1);
-  const [captureHalf, setCaptureHalf] = useState<1 | 2>(now.getDate() <= 15 ? 1 : 2);
   const dataYear = usePnrInboxFiltersStore((state) => state.year);
   const dataMonth = usePnrInboxFiltersStore((state) => state.month);
   const dataFortnight = usePnrInboxFiltersStore((state) => state.fortnight);
@@ -145,7 +138,7 @@ export function PnrInboxView({ profile }: { profile: AuthProfile }) {
   const importPauseRef = useRef(false);
   const connectorCheckRef = useRef(0);
   const installDialogRef = useRef<HTMLDialogElement>(null);
-  const competence = `${captureYear}${String(captureMonth).padStart(2, "0")}Q${captureHalf}`;
+  const competence = `${now.getFullYear()}${String(now.getMonth() + 1).padStart(2, "0")}Q${now.getDate() <= 15 ? 1 : 2}`;
   const resumeKey = `alc-pnr-case-center:${competence}`;
   const canImport = canManageImports(profile);
 
@@ -333,7 +326,6 @@ export function PnrInboxView({ profile }: { profile: AuthProfile }) {
   const updateAvailable = connection !== "unsupported" && installedVersion !== null
     && /^\d{1,9}\.\d{1,9}\.\d{1,9}$/.test(installedVersion)
     && compareConnectorVersions(installedVersion, LATEST_CONNECTOR_VERSION) < 0;
-  const captureYears = Array.from({ length: 4 }, (_, index) => now.getFullYear() - 2 + index);
 
   useEffect(() => {
     queueMicrotask(() => setResumeAvailable(Boolean(window.localStorage.getItem(resumeKey))));
@@ -516,7 +508,7 @@ export function PnrInboxView({ profile }: { profile: AuthProfile }) {
         chips={[competence, resumeAvailable ? "retomada disponível" : "sem captura pendente"]}
       />
 
-      <Panel title="Captura do Case Center" subtitle="Selecione a competência e mantenha a Bandeja de suporte aberta no Chrome." action={<StatusBadge tone={connectionMeta.tone}>{connection === "checking" ? <RefreshCw size={12} /> : syncReady ? <CircleCheckBig size={12} /> : <XCircle size={12} />}{syncReady ? "Pronto" : connection === "checking" ? "Verificando" : "Atenção"}</StatusBadge>}>
+      <Panel title="Captura do Case Center" subtitle="Abra o Case Center e traga os dados da competência atual para o Inteligência ALC." action={<StatusBadge tone={connectionMeta.tone}>{connection === "checking" ? <RefreshCw size={12} /> : syncReady ? <CircleCheckBig size={12} /> : <XCircle size={12} />}{syncReady ? "Pronto" : connection === "checking" ? "Verificando" : "Atenção"}</StatusBadge>}>
         <div className="case-center-control">
           <div className="case-center-connector">
             <div>
@@ -526,34 +518,35 @@ export function PnrInboxView({ profile }: { profile: AuthProfile }) {
             </div>
             <div className="case-center-connector__actions">
               {connection === "extension-missing" || connection === "unsupported" || updateAvailable ? <button className="secondary-button" type="button" onClick={() => installDialogRef.current?.showModal()}><Download size={15} />{connection === "extension-missing" ? "Instalar Conector PNR" : "Baixar atualização"}</button> : null}
-              {connection === "ml-missing" || connection === "expired" ? <button className="secondary-button" type="button" onClick={() => void openCaseCenter()}><ExternalLink size={15} />Abrir Bandeja Mercado Livre</button> : null}
               <button className="secondary-button" type="button" disabled={connection === "checking"} onClick={() => void checkConnector()}><RefreshCw size={15} />Verificar novamente</button>
             </div>
           </div>
-          <div className="case-center-form">
-            <label><span>Ano</span><select value={captureYear} onChange={(event) => setCaptureYear(Number(event.target.value))}>{captureYears.map((item) => <option key={item}>{item}</option>)}</select></label>
-            <label><span>Mês</span><select value={captureMonth} onChange={(event) => setCaptureMonth(Number(event.target.value))}>{MONTHS.map((label, index) => <option key={label} value={index + 1}>{label}</option>)}</select></label>
-            <label><span>Quinzena</span><select value={captureHalf} onChange={(event) => setCaptureHalf(Number(event.target.value) as 1 | 2)}><option value={1}>Quinzena 1 / Q1</option><option value={2}>Quinzena 2 / Q2</option></select></label>
-            <div className="case-center-import-actions">
-              <button className="primary-button" type="button" disabled={running || !canImport || !syncReady} onClick={() => void startSync()}><CloudDownload size={17} />Trazer Dados para Inteligência ALC</button>
-              <button
-                className="icon-button"
-                type="button"
-                disabled={!canImport || !syncReady}
-                aria-label={running ? "Pausar captura do Case Center" : "Iniciar ou retomar captura do Case Center"}
-                title={running ? "Pausar captura" : "Iniciar ou retomar captura"}
-                onClick={() => {
-                  if (running) {
-                    importPauseRef.current = true;
-                    setPhase("Pausando após a página atual...");
-                    return;
-                  }
-                  void startSync();
-                }}
-              >
-                {running ? <Pause size={16} /> : <Play size={16} />}
-              </button>
-            </div>
+          <div className="case-center-form case-center-form--actions">
+            <button
+              className="secondary-button case-center-main-action"
+              type="button"
+              disabled={connection === "checking"}
+              onClick={() => void openCaseCenter()}
+            >
+              <ExternalLink size={17} />
+              Abrir Case Center
+            </button>
+            <button
+              className="primary-button case-center-main-action"
+              type="button"
+              disabled={!canImport || (!syncReady && !running)}
+              onClick={() => {
+                if (running) {
+                  importPauseRef.current = true;
+                  setPhase("Pausando após a página atual...");
+                  return;
+                }
+                void startSync();
+              }}
+            >
+              {running ? <Pause size={17} /> : <CloudDownload size={17} />}
+              {running ? "Pausar captura" : "Trazer Dados para Inteligência ALC"}
+            </button>
           </div>
           <div className="case-center-progress" aria-live="polite">
             <div><strong>{phase}</strong><span>{progress.page ? `Página ${progress.page}${progress.totalPages ? ` de ${progress.totalPages}` : ""}` : competence}</span></div>
