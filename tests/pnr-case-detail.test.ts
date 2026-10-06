@@ -101,7 +101,7 @@ describe("histórico durável de detalhes PNR", () => {
     await expect(first).resolves.toBe(true);
   });
 
-  it("mantém worker global e permite priorizar imediatamente o caso aberto no drawer", () => {
+  it("mantém o worker montado globalmente, mas ativo somente no Sync PNR", () => {
     const drawer = readFileSync("components/views/pnr-case-detail-drawer.tsx", "utf8");
     const layout = readFileSync("app/layout.tsx", "utf8");
     const backgroundSync = readFileSync("components/pnr-case-center-background-sync.tsx", "utf8");
