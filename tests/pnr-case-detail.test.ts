@@ -6,7 +6,7 @@ import {
   uniquePnrCaseDetailSnapshots,
 } from "@/lib/pnr-case-detail";
 import { dedupeCaseTimelineEvents } from "@/lib/pnr-case-center";
-import { pnrDetailQueuePriority, runWithPnrSyncLock } from "@/lib/pnr-case-sync";
+import { pnrDetailEmptySyncDelayMs, pnrDetailQueuePriority, runWithPnrSyncLock } from "@/lib/pnr-case-sync";
 
 describe("histórico durável de detalhes PNR", () => {
   it("mantém valores e listas antigas quando a captura nova vem vazia", () => {
@@ -71,6 +71,14 @@ describe("histórico durável de detalhes PNR", () => {
     }, Date.parse("2026-09-17T13:00:00.000Z"))).toBe(1);
   });
 
+  it("aumenta o intervalo quando a fila está vazia e limita o backoff em cinco minutos", () => {
+    expect(pnrDetailEmptySyncDelayMs(1)).toBe(30_000);
+    expect(pnrDetailEmptySyncDelayMs(2)).toBe(60_000);
+    expect(pnrDetailEmptySyncDelayMs(3)).toBe(120_000);
+    expect(pnrDetailEmptySyncDelayMs(4)).toBe(300_000);
+    expect(pnrDetailEmptySyncDelayMs(50)).toBe(300_000);
+  });
+
   it("permite somente uma aba por vez quando Web Locks está disponível", async () => {
     let held = false;
     let release: (() => void) | undefined;
@@ -93,7 +101,7 @@ describe("histórico durável de detalhes PNR", () => {
     await expect(first).resolves.toBe(true);
   });
 
-  it("mantém worker global e permite priorizar imediatamente o caso aberto no drawer", () => {
+  it("mantém o worker montado globalmente, mas ativo somente no Sync PNR", () => {
     const drawer = readFileSync("components/views/pnr-case-detail-drawer.tsx", "utf8");
     const layout = readFileSync("app/layout.tsx", "utf8");
     const backgroundSync = readFileSync("components/pnr-case-center-background-sync.tsx", "utf8");
@@ -104,6 +112,9 @@ describe("histórico durável de detalhes PNR", () => {
     expect(drawer).toContain("refreshCaseNow");
     expect(drawer).toContain("Atualizando este caso diretamente no Case Center");
     expect(layout).toContain("<PnrCaseCenterBackgroundSync />");
-    expect(backgroundSync).toContain('if (pathname === "/login") return;');
+    expect(backgroundSync).toContain('if (pathname !== "/bandeja-pnr") return;');
+    expect(backgroundSync).toContain('document.visibilityState !== "visible"');
+    expect(backgroundSync).toContain('"FETCH_TIMELINES"');
+    expect(backgroundSync).toContain('/api/pnr-case-center/timeline/bulk');
   });
 });

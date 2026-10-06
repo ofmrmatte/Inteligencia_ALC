@@ -18,7 +18,7 @@ const detailUrl = `${listUrl}/198912360`;
 beforeAll(async () => {
   vi.stubGlobal("chrome", {
     runtime: {
-      getManifest: () => ({ version: "1.1.14" }),
+      getManifest: () => ({ version: "1.1.15" }),
       onMessage: { addListener: (listener) => { onMessage = listener; } },
       onInstalled: { addListener: (listener) => { onInstalled = listener; } },
     },
@@ -74,14 +74,14 @@ describe("handshake do Conector PNR", () => {
   it("identifica a extensão mesmo sem aba Mercado Livre", async () => {
     tabs = [];
     expect(await ping()).toEqual({ ok: true, data: {
-      installed: true, version: "1.1.14", mlTabAvailable: false, sessionAvailable: false,
+      installed: true, version: "1.1.15", mlTabAvailable: false, sessionAvailable: false,
     } });
   });
 
   it("faz PING leve sem consultar uma página do Case Center", async () => {
     tabs = [{ id: 7, status: "complete", url: detailUrl }];
     expect(await ping()).toEqual({ ok: true, data: {
-      installed: true, version: "1.1.14", mlTabAvailable: true, sessionAvailable: true,
+      installed: true, version: "1.1.15", mlTabAvailable: true, sessionAvailable: true,
     } });
     expect(probeArgs).toBeUndefined();
   });
@@ -136,6 +136,34 @@ describe("handshake do Conector PNR", () => {
     expect(updatedTab).toBeUndefined();
   });
 
+  it("busca timelines em lote sem navegar a aba e preserva erros por caso", async () => {
+    tabs = [{ id: 7, status: "complete", url: detailUrl }];
+    probeResult = [
+      { caseId: "198912360", ok: true, data: { caseState: { events: [], caseDetail: {} } } },
+      { caseId: "198912361", ok: false, code: "HTTP_ERROR", message: "Case Center respondeu HTTP 429." },
+    ];
+    const response = await new Promise((resolve) => onMessage(
+      {
+        source: "alc-pnr-panel",
+        type: "FETCH_TIMELINES",
+        payload: { caseIds: ["198912360", "198912361"], concurrency: 6 },
+      },
+      { url: "http://localhost:3000/bandeja-pnr" },
+      resolve,
+    ));
+    expect(response).toMatchObject({
+      ok: true,
+      data: {
+        results: [
+          { caseId: "198912360", ok: true, data: { sourceEventCount: 0 } },
+          { caseId: "198912361", ok: false, error: { code: "HTTP_ERROR" } },
+        ],
+      },
+    });
+    expect(probeArgs).toEqual({ caseIds: ["198912360", "198912361"], concurrency: 6 });
+    expect(updatedTab).toBeUndefined();
+  });
+
   it("não aceita o texto de competência de uma página de detalhe como filtro aplicado", async () => {
     const previousLocation = globalThis.location;
     Object.defineProperty(globalThis, "location", {
@@ -155,6 +183,16 @@ describe("handshake do Conector PNR", () => {
     }
   });
 
+  it("aceita o domínio de produção no Railway", async () => {
+    tabs = [];
+    const response = await new Promise((resolve) => onMessage(
+      { source: "alc-pnr-panel", type: "PING", payload: { competence: "202608Q2" } },
+      { url: "https://inteligenciaalc-production.up.railway.app/bandeja-pnr" },
+      resolve,
+    ));
+    expect(response).toMatchObject({ ok: true, data: { installed: true, version: "1.1.15" } });
+  });
+
   it("aceita o preview deste projeto e rejeita previews de terceiros", async () => {
     tabs = [];
     const sendFrom = (url) => new Promise((resolve) => onMessage(
@@ -162,7 +200,7 @@ describe("handshake do Conector PNR", () => {
       { url },
       resolve,
     ));
-    expect((await sendFrom(previewUrl)).data).toMatchObject({ installed: true, version: "1.1.14" });
+    expect((await sendFrom(previewUrl)).data).toMatchObject({ installed: true, version: "1.1.15" });
     expect(await sendFrom("https://alcpaineldeinteligencia-test-other-team.vercel.app/bandeja-pnr"))
       .toMatchObject({ ok: false, error: { code: "INVALID_RESPONSE" } });
   });

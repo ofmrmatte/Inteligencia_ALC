@@ -1,10 +1,22 @@
 import { CASE_CENTER_TIMELINE_PARSER_VERSION } from "@/lib/pnr-case-center";
 
 export const PNR_DETAIL_SYNC_LOCK = "alc-pnr-case-detail-sync";
-export const PNR_DETAIL_SYNC_BATCH_SIZE = 20;
+export const PNR_DETAIL_SYNC_BATCH_SIZE = 50;
 export const PNR_DETAIL_QUEUE_CANDIDATE_LIMIT = 500;
-export const PNR_DETAIL_SYNC_INTERVAL_MS = 5_000;
-export const PNR_DETAIL_SYNC_CASE_DELAY_MS = 400;
+export const PNR_DETAIL_SYNC_CONCURRENCY = 6;
+export const PNR_DETAIL_PERSIST_BATCH_SIZE = 10;
+export const PNR_DETAIL_SYNC_ACTIVE_INTERVAL_MS = 1_000;
+export const PNR_DETAIL_SYNC_EMPTY_BACKOFF_MS = [30_000, 60_000, 120_000, 300_000] as const;
+export const PNR_DETAIL_SYNC_RATE_LIMIT_BACKOFF_MS = 30_000;
+export const PNR_DETAIL_SYNC_LEADER_LEASE_MS = 15_000;
+
+export function pnrDetailEmptySyncDelayMs(consecutiveEmptyPolls: number) {
+  const index = Math.min(
+    Math.max(consecutiveEmptyPolls - 1, 0),
+    PNR_DETAIL_SYNC_EMPTY_BACKOFF_MS.length - 1,
+  );
+  return PNR_DETAIL_SYNC_EMPTY_BACKOFF_MS[index];
+}
 
 export interface PnrDetailQueueRecord {
   detail_sync_status: string;
