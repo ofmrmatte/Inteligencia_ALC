@@ -401,3 +401,7 @@ $function$;
 
 revoke all on function public.dashboard_overview_v1(text[], text, text, text, text) from public, anon, authenticated;
 grant execute on function public.dashboard_overview_v1(text[], text, text, text, text) to service_role;
+
+
+alter function public.dashboard_overview_v1(text[], text, text, text, text)
+set statement_timeout = '30s';
