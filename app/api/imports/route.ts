@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { filterByAccessScope } from "@/lib/access-scope";
+import { canAccessScopedRecord, filterByAccessScope } from "@/lib/access-scope";
 import { getUserAccessScope } from "@/lib/access-scope-server";
 import { hasFullAccess, isUserRole, type AuthProfile } from "@/lib/auth";
 import { fortnightFromDate, monthFromFortnight, normalizeFortnight } from "@/lib/competence";
@@ -350,6 +350,9 @@ const PNR_SELECT = "batch_id,source_file,source_sheet,source_row,case_id,case_da
 const CASE_CENTER_SELECT = "case_id,competence,latest_batch_id,case_date,main_status,sub_status,billing_period,shipment_id,purchase_value,svc_name,base_key,sigla,route_code,route_id,driver_id,driver_name,currency,reviewed_status,case_type,route_status,priority,case_capture_status,detail_sync_status,timeline_synced_at,first_captured_at,last_captured_at,source_last_seen_at,detail_parser_version";
 const RISK_SELECT = "batch_id,source_file,source_sheet,source_row,failure_date,shipment_id,item_description,driver_id,facility_id,destination_type,carrier_name,failure_reason,last_substatus,route_id,route_status,destination_facility_id,vehicle_type,quantity,stopped_days,gmv_usd,gmv_brl,base_key,sigla";
 const DRIVER_SELECT = "batch_id,source_file,source_sheet,source_row,driver_id,name,experience,incidents,last_updated,state,shipped,delivered,undelivered,unvisited,penalized,contradictory_pnr,empty_boxes,lost,stolen";
+const BOOTSTRAP_DRIVER_SELECT = "driver_code,full_name,base_key,sigla";
+const BOOTSTRAP_UNIT_SELECT = "unit_key,sigla,base_name,base_key,xpt_code,coordinator_name,active";
+const BOOTSTRAP_SUPERVISOR_SELECT = "unit_key,supervisor_name,active";
 const CLASSIFICATION_EVENT_TYPES = [
   "NOT_ATTACHED_RECEIPT",
   "UPDATE_STATUS_TO_ON_REVIEW",
@@ -476,6 +479,95 @@ async function readImportedFiles(supabase: ServerClient, batchId: string | null)
     if (error) throw new Error(`imported_files: ${error.message}`);
     return { rows: (data ?? []) as unknown as DbRow[], count: null };
   });
+}
+
+async function loadDashboardBootstrap(supabase: ServerClient, profile: AuthProfile): Promise<DashboardData> {
+  // A leitura leve é usada somente por perfis com acesso global. Para perfis
+  // escopados mantemos o carregamento completo até o bootstrap ter equivalência
+  // exata de visibilidade de lotes.
+  if (!hasFullAccess(profile)) return loadDashboardData(supabase, profile);
+
+  const [imports, drivers, unitsResult, supervisorsResult] = await Promise.all([
+    readTable(supabase, "import_batches", IMPORT_BATCH_SELECT, "started_at"),
+    readTable(supabase, "alc_drivers", BOOTSTRAP_DRIVER_SELECT, "full_name"),
+    supabase.from("operational_units").select(BOOTSTRAP_UNIT_SELECT).eq("active", true),
+    supabase.from("operational_unit_supervisors").select(BOOTSTRAP_SUPERVISOR_SELECT).eq("active", true),
+  ]);
+
+  if (unitsResult.error) throw new Error(`operational_units: ${unitsResult.error.message}`);
+  if (supervisorsResult.error) throw new Error(`operational_unit_supervisors: ${supervisorsResult.error.message}`);
+
+  const mappedImports = imports.map(mapImportEntry).sort((a, b) => Date.parse(b.importedAt) - Date.parse(a.importedAt));
+  const supervisorsByUnit = new Map<string, string[]>();
+  for (const row of (supervisorsResult.data ?? []) as unknown as DbRow[]) {
+    const unitKey = toStringValue(row.unit_key);
+    const supervisor = toStringValue(row.supervisor_name);
+    if (!unitKey || !supervisor) continue;
+    supervisorsByUnit.set(unitKey, [...(supervisorsByUnit.get(unitKey) ?? []), supervisor]);
+  }
+
+  const hierarchy: HierarchyRecord[] = [];
+  for (const row of (unitsResult.data ?? []) as unknown as DbRow[]) {
+    const unitKey = toStringValue(row.unit_key);
+    const supervisors = supervisorsByUnit.get(unitKey) ?? [""];
+    for (const [index, supervisor] of supervisors.entries()) {
+      hierarchy.push({
+        batchId: "operational-directory",
+        sourceFile: "Cadastro de bases",
+        sourceSheet: "Hierarquia operacional",
+        rowNumber: index + 1,
+        coordinator: toStringValue(row.coordinator_name),
+        supervisor,
+        sigla: toStringValue(row.sigla),
+        base: toStringValue(row.base_name),
+        baseKey: toStringValue(row.base_key),
+        unitKey,
+        xptCode: toStringValue(row.xpt_code),
+      });
+    }
+  }
+
+  const driverRows: DriverRecord[] = drivers
+    .filter((row) => canAccessScopedRecord({
+      profileId: profile.id,
+      fullAccess: true,
+      allowedBaseKeys: [],
+      allowedSiglas: [],
+      allowedPairs: [],
+      safeSiglaOnly: [],
+    }, { baseKey: toStringValue(row.base_key), sigla: toStringValue(row.sigla) }))
+    .map((row, index) => ({
+      batchId: "driver-directory",
+      sourceFile: "Cadastro de motoristas",
+      sourceSheet: "Diretório",
+      rowNumber: index + 1,
+      driverId: toStringValue(row.driver_code).replace(/\.0$/, ""),
+      name: toStringValue(row.full_name),
+      experience: "",
+      incidents: 0,
+      lastUpdated: null,
+      state: "",
+      shipped: 0,
+      delivered: 0,
+      undelivered: 0,
+      unvisited: 0,
+      penalized: 0,
+      contradictoryPnr: 0,
+      emptyBoxes: 0,
+      lost: 0,
+      stolen: 0,
+    }))
+    .filter((row) => Boolean(row.driverId || row.name));
+
+  return {
+    hierarchy,
+    prefatura: [],
+    pnr: [],
+    risk: [],
+    drivers: driverRows,
+    imports: mappedImports,
+    isDemo: false,
+  };
 }
 
 async function loadDashboardData(supabase: ServerClient, profile: AuthProfile): Promise<DashboardData> {
@@ -933,12 +1025,16 @@ async function persistBatch(supabase: ServerClient, profile: AuthProfile, batch:
   );
 }
 
-export async function GET() {
+export async function GET(request: Request) {
   const startedAt = performance.now();
   try {
     const supabase = await createClient();
     const profile = await requireProfile(supabase);
-    const data = await loadDashboardData(createAdminClient(), profile);
+    const mode = new URL(request.url).searchParams.get("mode");
+    const admin = createAdminClient();
+    const data = mode === "bootstrap"
+      ? await loadDashboardBootstrap(admin, profile)
+      : await loadDashboardData(admin, profile);
     const durationMs = performance.now() - startedAt;
     const rowCount = data.hierarchy.length + data.prefatura.length + data.pnr.length + data.risk.length + data.drivers.length + data.imports.length;
     return NextResponse.json(data, {
