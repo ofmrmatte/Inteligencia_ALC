@@ -19,4 +19,16 @@ describe("dashboard hydration", () => {
   it("preserva a ordem temporal dos eventos usados na classificação PNR", () => {
     expect(route).toContain("events.sort((a, b) => Date.parse(b.dateCreated) - Date.parse(a.dateCreated))");
   });
+  it("usa hidratação dedicada na tela Sync PNR", () => {
+    const store = readFileSync("lib/store.ts", "utf8");
+    const app = readFileSync("components/dashboard-app.tsx", "utf8");
+    const view = readFileSync("components/views/pnr-inbox-view.tsx", "utf8");
+    expect(store).toContain('"bootstrap" | "pnr" | "full"');
+    expect(store).toContain('"/api/imports?mode=pnr"');
+    expect(app).toContain('section === "bandeja-pnr"');
+    expect(app).toContain('"pnr" as const');
+    expect(route).toContain("loadPnrDashboardData");
+    expect(view).toContain('hydrate(cacheOwnerId, true, "pnr")');
+  });
+
 });

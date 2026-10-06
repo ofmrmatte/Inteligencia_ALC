@@ -10,7 +10,7 @@ import { EMPTY_DATA, EMPTY_FILTERS } from "@/lib/types";
 
 const STORAGE_KEY_PREFIX = "alc-inteligencia:v4";
 const DATA_STALE_AFTER_MS = 24 * 60 * 60 * 1000;
-type HydrationMode = "bootstrap" | "full";
+type HydrationMode = "bootstrap" | "pnr" | "full";
 const hydrationTasks = new Map<string, Promise<void>>();
 const memoryCaches = new Map<string, DashboardCache>();
 
@@ -78,7 +78,11 @@ async function applyOnlineDirectory(data: DashboardData) {
 }
 
 async function fetchOnlineData(mode: HydrationMode) {
-  const url = mode === "bootstrap" ? "/api/imports?mode=bootstrap" : "/api/imports";
+  const url = mode === "bootstrap"
+    ? "/api/imports?mode=bootstrap"
+    : mode === "pnr"
+      ? "/api/imports?mode=pnr"
+      : "/api/imports";
   const response = await fetch(url, { cache: "no-store" });
   if (!response.ok) throw new Error(await readError(response, "Falha ao carregar dados online."));
   const data = (await response.json()) as DashboardData;
@@ -288,10 +292,12 @@ export const useDashboardStore = create<DashboardStore>((storeSet, getState) => 
     const owner = getState().cacheOwnerId;
     if (owner) {
       const bootstrapKey = storageKey(owner, "bootstrap");
+      const pnrKey = storageKey(owner, "pnr");
       const fullKey = storageKey(owner, "full");
       memoryCaches.delete(bootstrapKey);
+      memoryCaches.delete(pnrKey);
       memoryCaches.delete(fullKey);
-      await Promise.all([del(bootstrapKey), del(fullKey)]);
+      await Promise.all([del(bootstrapKey), del(pnrKey), del(fullKey)]);
     }
   },
   loadDemo: async () => {

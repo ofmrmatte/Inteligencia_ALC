@@ -412,7 +412,7 @@ export function PnrInboxView({ profile }: { profile: AuthProfile }) {
 
   const refreshDashboard = async () => {
     useDashboardStore.setState({ lastSyncedAt: 0 });
-    await hydrate(cacheOwnerId, true);
+    await hydrate(cacheOwnerId, true, "pnr");
   };
 
   const openCaseCenter = () => {

@@ -562,6 +562,43 @@ async function loadDashboardBootstrap(supabase: ServerClient, profile: AuthProfi
   };
 }
 
+async function loadPnrDashboardData(supabase: ServerClient, profile: AuthProfile): Promise<DashboardData> {
+  const accessScope = await getUserAccessScope(profile);
+  const [caseCenterCases, caseCenterEvents] = await Promise.all([
+    readTable(supabase, "pnr_case_center_cases", CASE_CENTER_SELECT, "last_captured_at"),
+    readCaseCenterClassificationEvents(supabase),
+  ]);
+
+  const timelineByCase = new Map<string, PnrCaseCenterClassificationEvent[]>();
+  for (const event of caseCenterEvents) {
+    const caseId = toStringValue(event.case_id);
+    if (!caseId) continue;
+    timelineByCase.set(caseId, [...(timelineByCase.get(caseId) ?? []), {
+      eventType: toStringValue(event.event_type),
+      dateCreated: toStringValue(event.date_created),
+      actorName: toStringValue(event.actor_name) || undefined,
+      actorUserId: toStringValue(event.actor_user_id) || undefined,
+    }]);
+  }
+  for (const events of timelineByCase.values()) {
+    events.sort((a, b) => Date.parse(b.dateCreated) - Date.parse(a.dateCreated));
+  }
+
+  const pnrRows = caseCenterCases.map((row) =>
+    mapCaseCenterCase(row, timelineByCase.get(toStringValue(row.case_id)) ?? []),
+  );
+
+  return {
+    hierarchy: [],
+    prefatura: [],
+    pnr: filterByAccessScope(accessScope, pnrRows),
+    risk: [],
+    drivers: [],
+    imports: [],
+    isDemo: false,
+  };
+}
+
 async function loadDashboardData(supabase: ServerClient, profile: AuthProfile): Promise<DashboardData> {
   const accessScope = await getUserAccessScope(profile);
   const [imports, hierarchy, prefatura, pnr, caseCenterCases, caseCenterEvents, risk, drivers] = await Promise.all([
@@ -1026,7 +1063,9 @@ export async function GET(request: Request) {
     const admin = createAdminClient();
     const data = mode === "bootstrap"
       ? await loadDashboardBootstrap(admin, profile)
-      : await loadDashboardData(admin, profile);
+      : mode === "pnr"
+        ? await loadPnrDashboardData(admin, profile)
+        : await loadDashboardData(admin, profile);
     const durationMs = performance.now() - startedAt;
     const rowCount = data.hierarchy.length + data.prefatura.length + data.pnr.length + data.risk.length + data.drivers.length + data.imports.length;
     return NextResponse.json(data, {

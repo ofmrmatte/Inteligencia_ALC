@@ -42,14 +42,25 @@ describe("proxy de autenticação", () => {
     expect(getClaims).toHaveBeenCalledTimes(1);
   });
 
-  it("não converte indisponibilidade temporária em redirect para login", async () => {
+  it("redireciona navegação de página para recuperação quando o Auth fica indisponível", async () => {
     getClaims.mockResolvedValue({ data: null, error: { message: "connection timeout", status: 503 } });
 
     const response = await updateSession(new NextRequest("https://app.example.com/"));
 
+    expect(response.status).toBe(307);
+    expect(response.headers.get("location")).toContain("/login?error=auth_temp");
+    expect(response.headers.get("location")).toContain("next=%2F");
+    expect(getClaims).toHaveBeenCalledTimes(3);
+  });
+
+  it("mantém 503 JSON para APIs quando o Auth fica indisponível", async () => {
+    getClaims.mockResolvedValue({ data: null, error: { message: "connection timeout", status: 503 } });
+
+    const response = await updateSession(new NextRequest("https://app.example.com/api/imports"));
+
     expect(response.status).toBe(503);
     expect(response.headers.get("location")).toBeNull();
-    expect(getClaims).toHaveBeenCalledTimes(1);
+    expect(getClaims).toHaveBeenCalledTimes(3);
   });
 
   it("preserva cookies atualizados ao criar uma resposta de redirect", async () => {

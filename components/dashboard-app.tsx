@@ -67,7 +67,11 @@ export function DashboardApp({ section, profile }: { section: SectionId; profile
   const remountOnGlobalSync = section === "gestao-descontos";
   const shouldLoadGlobalData = canLoadOperationalData && !NO_GLOBAL_DATA_SECTIONS.includes(section);
   const shouldPollGlobalRevision = shouldLoadGlobalData || remountOnGlobalSync;
-  const hydrationMode = section === "visao-geral" ? "bootstrap" as const : "full" as const;
+  const hydrationMode = section === "visao-geral"
+    ? "bootstrap" as const
+    : section === "bandeja-pnr"
+      ? "pnr" as const
+      : "full" as const;
   const hasOperationalRows = data.hierarchy.length > 0 || data.prefatura.length > 0 || data.pnr.length > 0 || data.risk.length > 0 || data.drivers.length > 0;
   const cacheOwnerId = [
     profile.id,
