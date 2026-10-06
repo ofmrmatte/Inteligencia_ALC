@@ -183,6 +183,16 @@ describe("handshake do Conector PNR", () => {
     }
   });
 
+  it("aceita o domínio de produção no Railway", async () => {
+    tabs = [];
+    const response = await new Promise((resolve) => onMessage(
+      { source: "alc-pnr-panel", type: "PING", payload: { competence: "202608Q2" } },
+      { url: "https://inteligenciaalc-production.up.railway.app/bandeja-pnr" },
+      resolve,
+    ));
+    expect(response).toMatchObject({ ok: true, data: { installed: true, version: "1.1.15" } });
+  });
+
   it("aceita o preview deste projeto e rejeita previews de terceiros", async () => {
     tabs = [];
     const sendFrom = (url) => new Promise((resolve) => onMessage(
