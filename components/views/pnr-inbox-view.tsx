@@ -109,7 +109,6 @@ async function readError(response: Response, fallback: string) {
 }
 
 export function PnrInboxView({ profile }: { profile: AuthProfile }) {
-  const now = new Date();
   const data = useDashboardStore((state) => state.data);
   const hydrate = useDashboardStore((state) => state.hydrate);
   const cacheOwnerId = useDashboardStore((state) => state.cacheOwnerId);
@@ -127,6 +126,7 @@ export function PnrInboxView({ profile }: { profile: AuthProfile }) {
   const [progress, setProgress] = useState({ page: 0, totalPages: 0, processed: 0, totalElements: 0, errors: 0 });
   const [completion, setCompletion] = useState<CompletionState | null>(null);
   const [resumeAvailable, setResumeAvailable] = useState(false);
+  const [caseCenterCompetence, setCaseCenterCompetence] = useState<string | null>(null);
   const [selectedCase, setSelectedCase] = useState<PnrRecord | null>(null);
   const [timeline, setTimeline] = useState<PnrCaseTimelineEvent[]>([]);
   const [timelineLoading, setTimelineLoading] = useState(false);
@@ -140,8 +140,7 @@ export function PnrInboxView({ profile }: { profile: AuthProfile }) {
   const importPauseRef = useRef(false);
   const connectorCheckRef = useRef(0);
   const installDialogRef = useRef<HTMLDialogElement>(null);
-  const competence = `${now.getFullYear()}${String(now.getMonth() + 1).padStart(2, "0")}Q${now.getDate() <= 15 ? 1 : 2}`;
-  const resumeKey = `alc-pnr-case-center:${competence}`;
+  const resumeKeyFor = (competence: string) => `alc-pnr-case-center:${competence}`;
   const canImport = canManageImports(profile);
 
   const rows = useMemo(() => {
@@ -330,15 +329,30 @@ export function PnrInboxView({ profile }: { profile: AuthProfile }) {
     && compareConnectorVersions(installedVersion, LATEST_CONNECTOR_VERSION) < 0;
 
   useEffect(() => {
-    queueMicrotask(() => setResumeAvailable(Boolean(window.localStorage.getItem(resumeKey))));
-  }, [resumeKey]);
+    if (!caseCenterCompetence) {
+      setResumeAvailable(false);
+      return;
+    }
+    queueMicrotask(() => setResumeAvailable(Boolean(window.localStorage.getItem(resumeKeyFor(caseCenterCompetence)))));
+  }, [caseCenterCompetence]);
+
+  const readCaseCenterCompetence = useCallback(async () => {
+    const result = await requestPnrConnector<{ competence: string }>("READ_CASE_CENTER_PERIOD", {}, 10_000);
+    const selected = String(result?.competence || "");
+    if (!/^20\d{4}Q[12]$/.test(selected)) {
+      throw new Error("Não foi possível identificar a competência selecionada no Case Center.");
+    }
+    setCaseCenterCompetence(selected);
+    setResumeAvailable(Boolean(window.localStorage.getItem(resumeKeyFor(selected))));
+    return selected;
+  }, []);
 
   const checkConnector = useCallback(async () => {
     const checkId = ++connectorCheckRef.current;
     setConnection("checking");
     setConnectionMessage(null);
     try {
-      const handshake = await requestPnrConnector<PnrConnectorHandshake>("PING", { competence }, 10_000);
+      const handshake = await requestPnrConnector<PnrConnectorHandshake>("PING", {}, 10_000);
       const state = handshake?.installed ? connectorStateFromHandshake(handshake) : "unsupported";
       if (checkId === connectorCheckRef.current) {
         setInstalledVersion(handshake?.installed ? handshake.version : null);
@@ -357,7 +371,7 @@ export function PnrInboxView({ profile }: { profile: AuthProfile }) {
       }
       return state;
     }
-  }, [competence]);
+  }, []);
 
   useEffect(() => {
     queueMicrotask(() => void checkConnector());
@@ -382,6 +396,8 @@ export function PnrInboxView({ profile }: { profile: AuthProfile }) {
     } catch {
       // A nova aba é cross-origin; não precisamos manter referência a ela.
     }
+    setCaseCenterCompetence(null);
+    setResumeAvailable(false);
     setPhase("Case Center aberto sem filtros.");
     window.setTimeout(() => void checkConnector(), 1_500);
   };
@@ -395,14 +411,18 @@ export function PnrInboxView({ profile }: { profile: AuthProfile }) {
     importPauseRef.current = false;
     setRunning(true);
     setCompletion(null);
-    setPhase("Iniciando captura...");
+    setPhase("Lendo competência selecionada no Case Center...");
+    let activeResumeKey = "";
     try {
       await runWithPnrImportLock(navigator.locks, async () => {
       const currentConnection = syncReady ? connection : await checkConnector();
       if (currentConnection !== "connected" && currentConnection !== "outdated") {
         throw new Error(connectionPresentation(currentConnection).label);
       }
-      const stored = JSON.parse(window.localStorage.getItem(resumeKey) || "null") as ResumeState | null;
+      const competence = await readCaseCenterCompetence();
+      activeResumeKey = resumeKeyFor(competence);
+      setPhase(`Competência ${competence} identificada. Iniciando captura...`);
+      const stored = JSON.parse(window.localStorage.getItem(activeResumeKey) || "null") as ResumeState | null;
       const resume = stored ?? { syncId: crypto.randomUUID(), nextPage: 1, processed: 0, errors: 0 };
       let lastPersisted = resume.processed;
       let totalFound = 0;
@@ -444,9 +464,9 @@ export function PnrInboxView({ profile }: { profile: AuthProfile }) {
           totalFound = pageResult.totalElements;
           lastCounts = body;
           if (completed) {
-            window.localStorage.removeItem(resumeKey);
+            window.localStorage.removeItem(activeResumeKey);
           } else {
-            window.localStorage.setItem(resumeKey, JSON.stringify({ syncId: resume.syncId, nextPage: pageResult.page + 1, processed, errors } satisfies ResumeState));
+            window.localStorage.setItem(activeResumeKey, JSON.stringify({ syncId: resume.syncId, nextPage: pageResult.page + 1, processed, errors } satisfies ResumeState));
           }
         },
         onProgress: (next) => {
@@ -478,7 +498,7 @@ export function PnrInboxView({ profile }: { profile: AuthProfile }) {
     } catch (error) {
       const state = connectionStateFromError(error);
       if (state !== "error") setConnection(state);
-      setResumeAvailable(Boolean(window.localStorage.getItem(resumeKey)));
+      setResumeAvailable(activeResumeKey ? Boolean(window.localStorage.getItem(activeResumeKey)) : false);
       const message = error instanceof Error ? error.message : connectorStatusFromCode();
       setPhase(message);
       toast.error(message);
@@ -508,10 +528,10 @@ export function PnrInboxView({ profile }: { profile: AuthProfile }) {
     <div className="view-stack">
       <PageIntro
         description="Capture atualizações pela Bandeja do Mercado Livre e consulte no ALC todo o histórico já arquivado, mesmo sem o conector ativo."
-        chips={[competence, resumeAvailable ? "retomada disponível" : "sem captura pendente"]}
+        chips={[caseCenterCompetence ?? "competência lida do Case Center", resumeAvailable ? "retomada disponível" : "sem captura pendente"]}
       />
 
-      <Panel title="Captura do Case Center" subtitle="Abra o Case Center e traga os dados da competência atual para o Inteligência ALC." action={<StatusBadge tone={connectionMeta.tone}>{connection === "checking" ? <RefreshCw size={12} /> : syncReady ? <CircleCheckBig size={12} /> : <XCircle size={12} />}{syncReady ? "Pronto" : connection === "checking" ? "Verificando" : "Atenção"}</StatusBadge>}>
+      <Panel title="Captura do Case Center" subtitle="Abra o Case Center sem filtros; ao trazer os dados, o ALC lê a competência selecionada diretamente na tela do Mercado Livre." action={<StatusBadge tone={connectionMeta.tone}>{connection === "checking" ? <RefreshCw size={12} /> : syncReady ? <CircleCheckBig size={12} /> : <XCircle size={12} />}{syncReady ? "Pronto" : connection === "checking" ? "Verificando" : "Atenção"}</StatusBadge>}>
         <div className="case-center-control">
           <div className="case-center-connector">
             <div>
@@ -551,7 +571,7 @@ export function PnrInboxView({ profile }: { profile: AuthProfile }) {
             </button>
           </div>
           <div className="case-center-progress" aria-live="polite">
-            <div><strong>{phase}</strong><span>{progress.page ? `Página ${progress.page}${progress.totalPages ? ` de ${progress.totalPages}` : ""}` : competence}</span></div>
+            <div><strong>{phase}</strong><span>{progress.page ? `Página ${progress.page}${progress.totalPages ? ` de ${progress.totalPages}` : ""}` : caseCenterCompetence ?? "aguardando competência do Case Center"}</span></div>
             <div className="case-center-progress__track"><i style={{ width: `${progress.totalElements ? Math.min(100, (progress.processed / progress.totalElements) * 100) : 0}%` }} /></div>
             {completion ? <div className="case-center-result"><span>{formatNumber(completion.received)} encontrados</span><span>{formatNumber(completion.reconciled)} reconciliados com histórico</span><span>{formatNumber(completion.created)} novos</span><span>{formatNumber(completion.updated)} atualizados</span><span>{formatNumber(completion.unchanged)} sem alteração</span><span>{formatNumber(completion.deleted)} excluídos</span><span>{formatNumber(completion.errors)} erros</span></div> : null}
             <div className="case-center-detail-sync">
@@ -593,7 +613,7 @@ export function PnrInboxView({ profile }: { profile: AuthProfile }) {
       </dialog>
 
       <div className="kpi-grid kpi-grid--six">
-        <KpiCard label="Casos encontrados" value={formatNumber(rows.length)} detail={competence} icon={<Boxes size={19} />} />
+        <KpiCard label="Casos encontrados" value={formatNumber(rows.length)} detail="Recorte dos filtros acima" icon={<Boxes size={19} />} />
         <KpiCard label="Enviados para faturamento" value={formatNumber(billed)} detail="Fechamento concluído" icon={<CircleCheckBig size={19} />} tone="green" />
         <KpiCard label="Anulados" value={formatNumber(cancelled)} detail="Fechamento sem faturamento" icon={<Ban size={19} />} tone="red" />
         <KpiCard label="Revisados" value={formatNumber(reviewed)} detail="Com revisão registrada" icon={<CircleCheckBig size={19} />} tone="green" />
