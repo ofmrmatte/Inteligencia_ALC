@@ -5,7 +5,7 @@ import { hasFullAccess, isUserRole, type AuthProfile } from "@/lib/auth";
 import { fortnightFromDate, monthFromFortnight, normalizeFortnight } from "@/lib/competence";
 import { duplicateFileImportError, findDuplicateFileHash } from "@/lib/import-dedupe";
 import { normalizeText } from "@/lib/normalize";
-import { caseCenterStatusLabel, caseCenterTimelineNeedsRefresh } from "@/lib/pnr-case-center";
+import { CASE_CENTER_TIMELINE_PARSER_VERSION, caseCenterStatusLabel } from "@/lib/pnr-case-center";
 import { derivePnrFinancialClassification, type PnrCaseCenterClassificationEvent } from "@/lib/pnr-classification";
 import {
   enrichPrefaturaRows,
@@ -219,7 +219,7 @@ function mapPnr(row: DbRow): PnrRecord {
 function mapCaseCenterCase(row: DbRow, timeline: PnrCaseCenterClassificationEvent[] = []): PnrRecord {
   const caseId = toStringValue(row.case_id);
   const competence = toStringValue(row.competence);
-  const detailSyncStatus = caseCenterTimelineNeedsRefresh(row.raw_snapshot_jsonb)
+  const detailSyncStatus = Number(row.detail_parser_version ?? 0) !== CASE_CENTER_TIMELINE_PARSER_VERSION
     ? "DETAIL_PENDING"
     : toStringValue(row.detail_sync_status) as PnrRecord["detailSyncStatus"];
   const classification = derivePnrFinancialClassification({
@@ -347,54 +347,113 @@ const IMPORT_BATCH_SELECT = "id,name,metadata,finished_at,started_at,fortnight,m
 const HIERARCHY_SELECT = "batch_id,source_file,source_sheet,source_row,coordinator_name,supervisor_name,sigla,base_name,base_key";
 const PREFATURA_SELECT = "batch_id,source_file,source_sheet,source_row,period,base_label,base_name,base_key,sigla,driver_id,driver_name,plate,description,route_date,shipment_id,route_id,value,operation,quality_status,enrichment_source,base_source,driver_name_source,driver_id_source";
 const PNR_SELECT = "batch_id,source_file,source_sheet,source_row,case_id,case_date,status,billing_period,shipment_id,products,purchase_value,carrier,origin_station,base_key,sigla,route_code,route_id,driver_id,driver_name,currency,main_status,sub_status,reviewed_status,case_type,route_status,priority,source_system,custom,billing_type,cancellation_type,classification_columns_present";
-const CASE_CENTER_SELECT = "case_id,competence,latest_batch_id,case_date,main_status,sub_status,billing_period,shipment_id,purchase_value,svc_name,base_key,sigla,route_code,route_id,driver_id,driver_name,currency,reviewed_status,case_type,route_status,priority,case_capture_status,detail_sync_status,timeline_synced_at,first_captured_at,last_captured_at,source_last_seen_at,raw_snapshot_jsonb";
+const CASE_CENTER_SELECT = "case_id,competence,latest_batch_id,case_date,main_status,sub_status,billing_period,shipment_id,purchase_value,svc_name,base_key,sigla,route_code,route_id,driver_id,driver_name,currency,reviewed_status,case_type,route_status,priority,case_capture_status,detail_sync_status,timeline_synced_at,first_captured_at,last_captured_at,source_last_seen_at,detail_parser_version";
 const RISK_SELECT = "batch_id,source_file,source_sheet,source_row,failure_date,shipment_id,item_description,driver_id,facility_id,destination_type,carrier_name,failure_reason,last_substatus,route_id,route_status,destination_facility_id,vehicle_type,quantity,stopped_days,gmv_usd,gmv_brl,base_key,sigla";
 const DRIVER_SELECT = "batch_id,source_file,source_sheet,source_row,driver_id,name,experience,incidents,last_updated,state,shipped,delivered,undelivered,unvisited,penalized,contradictory_pnr,empty_boxes,lost,stolen";
+const CLASSIFICATION_EVENT_TYPES = [
+  "NOT_ATTACHED_RECEIPT",
+  "UPDATE_STATUS_TO_ON_REVIEW",
+  "UPDATE_STATUS_TO_IN_PROGRESS_ON_REVIEW",
+  "UPDATE_STATUS_TO_CLOSED_BILLED",
+  "UPDATE_CASE_BILLED",
+] as const;
+const DASHBOARD_PAGE_CONCURRENCY = 4;
+
+async function runPageWorkers<T>(total: number, pageSize: number, workerCount: number, fetchPage: (offset: number, size: number) => Promise<T[]>) {
+  if (total <= 0) return [] as T[];
+  const offsets = Array.from({ length: Math.ceil(total / pageSize) }, (_, index) => index * pageSize);
+  const pages = new Array<T[]>(offsets.length);
+  let cursor = 0;
+
+  const worker = async () => {
+    while (true) {
+      const pageIndex = cursor;
+      cursor += 1;
+      if (pageIndex >= offsets.length) return;
+      pages[pageIndex] = await fetchPage(offsets[pageIndex], pageSize);
+    }
+  };
+
+  await Promise.all(Array.from({ length: Math.min(workerCount, offsets.length) }, () => worker()));
+  const rows = pages.flat();
+  if (rows.length !== total) {
+    throw new Error(`Divergência de paginação: banco informou ${total} linhas e a API carregou ${rows.length}.`);
+  }
+  return rows;
+}
+
+async function retryDashboardPage<T>(label: string, operation: () => Promise<{ data: T[] | null; error: { message: string } | null }>) {
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    const { data, error } = await operation();
+    if (!error) return (data ?? []) as T[];
+    if (!isTransientDashboardReadError(error.message) || attempt === 2) {
+      throw new Error(`${label}: ${error.message}`);
+    }
+    await new Promise((resolve) => setTimeout(resolve, 250 * (attempt + 1)));
+  }
+  return [];
+}
 
 async function readTable(supabase: ServerClient, table: string, select = "*", orderColumn = "created_at", pageSize = 1000) {
-  return readPaged<DbRow>(async (offset, size) => {
-    for (let attempt = 0; attempt < 3; attempt += 1) {
-      const { data, error } = await supabase
+  const counted = await supabase.from(table).select("id", { count: "exact", head: true });
+  if (counted.error) throw new Error(`${table}: ${counted.error.message}`);
+  const total = counted.count ?? 0;
+
+  return runPageWorkers<DbRow>(total, pageSize, DASHBOARD_PAGE_CONCURRENCY, (offset, size) =>
+    retryDashboardPage<DbRow>(table, async () => {
+      const result = await supabase
         .from(table)
         .select(select)
         .order(orderColumn, { ascending: false })
         .order("id", { ascending: false })
         .range(offset, offset + size - 1);
-
-      if (!error) {
-        return { rows: (data ?? []) as unknown as DbRow[], count: null };
-      }
-
-      if (!isTransientDashboardReadError(error.message) || attempt === 2) {
-        throw new Error(`${table}: ${error.message}`);
-      }
-
-      await new Promise((resolve) => setTimeout(resolve, 150 * (attempt + 1)));
-    }
-
-    return { rows: [], count: null };
-  }, pageSize);
+      return { data: result.data as unknown as DbRow[] | null, error: result.error };
+    }),
+  );
 }
 
 async function readLegacyPnrTable(supabase: ServerClient, pageSize = 1000) {
-  return readPaged<DbRow>(async (offset, size) => {
-    for (let attempt = 0; attempt < 3; attempt += 1) {
-      const { data, error } = await supabase
+  const counted = await supabase
+    .from("pnr_records")
+    .select("id", { count: "exact", head: true })
+    .neq("source_system", "case_center");
+  if (counted.error) throw new Error(`pnr_records: ${counted.error.message}`);
+  const total = counted.count ?? 0;
+
+  return runPageWorkers<DbRow>(total, pageSize, DASHBOARD_PAGE_CONCURRENCY, (offset, size) =>
+    retryDashboardPage<DbRow>("pnr_records", async () => {
+      const result = await supabase
         .from("pnr_records")
         .select(PNR_SELECT)
         .neq("source_system", "case_center")
         .order("created_at", { ascending: false })
         .order("id", { ascending: false })
         .range(offset, offset + size - 1);
+      return { data: result.data as unknown as DbRow[] | null, error: result.error };
+    }),
+  );
+}
 
-      if (!error) return { rows: (data ?? []) as unknown as DbRow[], count: null };
-      if (!isTransientDashboardReadError(error.message) || attempt === 2) {
-        throw new Error(`pnr_records: ${error.message}`);
-      }
-      await new Promise((resolve) => setTimeout(resolve, 150 * (attempt + 1)));
-    }
-    return { rows: [], count: null };
-  }, pageSize);
+async function readCaseCenterClassificationEvents(supabase: ServerClient, pageSize = 1000) {
+  const counted = await supabase
+    .from("pnr_case_events")
+    .select("id", { count: "exact", head: true })
+    .in("event_type", [...CLASSIFICATION_EVENT_TYPES]);
+  if (counted.error) throw new Error(`pnr_case_events: ${counted.error.message}`);
+  const total = counted.count ?? 0;
+
+  return runPageWorkers<DbRow>(total, pageSize, DASHBOARD_PAGE_CONCURRENCY, (offset, size) =>
+    retryDashboardPage<DbRow>("pnr_case_events", async () => {
+      const result = await supabase
+        .from("pnr_case_events")
+        .select("case_id,event_type,date_created,actor_name,actor_user_id")
+        .in("event_type", [...CLASSIFICATION_EVENT_TYPES])
+        .order("date_created", { ascending: false })
+        .order("id", { ascending: false })
+        .range(offset, offset + size - 1);
+      return { data: result.data as unknown as DbRow[] | null, error: result.error };
+    }),
+  );
 }
 
 async function readImportedFiles(supabase: ServerClient, batchId: string | null) {
@@ -418,7 +477,7 @@ async function loadDashboardData(supabase: ServerClient, profile: AuthProfile): 
     readTable(supabase, "prefatura_records", PREFATURA_SELECT),
     readLegacyPnrTable(supabase),
     readTable(supabase, "pnr_case_center_cases", CASE_CENTER_SELECT, "last_captured_at"),
-    readTable(supabase, "pnr_case_events", "case_id,event_type,date_created,actor_name,actor_user_id", "date_created"),
+    readCaseCenterClassificationEvents(supabase),
     readTable(supabase, "risk_lm_records", RISK_SELECT),
     readTable(supabase, "driver_records", DRIVER_SELECT),
   ]);
