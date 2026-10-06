@@ -342,8 +342,21 @@ export function PnrInboxView({ profile }: { profile: AuthProfile }) {
     if (!/^20\d{4}Q[12]$/.test(selected)) {
       throw new Error("Não foi possível identificar a competência selecionada no Case Center.");
     }
+
+    const stored = JSON.parse(window.localStorage.getItem(resumeKeyFor(selected)) || "null") as ResumeState | null;
     setCaseCenterCompetence(selected);
-    setResumeAvailable(Boolean(window.localStorage.getItem(resumeKeyFor(selected))));
+    setResumeAvailable(Boolean(stored));
+
+    if (stored) {
+      setProgress((current) => ({
+        ...current,
+        page: Math.max(current.page, stored.nextPage - 1),
+        processed: Math.max(current.processed, stored.processed),
+        errors: Math.max(current.errors, stored.errors),
+      }));
+      setPhase(`Captura pausada. Pronta para continuar da página ${stored.nextPage}.`);
+    }
+
     return selected;
   }, []);
 
@@ -379,6 +392,23 @@ export function PnrInboxView({ profile }: { profile: AuthProfile }) {
       connectorCheckRef.current += 1;
     };
   }, [checkConnector]);
+
+  useEffect(() => {
+    if (!syncReady || running) return;
+
+    const refreshResumeState = () => {
+      void readCaseCenterCompetence().catch(() => {
+        // A aba pode ainda estar carregando ou sem competência selecionada.
+      });
+    };
+
+    const timer = window.setTimeout(refreshResumeState, 350);
+    window.addEventListener("focus", refreshResumeState);
+    return () => {
+      window.clearTimeout(timer);
+      window.removeEventListener("focus", refreshResumeState);
+    };
+  }, [syncReady, running, readCaseCenterCompetence]);
 
   const refreshDashboard = async () => {
     useDashboardStore.setState({ lastSyncedAt: 0 });
@@ -478,7 +508,7 @@ export function PnrInboxView({ profile }: { profile: AuthProfile }) {
       setResumeAvailable(!result.completed);
       if (result.cancelled) {
         setResumeAvailable(true);
-        setPhase("Captura pausada. Use Play para continuar.");
+        setPhase("Captura pausada. Use Continuar importação para retomar.");
       } else {
         setPhase("Sincronização concluída");
         setCompletion({
@@ -566,8 +596,8 @@ export function PnrInboxView({ profile }: { profile: AuthProfile }) {
                 void startSync();
               }}
             >
-              {running ? <Pause size={17} /> : <CloudDownload size={17} />}
-              {running ? "Pausar captura" : "Trazer Dados para Inteligência ALC"}
+              {running ? <Pause size={17} /> : resumeAvailable ? <Play size={17} /> : <CloudDownload size={17} />}
+              {running ? "Pausar captura" : resumeAvailable ? "Continuar importação" : "Trazer Dados para Inteligência ALC"}
             </button>
           </div>
           <div className="case-center-progress" aria-live="polite">
