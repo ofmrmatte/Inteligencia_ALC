@@ -1,9 +1,11 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-const { createClient, redirect, signInWithPassword, headers } = vi.hoisted(() => ({
+const { createClient, redirect, signInWithPassword, listFactors, signOut, headers } = vi.hoisted(() => ({
   createClient: vi.fn(),
   redirect: vi.fn(() => { throw new Error("NEXT_REDIRECT"); }),
   signInWithPassword: vi.fn(),
+  listFactors: vi.fn(),
+  signOut: vi.fn(),
   headers: vi.fn(async () => new Headers({ "x-forwarded-for": "203.0.113.10" })),
 }));
 
@@ -14,37 +16,69 @@ vi.mock("next/headers", () => ({ headers }));
 
 import { signInAction } from "@/app/login/actions";
 
-function credentials() {
+function credentials(next = "/") {
   const form = new FormData();
   form.set("email", "user@alc.test");
   form.set("password", "secret123");
+  form.set("next", next);
   return form;
 }
 
 describe("login administrativo", () => {
   beforeEach(() => {
     vi.resetAllMocks();
-    createClient.mockResolvedValue({ auth: { signInWithPassword } });
+    createClient.mockResolvedValue({
+      auth: {
+        signInWithPassword,
+        signOut,
+        mfa: { listFactors },
+      },
+    });
   });
 
-  it("redireciona após uma única autenticação válida", async () => {
+  it("mantém o usuário no login e abre MFA quando existe TOTP verificado", async () => {
     signInWithPassword.mockResolvedValue({ data: { session: { access_token: "redacted" } }, error: null });
+    listFactors.mockResolvedValue({ data: { totp: [{ id: "factor-1" }], all: [{ id: "factor-1", status: "verified" }] }, error: null });
 
-    await expect(signInAction({}, credentials())).rejects.toThrow("NEXT_REDIRECT");
+    await expect(signInAction({}, credentials())).resolves.toEqual({ mfaRequired: true });
 
     expect(signInWithPassword).toHaveBeenCalledTimes(1);
-    expect(redirect).toHaveBeenCalledWith("/seguranca/mfa");
+    expect(listFactors).toHaveBeenCalledTimes(1);
+    expect(redirect).not.toHaveBeenCalled();
+  });
+
+  it("entra direto no destino quando a conta não possui MFA", async () => {
+    signInWithPassword.mockResolvedValue({ data: { session: { access_token: "redacted" } }, error: null });
+    listFactors.mockResolvedValue({ data: { totp: [], all: [] }, error: null });
+
+    await expect(signInAction({}, credentials("/bandeja-pnr"))).rejects.toThrow("NEXT_REDIRECT");
+
+    expect(redirect).toHaveBeenCalledWith("/bandeja-pnr");
+  });
+
+  it("encerra a sessão se não conseguir verificar os fatores após a senha", async () => {
+    signInWithPassword.mockResolvedValue({ data: { session: { access_token: "redacted" } }, error: null });
+    listFactors.mockResolvedValue({ data: null, error: { message: "temporary failure" } });
+
+    await expect(signInAction({}, credentials())).resolves.toEqual({
+      error: "Não foi possível verificar a segurança da conta. Tente entrar novamente.",
+    });
+
+    expect(signOut).toHaveBeenCalledTimes(1);
+    expect(redirect).not.toHaveBeenCalled();
   });
 
   it("não repete signInWithPassword após erro transitório", async () => {
-    signInWithPassword
-      .mockResolvedValueOnce({ data: { session: null }, error: { message: "Connection terminated due to connection timeout", status: 503 } })
-      .mockResolvedValueOnce({ data: { session: { access_token: "redacted" } }, error: null });
+    signInWithPassword.mockResolvedValue({
+      data: { session: null },
+      error: { message: "Connection terminated due to connection timeout", status: 503 },
+    });
 
     const result = await signInAction({}, credentials());
 
     expect(signInWithPassword).toHaveBeenCalledTimes(1);
     expect(result.error).toMatch(/Não foi possível concluir o acesso agora/);
+    expect(listFactors).not.toHaveBeenCalled();
     expect(redirect).not.toHaveBeenCalled();
   });
 
@@ -56,5 +90,6 @@ describe("login administrativo", () => {
 
     await expect(signInAction({}, credentials())).resolves.toEqual({ error: "E-mail ou senha inválidos." });
     expect(signInWithPassword).toHaveBeenCalledTimes(1);
+    expect(listFactors).not.toHaveBeenCalled();
   });
 });
