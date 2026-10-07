@@ -101,7 +101,12 @@ async function upsertRows(client, table, pk, rows) {
   const action = !pk.length
     ? ""
     : updateColumns.length
-      ? "DO UPDATE SET " + updateColumns.map((column) => `${qident(column)} = EXCLUDED.${qident(column)}`).join(", ")
+      ? "DO UPDATE SET "
+        + updateColumns.map((column) => `${qident(column)} = EXCLUDED.${qident(column)}`).join(", ")
+        + " WHERE "
+        + updateColumns
+          .map((column) => `${qident(table)}.${qident(column)} IS DISTINCT FROM EXCLUDED.${qident(column)}`)
+          .join(" OR ")
       : "DO NOTHING";
 
   for (let start = 0; start < rows.length; start += INSERT_CHUNK_SIZE) {
@@ -141,6 +146,15 @@ async function copyTable(client, meta, pass) {
 async function targetCount(client, table) {
   const result = await client.query(`SELECT count(*)::bigint AS count FROM ${qident(table)}`);
   return Number(result.rows[0]?.count || 0);
+}
+
+async function checkpoint(client, label) {
+  try {
+    await client.query("CHECKPOINT");
+    console.log(`[migration] checkpoint: ${label}`);
+  } catch (error) {
+    console.warn(`[migration] checkpoint skipped (${label}): ${error instanceof Error ? error.message : String(error)}`);
+  }
 }
 
 async function installRevisionTriggers(client) {
@@ -245,6 +259,8 @@ async function main() {
   try {
     await primaryClient.query("SELECT 1");
     await secondaryClient.query("SELECT 1");
+    await checkpoint(primaryClient, "core before cleanup");
+    await checkpoint(secondaryClient, "aux before cleanup");
 
     // Failed single-volume attempts may have left these large tables on the
     // primary volume. They are source-of-truth in Supabase until cutover, so
@@ -272,13 +288,23 @@ async function main() {
         );
       }
       console.log("[migration] target tables reset across core + aux");
+      await checkpoint(primaryClient, "core after reset");
+      await checkpoint(secondaryClient, "aux after reset");
     }
 
-    for (const pass of [1, 2]) {
-      for (const meta of schema) {
-        await copyTable(clientFor(meta.table), meta, pass);
-      }
+    for (const meta of schema) {
+      await copyTable(clientFor(meta.table), meta, 1);
     }
+
+    await checkpoint(primaryClient, "core after pass 1");
+    await checkpoint(secondaryClient, "aux after pass 1");
+
+    for (const meta of schema) {
+      await copyTable(clientFor(meta.table), meta, 2);
+    }
+
+    await checkpoint(primaryClient, "core after pass 2");
+    await checkpoint(secondaryClient, "aux after pass 2");
 
     for (const meta of schema) {
       const client = clientFor(meta.table);
@@ -290,6 +316,9 @@ async function main() {
         }
       }
     }
+
+    await checkpoint(primaryClient, "core after indexes");
+    await checkpoint(secondaryClient, "aux after indexes");
 
     // Cross-table RPCs/views intentionally stay on the core database; every
     // table they reference is kept there.
