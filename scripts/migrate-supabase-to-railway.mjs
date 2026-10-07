@@ -3,7 +3,7 @@ import pg from "pg";
 
 const { Pool } = pg;
 
-const required = ["DATABASE_URL", "SUPABASE_URL", "SUPABASE_SERVICE_ROLE_KEY"];
+const required = ["DATABASE_URL", "PNR_DATABASE_URL", "SUPABASE_URL", "SUPABASE_SERVICE_ROLE_KEY"];
 for (const name of required) {
   if (!process.env[name]) {
     console.error(`[migration] missing ${name}`);
@@ -22,16 +22,35 @@ const supabase = createClient(
   { auth: { persistSession: false, autoRefreshToken: false } },
 );
 
-const pool = new Pool({
-  connectionString: process.env.DATABASE_URL,
-  max: 5,
-  connectionTimeoutMillis: 15_000,
-  idleTimeoutMillis: 30_000,
-  ssl: false,
-});
+function createPool(connectionString, applicationName) {
+  return new Pool({
+    connectionString,
+    max: 5,
+    connectionTimeoutMillis: 15_000,
+    idleTimeoutMillis: 30_000,
+    ssl: false,
+    application_name: applicationName,
+  });
+}
+
+const primaryPool = createPool(process.env.DATABASE_URL, "alc-migration-core");
+const secondaryPool = createPool(process.env.PNR_DATABASE_URL, "alc-migration-aux");
 
 const PAGE_SIZE = 500;
 const INSERT_CHUNK_SIZE = 50;
+
+const SECONDARY_TABLES = new Set([
+  "audit_logs",
+  "audit_events",
+  "pre_fatura_records",
+  "desvios_pnr_metrics_summary",
+  "pnr_case_events",
+  "pnr_case_detail_snapshots",
+]);
+
+function isSecondaryTable(table) {
+  return SECONDARY_TABLES.has(table);
+}
 
 function qident(value) {
   return '"' + String(value).replaceAll('"', '""') + '"';
@@ -131,14 +150,14 @@ async function installRevisionTriggers(client) {
     CREATE OR REPLACE FUNCTION app_private.sync_operational_base_id()
     RETURNS trigger
     LANGUAGE plpgsql
-    AS $
+    AS $$
     BEGIN
       IF NEW.id IS NULL OR btrim(NEW.id) = '' THEN
         NEW.id := NEW.base_key;
       END IF;
       RETURN NEW;
     END;
-    $;
+    $$;
 
     DROP TRIGGER IF EXISTS operational_bases_sync_id ON public.operational_bases;
     CREATE TRIGGER operational_bases_sync_id
@@ -216,30 +235,53 @@ async function main() {
   const extras = await rpc("railway_migration_extras");
   if (!Array.isArray(schema) || !schema.length) throw new Error("migration schema is empty");
 
-  const client = await pool.connect();
+  const primaryClient = await primaryPool.connect();
+  const secondaryClient = await secondaryPool.connect();
+
+  const clientFor = (table) => isSecondaryTable(table) ? secondaryClient : primaryClient;
+  const primaryMetas = schema.filter((meta) => !isSecondaryTable(meta.table));
+  const secondaryMetas = schema.filter((meta) => isSecondaryTable(meta.table));
+
   try {
-    await client.query("SELECT 1");
+    await primaryClient.query("SELECT 1");
+    await secondaryClient.query("SELECT 1");
+
+    // Failed single-volume attempts may have left these large tables on the
+    // primary volume. They are source-of-truth in Supabase until cutover, so
+    // dropping only the stale Railway copies is safe and immediately frees disk.
+    for (const meta of secondaryMetas) {
+      await primaryClient.query(`DROP TABLE IF EXISTS ${qident(meta.table)} CASCADE`);
+    }
+    console.log("[migration] stale secondary tables removed from primary");
 
     for (const meta of schema) {
+      const client = clientFor(meta.table);
       await client.query(normalizeTableDdl(meta));
-      console.log(`[migration] table ready: ${meta.table}`);
+      console.log(`[migration] table ready: ${meta.table} -> ${isSecondaryTable(meta.table) ? "aux" : "core"}`);
     }
 
     if (process.env.RAILWAY_MIGRATION_RESET === "1") {
-      const tables = schema.map((meta) => qident(meta.table)).join(", ");
-      await client.query(`TRUNCATE TABLE ${tables} RESTART IDENTITY CASCADE`);
-      console.log("[migration] target tables reset");
+      if (primaryMetas.length) {
+        await primaryClient.query(
+          `TRUNCATE TABLE ${primaryMetas.map((meta) => qident(meta.table)).join(", ")} RESTART IDENTITY CASCADE`,
+        );
+      }
+      if (secondaryMetas.length) {
+        await secondaryClient.query(
+          `TRUNCATE TABLE ${secondaryMetas.map((meta) => qident(meta.table)).join(", ")} RESTART IDENTITY CASCADE`,
+        );
+      }
+      console.log("[migration] target tables reset across core + aux");
     }
 
-    const sourceCounts = new Map();
     for (const pass of [1, 2]) {
       for (const meta of schema) {
-        const expected = await copyTable(client, meta, pass);
-        sourceCounts.set(meta.table, expected);
+        await copyTable(clientFor(meta.table), meta, pass);
       }
     }
 
     for (const meta of schema) {
+      const client = clientFor(meta.table);
       for (const rawIndex of meta.indexes || []) {
         try {
           await client.query(normalizeIndex(rawIndex));
@@ -249,19 +291,22 @@ async function main() {
       }
     }
 
-    await installExtras(client, extras);
+    // Cross-table RPCs/views intentionally stay on the core database; every
+    // table they reference is kept there.
+    await installExtras(primaryClient, extras);
 
     const failures = [];
     for (const meta of schema) {
       const source = await sourceCount(meta.table);
-      const target = await targetCount(client, meta.table);
-      console.log(`[migration] validate ${meta.table}: source=${source} target=${target}`);
+      const target = await targetCount(clientFor(meta.table), meta.table);
+      console.log(
+        `[migration] validate ${meta.table} (${isSecondaryTable(meta.table) ? "aux" : "core"}): source=${source} target=${target}`,
+      );
       if (source !== target) failures.push({ table: meta.table, source, target });
     }
 
-    const identity = schema.find((meta) => meta.table === "desvios_pnr_metrics_summary");
-    if (identity) {
-      await client.query(`
+    if (schema.some((meta) => meta.table === "desvios_pnr_metrics_summary")) {
+      await secondaryClient.query(`
         SELECT setval(
           pg_get_serial_sequence('desvios_pnr_metrics_summary', 'id'),
           COALESCE((SELECT max(id) FROM desvios_pnr_metrics_summary), 1),
@@ -270,11 +315,19 @@ async function main() {
       `).catch(() => undefined);
     }
 
-    const size = await client.query(`
-      SELECT pg_database_size(current_database())::bigint AS bytes,
-             pg_size_pretty(pg_database_size(current_database())) AS pretty
-    `);
-    console.log(`[migration] Railway database size: ${size.rows[0]?.pretty} (${size.rows[0]?.bytes} bytes)`);
+    const [coreSize, auxSize] = await Promise.all([
+      primaryClient.query(`
+        SELECT pg_database_size(current_database())::bigint AS bytes,
+               pg_size_pretty(pg_database_size(current_database())) AS pretty
+      `),
+      secondaryClient.query(`
+        SELECT pg_database_size(current_database())::bigint AS bytes,
+               pg_size_pretty(pg_database_size(current_database())) AS pretty
+      `),
+    ]);
+    console.log(
+      `[migration] Railway sizes: core=${coreSize.rows[0]?.pretty} (${coreSize.rows[0]?.bytes}) aux=${auxSize.rows[0]?.pretty} (${auxSize.rows[0]?.bytes})`,
+    );
 
     if (failures.length) {
       console.error("[migration] validation failures", JSON.stringify(failures));
@@ -282,15 +335,15 @@ async function main() {
       return;
     }
 
-    console.log(`[migration] COMPLETE: ${schema.length} tables validated`);
+    console.log(`[migration] COMPLETE: ${schema.length} tables validated across core + aux`);
   } finally {
-    client.release();
-    await pool.end();
+    primaryClient.release();
+    secondaryClient.release();
+    await Promise.allSettled([primaryPool.end(), secondaryPool.end()]);
   }
 }
-
 main().catch(async (error) => {
   console.error("[migration] FAILED:", error instanceof Error ? error.stack || error.message : error);
-  await pool.end().catch(() => undefined);
+  await Promise.allSettled([primaryPool.end(), secondaryPool.end()]);
   process.exit(1);
 });
