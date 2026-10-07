@@ -31,6 +31,15 @@ const TABLE_PRIMARY_KEYS: Record<string, string[]> = {
   pnr_case_detail_snapshots: ["id"],
 };
 
+const SECONDARY_TABLES = new Set([
+  "audit_logs",
+  "audit_events",
+  "pre_fatura_records",
+  "desvios_pnr_metrics_summary",
+  "pnr_case_events",
+  "pnr_case_detail_snapshots",
+]);
+
 const OPERATIONAL_TABLES = new Set([
   "dashboard_files",
   "audit_logs",
@@ -71,22 +80,42 @@ type Filter = { sql: string; values: unknown[] };
 
 type QueryAction = "select" | "insert" | "update" | "upsert" | "delete";
 
-const globalPool = globalThis as typeof globalThis & { __alcRailwayPool?: pg.Pool };
+const globalPool = globalThis as typeof globalThis & {
+  __alcRailwayPool?: pg.Pool;
+  __alcRailwayAuxPool?: pg.Pool;
+};
 
-function pool() {
+function createPool(connectionString: string, applicationName: string) {
+  return new Pool({
+    connectionString,
+    max: 12,
+    connectionTimeoutMillis: 10_000,
+    idleTimeoutMillis: 30_000,
+    ssl: false,
+    application_name: applicationName,
+  });
+}
+
+function corePool() {
   const connectionString = process.env.DATABASE_URL;
   if (!connectionString) throw new Error("DATABASE_URL não configurada.");
   if (!globalPool.__alcRailwayPool) {
-    globalPool.__alcRailwayPool = new Pool({
-      connectionString,
-      max: 12,
-      connectionTimeoutMillis: 10_000,
-      idleTimeoutMillis: 30_000,
-      ssl: false,
-      application_name: "inteligencia-alc",
-    });
+    globalPool.__alcRailwayPool = createPool(connectionString, "inteligencia-alc-core");
   }
   return globalPool.__alcRailwayPool;
+}
+
+function auxPool() {
+  const connectionString = process.env.PNR_DATABASE_URL;
+  if (!connectionString) throw new Error("PNR_DATABASE_URL não configurada.");
+  if (!globalPool.__alcRailwayAuxPool) {
+    globalPool.__alcRailwayAuxPool = createPool(connectionString, "inteligencia-alc-aux");
+  }
+  return globalPool.__alcRailwayAuxPool;
+}
+
+function poolForTable(table: string) {
+  return SECONDARY_TABLES.has(table) ? auxPool() : corePool();
 }
 
 function ident(value: string) {
@@ -302,7 +331,7 @@ class RailwayQueryBuilder implements PromiseLike<QueryResult<unknown>> {
 
   private async execute(): Promise<QueryResult<unknown>> {
     try {
-      const db = pool();
+      const db = poolForTable(this.table);
       const values: unknown[] = [];
       const table = ident(this.table);
       const where = this.compileFilters(values);
@@ -417,7 +446,7 @@ class RailwayQueryBuilder implements PromiseLike<QueryResult<unknown>> {
 
 async function railwayRpc(name: string, args: Record<string, unknown> = {}): Promise<QueryResult<unknown>> {
   try {
-    const db = pool();
+    const db = corePool();
     if (name === "dashboard_overview_v1") {
       const values = [
         args.p_pairs ?? null,
@@ -446,11 +475,13 @@ async function railwayRpc(name: string, args: Record<string, unknown> = {}): Pro
 }
 
 export function isRailwayOperationalTable(table: string) {
-  return Boolean(process.env.DATABASE_URL) && OPERATIONAL_TABLES.has(table);
+  if (!OPERATIONAL_TABLES.has(table)) return false;
+  if (SECONDARY_TABLES.has(table)) return Boolean(process.env.PNR_DATABASE_URL);
+  return Boolean(process.env.DATABASE_URL);
 }
 
 export function createRailwayHybridClient<T extends object>(supabase: T): T {
-  if (!process.env.DATABASE_URL) return supabase;
+  if (!process.env.DATABASE_URL || !process.env.PNR_DATABASE_URL) return supabase;
   return new Proxy(supabase, {
     get(target, property, receiver) {
       if (property === "from") {
