@@ -1,1 +1,32 @@
-import { readFileSync } from "node:fs";\nimport { describe, expect, it } from "vitest";\n\ndescribe("MFA obrigatório", () => {\n  const proxy = readFileSync("lib/supabase/proxy.ts", "utf8");\n  const login = readFileSync("app/login/actions.ts", "utf8");\n  const setup = readFileSync("app/seguranca/mfa/mfa-setup.tsx", "utf8");\n  const store = readFileSync("lib/store.ts", "utf8");\n\n  it("exige aal2 para páginas e APIs protegidas", () => {\n    expect(proxy).toContain('claims?.aal !== "aal2"');\n    expect(proxy).toContain('error: "MFA_REQUIRED"');\n    expect(proxy).toContain("mfaUrl.pathname = MFA_PATH");\n  });\n\n  it("encaminha logins válidos para a etapa MFA", () => {\n    expect(login).toContain('redirect("/seguranca/mfa")');\n  });\n\n  it("suporta cadastro e desafio TOTP", () => {\n    expect(setup).toContain('factorType: "totp"');\n    expect(setup).toContain("mfa.challenge");\n    expect(setup).toContain("mfa.verify");\n    expect(setup).toContain("getAuthenticatorAssuranceLevel");\n    expect(setup).toContain("listFactors");\n  });\n\n  it("limpa todos os caches operacionais ao sair", () => {\n    expect(store).toContain("await keys()");\n    expect(store).toContain("STORAGE_KEY_PREFIX");\n  });\n});\n
+import { readFileSync } from "node:fs";
+import { describe, expect, it } from "vitest";
+
+describe("MFA obrigatório", () => {
+  const proxy = readFileSync("lib/supabase/proxy.ts", "utf8");
+  const login = readFileSync("app/login/actions.ts", "utf8");
+  const setup = readFileSync("app/seguranca/mfa/mfa-setup.tsx", "utf8");
+  const store = readFileSync("lib/store.ts", "utf8");
+
+  it("exige aal2 para páginas e APIs protegidas", () => {
+    expect(proxy).toContain('claims?.aal !== "aal2"');
+    expect(proxy).toContain('error: "MFA_REQUIRED"');
+    expect(proxy).toContain("mfaUrl.pathname = MFA_PATH");
+  });
+
+  it("encaminha logins válidos para a etapa MFA", () => {
+    expect(login).toContain('redirect("/seguranca/mfa")');
+  });
+
+  it("suporta cadastro e desafio TOTP", () => {
+    expect(setup).toContain('factorType: "totp"');
+    expect(setup).toContain("mfa.challenge");
+    expect(setup).toContain("mfa.verify");
+    expect(setup).toContain("getAuthenticatorAssuranceLevel");
+    expect(setup).toContain("listFactors");
+  });
+
+  it("limpa todos os caches operacionais ao sair", () => {
+    expect(store).toContain("await keys()");
+    expect(store).toContain("STORAGE_KEY_PREFIX");
+  });
+});
