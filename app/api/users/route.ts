@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { roleModuleCap } from "@/lib/access-control";
-import { canManageUsers, isUserRole, MANAGED_USER_ROLES, type UserRole } from "@/lib/auth";
+import { canManageRole, canManageUserTransition, canManageUsers, isUserRole, manageableUserRoles, type AuthProfile, type UserRole } from "@/lib/auth";
 import { getCurrentProfile } from "@/lib/auth-server";
 import { normalizeText } from "@/lib/normalize";
 import { createAdminClient } from "@/lib/supabase/admin";
@@ -28,8 +28,34 @@ function normalizeEmail(value: unknown) {
   return toStringValue(value).trim().toLowerCase();
 }
 
+class UserManagementAccessError extends Error {}
+
 function parseRole(value: unknown): UserRole {
-  return isUserRole(value) && value !== "driver" && value !== "super_admin" ? value : "coordinator";
+  if (!isUserRole(value)) throw new Error("Cargo inválido.");
+  return value;
+}
+
+function validateManagedPassword(password: string, required: boolean) {
+  if (!password && !required) return;
+  if (password.length < 12) throw new Error("A senha precisa ter pelo menos 12 caracteres.");
+  if (!/[a-z]/.test(password) || !/[A-Z]/.test(password) || !/\d/.test(password) || !/[^A-Za-z0-9]/.test(password)) {
+    throw new Error("A senha precisa combinar maiúscula, minúscula, número e símbolo.");
+  }
+}
+
+function ensureCanManageRole(manager: Pick<AuthProfile, "role">, role: UserRole) {
+  if (!canManageRole(manager, role)) {
+    throw new UserManagementAccessError("Você não possui permissão para gerenciar este cargo.");
+  }
+}
+
+function userManagementStatus(error: unknown) {
+  const message = error instanceof Error ? error.message : "Falha na gestão de usuários.";
+  if (error instanceof UserManagementAccessError) return { message, status: 403 };
+  if (message.includes("SERVICE_ROLE")) return { message, status: 503 };
+  if (message.includes("Sessão expirada")) return { message, status: 401 };
+  if (message.includes("restrita")) return { message, status: 403 };
+  return { message, status: 400 };
 }
 
 function managedRole(role: UserRole) {
@@ -67,7 +93,7 @@ function parseUserPayload(payload: DbRow, requirePassword: boolean) {
   const role = parseRole(payload.role);
   if (!managedRole(role)) throw new Error("Cargo não permitido para cadastro interno.");
   if (!email || !email.includes("@")) throw new Error("Informe um e-mail válido.");
-  if (requirePassword && password.length < 6) throw new Error("A senha inicial precisa ter pelo menos 6 caracteres.");
+  validateManagedPassword(password, requirePassword);
 
   const moduleCap = roleModuleCap(role);
   const hasModules = hasPayloadField(payload, "moduleScope", "module_scope");
@@ -198,16 +224,47 @@ async function requireUserManager() {
   return profile;
 }
 
-async function responsePayload() {
+async function loadTargetProfile(admin: AdminClient, id: string) {
+  const { data, error } = await admin
+    .from("profiles")
+    .select("*")
+    .eq("id", id)
+    .maybeSingle();
+  if (error) throw new Error(error.message);
+  if (!data) throw new Error("Usuário não encontrado.");
+  return data as DbRow;
+}
+
+async function writeUserAudit(
+  admin: AdminClient,
+  actorId: string,
+  action: string,
+  entityId: string,
+  beforeData: DbRow | null,
+  afterData: DbRow | null,
+) {
+  const { error } = await admin.from("audit_events").insert({
+    actor_id: actorId,
+    action,
+    entity_table: "profiles",
+    entity_id: entityId,
+    before_data: beforeData,
+    after_data: afterData,
+  });
+  if (error) console.error("[security-audit] Falha ao registrar gestão de usuário:", error.message);
+}
+
+async function responsePayload(manager: AuthProfile) {
   const admin = createAdminClient();
+  const allowedRoles = manageableUserRoles(manager);
   const [usersResult, bases, xpts] = await Promise.all([
-    admin.from("profiles").select("*").in("role", [...MANAGED_USER_ROLES]).order("email", { ascending: true }),
+    admin.from("profiles").select("*").in("role", allowedRoles).order("email", { ascending: true }),
     loadBaseRows(admin),
     loadXptRows(admin),
   ]);
   if (usersResult.error) throw new Error(usersResult.error.message);
   return NextResponse.json({
-    roles: MANAGED_USER_ROLES,
+    roles: allowedRoles,
     users: ((usersResult.data ?? []) as DbRow[]).map((row) => mapManagedUser(row, bases, xpts)),
     bases: bases.map((row) => ({
       baseKey: toStringValue(row.unit_key),
@@ -224,20 +281,20 @@ async function responsePayload() {
 
 export async function GET() {
   try {
-    await requireUserManager();
-    return await responsePayload();
+    const manager = await requireUserManager();
+    return await responsePayload(manager);
   } catch (error) {
-    const message = error instanceof Error ? error.message : "Falha ao listar usuários.";
-    const status = message.includes("SERVICE_ROLE") ? 503 : message.includes("restrita") ? 403 : 401;
-    return jsonError(message, status);
+    const result = userManagementStatus(error);
+    return jsonError(result.message, result.status);
   }
 }
 
 export async function POST(request: Request) {
   try {
-    await requireUserManager();
+    const manager = await requireUserManager();
     const admin = createAdminClient();
     const payload = parseUserPayload((await request.json()) as DbRow, true);
+    ensureCanManageRole(manager, payload.role);
     const [scopes, xptScope] = await Promise.all([
       resolveBaseScopes(admin, payload.baseScope, payload.role),
       resolveXptScope(admin, payload.xptScope, payload.role),
@@ -270,10 +327,22 @@ export async function POST(request: Request) {
     });
     if (profileError) throw new Error(profileError.message);
 
-    return await responsePayload();
+    await writeUserAudit(admin, manager.id, "user.create", created.user.id, null, {
+      email: payload.email,
+      full_name: payload.fullName || payload.email,
+      role: payload.role,
+      global_access: payload.globalAccess,
+      active: payload.active,
+      base_scope: scopes.baseScope,
+      sigla_scope: scopes.siglaScope,
+      xpt_scope: xptScope,
+      module_scope: payload.moduleScope,
+    });
+
+    return await responsePayload(manager);
   } catch (error) {
-    const message = error instanceof Error ? error.message : "Falha ao cadastrar usuário.";
-    return jsonError(message, message.includes("restrita") ? 403 : message.includes("SERVICE_ROLE") ? 503 : 400);
+    const result = userManagementStatus(error);
+    return jsonError(result.message, result.status);
   }
 }
 
@@ -284,8 +353,14 @@ export async function PATCH(request: Request) {
     const body = (await request.json()) as DbRow;
     const id = toStringValue(body.id);
     if (!id) throw new Error("Usuário não informado.");
+    if (id === manager.id) throw new UserManagementAccessError("Por segurança, sua própria conta não pode ser alterada pela gestão de usuários.");
+    const before = await loadTargetProfile(admin, id);
+    const currentRole = parseRole(before.role);
     const payload = parseUserPayload(body, false);
-    if (id === manager.id && payload.active === false) throw new Error("Você não pode desativar sua própria conta.");
+    validateManagedPassword(payload.password, false);
+    if (!canManageUserTransition(manager, currentRole, payload.role)) {
+      throw new UserManagementAccessError("Você não possui permissão para alterar este usuário ou atribuir esse cargo.");
+    }
     const [scopes, xptScope] = await Promise.all([
       resolveBaseScopes(admin, payload.baseScope, payload.role),
       resolveXptScope(admin, payload.xptScope, payload.role),
@@ -316,10 +391,23 @@ export async function PATCH(request: Request) {
     const { error: authError } = await admin.auth.admin.updateUserById(id, updateAuth);
     if (authError) throw new Error(authError.message);
 
-    return await responsePayload();
+    await writeUserAudit(admin, manager.id, "user.update", id, before, {
+      ...before,
+      email: payload.email,
+      full_name: payload.fullName || payload.email,
+      role: payload.role,
+      global_access: payload.globalAccess,
+      active: payload.active,
+      base_scope: scopes.baseScope,
+      sigla_scope: scopes.siglaScope,
+      xpt_scope: xptScope,
+      module_scope: payload.moduleScope,
+    });
+
+    return await responsePayload(manager);
   } catch (error) {
-    const message = error instanceof Error ? error.message : "Falha ao atualizar usuário.";
-    return jsonError(message, message.includes("restrita") ? 403 : message.includes("SERVICE_ROLE") ? 503 : 400);
+    const result = userManagementStatus(error);
+    return jsonError(result.message, result.status);
   }
 }
 
@@ -329,14 +417,20 @@ export async function DELETE(request: Request) {
     const admin = createAdminClient();
     const id = new URL(request.url).searchParams.get("id");
     if (!id) throw new Error("Usuário não informado.");
-    if (id === manager.id) throw new Error("Você não pode remover sua própria conta.");
+    if (id === manager.id) throw new UserManagementAccessError("Você não pode remover sua própria conta.");
+
+    const before = await loadTargetProfile(admin, id);
+    const currentRole = parseRole(before.role);
+    ensureCanManageRole(manager, currentRole);
 
     const { error } = await admin.auth.admin.deleteUser(id);
     if (error) throw new Error(error.message);
-    await admin.from("profiles").delete().eq("id", id);
-    return await responsePayload();
+    const { error: profileDeleteError } = await admin.from("profiles").delete().eq("id", id);
+    if (profileDeleteError) throw new Error(profileDeleteError.message);
+    await writeUserAudit(admin, manager.id, "user.delete", id, before, null);
+    return await responsePayload(manager);
   } catch (error) {
-    const message = error instanceof Error ? error.message : "Falha ao remover usuário.";
-    return jsonError(message, message.includes("restrita") ? 403 : message.includes("SERVICE_ROLE") ? 503 : 400);
+    const result = userManagementStatus(error);
+    return jsonError(result.message, result.status);
   }
 }
