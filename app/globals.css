@@ -1181,69 +1181,6 @@ a { color: inherit; text-decoration: none; }
   .privacy-consent__close { right: 18px; bottom: 235px; }
 }
 
-
-/* Mandatory TOTP MFA */
-.mfa-card { width: min(520px, calc(100vw - 32px)); }
-.mfa-stack { display: grid; gap: 14px; }
-.mfa-status {
-  display: flex;
-  align-items: flex-start;
-  gap: 10px;
-  padding: 12px;
-  color: #e7e7e7;
-  background: #17191d;
-  border: 1px solid #2a2d33;
-  border-radius: 8px;
-  font-size: 11px;
-  line-height: 1.55;
-}
-.mfa-status svg { flex: 0 0 auto; margin-top: 1px; color: #ff4b55; }
-.mfa-qr-wrap { display: grid; place-items: center; padding: 14px; background: #fff; border-radius: 10px; }
-.mfa-qr { width: min(250px, 70vw); height: auto; display: block; }
-.mfa-secret { display: grid; gap: 6px; }
-.mfa-secret > span,
-.mfa-code-field > span { color: #aeb1b8; font-size: 9px; font-weight: 600; letter-spacing: .06em; text-transform: uppercase; }
-.mfa-secret code {
-  display: block;
-  overflow-wrap: anywhere;
-  padding: 10px;
-  color: #fff;
-  background: #17191d;
-  border: 1px solid #2a2d33;
-  border-radius: 7px;
-  font-size: 11px;
-}
-.mfa-code-field { display: grid; gap: 6px; }
-.mfa-code-field input {
-  width: 100%;
-  height: 48px;
-  padding: 0 14px;
-  color: #fff;
-  background: #17191d;
-  border: 1px solid #343840;
-  border-radius: 7px;
-  outline: none;
-  font: 700 20px/1 var(--font-heading);
-  letter-spacing: .35em;
-  text-align: center;
-}
-.mfa-code-field input:focus { border-color: var(--red); box-shadow: 0 0 0 3px rgba(227, 6, 19, .18); }
-.mfa-signout {
-  width: 100%;
-  min-height: 38px;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  gap: 7px;
-  color: #b9bbc1;
-  background: transparent;
-  border: 1px solid #303238;
-  border-radius: 7px;
-}
-.mfa-signout:hover { color: #fff; border-color: #4a4d55; }
-.mfa-signout:disabled { opacity: .55; cursor: not-allowed; }
-
-
 /* Optional MFA: login modal and profile security */
 body:has(.mfa-modal-backdrop) .login-page > .login-card,
 body:has(.mfa-modal-backdrop) .login-page > .login-aside {
