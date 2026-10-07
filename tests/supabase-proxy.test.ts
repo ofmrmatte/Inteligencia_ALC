@@ -34,7 +34,7 @@ describe("proxy de autenticação", () => {
   });
 
   it("reconhece uma sessão válida", async () => {
-    getClaims.mockResolvedValue({ data: { claims: { sub: "user-1" } }, error: null });
+    getClaims.mockResolvedValue({ data: { claims: { sub: "user-1", aal: "aal2" } }, error: null });
 
     const response = await updateSession(new NextRequest("https://app.example.com/"));
 
@@ -61,6 +61,32 @@ describe("proxy de autenticação", () => {
     expect(response.status).toBe(503);
     expect(response.headers.get("location")).toBeNull();
     expect(getClaims).toHaveBeenCalledTimes(3);
+  });
+
+  it("exige MFA antes de liberar páginas protegidas", async () => {
+    getClaims.mockResolvedValue({ data: { claims: { sub: "user-1", aal: "aal1" } }, error: null });
+
+    const response = await updateSession(new NextRequest("https://app.example.com/bandeja-pnr"));
+
+    expect(response.status).toBe(307);
+    expect(response.headers.get("location")).toContain("/seguranca/mfa?next=%2Fbandeja-pnr");
+  });
+
+  it("permite a própria tela de MFA em aal1", async () => {
+    getClaims.mockResolvedValue({ data: { claims: { sub: "user-1", aal: "aal1" } }, error: null });
+
+    const response = await updateSession(new NextRequest("https://app.example.com/seguranca/mfa"));
+
+    expect(response.status).toBe(200);
+  });
+
+  it("bloqueia APIs em aal1 mesmo com senha correta", async () => {
+    getClaims.mockResolvedValue({ data: { claims: { sub: "user-1", aal: "aal1" } }, error: null });
+
+    const response = await updateSession(new NextRequest("https://app.example.com/api/imports"));
+
+    expect(response.status).toBe(403);
+    await expect(response.json()).resolves.toMatchObject({ error: "MFA_REQUIRED" });
   });
 
   it("preserva cookies atualizados ao criar uma resposta de redirect", async () => {
