@@ -41,7 +41,7 @@ export function MfaSetup({ nextPath }: { nextPath: string }) {
         return;
       }
 
-      const verifiedTotp = factors.data.totp?.find((factor) => factor.status === "verified");
+      const verifiedTotp = factors.data.totp?.[0];
       if (verifiedTotp) {
         setFactorId(verifiedTotp.id);
         setStage("verify");
@@ -63,7 +63,8 @@ export function MfaSetup({ nextPath }: { nextPath: string }) {
       const factors = await supabase.auth.mfa.listFactors();
       if (factors.error) throw factors.error;
 
-      const unverifiedTotp = factors.data.totp?.filter((factor) => factor.status === "unverified") ?? [];
+      const unverifiedTotp =
+        factors.data.all?.filter((factor) => factor.factor_type === "totp" && factor.status === "unverified") ?? [];
       for (const factor of unverifiedTotp) {
         const removed = await supabase.auth.mfa.unenroll({ factorId: factor.id });
         if (removed.error) throw removed.error;
