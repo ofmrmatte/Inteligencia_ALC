@@ -183,7 +183,8 @@ class RailwayQueryBuilder implements PromiseLike<QueryResult<unknown>> {
 
   in(column: string, values: unknown[]) {
     if (!values.length) return this.addFilter("FALSE");
-    return this.addFilter(`${ident(column)} = ANY(?::text[])`, values.map((value) => String(value)));
+    const placeholders = values.map(() => "?").join(", ");
+    return this.addFilter(`${ident(column)} IN (${placeholders})`, ...values);
   }
 
   is(column: string, value: unknown) {
