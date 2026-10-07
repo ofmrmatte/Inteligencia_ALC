@@ -8,6 +8,7 @@ import { createClient } from "@/lib/supabase/server";
 
 export interface LoginState {
   error?: string;
+  mfaRequired?: boolean;
 }
 
 const schema = z.object({
@@ -24,6 +25,12 @@ async function loginAttemptKey(email: string) {
   const forwarded = requestHeaders.get("x-forwarded-for")?.split(",")[0]?.trim();
   const remote = forwarded || requestHeaders.get("x-real-ip") || "unknown";
   return `${remote.slice(0, 128)}|${email.trim().toLowerCase()}`;
+}
+
+function safeNext(value: FormDataEntryValue | null) {
+  if (typeof value !== "string" || !value.startsWith("/") || value.startsWith("//")) return "/";
+  if (value.startsWith("/login") || value.startsWith("/seguranca/mfa")) return "/";
+  return value;
 }
 
 function blockedForSeconds(key: string) {
@@ -87,8 +94,19 @@ export async function signInAction(_state: LoginState, formData: FormData): Prom
     return { error: "Não foi possível concluir o acesso agora. Tente novamente em alguns instantes." };
   }
 
+  const factors = await supabase.auth.mfa.listFactors();
+  if (factors.error) {
+    await supabase.auth.signOut();
+    return { error: "Não foi possível verificar a segurança da conta. Tente entrar novamente." };
+  }
+
   clearLoginFailures(attemptKey);
-  redirect("/seguranca/mfa");
+
+  if ((factors.data.totp?.length ?? 0) > 0) {
+    return { mfaRequired: true };
+  }
+
+  redirect(safeNext(formData.get("next")));
 }
 
 export async function signOutAction() {
