@@ -34,11 +34,18 @@ describe("distribuição do Conector PNR", () => {
     expect(MINIMUM_SUPPORTED_CONNECTOR_VERSION).toBe("1.1.17");
   });
 
-  it("inclui o preview Vercel do projeto na injeção declarativa", () => {
-    expect(connectorManifest.host_permissions).toContain("https://*.vercel.app/*");
-    expect(connectorManifest.content_scripts).toContainEqual(expect.objectContaining({
-      matches: ["https://*.vercel.app/*"],
-      include_globs: ["https://alcpaineldeinteligencia-*-mrmattes-projects.vercel.app/*"],
-    }));
+  it("restringe a distribuição à produção Railway e ao Case Center", () => {
+    expect(connectorManifest.host_permissions).toEqual([
+      "https://envios.adminml.com/*",
+      "https://inteligenciaalc-production.up.railway.app/*",
+    ]);
+    expect(connectorManifest.content_scripts).toEqual([
+      expect.objectContaining({
+        matches: ["https://inteligenciaalc-production.up.railway.app/*"],
+        js: ["panel-bridge.js"],
+      }),
+    ]);
+    expect(JSON.stringify(connectorManifest)).not.toContain("vercel.app");
+    expect(JSON.stringify(connectorManifest)).not.toContain("localhost");
   });
 });
