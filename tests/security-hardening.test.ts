@@ -37,6 +37,8 @@ describe("security hardening", () => {
     expect(nextConfig).toContain("Strict-Transport-Security");
     expect(nextConfig).toContain("X-Content-Type-Options");
     expect(proxy).toContain('fetchSite === "cross-site"');
+    expect(proxy).toContain("requestHosts(request)");
+    expect(proxy).toContain("parsed.host.toLowerCase()");
     expect(proxy).toContain("Origem da requisição não autorizada");
   });
 
