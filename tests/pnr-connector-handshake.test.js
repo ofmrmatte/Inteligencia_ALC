@@ -18,7 +18,7 @@ const detailUrl = `${listUrl}/198912360`;
 beforeAll(async () => {
   vi.stubGlobal("chrome", {
     runtime: {
-      getManifest: () => ({ version: "1.1.16" }),
+      getManifest: () => ({ version: "1.1.17" }),
       onMessage: { addListener: (listener) => { onMessage = listener; } },
       onInstalled: { addListener: (listener) => { onInstalled = listener; } },
     },
@@ -74,14 +74,14 @@ describe("handshake do Conector PNR", () => {
   it("identifica a extensão mesmo sem aba Mercado Livre", async () => {
     tabs = [];
     expect(await ping()).toEqual({ ok: true, data: {
-      installed: true, version: "1.1.16", mlTabAvailable: false, sessionAvailable: false,
+      installed: true, version: "1.1.17", mlTabAvailable: false, sessionAvailable: false,
     } });
   });
 
   it("faz PING leve sem consultar uma página do Case Center", async () => {
     tabs = [{ id: 7, status: "complete", url: detailUrl }];
     expect(await ping()).toEqual({ ok: true, data: {
-      installed: true, version: "1.1.16", mlTabAvailable: true, sessionAvailable: true,
+      installed: true, version: "1.1.17", mlTabAvailable: true, sessionAvailable: true,
     } });
     expect(probeArgs).toBeUndefined();
   });
@@ -202,7 +202,7 @@ describe("handshake do Conector PNR", () => {
       { url: "https://inteligenciaalc-production.up.railway.app/bandeja-pnr" },
       resolve,
     ));
-    expect(response).toMatchObject({ ok: true, data: { installed: true, version: "1.1.16" } });
+    expect(response).toMatchObject({ ok: true, data: { installed: true, version: "1.1.17" } });
   });
 
   it("aceita o preview deste projeto e rejeita previews de terceiros", async () => {
@@ -212,7 +212,7 @@ describe("handshake do Conector PNR", () => {
       { url },
       resolve,
     ));
-    expect((await sendFrom(previewUrl)).data).toMatchObject({ installed: true, version: "1.1.16" });
+    expect((await sendFrom(previewUrl)).data).toMatchObject({ installed: true, version: "1.1.17" });
     expect(await sendFrom("https://alcpaineldeinteligencia-test-other-team.vercel.app/bandeja-pnr"))
       .toMatchObject({ ok: false, error: { code: "INVALID_RESPONSE" } });
   });
