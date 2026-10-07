@@ -23,6 +23,22 @@ function preserveSessionCookies(target: NextResponse, source: NextResponse) {
   return target;
 }
 
+function authRecoveryResponse(request: NextRequest, response: NextResponse, pathname: string) {
+  if (isApiPath(pathname)) {
+    return preserveSessionCookies(
+      NextResponse.json({ error: "Autenticação temporariamente indisponível." }, { status: 503 }),
+      response,
+    );
+  }
+
+  const recoveryUrl = request.nextUrl.clone();
+  recoveryUrl.pathname = "/login";
+  recoveryUrl.search = "";
+  recoveryUrl.searchParams.set("error", "auth_temp");
+  recoveryUrl.searchParams.set("next", pathname);
+  return preserveSessionCookies(NextResponse.redirect(recoveryUrl), response);
+}
+
 export async function updateSession(request: NextRequest) {
   const { pathname } = request.nextUrl;
   if (!isSupabaseConfigured() || !supabaseUrl || !supabasePublishableKey) {
@@ -63,19 +79,7 @@ export async function updateSession(request: NextRequest) {
   const isAuthenticated = Boolean(claims && !error);
 
   if (error && isTransientSupabaseError(error)) {
-    if (isApiPath(pathname)) {
-      return preserveSessionCookies(
-        NextResponse.json({ error: "Autenticação temporariamente indisponível." }, { status: 503 }),
-        response,
-      );
-    }
-
-    const recoveryUrl = request.nextUrl.clone();
-    recoveryUrl.pathname = "/login";
-    recoveryUrl.search = "";
-    recoveryUrl.searchParams.set("error", "auth_temp");
-    recoveryUrl.searchParams.set("next", pathname);
-    return preserveSessionCookies(NextResponse.redirect(recoveryUrl), response);
+    return authRecoveryResponse(request, response, pathname);
   }
 
   if (!isAuthenticated) {
@@ -91,19 +95,32 @@ export async function updateSession(request: NextRequest) {
     return preserveSessionCookies(NextResponse.redirect(redirectUrl), response);
   }
 
+  if (pathname === MFA_PATH) return response;
+
   if (claims?.aal !== "aal2") {
-    if (pathname === MFA_PATH) return response;
-    if (isApiPath(pathname)) {
-      return preserveSessionCookies(
-        NextResponse.json({ error: "MFA_REQUIRED", message: "Confirme o segundo fator para continuar." }, { status: 403 }),
-        response,
-      );
+    const factors = await retrySupabaseResult(() => supabase.auth.mfa.listFactors(), [250, 750]);
+
+    if (factors.error) {
+      return authRecoveryResponse(request, response, pathname);
     }
-    const mfaUrl = request.nextUrl.clone();
-    mfaUrl.pathname = MFA_PATH;
-    mfaUrl.search = "";
-    mfaUrl.searchParams.set("next", pathname);
-    return preserveSessionCookies(NextResponse.redirect(mfaUrl), response);
+
+    const hasVerifiedTotp = (factors.data.totp?.length ?? 0) > 0;
+
+    if (hasVerifiedTotp) {
+      if (isApiPath(pathname)) {
+        return preserveSessionCookies(
+          NextResponse.json({ error: "MFA_REQUIRED", message: "Confirme o segundo fator para continuar." }, { status: 403 }),
+          response,
+        );
+      }
+
+      const mfaUrl = request.nextUrl.clone();
+      mfaUrl.pathname = "/login";
+      mfaUrl.search = "";
+      mfaUrl.searchParams.set("mfa", "1");
+      mfaUrl.searchParams.set("next", pathname);
+      return preserveSessionCookies(NextResponse.redirect(mfaUrl), response);
+    }
   }
 
   return response;
