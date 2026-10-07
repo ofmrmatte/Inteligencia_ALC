@@ -3,6 +3,35 @@ import pg from "pg";
 
 const { Pool } = pg;
 
+const TABLE_PRIMARY_KEYS: Record<string, string[]> = {
+  dashboard_files: ["id"],
+  audit_logs: ["id"],
+  dashboard_settings: ["key"],
+  pre_fatura_records: ["id"],
+  processed_dashboard_files: ["id"],
+  desvios_pnr_metrics_summary: ["id"],
+  import_batches: ["id"],
+  imported_files: ["id"],
+  hierarchy_scopes: ["id"],
+  prefatura_records: ["id"],
+  pnr_records: ["id"],
+  risk_lm_records: ["id"],
+  driver_records: ["id"],
+  audit_events: ["id"],
+  operational_bases: ["base_key"],
+  alc_drivers: ["id"],
+  operational_units: ["unit_key"],
+  operational_unit_supervisors: ["id"],
+  operational_xpts: ["xpt_code"],
+  discount_cases: ["id"],
+  discount_case_events: ["id"],
+  global_data_revision: ["id"],
+  reconciliation_merge_audit: ["id"],
+  pnr_case_center_cases: ["id"],
+  pnr_case_events: ["id"],
+  pnr_case_detail_snapshots: ["id"],
+};
+
 const OPERATIONAL_TABLES = new Set([
   "dashboard_files",
   "audit_logs",
@@ -282,18 +311,19 @@ class RailwayQueryBuilder implements PromiseLike<QueryResult<unknown>> {
 
       if (this.action === "select") {
         const columns = selectList(this.selected);
+        let totalCount: number | undefined;
         if (this.countMode) {
           const countSql = `SELECT count(*)::bigint AS count FROM ${table}${where}`;
           const countResult = await db.query(countSql, values);
-          const count = Number(countResult.rows[0]?.count || 0);
-          if (this.headOnly) return { data: null, error: null, count };
+          totalCount = Number(countResult.rows[0]?.count || 0);
+          if (this.headOnly) return { data: null, error: null, count: totalCount };
         }
         sql = `SELECT ${columns} FROM ${table}${where}`;
         if (this.orders.length) sql += " ORDER BY " + this.orders.join(", ");
         if (this.maxRows !== null) sql += ` LIMIT ${this.maxRows}`;
         if (this.offsetRows !== null) sql += ` OFFSET ${this.offsetRows}`;
         const result = await db.query(sql, values);
-        return this.shapeRows(result.rows, this.countMode ? Number(result.rowCount) : undefined);
+        return this.shapeRows(result.rows, totalCount);
       }
 
       if (this.action === "insert" || this.action === "upsert") {
@@ -309,14 +339,21 @@ class RailwayQueryBuilder implements PromiseLike<QueryResult<unknown>> {
         });
         sql = `INSERT INTO ${table} (${columns.map(ident).join(", ")}) VALUES ${groups.join(", ")}`;
 
-        if (this.action === "upsert" && this.conflictColumns.length) {
-          sql += ` ON CONFLICT (${this.conflictColumns.map(ident).join(", ")}) `;
-          if (this.ignoreDuplicates) sql += "DO NOTHING";
-          else {
-            const updates = columns.filter((column) => !this.conflictColumns.includes(column));
-            sql += updates.length
-              ? "DO UPDATE SET " + updates.map((column) => `${ident(column)} = EXCLUDED.${ident(column)}`).join(", ")
-              : "DO NOTHING";
+        if (this.action === "upsert") {
+          const conflictColumns = this.conflictColumns.length
+            ? this.conflictColumns
+            : (TABLE_PRIMARY_KEYS[this.table] || []);
+          if (conflictColumns.length) {
+            sql += ` ON CONFLICT (${conflictColumns.map(ident).join(", ")}) `;
+            if (this.ignoreDuplicates) sql += "DO NOTHING";
+            else {
+              const updates = columns.filter((column) => !conflictColumns.includes(column));
+              sql += updates.length
+                ? "DO UPDATE SET " + updates.map((column) => `${ident(column)} = EXCLUDED.${ident(column)}`).join(", ")
+                : "DO NOTHING";
+            }
+          } else {
+            sql += " ON CONFLICT DO NOTHING";
           }
         }
         if (this.returning) sql += " RETURNING " + selectList(this.returning);
