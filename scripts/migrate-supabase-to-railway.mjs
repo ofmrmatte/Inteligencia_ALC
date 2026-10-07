@@ -105,7 +105,7 @@ async function upsertRows(client, table, pk, rows) {
         + updateColumns.map((column) => `${qident(column)} = EXCLUDED.${qident(column)}`).join(", ")
         + " WHERE "
         + updateColumns
-          .map((column) => `${qident(table)}.${qident(column)} IS DISTINCT FROM EXCLUDED.${qident(column)}`)
+          .map((column) => `to_jsonb(${qident(table)}.${qident(column)}) IS DISTINCT FROM to_jsonb(EXCLUDED.${qident(column)})`)
           .join(" OR ")
       : "DO NOTHING";
 
