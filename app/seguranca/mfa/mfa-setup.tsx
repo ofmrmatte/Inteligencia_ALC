@@ -60,6 +60,16 @@ export function MfaSetup({ nextPath }: { nextPath: string }) {
     setBusy(true);
     setError("");
     try {
+      const factors = await supabase.auth.mfa.listFactors();
+      if (factors.error) throw factors.error;
+
+      const unverifiedTotp =
+        factors.data.all?.filter((factor) => factor.factor_type === "totp" && factor.status === "unverified") ?? [];
+      for (const factor of unverifiedTotp) {
+        const removed = await supabase.auth.mfa.unenroll({ factorId: factor.id });
+        if (removed.error) throw removed.error;
+      }
+
       const enrolled = await supabase.auth.mfa.enroll({
         factorType: "totp",
         friendlyName: "Inteligência ALC",
