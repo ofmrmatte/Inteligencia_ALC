@@ -1,19 +1,12 @@
 /* global chrome */
 
 const allowedOrigins = new Set([
-  "https://inteligenciaalc.vercel.app",
-  "https://dashboardfatura.vercel.app",
   "https://inteligenciaalc-production.up.railway.app",
-  "http://localhost",
-  "http://127.0.0.1",
 ]);
-const previewHost = /^alcpaineldeinteligencia-[a-z0-9]+(?:-[a-z0-9]+)*-mrmattes-projects\.vercel\.app$/;
 
 function allowed(origin) {
   const url = new URL(origin);
-  return allowedOrigins.has(url.origin)
-    || (url.protocol === "https:" && previewHost.test(url.hostname))
-    || (url.protocol === "http:" && (url.hostname === "localhost" || url.hostname === "127.0.0.1"));
+  return allowedOrigins.has(url.origin);
 }
 
 if (allowed(window.location.origin) && !globalThis.__alcPnrBridgeInstalled) {
