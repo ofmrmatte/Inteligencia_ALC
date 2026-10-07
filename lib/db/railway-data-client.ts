@@ -237,7 +237,7 @@ class RailwayQueryBuilder implements PromiseLike<QueryResult<unknown>> {
     const clauses: string[] = [];
     const values: unknown[] = [];
     for (const term of splitOrExpression(expression)) {
-      const match = term.match(/^([A-Za-z_][A-Za-z0-9_]*)\.(eq|neq|gt|gte|lt|lte|is)\.(.*)$/s);
+      const match = term.match(/^([A-Za-z_][A-Za-z0-9_]*)\.(eq|neq|gt|gte|lt|lte|is)\.([\s\S]*)$/);
       if (!match) throw new Error(`Filtro .or não suportado: ${term}`);
       const [, column, op, raw] = match;
       if (op === "is" && raw === "null") {
