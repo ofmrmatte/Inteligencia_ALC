@@ -43,6 +43,14 @@ function normalizeIndex(sql) {
     .replace(/^CREATE UNIQUE INDEX /i, "CREATE UNIQUE INDEX IF NOT EXISTS ");
 }
 
+function normalizeTableDdl(meta) {
+  let ddl = String(meta.ddl);
+  if (meta.table === "operational_bases") {
+    ddl = ddl.replace(/id text DEFAULT base_key/g, "id text");
+  }
+  return ddl;
+}
+
 async function rpc(name) {
   const { data, error } = await supabase.rpc(name);
   if (error) throw new Error(`${name}: ${error.message}`);
@@ -120,6 +128,23 @@ async function installRevisionTriggers(client) {
   await client.query(`
     CREATE SCHEMA IF NOT EXISTS app_private;
 
+    CREATE OR REPLACE FUNCTION app_private.sync_operational_base_id()
+    RETURNS trigger
+    LANGUAGE plpgsql
+    AS $
+    BEGIN
+      IF NEW.id IS NULL OR btrim(NEW.id) = '' THEN
+        NEW.id := NEW.base_key;
+      END IF;
+      RETURN NEW;
+    END;
+    $;
+
+    DROP TRIGGER IF EXISTS operational_bases_sync_id ON public.operational_bases;
+    CREATE TRIGGER operational_bases_sync_id
+    BEFORE INSERT OR UPDATE OF base_key, id ON public.operational_bases
+    FOR EACH ROW EXECUTE FUNCTION app_private.sync_operational_base_id();
+
     CREATE OR REPLACE FUNCTION app_private.bump_global_data_revision()
     RETURNS trigger
     LANGUAGE plpgsql
@@ -196,7 +221,7 @@ async function main() {
     await client.query("SELECT 1");
 
     for (const meta of schema) {
-      await client.query(meta.ddl);
+      await client.query(normalizeTableDdl(meta));
       console.log(`[migration] table ready: ${meta.table}`);
     }
 
