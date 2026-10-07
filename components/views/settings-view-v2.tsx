@@ -31,7 +31,7 @@ interface ManagedUser {
   xptScope: string[];
   moduleScope: string[];
 }
-interface UsersPayload { users: ManagedUser[]; bases: BaseOption[]; xpts: XptOption[] }
+interface UsersPayload { roles: UserRole[]; users: ManagedUser[]; bases: BaseOption[]; xpts: XptOption[] }
 interface UserDraft {
   id?: string;
   email: string;
@@ -168,7 +168,7 @@ function HierarchyPanel() {
   );
 }
 function UserManagementPanel({ currentUserId }: { currentUserId: string }) {
-  const [payload, setPayload] = useState<UsersPayload>({ users: [], bases: [], xpts: [] });
+  const [payload, setPayload] = useState<UsersPayload>({ roles: [], users: [], bases: [], xpts: [] });
   const [draft, setDraft] = useState<UserDraft>(blankDraft);
   const [editing, setEditing] = useState<UserDraft | null>(null);
   const [loading, setLoading] = useState(true);
@@ -179,7 +179,7 @@ function UserManagementPanel({ currentUserId }: { currentUserId: string }) {
     setLoading(true);
     try {
       const body = await readJson(await fetch("/api/users", { cache: "no-store" }), "Falha ao carregar usuários.");
-      setPayload({ users: body.users ?? [], bases: body.bases ?? [], xpts: body.xpts ?? [] });
+      setPayload({ roles: body.roles ?? [], users: body.users ?? [], bases: body.bases ?? [], xpts: body.xpts ?? [] });
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "Falha ao carregar usuários.");
     } finally {
@@ -199,7 +199,7 @@ function UserManagementPanel({ currentUserId }: { currentUserId: string }) {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(draft),
       }), "Falha ao cadastrar usuário.");
-      setPayload({ users: body.users ?? [], bases: body.bases ?? [], xpts: body.xpts ?? [] });
+      setPayload({ roles: body.roles ?? [], users: body.users ?? [], bases: body.bases ?? [], xpts: body.xpts ?? [] });
       setDraft(blankDraft());
       setMessage("Usuário cadastrado com a matriz de acesso definida.");
     } catch (error) {
@@ -219,7 +219,7 @@ function UserManagementPanel({ currentUserId }: { currentUserId: string }) {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(editing),
       }), "Falha ao atualizar usuário.");
-      setPayload({ users: body.users ?? [], bases: body.bases ?? [], xpts: body.xpts ?? [] });
+      setPayload({ roles: body.roles ?? [], users: body.users ?? [], bases: body.bases ?? [], xpts: body.xpts ?? [] });
       setEditing(null);
       setMessage("Acesso do usuário atualizado.");
     } catch (error) {
@@ -235,7 +235,7 @@ function UserManagementPanel({ currentUserId }: { currentUserId: string }) {
     setMessage("");
     try {
       const body = await readJson(await fetch(`/api/users?id=${encodeURIComponent(user.id)}`, { method: "DELETE" }), "Falha ao remover usuário.");
-      setPayload({ users: body.users ?? [], bases: body.bases ?? [], xpts: body.xpts ?? [] });
+      setPayload({ roles: body.roles ?? [], users: body.users ?? [], bases: body.bases ?? [], xpts: body.xpts ?? [] });
       setMessage("Usuário removido.");
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "Falha ao remover usuário.");
@@ -255,8 +255,8 @@ function UserManagementPanel({ currentUserId }: { currentUserId: string }) {
         <div className={styles.formGrid}>
           <label className={styles.field}><span>E-mail</span><input required type="email" value={draft.email} onChange={(event) => setDraft({ ...draft, email: event.target.value })} placeholder="usuario@alc.com.br" /></label>
           <label className={styles.field}><span>Nome</span><input required value={draft.fullName} onChange={(event) => setDraft({ ...draft, fullName: event.target.value })} placeholder="Nome do usuário" /></label>
-          <label className={styles.field}><span>Senha inicial</span><input required minLength={6} type="password" value={draft.password} onChange={(event) => setDraft({ ...draft, password: event.target.value })} placeholder="mín. 6 caracteres" /></label>
-          <label className={styles.field}><span>Cargo</span><select value={draft.role} onChange={(event) => setDraft(roleChanged(draft, event.target.value as UserRole))}>{MANAGED_USER_ROLES.map((role) => <option key={role} value={role}>{ROLE_LABELS[role]}</option>)}</select></label>
+          <label className={styles.field}><span>Senha inicial</span><input required minLength={12} autoComplete="new-password" type="password" value={draft.password} onChange={(event) => setDraft({ ...draft, password: event.target.value })} placeholder="12+ caracteres, maiúscula, número e símbolo" /></label>
+          <label className={styles.field}><span>Cargo</span><select value={draft.role} onChange={(event) => setDraft(roleChanged(draft, event.target.value as UserRole))}>{payload.roles.map((role) => <option key={role} value={role}>{ROLE_LABELS[role]}</option>)}</select></label>
         </div>
 
         <div className={styles.roleSummary}>
@@ -286,7 +286,7 @@ function UserManagementPanel({ currentUserId }: { currentUserId: string }) {
               <td><div className={styles.badges}>{user.baseScope.slice(0, 2).map((baseKey) => { const base = payload.bases.find((item) => item.baseKey === baseKey); return <span className={styles.badge} key={baseKey}>{base ? baseLabel(base) : baseKey}</span>; })}{user.baseScope.length > 2 ? <span className={styles.badge}>+{user.baseScope.length - 2}</span> : null}{hasGlobalBaseScope(user.role) ? <span className={styles.badge}>Todas</span> : null}</div></td>
               <td><div className={styles.badges}>{isGlobalOperationalRole(user.role) ? <span className={styles.badge}>Todos</span> : supportsXptScope(user.role) ? <>{user.xptScope.slice(0, 2).map((xptCode) => <span className={styles.badge} key={xptCode}>{xptCode}</span>)}{user.xptScope.length > 2 ? <span className={styles.badge}>+{user.xptScope.length - 2}</span> : null}{!user.xptScope.length ? <span className={styles.badge}>Nenhum</span> : null}</> : <span className={styles.badge}>Não se aplica</span>}</div></td>
               <td><StatusBadge tone={user.active ? "green" : "amber"}>{user.active ? "Ativo" : "Inativo"}</StatusBadge></td>
-              <td className="align-right"><div className={styles.actions}><button className="table-action" type="button" title="Editar" onClick={() => setEditing({ ...user, password: "" })}><Edit3 size={14} /></button><button className="table-action" disabled={user.id === currentUserId || saving} type="button" title="Remover" onClick={() => void removeUser(user)}><Trash2 size={14} /></button></div></td>
+              <td className="align-right"><div className={styles.actions}><button className="table-action" disabled={user.id === currentUserId || saving} type="button" title={user.id === currentUserId ? "Sua própria conta não pode ser alterada aqui" : "Editar"} onClick={() => setEditing({ ...user, password: "" })}><Edit3 size={14} /></button><button className="table-action" disabled={user.id === currentUserId || saving} type="button" title="Remover" onClick={() => void removeUser(user)}><Trash2 size={14} /></button></div></td>
             </tr>
           ))}
         </tbody>
@@ -299,8 +299,8 @@ function UserManagementPanel({ currentUserId }: { currentUserId: string }) {
             <div className={styles.formGrid}>
               <label className={styles.field}><span>Nome</span><input value={editing.fullName} onChange={(event) => setEditing({ ...editing, fullName: event.target.value })} /></label>
               <label className={styles.field}><span>E-mail</span><input type="email" value={editing.email} onChange={(event) => setEditing({ ...editing, email: event.target.value })} /></label>
-              <label className={styles.field}><span>Nova senha</span><input type="password" value={editing.password} onChange={(event) => setEditing({ ...editing, password: event.target.value })} placeholder="deixe em branco para manter" /></label>
-              <label className={styles.field}><span>Cargo</span><select value={editing.role} onChange={(event) => setEditing(roleChanged(editing, event.target.value as UserRole))}>{MANAGED_USER_ROLES.map((role) => <option key={role} value={role}>{ROLE_LABELS[role]}</option>)}</select></label>
+              <label className={styles.field}><span>Nova senha</span><input minLength={12} autoComplete="new-password" type="password" value={editing.password} onChange={(event) => setEditing({ ...editing, password: event.target.value })} placeholder="em branco mantém; nova senha deve ter 12+ caracteres" /></label>
+              <label className={styles.field}><span>Cargo</span><select value={editing.role} onChange={(event) => setEditing(roleChanged(editing, event.target.value as UserRole))}>{payload.roles.map((role) => <option key={role} value={role}>{ROLE_LABELS[role]}</option>)}</select></label>
             </div>
             <div className={styles.roleSummary}><span className={styles.roleSummaryIcon}><ShieldCheck size={18} /></span><div><strong>{ROLE_LABELS[editing.role]}</strong><span>{ROLE_DETAILS[editing.role] ?? "Escopo definido pela matriz de permissões."}</span></div></div>
             <AccessEditor draft={editing} setDraft={setEditing} bases={payload.bases} xpts={payload.xpts} />
