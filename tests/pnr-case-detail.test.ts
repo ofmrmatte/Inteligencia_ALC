@@ -116,5 +116,7 @@ describe("histórico durável de detalhes PNR", () => {
     expect(backgroundSync).toContain('document.visibilityState !== "visible"');
     expect(backgroundSync).toContain('"FETCH_TIMELINES"');
     expect(backgroundSync).toContain('/api/pnr-case-center/timeline/bulk');
+    expect(backgroundSync).toContain('error.status === 401');
+    expect(backgroundSync).toContain('Sincronização pausada —');
   });
 });
