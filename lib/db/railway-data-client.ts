@@ -1,4 +1,3 @@
-import "server-only";
 import pg from "pg";
 
 const { Pool } = pg;
