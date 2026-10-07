@@ -11,7 +11,7 @@ let updatedTab;
 let createdTab;
 let injectedTabs = [];
 let serviceWorker;
-const previewUrl = "https://alcpaineldeinteligencia-5pv5ezaem-mrmattes-projects.vercel.app/bandeja-pnr";
+const panelUrl = "https://inteligenciaalc-production.up.railway.app/bandeja-pnr";
 const listUrl = "https://envios.adminml.com/logistics/case-center/cases";
 const detailUrl = `${listUrl}/198912360`;
 
@@ -65,7 +65,7 @@ beforeEach(() => {
 function ping(competence = "202608Q2") {
   return new Promise((resolve) => onMessage(
     { source: "alc-pnr-panel", type: "PING", payload: { competence } },
-    { url: "https://inteligenciaalc.vercel.app/pnr-bandeja" },
+    { url: panelUrl },
     resolve,
   ));
 }
@@ -103,7 +103,7 @@ describe("handshake do Conector PNR", () => {
     probeResult = { ok: true, period: "202608Q2" };
     const response = await new Promise((resolve) => onMessage(
       { source: "alc-pnr-panel", type: "OPEN_CASE_CENTER", payload: { competence: "202608Q2" } },
-      { url: "http://localhost:3000/bandeja-pnr" },
+      { url: panelUrl },
       resolve,
     ));
     expect(response).toEqual({ ok: true, data: { ok: true, period: "202608Q2" } });
@@ -119,7 +119,7 @@ describe("handshake do Conector PNR", () => {
     probeResult = { ok: true, period: "202608Q2" };
     await new Promise((resolve) => onMessage(
       { source: "alc-pnr-panel", type: "OPEN_CASE_CENTER", payload: { competence: "202608Q2" } },
-      { url: "http://localhost:3000/bandeja-pnr" },
+      { url: panelUrl },
       resolve,
     ));
     expect(updatedTab).toEqual({ id: 9, options: { active: true } });
@@ -129,7 +129,7 @@ describe("handshake do Conector PNR", () => {
     probeResult = { ok: true, period: "202608Q2" };
     await new Promise((resolve) => onMessage(
       { source: "alc-pnr-panel", type: "OPEN_CASE_CENTER", payload: { competence: "202608Q2" } },
-      { url: "http://localhost:3000/bandeja-pnr" },
+      { url: panelUrl },
       resolve,
     ));
     expect(createdTab).toEqual({ url: "https://envios.adminml.com/logistics/case-center/cases", active: true });
@@ -141,7 +141,7 @@ describe("handshake do Conector PNR", () => {
     expect(await ping()).toMatchObject({ ok: true, data: { mlTabAvailable: true, sessionAvailable: true } });
     const response = await new Promise((resolve) => onMessage(
       { source: "alc-pnr-panel", type: "FETCH_TIMELINE", payload: { caseId: "198912360" } },
-      { url: "http://localhost:3000/bandeja-pnr" },
+      { url: panelUrl },
       resolve,
     ));
     expect(response).toMatchObject({ ok: true, data: { caseId: "198912360", sourceEventCount: 0 } });
@@ -160,7 +160,7 @@ describe("handshake do Conector PNR", () => {
         type: "FETCH_TIMELINES",
         payload: { caseIds: ["198912360", "198912361"], concurrency: 6 },
       },
-      { url: "http://localhost:3000/bandeja-pnr" },
+      { url: panelUrl },
       resolve,
     ));
     expect(response).toMatchObject({
@@ -205,29 +205,32 @@ describe("handshake do Conector PNR", () => {
     expect(response).toMatchObject({ ok: true, data: { installed: true, version: "1.1.17" } });
   });
 
-  it("aceita o preview deste projeto e rejeita previews de terceiros", async () => {
+  it("rejeita Vercel, localhost e outras origens", async () => {
     tabs = [];
     const sendFrom = (url) => new Promise((resolve) => onMessage(
       { source: "alc-pnr-panel", type: "PING", payload: { competence: "202608Q2" } },
       { url },
       resolve,
     ));
-    expect((await sendFrom(previewUrl)).data).toMatchObject({ installed: true, version: "1.1.17" });
-    expect(await sendFrom("https://alcpaineldeinteligencia-test-other-team.vercel.app/bandeja-pnr"))
+    expect(await sendFrom("https://inteligenciaalc.vercel.app/bandeja-pnr"))
+      .toMatchObject({ ok: false, error: { code: "INVALID_RESPONSE" } });
+    expect(await sendFrom("http://localhost:3000/bandeja-pnr"))
+      .toMatchObject({ ok: false, error: { code: "INVALID_RESPONSE" } });
+    expect(await sendFrom("https://unrelated.example.com/bandeja-pnr"))
       .toMatchObject({ ok: false, error: { code: "INVALID_RESPONSE" } });
   });
 
   it("injeta a ponte somente nas abas existentes do painel", async () => {
     injectedTabs = [];
     tabs = [
-      { id: 7, url: previewUrl },
+      { id: 7, url: panelUrl },
       { id: 8, url: "https://unrelated.vercel.app/" },
     ];
     onInstalled();
     await vi.waitFor(() => expect(injectedTabs).toEqual([7]));
   });
 
-  it("registra a ponte no preview, mas não em outro domínio Vercel", async () => {
+  it("registra a ponte somente na produção Railway", async () => {
     const source = await readFile(new URL("../extension-pnr/src/panel-bridge.js", import.meta.url), "utf8");
     const listensAt = (origin) => {
       let registered = false;
@@ -235,8 +238,8 @@ describe("handshake do Conector PNR", () => {
       runInNewContext(source, { URL, window });
       return registered;
     };
-    expect(listensAt(new URL(previewUrl).origin)).toBe(true);
-    expect(listensAt("https://alcpaineldeinteligencia-test-other-team.vercel.app")).toBe(false);
-    expect(listensAt("https://unrelated.vercel.app")).toBe(false);
+    expect(listensAt(new URL(panelUrl).origin)).toBe(true);
+    expect(listensAt("https://inteligenciaalc.vercel.app")).toBe(false);
+    expect(listensAt("http://localhost:3000")).toBe(false);
   });
 });
