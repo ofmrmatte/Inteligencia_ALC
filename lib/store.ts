@@ -1,6 +1,6 @@
 "use client";
 
-import { del, get, set } from "idb-keyval";
+import { del, get, keys, set } from "idb-keyval";
 import { create } from "zustand";
 import { createDemoData } from "@/lib/demo";
 import { applyOperationalDirectory, type OperationalDirectoryPayload } from "@/lib/operational-directory";
@@ -302,16 +302,13 @@ export const useDashboardStore = create<DashboardStore>((storeSet, getState) => 
     }
   },
   clearLocalCache: async () => {
-    const owner = getState().cacheOwnerId;
-    if (owner) {
-      const keys = [
-        storageKey(owner, "bootstrap"),
-        storageKey(owner, "pnr"),
-        storageKey(owner, "full"),
-      ];
-      for (const key of keys) memoryCaches.delete(key);
-      await Promise.all(keys.map((key) => del(key)));
+    const persistedKeys = (await keys()).filter(
+      (key): key is string => typeof key === "string" && key.startsWith(`${STORAGE_KEY_PREFIX}:`),
+    );
+    for (const key of [...memoryCaches.keys()]) {
+      if (key.startsWith(`${STORAGE_KEY_PREFIX}:`)) memoryCaches.delete(key);
     }
+    await Promise.all(persistedKeys.map((key) => del(key)));
     hydrationTasks.clear();
     storeSet({
       data: EMPTY_DATA,

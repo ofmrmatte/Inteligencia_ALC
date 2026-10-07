@@ -33,7 +33,7 @@ describe("login administrativo", () => {
     await expect(signInAction({}, credentials())).rejects.toThrow("NEXT_REDIRECT");
 
     expect(signInWithPassword).toHaveBeenCalledTimes(1);
-    expect(redirect).toHaveBeenCalledWith("/");
+    expect(redirect).toHaveBeenCalledWith("/seguranca/mfa");
   });
 
   it("não repete signInWithPassword após erro transitório", async () => {

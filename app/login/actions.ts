@@ -88,7 +88,7 @@ export async function signInAction(_state: LoginState, formData: FormData): Prom
   }
 
   clearLoginFailures(attemptKey);
-  redirect("/");
+  redirect("/seguranca/mfa");
 }
 
 export async function signOutAction() {

@@ -4,6 +4,7 @@ import { isSupabaseConfigured, supabasePublishableKey, supabaseUrl } from "@/lib
 import { isTransientSupabaseError, retrySupabaseResult } from "@/lib/supabase/retry";
 
 const PUBLIC_PATHS = new Set(["/login", "/manifest.webmanifest"]);
+const MFA_PATH = "/seguranca/mfa";
 
 function isPublicPath(pathname: string) {
   return PUBLIC_PATHS.has(pathname);
@@ -58,7 +59,8 @@ export async function updateSession(request: NextRequest) {
   });
 
   const { data, error } = await retrySupabaseResult(() => supabase.auth.getClaims(), [250, 750]);
-  const isAuthenticated = Boolean(data?.claims && !error);
+  const claims = data?.claims as { aal?: string } | undefined;
+  const isAuthenticated = Boolean(claims && !error);
 
   if (error && isTransientSupabaseError(error)) {
     if (isApiPath(pathname)) {
@@ -87,6 +89,21 @@ export async function updateSession(request: NextRequest) {
     redirectUrl.pathname = "/login";
     redirectUrl.searchParams.set("next", pathname);
     return preserveSessionCookies(NextResponse.redirect(redirectUrl), response);
+  }
+
+  if (claims?.aal !== "aal2") {
+    if (pathname === MFA_PATH) return response;
+    if (isApiPath(pathname)) {
+      return preserveSessionCookies(
+        NextResponse.json({ error: "MFA_REQUIRED", message: "Confirme o segundo fator para continuar." }, { status: 403 }),
+        response,
+      );
+    }
+    const mfaUrl = request.nextUrl.clone();
+    mfaUrl.pathname = MFA_PATH;
+    mfaUrl.search = "";
+    mfaUrl.searchParams.set("next", pathname);
+    return preserveSessionCookies(NextResponse.redirect(mfaUrl), response);
   }
 
   return response;
