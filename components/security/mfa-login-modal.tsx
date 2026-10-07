@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
+import { createPortal } from "react-dom";
 import { KeyRound, LoaderCircle, LogOut, ShieldCheck } from "lucide-react";
 import { createClient } from "@/lib/supabase/client";
 import { useDashboardStore } from "@/lib/store";
@@ -10,11 +11,16 @@ type Phase = "loading" | "verify" | "success";
 export function MfaLoginModal({ nextPath }: { nextPath: string }) {
   const supabase = useMemo(() => createClient(), []);
   const clearLocalCache = useDashboardStore((state) => state.clearLocalCache);
+  const [mounted, setMounted] = useState(false);
   const [phase, setPhase] = useState<Phase>("loading");
   const [factorId, setFactorId] = useState("");
   const [code, setCode] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
+
+  useEffect(() => {
+    setMounted(true);
+  }, []);
 
   useEffect(() => {
     let disposed = false;
@@ -100,7 +106,9 @@ export function MfaLoginModal({ nextPath }: { nextPath: string }) {
     }
   }
 
-  return (
+  if (!mounted) return null;
+
+  return createPortal(
     <div className="mfa-modal-backdrop" role="presentation">
       <section
         className={`mfa-modal ${phase === "success" ? "is-success" : ""}`}
@@ -166,6 +174,7 @@ export function MfaLoginModal({ nextPath }: { nextPath: string }) {
           </>
         )}
       </section>
-    </div>
+    </div>,
+    document.body,
   );
 }
