@@ -2,8 +2,19 @@ import Image from "next/image";
 import { isSupabaseConfigured } from "@/lib/supabase/config";
 import { LoginForm } from "./login-form";
 
-export default async function LoginPage({ searchParams }: { searchParams: Promise<{ error?: string }> }) {
-  const { error } = await searchParams;
+function safeNext(value: string | undefined) {
+  if (!value || !value.startsWith("/") || value.startsWith("//")) return "/";
+  if (value.startsWith("/login") || value.startsWith("/seguranca/mfa")) return "/";
+  return value;
+}
+
+export default async function LoginPage({
+  searchParams,
+}: {
+  searchParams: Promise<{ error?: string; next?: string; mfa?: string }>;
+}) {
+  const { error, next, mfa } = await searchParams;
+  const nextPath = safeNext(next);
 
   return (
     <main className="login-page">
@@ -19,6 +30,8 @@ export default async function LoginPage({ searchParams }: { searchParams: Promis
         </div>
         <LoginForm
           supabaseReady={isSupabaseConfigured()}
+          nextPath={nextPath}
+          initialMfa={mfa === "1"}
           initialError={
             error === "access"
               ? "Seu usuário está autenticado, mas não possui acesso administrativo liberado."
