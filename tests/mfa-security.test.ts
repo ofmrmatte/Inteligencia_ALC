@@ -25,6 +25,15 @@ describe("MFA obrigatório", () => {
     expect(setup).toContain("listFactors");
   });
 
+  it("usa apenas fatores TOTP verificados no desafio", () => {
+    expect(setup).toContain('find((factor) => factor.status === "verified")');
+  });
+
+  it("remove apenas cadastros TOTP incompletos antes de gerar novo QR Code", () => {
+    expect(setup).toContain('filter((factor) => factor.status === "unverified")');
+    expect(setup).toContain("mfa.unenroll({ factorId: factor.id })");
+  });
+
   it("limpa todos os caches operacionais ao sair", () => {
     expect(store).toContain("await keys()");
     expect(store).toContain("STORAGE_KEY_PREFIX");
