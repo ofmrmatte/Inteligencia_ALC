@@ -7,6 +7,7 @@ describe("MFA opcional por usuário", () => {
   const loginForm = readFileSync("app/login/login-form.tsx", "utf8");
   const loginModal = readFileSync("components/security/mfa-login-modal.tsx", "utf8");
   const profileSecurity = readFileSync("components/security/mfa-security-panel.tsx", "utf8");
+  const styles = readFileSync("app/globals.css", "utf8");
   const profileView = readFileSync("components/views/profile-view.tsx", "utf8");
   const legacyPage = readFileSync("app/seguranca/mfa/page.tsx", "utf8");
 
@@ -24,6 +25,15 @@ describe("MFA opcional por usuário", () => {
     expect(loginModal).toContain("mfa-modal-backdrop");
     expect(loginModal).toContain("mfa.challenge");
     expect(loginModal).toContain("mfa.verify");
+  });
+
+  it("renderiza o MFA de login em portal acima do fundo desfocado", () => {
+    expect(loginModal).toContain('import { createPortal } from "react-dom"');
+    expect(loginModal).toContain("return createPortal(");
+    expect(loginModal).toContain("document.body");
+    expect(styles).toContain("z-index: 10000");
+    expect(styles).toContain("justify-content: center");
+    expect(styles).toContain("align-items: center");
   });
 
   it("permite ativar MFA no perfil com enrollment TOTP", () => {
