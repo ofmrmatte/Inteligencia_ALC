@@ -9,7 +9,7 @@ import type { DashboardData, DashboardFilters, ParsedBatch } from "@/lib/types";
 import { EMPTY_DATA, EMPTY_FILTERS } from "@/lib/types";
 
 const STORAGE_KEY_PREFIX = "alc-inteligencia:v4";
-const DATA_STALE_AFTER_MS = 24 * 60 * 60 * 1000;
+const DATA_STALE_AFTER_MS = 8 * 60 * 60 * 1000;
 type HydrationMode = "bootstrap" | "pnr" | "full";
 const hydrationTasks = new Map<string, Promise<void>>();
 const memoryCaches = new Map<string, DashboardCache>();
@@ -34,6 +34,7 @@ interface DashboardStore {
   addBatches: (batches: ParsedBatch[], files?: File[]) => Promise<void>;
   removeBatch: (batchId: string) => Promise<void>;
   clearData: () => Promise<void>;
+  clearLocalCache: () => Promise<void>;
   loadDemo: () => Promise<void>;
   setFilter: <K extends keyof DashboardFilters>(key: K, value: DashboardFilters[K]) => void;
   resetFilters: () => void;
@@ -299,6 +300,30 @@ export const useDashboardStore = create<DashboardStore>((storeSet, getState) => 
       memoryCaches.delete(fullKey);
       await Promise.all([del(bootstrapKey), del(pnrKey), del(fullKey)]);
     }
+  },
+  clearLocalCache: async () => {
+    const owner = getState().cacheOwnerId;
+    if (owner) {
+      const keys = [
+        storageKey(owner, "bootstrap"),
+        storageKey(owner, "pnr"),
+        storageKey(owner, "full"),
+      ];
+      for (const key of keys) memoryCaches.delete(key);
+      await Promise.all(keys.map((key) => del(key)));
+    }
+    hydrationTasks.clear();
+    storeSet({
+      data: EMPTY_DATA,
+      filters: EMPTY_FILTERS,
+      hydrated: false,
+      refreshing: false,
+      importing: false,
+      cacheOwnerId: "",
+      dataMode: "full",
+      lastSyncedAt: null,
+      loadError: "",
+    });
   },
   loadDemo: async () => {
     const data = createDemoData();
