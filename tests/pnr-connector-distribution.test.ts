@@ -17,11 +17,11 @@ describe("distribuição do Conector PNR", () => {
 
   it("separa ausência da extensão, aba e sessão", () => {
     expect(connectorStateFromHandshake(null)).toBe("extension-missing");
-    expect(connectorStateFromHandshake({ installed: true, version: "1.1.16", mlTabAvailable: false, sessionAvailable: false })).toBe("ml-missing");
-    expect(connectorStateFromHandshake({ installed: true, version: "1.1.16", mlTabAvailable: true, sessionAvailable: false })).toBe("expired");
-    expect(connectorStateFromHandshake({ installed: true, version: "1.1.16", mlTabAvailable: true, sessionAvailable: false, sessionError: "INVALID_RESPONSE" })).toBe("error");
+    expect(connectorStateFromHandshake({ installed: true, version: "1.1.17", mlTabAvailable: false, sessionAvailable: false })).toBe("ml-missing");
+    expect(connectorStateFromHandshake({ installed: true, version: "1.1.17", mlTabAvailable: true, sessionAvailable: false })).toBe("expired");
+    expect(connectorStateFromHandshake({ installed: true, version: "1.1.17", mlTabAvailable: true, sessionAvailable: false, sessionError: "INVALID_RESPONSE" })).toBe("error");
     expect(connectorStateFromHandshake({ installed: true, version: "1.1.10", mlTabAvailable: true, sessionAvailable: true })).toBe("unsupported");
-    expect(connectorStateFromHandshake({ installed: true, version: "1.1.16", mlTabAvailable: true, sessionAvailable: true })).toBe("connected");
+    expect(connectorStateFromHandshake({ installed: true, version: "1.1.17", mlTabAvailable: true, sessionAvailable: true })).toBe("connected");
   });
 
   it("bloqueia versões anteriores ao mínimo e avisa quando há uma versão mais recente", () => {
@@ -30,15 +30,22 @@ describe("distribuição do Conector PNR", () => {
     expect(connectorStateFromHandshake({ ...ready, version: "1.1.8" }, { minimumSupportedVersion: "1.1.0", latestVersion: "1.2.0" })).toBe("outdated");
     expect(connectorStateFromHandshake({ ...ready, version: "invalid" })).toBe("unsupported");
     expect(connectorStateFromHandshake({ ...ready, version: "99999999999999999999.0.0" })).toBe("unsupported");
-    expect(LATEST_CONNECTOR_VERSION).toBe("1.1.16");
-    expect(MINIMUM_SUPPORTED_CONNECTOR_VERSION).toBe("1.1.16");
+    expect(LATEST_CONNECTOR_VERSION).toBe("1.1.17");
+    expect(MINIMUM_SUPPORTED_CONNECTOR_VERSION).toBe("1.1.17");
   });
 
-  it("inclui o preview Vercel do projeto na injeção declarativa", () => {
-    expect(connectorManifest.host_permissions).toContain("https://*.vercel.app/*");
-    expect(connectorManifest.content_scripts).toContainEqual(expect.objectContaining({
-      matches: ["https://*.vercel.app/*"],
-      include_globs: ["https://alcpaineldeinteligencia-*-mrmattes-projects.vercel.app/*"],
-    }));
+  it("restringe a distribuição à produção Railway e ao Case Center", () => {
+    expect(connectorManifest.host_permissions).toEqual([
+      "https://envios.adminml.com/*",
+      "https://inteligenciaalc-production.up.railway.app/*",
+    ]);
+    expect(connectorManifest.content_scripts).toEqual([
+      expect.objectContaining({
+        matches: ["https://inteligenciaalc-production.up.railway.app/*"],
+        js: ["panel-bridge.js"],
+      }),
+    ]);
+    expect(JSON.stringify(connectorManifest)).not.toContain("vercel.app");
+    expect(JSON.stringify(connectorManifest)).not.toContain("localhost");
   });
 });

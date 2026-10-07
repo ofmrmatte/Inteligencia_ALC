@@ -9,22 +9,16 @@ import {
 } from "./case-center.js";
 
 const panelOrigins = new Set([
-  "https://inteligenciaalc.vercel.app",
-  "https://dashboardfatura.vercel.app",
   "https://inteligenciaalc-production.up.railway.app",
-  "http://localhost",
-  "http://127.0.0.1",
 ]);
-const previewHost = /^alcpaineldeinteligencia-[a-z0-9]+(?:-[a-z0-9]+)*-mrmattes-projects\.vercel\.app$/;
+
 const caseCenterListUrl = "https://envios.adminml.com/logistics/case-center/cases";
 const caseCenterListPath = "/logistics/case-center/cases";
 
 function allowedPanel(url) {
   try {
     const parsed = new URL(url);
-    return panelOrigins.has(parsed.origin)
-      || (parsed.protocol === "https:" && previewHost.test(parsed.hostname))
-      || (parsed.protocol === "http:" && (parsed.hostname === "localhost" || parsed.hostname === "127.0.0.1"));
+    return panelOrigins.has(parsed.origin);
   } catch {
     return false;
   }
@@ -436,12 +430,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
 chrome.runtime.onInstalled.addListener(() => {
   chrome.tabs.query({ url: [
-    "https://inteligenciaalc.vercel.app/*",
-    "https://dashboardfatura.vercel.app/*",
     "https://inteligenciaalc-production.up.railway.app/*",
-    "https://*.vercel.app/*",
-    "http://localhost/*",
-    "http://127.0.0.1/*",
   ] }).then((tabs) => Promise.all(tabs.filter((tab) => tab.id && allowedPanel(tab.url || "")).map((tab) => (
     chrome.scripting.executeScript({ target: { tabId: tab.id }, files: ["panel-bridge.js"] }).catch(() => undefined)
   )))).catch(() => undefined);

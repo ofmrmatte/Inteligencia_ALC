@@ -1,14 +1,16 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-const { createClient, redirect, signInWithPassword } = vi.hoisted(() => ({
+const { createClient, redirect, signInWithPassword, headers } = vi.hoisted(() => ({
   createClient: vi.fn(),
   redirect: vi.fn(() => { throw new Error("NEXT_REDIRECT"); }),
   signInWithPassword: vi.fn(),
+  headers: vi.fn(async () => new Headers({ "x-forwarded-for": "203.0.113.10" })),
 }));
 
 vi.mock("@/lib/supabase/config", () => ({ isSupabaseConfigured: () => true }));
 vi.mock("@/lib/supabase/server", () => ({ createClient }));
 vi.mock("next/navigation", () => ({ redirect }));
+vi.mock("next/headers", () => ({ headers }));
 
 import { signInAction } from "@/app/login/actions";
 

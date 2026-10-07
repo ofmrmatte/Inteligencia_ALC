@@ -43,7 +43,7 @@ describe("conector PNR na página atual do Mercado Livre", () => {
   it("lê o estado Nordic e aplica a competência enviada pelo painel", async () => {
     const response = await new Promise((resolve) => onMessage(
       { source: "alc-pnr-panel", type: "FETCH_PAGE", payload: { competence: "202608Q2", page: 1 } },
-      { url: "http://localhost:3000/bandeja-pnr" },
+      { url: "https://inteligenciaalc-production.up.railway.app/bandeja-pnr" },
       resolve,
     ));
 
@@ -72,7 +72,7 @@ describe("conector PNR na página atual do Mercado Livre", () => {
 
     const response = await new Promise((resolve) => onMessage(
       { source: "alc-pnr-panel", type: "FETCH_PAGE", payload: { competence: "202608Q2", page: 1 } },
-      { url: "http://localhost:3000/bandeja-pnr" },
+      { url: "https://inteligenciaalc-production.up.railway.app/bandeja-pnr" },
       resolve,
     ));
 
@@ -114,7 +114,7 @@ describe("conector PNR na página atual do Mercado Livre", () => {
 
     const response = await new Promise((resolve) => onMessage(
       { source: "alc-pnr-panel", type: "FETCH_TIMELINE", payload: { caseId: "197162479" } },
-      { url: "http://localhost:3000/bandeja-pnr" },
+      { url: "https://inteligenciaalc-production.up.railway.app/bandeja-pnr" },
       resolve,
     ));
 

@@ -35,5 +35,8 @@ jobs:
       - name: Tests
         run: npm test
 
+      - name: Production dependency security audit
+        run: npm audit --omit=dev --audit-level=high
+
       - name: Static performance audit
         run: npm run audit:perf

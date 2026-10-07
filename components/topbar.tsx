@@ -55,6 +55,8 @@ export function Topbar({ section, profile, canImport, onImport, onMobileMenu }: 
   const hydrated = useDashboardStore((state) => state.hydrated);
   const refreshing = useDashboardStore((state) => state.refreshing);
   const loadError = useDashboardStore((state) => state.loadError);
+  const clearLocalCache = useDashboardStore((state) => state.clearLocalCache);
+  const [signingOut, setSigningOut] = useState(false);
   const meta = SECTION_META[section];
   const last = data.imports[0];
   const [notificationOpen, setNotificationOpen] = useState(false);
@@ -126,6 +128,17 @@ export function Topbar({ section, profile, canImport, onImport, onMobileMenu }: 
     persistRead([...readIds, ...notifications.map((item) => item.id)]);
   }
 
+  async function handleSignOut() {
+    if (signingOut) return;
+    setSigningOut(true);
+    try {
+      await clearLocalCache();
+      await signOutAction();
+    } finally {
+      setSigningOut(false);
+    }
+  }
+
   return (
     <header className="topbar">
       <button className="icon-button mobile-only" onClick={onMobileMenu} aria-label="Abrir menu"><Menu size={20} /></button>
@@ -180,9 +193,7 @@ export function Topbar({ section, profile, canImport, onImport, onMobileMenu }: 
         </div>
 
         <button className="primary-button primary-button--small" onClick={onImport} disabled={!canImport} title={canImport ? "Importar dados" : "Importação restrita a perfis autorizados"}><HardDriveUpload size={17} />Importar</button>
-        <form action={signOutAction}>
-          <button className="icon-button" aria-label="Sair" title="Sair"><LogOut size={18} /></button>
-        </form>
+        <button className="icon-button" type="button" disabled={signingOut} onClick={() => void handleSignOut()} aria-label="Sair" title="Sair"><LogOut size={18} /></button>
       </div>
     </header>
   );

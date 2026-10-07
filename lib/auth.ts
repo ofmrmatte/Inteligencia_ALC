@@ -50,6 +50,13 @@ export const ROLE_LABELS: Record<UserRole, string> = {
 const GLOBAL_OPERATIONAL_ROLES: UserRole[] = ["director", "developer", "loss_supervisor", "loss_admin", "super_admin"];
 const USER_MANAGER_ROLES: UserRole[] = ["director", "developer", "loss_supervisor", "super_admin"];
 
+const USER_MANAGEMENT_MATRIX: Partial<Record<UserRole, readonly UserRole[]>> = {
+  super_admin: MANAGED_USER_ROLES,
+  developer: MANAGED_USER_ROLES,
+  director: MANAGED_USER_ROLES,
+  loss_supervisor: ["coordinator", "supervisor", "loss_admin"],
+};
+
 export function isUserRole(value: unknown): value is UserRole {
   return typeof value === "string" && USER_ROLES.includes(value as UserRole);
 }
@@ -64,4 +71,24 @@ export function canManageImports(profile: Pick<AuthProfile, "role" | "globalAcce
 
 export function canManageUsers(profile: Pick<AuthProfile, "role" | "globalAccess">) {
   return USER_MANAGER_ROLES.includes(profile.role);
+}
+
+
+export function manageableUserRoles(profile: Pick<AuthProfile, "role">): UserRole[] {
+  return [...(USER_MANAGEMENT_MATRIX[profile.role] ?? [])];
+}
+
+export function canManageRole(
+  profile: Pick<AuthProfile, "role">,
+  role: UserRole,
+) {
+  return manageableUserRoles(profile).includes(role);
+}
+
+export function canManageUserTransition(
+  profile: Pick<AuthProfile, "role">,
+  currentRole: UserRole,
+  nextRole: UserRole,
+) {
+  return canManageRole(profile, currentRole) && canManageRole(profile, nextRole);
 }

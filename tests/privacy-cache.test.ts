@@ -7,7 +7,15 @@ describe("privacy consent and dashboard cache", () => {
     expect(store).toContain("const memoryCaches = new Map<string, DashboardCache>()");
     expect(store).toContain("readCachedDashboard");
     expect(store).toContain('storageKey(cacheOwnerId, mode)');
-    expect(store).toContain('DATA_STALE_AFTER_MS = 24 * 60 * 60 * 1000');
+    expect(store).toContain('DATA_STALE_AFTER_MS = 8 * 60 * 60 * 1000');
+  });
+
+  it("limpa o cache operacional local no logout", () => {
+    const store = readFileSync("lib/store.ts", "utf8");
+    const topbar = readFileSync("components/topbar.tsx", "utf8");
+    expect(store).toContain("clearLocalCache");
+    expect(topbar).toContain("await clearLocalCache()");
+    expect(topbar).toContain("await signOutAction()");
   });
 
   it("mantém o cache operacional independente de cookies opcionais", () => {
