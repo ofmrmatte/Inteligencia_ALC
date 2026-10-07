@@ -77,8 +77,9 @@ interface BulkPersistResponse {
 const LEADER_KEY = "alc-pnr-background-sync-leader";
 
 async function readError(response: Response, fallback: string) {
-  const body = await response.json().catch(() => ({})) as { error?: string };
-  return body.error || fallback;
+  const body = await response.json().catch(() => ({})) as { error?: string; message?: string };
+  if (body.error === "MFA_REQUIRED" && body.message) return body.message;
+  return body.error || body.message || fallback;
 }
 
 class PnrBackgroundAuthError extends Error {
@@ -351,7 +352,9 @@ export function PnrCaseCenterBackgroundSync() {
           authBlocked = true;
           publishPnrBackgroundSyncStatus({
             phase: "paused",
-            message: "Sincronização de detalhes aguardando login",
+            message: error.status === 401
+              ? "Sincronização de detalhes aguardando login"
+              : `Sincronização pausada — ${error.message || "acesso não autorizado"}`,
           });
           return;
         }
