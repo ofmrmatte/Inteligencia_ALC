@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { roleModuleCap } from "@/lib/access-control";
-import { canManageRole, canManageUserTransition, canManageUsers, isUserRole, manageableUserRoles, type AuthProfile, type UserRole } from "@/lib/auth";
+import { canManageRole, canManageUserTransition, canManageUsers, isUserRole, manageableUserRoles, MANAGED_USER_ROLES, type AuthProfile, type UserRole } from "@/lib/auth";
 import { getCurrentProfile } from "@/lib/auth-server";
 import { normalizeText } from "@/lib/normalize";
 import { createAdminClient } from "@/lib/supabase/admin";
