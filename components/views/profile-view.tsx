@@ -3,6 +3,7 @@
 import { Building2, Mail, ShieldCheck, UserRound } from "lucide-react";
 import { ROLE_LABELS, hasFullAccess, type AuthProfile } from "@/lib/auth";
 import { formatNumber, KpiCard, Panel, PageIntro, StatusBadge } from "@/components/ui";
+import { MfaSecurityPanel } from "@/components/security/mfa-security-panel";
 import { useDashboardStore } from "@/lib/store";
 import { TableWrap } from "./shared";
 
@@ -33,6 +34,7 @@ export function ProfileView({ profile }: { profile: AuthProfile }) {
           </tbody>
         </TableWrap>
       </Panel>
+      <MfaSecurityPanel />
       <Panel title="Escopo operacional" subtitle="Bases e siglas liberadas por RLS">
         <TableWrap>
           <thead><tr><th>Tipo</th><th>Valor</th></tr></thead>
