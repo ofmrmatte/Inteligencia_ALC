@@ -1,4 +1,5 @@
 import { createClient } from "@supabase/supabase-js";
+import { createRailwayHybridClient } from "@/lib/db/railway-data-client";
 import { requireSupabaseConfig } from "@/lib/supabase/config";
 
 export function createAdminClient() {
@@ -8,10 +9,12 @@ export function createAdminClient() {
     throw new Error("SUPABASE_SERVICE_ROLE_KEY não configurada no servidor.");
   }
 
-  return createClient(supabaseUrl, serviceRoleKey, {
+  const supabase = createClient(supabaseUrl, serviceRoleKey, {
     auth: {
       autoRefreshToken: false,
       persistSession: false,
     },
   });
+
+  return createRailwayHybridClient(supabase);
 }
