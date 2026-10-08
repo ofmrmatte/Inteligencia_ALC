@@ -43,8 +43,8 @@ describe("security hardening", () => {
   });
 
   it("restringe o Conector PNR somente à produção Railway", () => {
-    const manifest = readFileSync("extension-pnr/src/manifest.json", "utf8");
-    const bridge = readFileSync("extension-pnr/src/panel-bridge.js", "utf8");
+    const manifest = readFileSync("../../extensions/pnr-connector/src/manifest.json", "utf8");
+    const bridge = readFileSync("../../extensions/pnr-connector/src/panel-bridge.js", "utf8");
     expect(manifest).toContain("inteligenciaalc-production.up.railway.app");
     expect(manifest).not.toContain("*.vercel.app");
     expect(manifest).not.toContain("localhost");

@@ -5,5 +5,8 @@
   "type": "module",
   "scripts": {
     "build": "node build.mjs"
+  },
+  "dependencies": {
+    "fflate": "^0.8.3"
   }
 }

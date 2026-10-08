@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { normalizeCaseCenterPage, parseCaseTimelineHtml, periodDetails } from "../extension-pnr/src/case-center.js";
+import { normalizeCaseCenterPage, parseCaseTimelineHtml, periodDetails } from "../../../extensions/pnr-connector/src/case-center.js";
 
 function casePayload() {
   const fields = [

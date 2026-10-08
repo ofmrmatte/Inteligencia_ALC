@@ -3,7 +3,7 @@ import {
   extractCaseCenterDetail,
   findLabeledValue,
   normalizeCaseTimelineEvents,
-} from "../extension-pnr/src/case-center.js";
+} from "../../../extensions/pnr-connector/src/case-center.js";
 import {
   awaitingReceiptCase,
   reviewedBillingCase,

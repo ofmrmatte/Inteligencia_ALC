@@ -7,7 +7,7 @@ const root = dirname(fileURLToPath(import.meta.url));
 const output = join(root, "dist");
 const resolvedOutput = await realpath(output).catch(() => output);
 if (relative(root, resolvedOutput).startsWith(`..${sep}`) || relative(root, resolvedOutput) === ".." || resolvedOutput === root) {
-  throw new Error("Destino do build fora de extension-pnr.");
+  throw new Error("Destino do build fora de extensions/pnr-connector.");
 }
 const manifest = JSON.parse(await readFile(join(root, "src", "manifest.json"), "utf8"));
 const { version } = JSON.parse(await readFile(join(root, "package.json"), "utf8"));
@@ -44,7 +44,7 @@ for (const [file, content] of distributedFiles) {
   await writeFile(join(output, file), content);
   archive[`alc-pnr-connector/${file}`] = new Uint8Array(content);
 }
-const downloads = join(root, "..", "public", "downloads");
+const downloads = join(root, "..", "..", "apps", "inteligencia", "public", "downloads");
 await mkdir(downloads, { recursive: true });
 await writeFile(join(downloads, `alc-pnr-connector-v${version}.zip`), zipSync(archive, { level: 6 }));
-console.log(`ALC PNR Connector v${version} gerado em extension-pnr/dist e public/downloads`);
+console.log(`ALC PNR Connector v${version} gerado em extensions/pnr-connector/dist e apps/inteligencia/public/downloads`);

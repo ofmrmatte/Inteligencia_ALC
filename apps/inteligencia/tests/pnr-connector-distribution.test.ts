@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import connectorManifest from "@/extension-pnr/src/manifest.json";
+import connectorManifest from "alc-pnr-connector/src/manifest.json";
 import {
   connectorStateFromHandshake,
   compareConnectorVersions,

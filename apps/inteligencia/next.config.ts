@@ -1,4 +1,7 @@
 import type { NextConfig } from "next";
+import { fileURLToPath } from "node:url";
+
+const monorepoRoot = fileURLToPath(new URL("../..", import.meta.url));
 
 const isProduction = process.env.NODE_ENV === "production";
 
@@ -30,6 +33,8 @@ const securityHeaders = [
 ];
 
 const nextConfig: NextConfig = {
+  outputFileTracingRoot: monorepoRoot,
+  turbopack: { root: monorepoRoot },
   poweredByHeader: false,
   reactStrictMode: true,
   async headers() {

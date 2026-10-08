@@ -1,113 +1,56 @@
-# Inteligência ALC
+# ALC — monorepo
 
-Plataforma web para análise operacional, prevenção de perdas e apoio à tomada de decisão em operações logísticas.
+Repositório de aplicações operacionais da ALC, organizado com **npm workspaces**. O painel Inteligência ALC e o Comunicador têm diretórios e responsabilidades separados; a extensão de coleta pode atender às duas aplicações.
 
-> Projeto de portfólio desenvolvido a partir de necessidades operacionais reais. Informações sensíveis, credenciais e dados de usuários não devem ser versionados neste repositório.
+| Diretório | Workspace | Situação |
+| --- | --- | --- |
+| `apps/inteligencia` | `alc-painel-inteligencia` | Painel existente, com APIs, autenticação, RH, testes, scripts e migrations próprios. |
+| `apps/comunicador` | `@alc/comunicador` | Estrutura reservada; funcionalidades e serviço ainda serão implementados. |
+| `extensions/pnr-connector` | `alc-pnr-connector` | Extensão existente do Case Center. |
+| `packages` | — | Espaço para futuros contratos ou bibliotecas compartilhados. |
 
-## Sobre o projeto
-
-A Inteligência ALC centraliza dados provenientes de diferentes planilhas e fontes operacionais, transforma esses dados em informações auditáveis e disponibiliza indicadores para acompanhamento de PNR, pré-faturamento, risco LM, desempenho de motoristas e conciliação de registros.
-
-O projeto foi estruturado para substituir fluxos manuais e cruzamentos descentralizados por uma aplicação web com autenticação, persistência de dados, regras de acesso e validações de negócio.
-
-## Principais funcionalidades
-
-- Importação de arquivos `.xlsx`, `.xls`, `.xlsm`, `.csv` e `.zip`.
-- Processamento e consolidação de dados operacionais.
-- Gestão de PNR e acompanhamento de status.
-- Análise de pré-faturamento e descontos.
-- Indicadores de risco LM.
-- Acompanhamento de desempenho de motoristas.
-- Conciliação de IDs e tratamento de duplicidades.
-- Histórico de importações e rastreabilidade dos dados.
-- Controle de acesso por perfil e escopo operacional.
-- Persistência de dados e arquivos no Supabase.
-
-## Regras de negócio relevantes
-
-- Cada lote importado é processado de forma independente.
-- Cruzamentos entre lotes utilizam chaves explícitas.
-- IDs repetidos são conciliados e sinalizados, evitando somas silenciosas.
-- Dados operacionais são segmentados conforme perfil, base e sigla.
-- Macros VBA não são executadas; a aplicação lê os dados tabulares e reproduz os cruzamentos por regras auditáveis.
-
-## Arquitetura e stack
-
-### Front-end
-- Next.js 16
-- React 19
-- TypeScript
-- Zustand
-- Recharts
-- Lucide React
-
-### Back-end e dados
-- Next.js Server APIs
-- Supabase Auth
-- Supabase Database
-- Supabase Storage
-- PostgreSQL
-- Row Level Security (RLS)
-- Zod para validação de dados
-
-### Qualidade
-- ESLint
-- TypeScript type checking
-- Vitest
-- Build automatizado com Next.js
-
-### Deploy
-- Vercel
-
-## Estrutura do projeto
-
-```text
-app/          rotas, páginas e APIs da aplicação
-components/   componentes de interface
-lib/          regras, serviços e utilitários
-public/       arquivos públicos
-scripts/      rotinas auxiliares e sincronizações
-supabase/     migrations e configuração de banco
-tests/        testes automatizados
-```
+O monorepo compartilha a instalação e o lockfile; cada workspace declara suas dependências. Ter o mesmo repositório não implica compartilhar processos, tokens ou acesso irrestrito aos bancos.
 
 ## Execução local
 
-Requisitos:
+Requisito: Node.js 22 ou superior.
 
-- Node.js 20+
-- Projeto Supabase configurado
-
-```bash
-npm install
-npm run dev
-```
-
-Crie `.env.local` a partir de `.env.example` e informe apenas credenciais do seu próprio ambiente.
-
-## Validação
+Na raiz:
 
 ```bash
-npm run lint
-npm run typecheck
-npm test
-npm run build
+npm ci
+cp apps/inteligencia/.env.example apps/inteligencia/.env.local
+npm run dev:inteligencia
 ```
 
-## Competências demonstradas
+Informe as variáveis do seu ambiente apenas em `apps/inteligencia/.env.local`. O exemplo contém valores fictícios. As variáveis do Comunicador serão próprias, definidas quando sua aplicação for implementada.
 
-Este projeto envolve levantamento de requisitos, modelagem de regras de negócio, desenvolvimento web full stack, integração com banco de dados, autenticação, controle de acesso, processamento de arquivos, testes, debugging, deploy e evolução contínua de produto.
+## Comandos
 
-O desenvolvimento utiliza ferramentas de IA generativa como apoio à implementação, revisão, refatoração e testes, mantendo a definição de requisitos, regras operacionais e validação funcional como parte do processo de engenharia do projeto.
+| Comando na raiz | Destino |
+| --- | --- |
+| `npm run dev` ou `npm run dev:inteligencia` | Desenvolvimento do painel. |
+| `npm run build` ou `npm run build:inteligencia` | Build do painel e geração do pacote da extensão. |
+| `npm start` ou `npm run start:inteligencia` | Servidor do painel. |
+| `npm run extension:build` | Extensão em `extensions/pnr-connector/dist` e ZIP para download pelo painel. |
+| `npm run lint` | Scripts de lint definidos pelos workspaces. |
+| `npm run typecheck` | Scripts de typecheck definidos pelos workspaces. |
+| `npm test` | Testes definidos pelos workspaces; os testes do conector continuam junto aos testes do painel. |
+| `npm run audit:perf` | Auditoria estática do painel. |
 
-## Segurança
+Os comandos `prefatura:backfill`, `drivers:sync` e `test:watch` continuam disponíveis na raiz, direcionados ao painel. Eles devem ser executados somente com o contexto e ambiente apropriados.
 
-- Não versione `.env.local` ou arquivos com credenciais reais.
-- Utilize variáveis de ambiente para chaves e segredos.
-- Dados operacionais reais e informações pessoais não devem ser adicionados ao repositório público.
-- A `SUPABASE_SERVICE_ROLE_KEY` deve existir somente em ambiente server-side.
+O workspace do Comunicador ainda não oferece `dev`, `build` ou `start`; reservar sua estrutura não cria uma instância funcional.
 
-## Autor
+## Publicação e próximos passos
 
-**Matheus Ferreira Folgado**  
-GitHub: [@ofmrmatte](https://github.com/ofmrmatte)
+O contrato do Railway permanece: raiz do repositório, `npm run build` e `npm start`, publicando apenas o painel. A separação dos serviços e os filtros de arquivos estão descritos em [docs/monorepo.md](docs/monorepo.md).
+
+O acesso futuro ao Comunicador ficará no painel e abrirá uma nova aba. A Administração ficará dentro do Comunicador, na mesma aba.
+
+- [Painel Inteligência ALC](apps/inteligencia/README.md)
+- [Workspace do Comunicador](apps/comunicador/README.md)
+- [Escopo inicial do Comunicador](docs/comunicador-escopo.md)
+- [Conector PNR](extensions/pnr-connector/README.md)
+
+Não versione credenciais, dados pessoais ou arquivos operacionais reais.

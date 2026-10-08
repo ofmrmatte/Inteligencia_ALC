@@ -13,7 +13,7 @@ Extensão Chrome unpacked usada somente para consultar a Bandeja PNR em uma aba 
 
 Ao atualizar, desative a versão anterior em `chrome://extensions` antes de carregar a nova pasta.
 
-O build local `npm run extension:build` também gera `extension-pnr/dist` para instalação de desenvolvimento e o ZIP em `public/downloads`. O build do painel gera o pacote automaticamente. O handshake retorna apenas disponibilidade da aba/sessão e versão, nunca cookies, tokens ou CSRF.
+O build local `npm run extension:build`, executado na raiz do monorepo, também gera `extensions/pnr-connector/dist` para instalação de desenvolvimento e o ZIP em `apps/inteligencia/public/downloads`. O build do painel gera o pacote automaticamente. O handshake retorna apenas disponibilidade da aba/sessão e versão, nunca cookies, tokens ou CSRF.
 
 ## Limites de segurança
 

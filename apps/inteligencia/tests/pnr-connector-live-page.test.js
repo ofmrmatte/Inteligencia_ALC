@@ -36,7 +36,7 @@ beforeAll(async () => {
       executeScript: async ({ func, args }) => [{ result: await func(...args) }],
     },
   });
-  await import("../extension-pnr/src/service-worker.js");
+  await import("../../../extensions/pnr-connector/src/service-worker.js");
 });
 
 describe("conector PNR na página atual do Mercado Livre", () => {

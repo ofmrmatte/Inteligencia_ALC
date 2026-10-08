@@ -1,55 +1,26 @@
 {
-  "name": "alc-painel-inteligencia",
+  "name": "alc-monorepo",
   "version": "1.0.0",
   "private": true,
   "type": "module",
-  "scripts": {
-    "predev": "npm run extension:build",
-    "dev": "next dev",
-    "build": "npm run extension:build && node scripts/prepare-report-build.mjs && next build",
-    "start": "next start",
-    "lint": "eslint .",
-    "typecheck": "tsc --noEmit",
-    "test": "vitest run",
-    "audit:perf": "node scripts/performance-audit.mjs",
-    "extension:build": "npm --prefix extension-pnr run build",
-    "prefatura:backfill": "tsx scripts/backfill-prefatura-enrichment.ts",
-    "drivers:sync": "tsx scripts/sync-alc-drivers.ts",
-    "test:watch": "vitest"
-  },
+  "workspaces": ["apps/*", "extensions/*", "packages/*"],
   "engines": {
     "node": ">=22"
   },
-  "dependencies": {
-    "@supabase/ssr": "^0.12.4",
-    "@supabase/supabase-js": "^2.112.3",
-    "clsx": "^2.1.1",
-    "date-fns": "^4.4.0",
-    "fflate": "^0.8.3",
-    "idb-keyval": "^6.3.0",
-    "lucide-react": "^1.31.0",
-    "next": "^16.3.5",
-    "node-unrar-js": "^2.0.2",
-    "pg": "^8.13.1",
-    "react": "^19.2.8",
-    "react-dom": "^19.2.8",
-    "react-dropzone": "^20.1.0",
-    "recharts": "^3.10.1",
-    "sonner": "^2.0.8",
-    "xlsx": "https://cdn.sheetjs.com/xlsx-0.20.3/xlsx-0.20.3.tgz",
-    "zod": "^4.4.3",
-    "zustand": "^5.0.15"
-  },
-  "devDependencies": {
-    "@types/node": "^26.2.0",
-    "@types/pg": "^8.11.10",
-    "@types/react": "^19.2.18",
-    "@types/react-dom": "^19.2.4",
-    "@vitest/coverage-v8": "^4.1.10",
-    "eslint": "^9.39.5",
-    "eslint-config-next": "^16.3.1",
-    "tsx": "^4.23.12",
-    "typescript": "^6.0.3",
-    "vitest": "^4.1.10"
+  "scripts": {
+    "dev": "npm run dev --workspace=alc-painel-inteligencia --",
+    "dev:inteligencia": "npm run dev --workspace=alc-painel-inteligencia --",
+    "build": "npm run build --workspace=alc-painel-inteligencia --",
+    "build:inteligencia": "npm run build --workspace=alc-painel-inteligencia --",
+    "start": "npm run start --workspace=alc-painel-inteligencia --",
+    "start:inteligencia": "npm run start --workspace=alc-painel-inteligencia --",
+    "lint": "npm run lint --workspaces --if-present",
+    "typecheck": "npm run typecheck --workspaces --if-present",
+    "test": "npm run test --workspaces --if-present",
+    "test:watch": "npm run test:watch --workspace=alc-painel-inteligencia",
+    "audit:perf": "npm run audit:perf --workspace=alc-painel-inteligencia",
+    "extension:build": "npm run build --workspace=alc-pnr-connector",
+    "prefatura:backfill": "npm run prefatura:backfill --workspace=alc-painel-inteligencia --",
+    "drivers:sync": "npm run drivers:sync --workspace=alc-painel-inteligencia --"
   }
 }

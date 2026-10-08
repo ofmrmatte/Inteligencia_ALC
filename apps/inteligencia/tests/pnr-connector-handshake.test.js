@@ -50,7 +50,7 @@ beforeAll(async () => {
       return [{ result: probeResult }];
     } },
   });
-  serviceWorker = await import("../extension-pnr/src/service-worker.js");
+  serviceWorker = await import("../../../extensions/pnr-connector/src/service-worker.js");
 });
 
 beforeEach(() => {
@@ -231,7 +231,7 @@ describe("handshake do Conector PNR", () => {
   });
 
   it("registra a ponte somente na produção Railway", async () => {
-    const source = await readFile(new URL("../extension-pnr/src/panel-bridge.js", import.meta.url), "utf8");
+    const source = await readFile(new URL("../../../extensions/pnr-connector/src/panel-bridge.js", import.meta.url), "utf8");
     const listensAt = (origin) => {
       let registered = false;
       const window = { location: { origin }, addEventListener: () => { registered = true; } };

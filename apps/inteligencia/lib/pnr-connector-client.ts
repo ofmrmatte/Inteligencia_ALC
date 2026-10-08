@@ -1,6 +1,6 @@
 "use client";
 
-import connectorPackage from "@/extension-pnr/package.json";
+import connectorPackage from "alc-pnr-connector/package.json";
 
 export const MINIMUM_SUPPORTED_CONNECTOR_VERSION = "1.1.17";
 export const LATEST_CONNECTOR_VERSION = connectorPackage.version;

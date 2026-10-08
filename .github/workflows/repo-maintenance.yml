@@ -1,10 +1,7 @@
 name: one-time repo maintenance
 
 on:
-  push:
-    branches: [main]
-    paths:
-      - .github/workflows/repo-maintenance.yml
+  workflow_dispatch:
 
 permissions:
   contents: write
@@ -30,6 +27,7 @@ jobs:
         run: npm ci
 
       - name: Apply deterministic React 19 cleanup
+        working-directory: apps/inteligencia
         shell: bash
         run: |
           python3 <<'PY'
@@ -120,6 +118,6 @@ jobs:
           fi
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add components/views
+          git add apps/inteligencia/components/views
           git commit -m "Resolve React 19 lint debt in active views"
           git push origin HEAD:main
