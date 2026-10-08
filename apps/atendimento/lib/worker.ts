@@ -254,7 +254,9 @@ async function incoming(
   if (!text)
     answer = {
       state: { step: "human" },
-      reply: "Recebemos seu anexo. Vou encaminhar à equipe para análise.",
+      reply: channel === "driver"
+        ? "Para tratar a PNR, a evidência é a acareação manual entregue ao dispatcher responsável. Não é necessário enviar arquivos por este canal. Vou direcionar sua mensagem ao setor de Loss."
+        : "Recebemos seu anexo. Vou encaminhar à equipe para análise.",
       handoff: true,
     };
   else if (channel === "driver") {
@@ -294,7 +296,12 @@ async function incoming(
   if ("result" in answer.state)
     await transaction.query(
       "INSERT INTO alc_atendimento.audit(action,target,data) VALUES('treatment_recorded',$1,$2)",
-      [conversation.id, { result: answer.state.result }],
+      [conversation.id, {
+        result: answer.state.result,
+        caseCenterStatus: "unchanged",
+        complaintClosure: "not_verified",
+        // Resolve the conversation, never mutate the Mercado Livre PNR.
+      }],
     );
 }
 export async function processEvents() {
