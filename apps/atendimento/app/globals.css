@@ -1567,3 +1567,33 @@ dd {
   .agent-instruction-top { flex-direction:column;gap:12px; }
   .agent-instruction-top .actions { width:100%; }
 }
+
+
+/* Persistent evidence folders and selectable optional exports */
+.evidence-page .page-tools { align-items:center; }
+.evidence-section-head { display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:12px;margin-bottom:14px; }
+.evidence-section-head p { margin:2px 0 0; }
+.evidence-folders { display:flex;flex-direction:column;gap:8px; }
+.evidence-folder { border:1px solid var(--line);border-radius:9px;overflow:hidden; }
+.evidence-folder-row { display:flex;align-items:center;gap:10px;padding:9px 12px; }
+.evidence-folder-row > input { width:18px;height:18px;flex-shrink:0;cursor:pointer; }
+.evidence-folder-open { display:flex;align-items:center;text-align:left;gap:13px;
+  width:100%;background:transparent;border:0;padding:6px 2px;color:inherit;cursor:pointer; }
+.evidence-folder-open svg:first-child { color:var(--red); }
+.evidence-folder-open >span { display:flex;flex-direction:column;gap:4px;flex:1;min-width:0; }
+.evidence-folder-open strong { font-size:14px;overflow-wrap:anywhere; }
+.evidence-folder-open small { color:var(--muted);font-size:11px; }
+.evidence-folder-content { padding:15px;border-top:1px solid var(--line); }
+.evidence-print-grid { display:grid;grid-template-columns:repeat(auto-fill,minmax(190px,1fr));gap:15px; }
+.evidence-print { border:1px solid var(--line);border-radius:8px;overflow:hidden;background:var(--surface); }
+.evidence-print > a { display:block;background:#efeae2;overflow:hidden; }
+.evidence-print img { width:100%;height:220px;object-fit:contain;display:block; }
+.evidence-print > div { display:flex;align-items:center;justify-content:space-between;gap:7px;flex-wrap:wrap;padding:10px; }
+.evidence-print strong { font-size:11px; }
+.evidence-print >div a { font-size:11px;text-decoration:underline; }
+@media(max-width:600px){
+ .evidence-section-head .actions { width:100%;justify-content:flex-start; }
+ .evidence-folder-content { padding:9px; }
+ .evidence-print-grid { grid-template-columns:repeat(2,minmax(0,1fr));gap:8px; }
+ .evidence-print img { height:160px; }
+}

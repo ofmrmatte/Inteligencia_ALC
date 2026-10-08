@@ -49,3 +49,12 @@ O arquivo PNG apresenta um **layout inspirado no WhatsApp Web**, mas identifica 
 - Paginação é determinística, com verificação para não suprimir nenhum caractere ou mensagem. Em conversas muito longas, divide a fala em trechos rotulados. Se o histórico superar o limite seguro de 500 mensagens ou 80 páginas, a exportação falha explicitamente, sem cortar o comprovante.
 - A pasta é entregue **dentro do ZIP baixado**. Não há escrita em disco efêmero do Railway nem retenção automática desses arquivos em um bucket. O banco continua sendo a origem do histórico real e a criação do pacote gera auditoria.
 - O simulador de respostas foi removido da demonstração; os cards exibem o roteiro completo sem um teste conversacional adicional.
+
+## Arquivamento persistente por ID (correção posterior)
+A aba **Comprovantes** é o local principal dos arquivos — **não** o ZIP. Após concluir a tratativa, o atendente aciona **Criar pasta**. As imagens curtas são geradas de mensagens confirmadas, salvas no PostgreSQL do Atendimento e passam a aparecer na lista **Pastas de PNRs**, identificadas pelo próprio `case_id`. O atendente abre a pasta no painel, vê os thumbnails, abre cada print e pode baixar um PNG isolado.
+
+A exportação ZIP é **opcional**: selecionar explicitamente até dez pastas e clicar **Baixar ZIP**. Cada pasta mantém seu ID e manifesto com hashes no arquivo exportado. Não ocorre download automático ao criar ou abrir uma pasta.
+
+Persistência: tabelas `alc_atendimento.evidence_folders` e `alc_atendimento.evidence_images`, criadas pela migração idempotente de pré-deploy; não se usa armazenamento efêmero do web server. Os dados têm escopo operacional por base/sigla, exigem sessão autenticada e suas operações relevantes são auditadas. Imagens anteriores não são substituídas silenciosamente em caso de divergência do histórico. Cada pasta aceita até 80 prints e 25 MB; ZIP opcional tem limites próprios. Mensagens não verificadas continuam bloqueando o arquivamento.
+
+O projeto temporário PR70 foi retirado do ar na Railway com exclusão do serviço de preview. O projeto vazio não possui serviços, volumes nem buckets; exclusão do contêiner de projeto depende do painel Railway.

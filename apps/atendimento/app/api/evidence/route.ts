@@ -2,23 +2,33 @@ import { currentProfile, scopeFor } from "@/lib/auth";
 import { inboxScopeSql } from "@/lib/inbox";
 import { db } from "@/lib/db";
 
-export const runtime = "nodejs";
-export const dynamic = "force-dynamic";
+export const runtime="nodejs";
+export const dynamic="force-dynamic";
 
-export async function GET() {
-  const profile = await currentProfile();
-  const values: unknown[] = [];
-  const scope = inboxScopeSql(await scopeFor(profile), values);
-  const result = await db().query(
-    `SELECT c.id,c.phone,c.case_id,c.updated_at,c.status,
-       count(m.id)::int AS message_count
-     FROM alc_atendimento.conversations c
-     LEFT JOIN alc_atendimento.messages m ON m.conversation_id=c.id AND m.direction<>'note'
-     WHERE ${scope} AND c.channel='client' AND c.status='resolved' AND c.case_id IS NOT NULL
-     GROUP BY c.id
-     ORDER BY c.updated_at DESC,c.id DESC LIMIT 200`, values,
-  );
-  return Response.json({ records: result.rows, limit: 200 }, {
-    headers: { "Cache-Control": "private, no-store" },
-  });
+export async function GET(){
+ const profile=await currentProfile();
+ const scope=await scopeFor(profile);
+ const folderParams:unknown[]=[];
+ const folderScope=inboxScopeSql(scope,folderParams,"e");
+ const folderResult=await db().query(
+   `SELECT e.case_id,e.conversation_id,e.phone,e.print_count,e.message_count,e.created_at,
+    e.source_hash,e.base_key,e.sigla
+    FROM alc_atendimento.evidence_folders e
+    WHERE ${folderScope}
+    ORDER BY e.created_at DESC,e.case_id ASC LIMIT 200`,folderParams,
+ );
+ const pendingParams:unknown[]=[];
+ const pendingScope=inboxScopeSql(scope,pendingParams,"c");
+ const pendingResult=await db().query(
+   `SELECT c.id,c.case_id,c.phone,c.updated_at,c.base_key,c.sigla
+    FROM alc_atendimento.conversations c
+    WHERE ${pendingScope} AND c.channel='client' AND c.status='resolved'
+      AND c.case_id IS NOT NULL
+      AND NOT EXISTS(SELECT 1 FROM alc_atendimento.evidence_folders f WHERE f.case_id=c.case_id)
+    ORDER BY c.updated_at DESC,c.id DESC LIMIT 100`,pendingParams,
+ );
+ return Response.json({
+   folders:folderResult.rows, pending:pendingResult.rows,
+   folderLimit:200,pendingLimit:100,
+ },{headers:{"Cache-Control":"private, no-store"}});
 }

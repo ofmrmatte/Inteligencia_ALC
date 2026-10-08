@@ -49,4 +49,29 @@ CREATE TABLE IF NOT EXISTS alc_atendimento.login_tickets(ticket_hash text PRIMAR
 CREATE TABLE IF NOT EXISTS alc_atendimento.audit (id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY, actor_id uuid, action text NOT NULL, target text, data jsonb NOT NULL DEFAULT '{}', created_at timestamptz NOT NULL DEFAULT now());
 INSERT INTO alc_atendimento.settings(key,value) VALUES('automation','{"driverNotifications":false,"clientOutreach":false,"bot":true,"operatorName":"Equipe Loss","intervalMinutes":30}') ON CONFLICT DO NOTHING;
 INSERT INTO alc_atendimento.settings(key,value) VALUES('source','{"baselineComplete":false,"lastSync":null}') ON CONFLICT DO NOTHING;
+-- Persistent evidence folders; images are private and stored in Postgres, not the web server filesystem.
+CREATE TABLE IF NOT EXISTS alc_atendimento.evidence_folders (
+  case_id text PRIMARY KEY REFERENCES alc_atendimento.cases(case_id),
+  conversation_id uuid NOT NULL REFERENCES alc_atendimento.conversations(id),
+  phone text NOT NULL,
+  base_key text NOT NULL DEFAULT '',
+  sigla text NOT NULL DEFAULT '',
+  source_hash text NOT NULL CHECK (length(source_hash)=64),
+  message_count integer NOT NULL CHECK (message_count>=3),
+  print_count integer NOT NULL CHECK (print_count BETWEEN 1 AND 80),
+  manifest jsonb NOT NULL,
+  created_by uuid,
+  created_at timestamptz NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS atendimento_evidence_scope ON alc_atendimento.evidence_folders(base_key,sigla,created_at DESC);
+CREATE TABLE IF NOT EXISTS alc_atendimento.evidence_images (
+  case_id text NOT NULL REFERENCES alc_atendimento.evidence_folders(case_id) ON DELETE CASCADE,
+  page_number integer NOT NULL CHECK(page_number BETWEEN 1 AND 80),
+  filename text NOT NULL,
+  sha256 text NOT NULL CHECK(length(sha256)=64),
+  image_png bytea NOT NULL,
+  created_at timestamptz NOT NULL DEFAULT now(),
+  PRIMARY KEY(case_id,page_number),
+  UNIQUE(case_id,filename)
+);
 COMMIT;
