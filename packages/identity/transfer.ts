@@ -47,6 +47,15 @@ export function ticketHash(ticket: string) {
 // It carries no tokens or permissions and cannot establish a session by itself.
 export const ENTRY_COOKIE = "alc_atendimento_entry";
 export const ENTRY_SECONDS = 12 * 60 * 60;
+export function entrySessionKey(sessionId: string) {
+  return `sso_session_${sessionId}`;
+}
+export function validEntryGrant(value: unknown, profileId: string, now = Date.now()) {
+  if (!value || typeof value !== "object") return false;
+  const grant = value as Record<string, unknown>;
+  return grant.active === true && grant.profileId === profileId &&
+    typeof grant.expiresAt === "number" && Number.isFinite(grant.expiresAt) && grant.expiresAt > now;
+}
 export function entryReceipt(
   profileId: string,
   sessionId: string,

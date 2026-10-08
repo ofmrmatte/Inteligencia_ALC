@@ -5,6 +5,7 @@ import { redirect } from "next/navigation";
 import { z } from "zod";
 import { isSupabaseConfigured } from "@/lib/supabase/config";
 import { createClient } from "@/lib/supabase/server";
+import { revokeAtendimentoSessions } from "@/lib/atendimento-access";
 
 export interface LoginState {
   error?: string;
@@ -79,6 +80,17 @@ export async function signInAction(_state: LoginState, formData: FormData): Prom
   }
 
   const supabase = await createClient();
+  const previous = await supabase.auth.getClaims();
+  if (previous.error) {
+    return { error: "Não foi possível verificar a sessão anterior. Tente novamente antes de trocar de conta." };
+  }
+  if (previous.data?.claims.sub) {
+    try {
+      await revokeAtendimentoSessions(previous.data.claims.sub, previous.data.claims.session_id);
+    } catch {
+      return { error: "Não foi possível encerrar a sessão anterior. Tente novamente antes de trocar de conta." };
+    }
+  }
   const { data, error } = await supabase.auth.signInWithPassword(parsed.data);
 
   if (error) {
@@ -112,7 +124,12 @@ export async function signInAction(_state: LoginState, formData: FormData): Prom
 export async function signOutAction() {
   if (isSupabaseConfigured()) {
     const supabase = await createClient();
-    await supabase.auth.signOut();
+    const verified = await supabase.auth.getClaims();
+    if (verified.error) throw new Error("Não foi possível verificar sua sessão. Tente novamente.");
+    if (verified.data?.claims.sub)
+      await revokeAtendimentoSessions(verified.data.claims.sub, verified.data.claims.session_id);
+    const { error } = await supabase.auth.signOut();
+    if (error) throw new Error("Não foi possível encerrar sua sessão. Tente novamente.");
   }
   redirect("/login");
 }

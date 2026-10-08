@@ -4,6 +4,7 @@ import { useEffect, useMemo, useState } from "react";
 import { createPortal } from "react-dom";
 import { KeyRound, LoaderCircle, LogOut, ShieldCheck } from "lucide-react";
 import { createClient } from "@/lib/supabase/client";
+import { signOutAction } from "@/app/login/actions";
 import { useDashboardStore } from "@/lib/store";
 
 type Phase = "loading" | "verify" | "success";
@@ -99,8 +100,9 @@ export function MfaLoginModal({ nextPath }: { nextPath: string }) {
     setBusy(true);
     try {
       await clearLocalCache();
-      await supabase.auth.signOut();
-      window.location.replace("/login");
+      await signOutAction();
+    } catch {
+      setError("Não foi possível encerrar sua sessão. Tente novamente.");
     } finally {
       setBusy(false);
     }

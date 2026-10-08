@@ -14,14 +14,10 @@ export function Dispatches() {
   const { data, error } = useData<{ records: Job[] }>("outbox", 8_000);
   return (
     <main className="page">
-      <div className="page-title">
-        <div>
-          <p className="eyebrow">MENSAGENS OPERACIONAIS</p>
-          <h1>Disparos e histórico</h1>
+      <div className="page-tools">
           <p className="muted">
             Notificações de novas PNRs e contatos de tratativa.
           </p>
-        </div>
       </div>
       <div className="notice">
         Um contato inicial por PNR e telefone. Envios com resposta incerta do

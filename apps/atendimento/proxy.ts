@@ -7,6 +7,7 @@ export async function proxy(request: NextRequest) {
   if (
     path.startsWith("/webhooks/") ||
     path === "/health" ||
+    path === "/manifest.webmanifest" ||
     path === "/auth/transfer" ||
     path === "/acesso-indisponivel"
   )

@@ -147,25 +147,6 @@ export function Conversations({
   }
   return (
     <main className="page inbox-page">
-      <div className="page-title">
-        <div>
-          <p className="eyebrow">CAIXA DE ATENDIMENTO</p>
-          <h1>Conversas</h1>
-        </div>
-        <div className="title-actions">
-          <span className="badge">
-            {data?.total ?? "—"} conversas · {data?.unread ?? "—"} não lidas
-          </span>
-          <button
-            className="icon-button"
-            title="Atualizar conversas"
-            aria-label="Atualizar conversas"
-            onClick={() => void refresh()}
-          >
-            <RefreshCw size={17} />
-          </button>
-        </div>
-      </div>
       <div className="inbox-filters">
         <div className="segmented" aria-label="Visão da caixa">
           {[
@@ -222,15 +203,25 @@ export function Conversations({
             ))}
           </select>
         </label>
-        <label>
-          Etiqueta
-          <input
-            value={label}
-            maxLength={40}
-            onChange={(e) => changed(setLabel, e.target.value)}
-            placeholder="Filtrar etiqueta"
-          />
-        </label>
+        <div className="inbox-label-filter">
+          <label>
+            Etiqueta
+            <input
+              value={label}
+              maxLength={40}
+              onChange={(e) => changed(setLabel, e.target.value)}
+              placeholder="Filtrar etiqueta"
+            />
+          </label>
+          <button
+            className="icon-button"
+            title="Atualizar conversas"
+            aria-label="Atualizar conversas"
+            onClick={() => void refresh()}
+          >
+            <RefreshCw size={17} />
+          </button>
+        </div>
       </div>
       {error && (
         <p className="notice error" role="alert">
@@ -251,6 +242,9 @@ export function Conversations({
               maxLength={200}
               onChange={(e) => changed(setSearch, e.target.value)}
             />
+            <small className="conversation-count">
+              {data?.total ?? "—"} conversas · {data?.unread ?? "—"} não lidas
+            </small>
           </div>
           <div className="conversation-rows">
             {data?.records.map((c) => (

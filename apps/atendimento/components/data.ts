@@ -9,7 +9,7 @@ export async function api<T>(path: string, body?: unknown): Promise<T> {
   });
   const data = await response.json();
   if (response.status === 401 || data.error === "MFA_REQUIRED")
-    window.location.assign(new URL("/login", window.location.origin).href);
+    window.location.replace(new URL("/login", window.location.origin).href);
   else if (
     response.status === 403 &&
     [
@@ -17,7 +17,7 @@ export async function api<T>(path: string, body?: unknown): Promise<T> {
       "Seu acesso ao Atendimento está desativado.",
     ].includes(data.error)
   )
-    window.location.assign(
+    window.location.replace(
       new URL("/acesso-indisponivel", window.location.origin).href,
     );
   if (!response.ok) throw new Error(data.error || "Falha ao carregar.");

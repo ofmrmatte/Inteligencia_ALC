@@ -4,6 +4,7 @@ import { getCurrentProfile } from "@/lib/auth-server";
 import { canAccessSection } from "@/lib/access-control";
 import { createClient } from "@/lib/supabase/server";
 import { newTicket, sealSession, ticketHash } from "@alc/identity/transfer";
+import { registerAtendimentoSession } from "@/lib/atendimento-access";
 const globalTransfer = globalThis as unknown as {
   atendimentoTransferPool?: pg.Pool;
 };
@@ -26,7 +27,7 @@ export async function GET(request: Request) {
   const { data, error } = await client.auth.getSession();
   if (error || !data.session) return NextResponse.redirect(login);
   const verified = await client.auth.getClaims(data.session.access_token);
-  if (verified.error || verified.data?.claims.sub !== profile.id)
+  if (verified.error || verified.data?.claims.sub !== profile.id || typeof verified.data.claims.session_id !== "string")
     return NextResponse.redirect(login);
   const pool = (globalTransfer.atendimentoTransferPool ??= new pg.Pool({
     connectionString: process.env.PNR_DATABASE_URL,
@@ -35,6 +36,7 @@ export async function GET(request: Request) {
     application_name: "alc_atendimento_transfer",
   }));
   try {
+    await registerAtendimentoSession(profile.id, verified.data.claims.session_id);
     const ticket = newTicket();
     await pool.query(
       "DELETE FROM alc_atendimento.login_tickets WHERE expires_at<now()",

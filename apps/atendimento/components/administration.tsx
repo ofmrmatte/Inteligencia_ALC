@@ -29,14 +29,10 @@ export function Administration() {
   const [tab, setTab] = useState("channels");
   return (
     <main className="page">
-      <div className="page-title">
-        <div>
-          <p className="eyebrow">CONTROLE DA OPERAÇÃO</p>
-          <h1>Administração</h1>
+      <div className="page-tools">
           <p className="muted">
             Canais, usuários, coleta e automações do Atendimento.
           </p>
-        </div>
         <span className="badge">Acesso administrativo</span>
       </div>
       <nav className="tabs" aria-label="Áreas da Administração">

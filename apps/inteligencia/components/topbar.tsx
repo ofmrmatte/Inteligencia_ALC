@@ -4,6 +4,7 @@ import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from "reac
 import { Bell, Check, Database, HardDriveUpload, LogOut, Menu, ShieldCheck, TriangleAlert, XCircle } from "lucide-react";
 import { format } from "date-fns";
 import { ptBR } from "date-fns/locale";
+import { toast } from "sonner";
 import { signOutAction } from "@/app/login/actions";
 import { ROLE_LABELS, type AuthProfile } from "@/lib/auth";
 import { useDashboardStore } from "@/lib/store";
@@ -135,6 +136,8 @@ export function Topbar({ section, profile, canImport, onImport, onMobileMenu }: 
     try {
       await clearLocalCache();
       await signOutAction();
+    } catch {
+      toast.error("Não foi possível encerrar sua sessão. Tente novamente.");
     } finally {
       setSigningOut(false);
     }
