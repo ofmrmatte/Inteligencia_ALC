@@ -1,11 +1,11 @@
 export const AGENT_PLAYBOOK_VERSION = "2026-10-08-v1";
 export const CUSTOMER_STEPS = [
-  { id: "intro", title: "Abertura", goal: "Confirmar se a entrega foi recebida." },
-  { id: "received", title: "Recebido", goal: "Confirmar data e produto real, sem pressupor respostas." },
-  { id: "not-received", title: "Não recebido", goal: "Verificar portaria, vizinho ou familiar e registrar resultado." },
-  { id: "wrong-product", title: "Divergente", goal: "Encaminhar divergência para análise humana." },
-  { id: "handoff", title: "Atendimento humano", goal: "Transferir diante de dúvida, pedido ou contestação." },
-  { id: "closing", title: "Encerramento", goal: "Agradecer, registrar resultado verificado e encerrar." },
+  { id: "intro", title: "Abertura", goal: "Confirmar se a entrega foi recebida.", example: "Olá! Estamos acompanhando uma ocorrência de entrega. Você confirma se recebeu o produto?" },
+  { id: "received", title: "Recebido", goal: "Confirmar data e produto real, sem pressupor respostas.", example: "Obrigado pela confirmação. Em que data recebeu o produto? Era o item correto?" },
+  { id: "not-received", title: "Não recebido", goal: "Verificar portaria, vizinho ou familiar e registrar resultado.", example: "Você já verificou se alguém da portaria, da família ou um vizinho recebeu? Caso não localize, encaminharei à equipe." },
+  { id: "wrong-product", title: "Divergente", goal: "Encaminhar divergência para análise humana.", example: "Registrei a divergência. A equipe fará a análise; não posso antecipar uma decisão do Mercado Livre." },
+  { id: "handoff", title: "Atendimento humano", goal: "Transferir diante de dúvida, pedido ou contestação.", example: "Vou transferir sua mensagem para um atendente continuar a tratativa." },
+  { id: "closing", title: "Encerramento", goal: "Agradecer, registrar resultado verificado e encerrar.", example: "Obrigado pelas informações. O resultado registrado será encaminhado à equipe responsável. Tenha um bom dia!" },
 ] as const;
 export const DRIVER_STEPS = [
   { id: "verify", title: "Identificar motorista", goal: "Validar telefone, nome, ID e base antes de mostrar casos." },
