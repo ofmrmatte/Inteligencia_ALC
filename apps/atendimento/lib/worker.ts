@@ -5,6 +5,7 @@ import {
   phone,
   normalize,
   clientReply,
+  driverNotificationEligible,
   type CaseRecord,
   type AgentState,
 } from "./domain";
@@ -352,9 +353,8 @@ export async function processOutbox() {
         current.classification === "encerrada" ||
         recipient !== job.phone ||
         (job.channel === "client" && !current.customerVerified) ||
-        (job.payload.type === "template" &&
-          job.channel === "driver" &&
-          current.classification !== "aguardando_comprovante");
+        (job.channel === "driver" &&
+          !driverNotificationEligible(current.classification));
       if (invalid) {
         await db().query(
           "UPDATE alc_atendimento.outbox SET status='cancelled',error='Caso ou contato mudou após entrar na fila.' WHERE id=$1",
