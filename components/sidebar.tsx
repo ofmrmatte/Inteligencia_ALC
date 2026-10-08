@@ -23,7 +23,7 @@ export function Sidebar({
   canImport: boolean;
   profile: AuthProfile;
 }) {
-  const groups = ["Análises", "Controle de dados", "Administração"] as const;
+  const groups = ["Análises", "Controle de dados", "Administração", "Ajustes"] as const;
   const visibleNavigation = NAVIGATION.filter((item) => canAccessSection(profile, item.id));
   const pnrChildren = visibleNavigation.filter((item) => item.parentId === "gestao-pnr");
   const pnrActive = active === "gestao-pnr" || pnrChildren.some((item) => item.id === active);

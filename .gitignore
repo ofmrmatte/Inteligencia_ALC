@@ -7,8 +7,10 @@
 
 # tests
 /coverage
+/output/playwright/
 
 # local tooling
+/.testagent/
 .vercel
 /supabase/.temp
 /extension-pnr/dist

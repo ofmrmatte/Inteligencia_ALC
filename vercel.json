@@ -1,4 +1,9 @@
 {
   "framework": "nextjs",
-  "buildCommand": "npm run build"
+  "buildCommand": "npm run build",
+  "git": {
+    "deploymentEnabled": {
+      "codex/hr-v1-local": false
+    }
+  }
 }
