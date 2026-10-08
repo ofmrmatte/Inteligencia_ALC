@@ -1,4 +1,4 @@
-import { CUSTOMER_STEPS } from "./agent-playbook";
+import { CUSTOMER_STEPS, fillScript } from "./agent-playbook";
 function message(id: string) {
   return CUSTOMER_STEPS.find((step) => step.id === id)?.example || "";
 }
@@ -77,106 +77,83 @@ export function clientReply(
   state: AgentState,
   text: string,
   customerName?: string,
+  context?: { shipmentId?: string; deliveryAt?: string },
 ): { state: AgentState; reply: string; handoff?: boolean } {
   const t = normalize(text);
-  if (/HUMAN|ATENDENTE|EQUIPE|PESSOA|PARAR|CANCELAR|NAO QUERO/.test(t))
-    return {
-      state: { ...state, step: "human" },
-      reply: message("handoff"),
-      handoff: true,
-    };
-  const denied = /NAO (RECEBI|RECEBEU|FOI ENTREGUE)|NAO RECEB|NUNCA RECEB/.test(
-    t,
-  );
-  const yes =
-    /^(SIM|RECEBI|RECEBIDO|FOI ENTREGUE|ESTA CORRETO|CORRETO)(\b|[.!])/.test(t);
-  if (state.step === "receipt" || state.step === "start") {
-    if (denied)
-      return {
-        state: { step: "neighbors" },
-        reply: addressed("not-received", customerName),
-      };
-    if (yes)
-      return {
-        state: { step: "date" },
-        reply: message("received"),
-      };
-    return {
-      state: { step: "receipt" },
-      reply:
-        "Poderia confirmar se recebeu o produto mencionado no nosso contato?",
-    };
+  const human = () => ({ state: { ...state, step: "human" }, reply: message("handoff"), handoff: true });
+  if (state.step === "done" || state.step === "human")
+    return { state, reply: "" }; // Prevent another automatic message after conclusion/takeover.
+  if (/ATENDENTE|FALAR COM (ALGUEM|UMA PESSOA|UM HUMANO)|EQUIPE LOSS|HUMANO|PARAR|CANCELAR CONTATO|NAO QUERO/.test(t))
+    return human();
+  if (/RECLAMACAO|ENCERRAR (A )?RECLAMACAO|FECHAR (A )?RECLAMACAO/.test(t))
+    return { state, reply: message("complaint-question") };
+  if (/ATIVAR (O )?CARTAO|SENHA (DO )?CARTAO|CODIGO DE SEGURANCA/.test(t))
+    return { state, reply: message("card") };
+  const denied = /NAO (RECEBI|RECEBEU|FOI ENTREGUE)|NAO RECEB|NUNCA RECEB|NAO CHEGOU/.test(t);
+  const located = /ENCONTREI|LOCALIZEI|ACHEI|ESTAVA COM|RECEBI POR|RECEBEU POR/.test(t) && !denied;
+  const uncertain = /NAO (LEMBRO|RECORDO|SEI)|TALVEZ|NAO TENHO CERTEZA/.test(t);
+  const different = /PRODUTO (DIFERENTE|ERRADO|INCORRETO|DANIFICADO)|ITEM (ERRADO|DIFERENTE)|VEIO (ERRADO|DIFERENTE|QUEBRADO)|NAO (E|EH) O (PRODUTO|ITEM)/.test(t);
+  const thirdParty = /PORTARIA|PORTEIRO|VIZINH|FAMILIAR|TERCEIRO|OUTRA PESSOA|MINHA MAE|MEU PAI/.test(t);
+  const yes = /^(SIM|RECEBI|RECEBIDO|FOI ENTREGUE|ESTA CORRETO|CORRETO|CERTO|ESTAVA CERTO)(\\b|[.!])/.test(t);
+  const answeredNo = /^(NAO|NEGATIVO)(\\b|[.!])/.test(t);
+  const acceptedDate = /\\b(\\d{1,2})\\/(\\d{1,2})(?:\\/(\\d{2,4}))?\\b/.exec(text);
+  const day = Number(acceptedDate?.[1]), month = Number(acceptedDate?.[2]);
+  const year = acceptedDate?.[3] ? Number(acceptedDate[3].length === 2 ? "20"+acceptedDate[3] : acceptedDate[3]) : new Date().getFullYear();
+  const validDate = Boolean(acceptedDate && year >= 2000 && month >= 1 && month <= 12 &&
+    day >= 1 && day <= new Date(year, month, 0).getDate());
+  const formattedDate = validDate ? `${String(day).padStart(2,"0")}/${String(month).padStart(2,"0")}` : "";
+  const identified = addressed("uncertain", customerName);
+  const verifiedDelivery = context?.shipmentId?.trim();
+  const uncertainReply = verifiedDelivery
+    ? fillScript(identified, { ID: verifiedDelivery })
+    : identified.replace("Estamos consultando a entrega vinculada ao envio [ID].",
+      "Estamos consultando as informações da entrega mencionada no primeiro contato.");
+  if (state.step === "receipt" || state.step === "start" || state.step === "uncertain") {
+    if (denied) return { state: { step: "neighbors" }, reply: addressed("not-received", customerName) };
+    if (uncertain) return { state: { step: "uncertain" }, reply: uncertainReply };
+    if (different) return { state: { step: "human", correctProduct: false, result: "produto_divergente" }, reply: message("wrong-product"), handoff: true };
+    if (thirdParty && /RECEB|ENTREG|PEGOU/.test(t))
+      return { state: { step: "third_party" }, reply: message("third-party") };
+    if (yes) return { state: { step: "date" }, reply: message("received") };
+    return { state: { step: "receipt" }, reply: "Poderia confirmar se recebeu o produto mencionado no nosso contato?" };
   }
-  if (state.step === "date") {
-    const m = /\b(\d{1,2})\/(\d{1,2})\b/.exec(text);
-    const day = Number(m?.[1]),
-      month = Number(m?.[2]);
-    const valid =
-      m &&
-      month >= 1 &&
-      month <= 12 &&
-      day >= 1 &&
-      day <= new Date(2024, month, 0).getDate();
-    if (!valid)
-      return {
-        state,
-        reply: "Informe uma data válida no formato dd/mm, por favor.",
-      };
-    return {
-      state: {
-        step: "product",
-        receivedAt: `${String(day).padStart(2, "0")}/${String(month).padStart(2, "0")}`,
-      },
-      reply: message("date"),
-    };
+  if (state.step === "date" || state.step === "found_later") {
+    if (different) return { state: { step: "human", correctProduct: false, result: "produto_divergente" }, reply: message("wrong-product"), handoff: true };
+    if (!validDate) return { state, reply: "Para registrar a data corretamente, informe o dia e mês em que recebeu o produto (dd/mm), por gentileza." };
+    return { state: { step: "product", receivedAt: formattedDate }, reply: message("date") };
   }
   if (state.step === "product") {
+    if (different || answeredNo)
+      return { state: { ...state, step: "human", correctProduct: false, result: "produto_divergente" }, reply: message("wrong-product"), handoff: true };
     if (yes)
-      return {
-        state: {
-          ...state,
-          step: "done",
-          correctProduct: true,
-          result: "recebimento_confirmado",
-        },
-        reply: addressed("closing", customerName),
-      };
-    if (/NAO|ERRADO|DIFERENTE|INCORRETO/.test(t))
-      return {
-        state: {
-          ...state,
-          step: "human",
-          correctProduct: false,
-          result: "produto_divergente",
-        },
-        reply: message("wrong-product"),
-        handoff: true,
-      };
-    return { state, reply: "O produto está correto? Responda sim ou não." };
+      return { state: { ...state, step: "done", correctProduct: true, result: "recebimento_confirmado" }, reply: addressed("closing", customerName) };
+    return { state, reply: "O produto recebido corresponde ao que você comprou? Pode responder com suas palavras." };
   }
-  if (state.step === "neighbors") {
-    if (/RECEBI|ENCONTREI|ESTA COM|ESTAVA COM/.test(t) && !denied)
-      return {
-        state: { step: "date" },
-        reply: message("received"),
-      };
-    if (denied || /NAO (LOCALIZ|ENCONTR)/.test(t))
-      return {
-        state: { step: "human", result: "nao_recebido" },
-        reply: addressed("not-found", customerName),
-        handoff: true,
-      };
-    return {
-      state,
-      reply:
-        "Após verificar com portaria, familiares ou vizinhos, o produto foi localizado?",
-    };
+  if (state.step === "neighbors" || state.step === "neighbors_wait") {
+    if (located) return { state: { step: "date" }, reply: message("found-later") };
+    if (/AINDA (NAO )?(VERIFIQUEI|OLHEI|CONFERI)|VOU VERIFICAR|VOU CONFERIR|PRECISO VERIFICAR|DEPOIS VEJO/.test(t))
+      return { state: { step: "neighbors_wait" }, reply: message("check-pending") };
+    if (denied || /NAO (LOCALIZ|ENCONTR|ACHEI)|VERIFIQUEI E NAO|NINGUEM RECEBEU/.test(t))
+      return { state: { step: "human", result: "nao_recebido" }, reply: addressed("not-found", customerName), handoff: true };
+    if (thirdParty && /RECEB|ENTREG|PEGOU/.test(t))
+      return { state: { step: "third_party" }, reply: message("third-party") };
+    // Do not interpret "Sim, verifiquei" as "Sim, recebi".
+    if (state.step === "neighbors_wait" && /^(OK|CERTO|ENTENDI|COMBINADO)$/.test(t))
+      return { state, reply: "" };
+    return { state, reply: "Obrigado. A encomenda foi localizada após verificar com as pessoas do endereço?" };
   }
-  return {
-    state: { ...state, step: "human" },
-    reply: message("handoff"),
-    handoff: true,
-  };
+  if (state.step === "third_party") {
+    if (answeredNo || /NAO AUTORIZ|DESCONHEC|NAO CONHECO/.test(t))
+      return { state: { step: "human", result: "recebimento_terceiro_nao_autorizado" },
+        reply: "Entendi. Vou encaminhar essa informação à equipe de Prevenção de Perdas para análise, sem registrar o recebimento como confirmado.",
+        handoff: true };
+    if (/AUTORIZAD|CONHEC|E DA FAMILIA|MORA COMIGO/.test(t) || yes) {
+      if (validDate) return { state: { step: "product", receivedAt: formattedDate }, reply: message("date") };
+      return { state: { step: "date" }, reply: "Obrigado pela informação. Em que data a encomenda foi recebida pela pessoa autorizada (dd/mm)?" };
+    }
+    return { state, reply: "Essa pessoa estava autorizada a receber a encomenda em seu nome? Se possível, informe também a data." };
+  }
+  return human();
 }
 export function clientOpening(record: CaseRecord, operator: string) {
   if (
