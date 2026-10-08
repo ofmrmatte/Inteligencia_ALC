@@ -1,3 +1,10 @@
+import { CUSTOMER_STEPS } from "./agent-playbook";
+function message(id: string) {
+  return CUSTOMER_STEPS.find((step) => step.id === id)?.example || "";
+}
+function addressed(id: string, customerName?: string) {
+  return message(id).replaceAll("[Nome do Cliente]", customerName?.trim() || "cliente");
+}
 export function normalize(value: unknown) {
   return String(value ?? "")
     .normalize("NFD")
@@ -69,12 +76,13 @@ export type AgentState = {
 export function clientReply(
   state: AgentState,
   text: string,
+  customerName?: string,
 ): { state: AgentState; reply: string; handoff?: boolean } {
   const t = normalize(text);
   if (/HUMAN|ATENDENTE|EQUIPE|PESSOA|PARAR|CANCELAR|NAO QUERO/.test(t))
     return {
       state: { ...state, step: "human" },
-      reply: "Vou encaminhar seu atendimento à equipe Loss da ALC.",
+      reply: message("handoff"),
       handoff: true,
     };
   const denied = /NAO (RECEBI|RECEBEU|FOI ENTREGUE)|NAO RECEB|NUNCA RECEB/.test(
@@ -86,14 +94,12 @@ export function clientReply(
     if (denied)
       return {
         state: { step: "neighbors" },
-        reply:
-          "Você já verificou se alguém da portaria, um familiar ou vizinho recebeu o produto?",
+        reply: addressed("not-received", customerName),
       };
     if (yes)
       return {
         state: { step: "date" },
-        reply:
-          "Obrigado pela confirmação. Em qual data você recebeu o produto? Informe dia e mês (dd/mm).",
+        reply: message("received"),
       };
     return {
       state: { step: "receipt" },
@@ -121,7 +127,7 @@ export function clientReply(
         step: "product",
         receivedAt: `${String(day).padStart(2, "0")}/${String(month).padStart(2, "0")}`,
       },
-      reply: "O produto recebido está correto, conforme sua compra?",
+      reply: message("date"),
     };
   }
   if (state.step === "product") {
@@ -133,8 +139,7 @@ export function clientReply(
           correctProduct: true,
           result: "recebimento_confirmado",
         },
-        reply:
-          "Obrigado! Registramos suas informações para análise da equipe. Por favor, confirme também o recebimento diretamente no aplicativo do Mercado Livre.",
+        reply: addressed("closing", customerName),
       };
     if (/NAO|ERRADO|DIFERENTE|INCORRETO/.test(t))
       return {
@@ -144,8 +149,7 @@ export function clientReply(
           correctProduct: false,
           result: "produto_divergente",
         },
-        reply:
-          "Obrigado pelas informações. Vou encaminhar a divergência à equipe para análise.",
+        reply: message("wrong-product"),
         handoff: true,
       };
     return { state, reply: "O produto está correto? Responda sim ou não." };
@@ -154,14 +158,13 @@ export function clientReply(
     if (/RECEBI|ENCONTREI|ESTA COM|ESTAVA COM/.test(t) && !denied)
       return {
         state: { step: "date" },
-        reply:
-          "Que bom que localizou. Em qual data você recebeu o produto? Informe dd/mm.",
+        reply: message("received"),
       };
     if (denied || /NAO (LOCALIZ|ENCONTR)/.test(t))
       return {
-        state: { step: "done", result: "nao_recebido" },
-        reply:
-          "Obrigado pelas informações. Registramos que o produto não foi localizado e encaminharemos seu relato à equipe responsável pelo contato com o Mercado Livre.",
+        state: { step: "human", result: "nao_recebido" },
+        reply: addressed("not-found", customerName),
+        handoff: true,
       };
     return {
       state,
@@ -171,9 +174,38 @@ export function clientReply(
   }
   return {
     state: { ...state, step: "human" },
-    reply: "Vou encaminhar sua nova mensagem à equipe Loss da ALC.",
+    reply: message("handoff"),
     handoff: true,
   };
+}
+export function clientOpening(record: CaseRecord, operator: string) {
+  if (
+    !record.customerVerified ||
+    !record.customerName?.trim() ||
+    !phone(record.customerPhone) ||
+    !record.products?.length ||
+    !record.deliveryAt ||
+    !record.shipmentId?.trim() ||
+    !Number.isFinite(record.purchaseValue) ||
+    record.purchaseValue <= 0 ||
+    !operator.trim()
+  ) throw new Error("Cadastro do cliente ou detalhes da entrega incompletos.");
+  const date = new Date(record.deliveryAt);
+  if (!Number.isFinite(date.getTime())) throw new Error("Data de entrega inválida.");
+  const value = record.purchaseValue.toLocaleString("pt-BR", {
+    style: "currency", currency: "BRL",
+  });
+  const delivery = date.toLocaleString("pt-BR", {
+    timeZone: "America/Sao_Paulo", day: "2-digit", month: "2-digit",
+    year: "numeric", hour: "2-digit", minute: "2-digit",
+  });
+  return message("intro")
+    .replace("[Nome do Cliente]", record.customerName.trim())
+    .replace("[Seu Nome]", operator.trim())
+    .replace("[Produto]", record.products.map((p) => p.title).join(", ").slice(0, 900))
+    .replace("[Valor]", value)
+    .replace("[Data/Hora]", delivery)
+    .replace("[ID]", record.shipmentId.trim());
 }
 export function templateParameters(
   channel: "driver" | "client",
@@ -197,12 +229,14 @@ export function templateParameters(
     !record.customerName ||
     !record.customerPhone ||
     !record.products.length ||
-    !record.deliveryAt
+    !record.deliveryAt ||
+    !Number.isFinite(record.purchaseValue) ||
+    record.purchaseValue <= 0
   )
     throw new Error("Cadastro do cliente ou detalhes da entrega incompletos.");
+  // Validate that the approved C01 script can be fully rendered before queuing.
+  clientOpening(record, operator);
   const date = new Date(record.deliveryAt);
-  if (!Number.isFinite(date.getTime()))
-    throw new Error("Data de entrega inválida.");
   const values: Record<string, string> = {
     customer_name: record.customerName,
     nome_disparou: operator,
@@ -219,6 +253,9 @@ export function templateParameters(
       minute: "2-digit",
     }),
     product_id: record.shipmentId,
+    purchase_value: record.purchaseValue.toLocaleString("pt-BR", {
+      style: "currency", currency: "BRL",
+    }),
   };
   return [
     {
