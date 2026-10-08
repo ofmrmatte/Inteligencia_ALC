@@ -1,0 +1,12 @@
+{
+  "name": "alc-pnr-connector",
+  "version": "1.2.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "node build.mjs"
+  },
+  "dependencies": {
+    "fflate": "^0.8.3"
+  }
+}

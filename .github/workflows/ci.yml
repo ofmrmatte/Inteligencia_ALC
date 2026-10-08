@@ -35,6 +35,9 @@ jobs:
       - name: Tests
         run: npm test
 
+      - name: Build Inteligência and PNR connector
+        run: npm run build
+
       - name: Production dependency security audit
         run: npm audit --omit=dev --audit-level=high
 

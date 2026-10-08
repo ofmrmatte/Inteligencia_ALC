@@ -1,0 +1,33 @@
+{
+  "manifest_version": 3,
+  "name": "ALC PNR Connector",
+  "version": "1.2.0",
+  "description": "Conecta o Case Center ao Intelig\u00eancia ALC e ao ALC Atendimento, com coleta a cada 30 minutos.",
+  "permissions": [
+    "tabs",
+    "scripting",
+    "storage",
+    "alarms"
+  ],
+  "host_permissions": [
+    "https://envios.adminml.com/*",
+    "https://inteligenciaalc-production.up.railway.app/*",
+    "https://alc-atendimento-production.up.railway.app/*"
+  ],
+  "background": {
+    "service_worker": "service-worker.js",
+    "type": "module"
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "https://inteligenciaalc-production.up.railway.app/*",
+        "https://alc-atendimento-production.up.railway.app/*"
+      ],
+      "js": [
+        "panel-bridge.js"
+      ],
+      "run_at": "document_start"
+    }
+  ]
+}
