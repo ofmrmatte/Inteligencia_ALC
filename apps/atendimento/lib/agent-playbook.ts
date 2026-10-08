@@ -134,7 +134,7 @@ export const DRIVER_STEPS: readonly PlaybookStep[] = [
     "example": "Obrigado, [Nome do Motorista]!\n\nLocalizei seu cadastro vinculado à base [Base]. Vou consultar as PNRs disponíveis para você."
   },
   {
-    "id": "select",
+    "id": "lookup",
     "code": "M04",
     "title": "Selecionar tipo de ocorrência",
     "goal": "Consultar apenas classificações com mapeamento confiável.",
