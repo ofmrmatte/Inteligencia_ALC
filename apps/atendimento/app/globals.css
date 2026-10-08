@@ -1597,3 +1597,28 @@ dd {
  .evidence-print-grid { grid-template-columns:repeat(2,minmax(0,1fr));gap:8px; }
  .evidence-print img { height:160px; }
 }
+
+/* Header refresh: anchored immediately after the role badge on every workspace page. */
+.header-refresh { display:inline-flex;align-items:center;justify-content:center; }
+@media(max-width:800px) {
+  .header-refresh { width:32px;height:32px;min-height:32px; }
+}
+
+/* Verify token is deliberately masked until an authorized administrator reveals it. */
+.webhook-verify-panel {
+  margin: 16px 0;
+  padding: 14px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #fafafa;
+}
+.webhook-verify-panel > strong { font-size: 12px; }
+.webhook-verify-panel p { font-size: 11px; margin: 7px 0 11px; line-height: 1.5; }
+.webhook-verify-row { display:flex;flex-wrap:wrap;align-items:center;gap:8px; }
+.webhook-verify-value {
+  flex:1 1 180px;min-width:0;overflow-wrap:anywhere;
+  font-family:ui-monospace,SFMono-Regular,Consolas,monospace;
+  background:white;border:1px solid var(--line);border-radius:6px;
+  padding:10px;font-size:12px;user-select:text;
+}
+.webhook-verify-row button { display:inline-flex;align-items:center;gap:6px; }

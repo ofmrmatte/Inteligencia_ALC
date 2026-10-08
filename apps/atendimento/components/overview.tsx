@@ -9,7 +9,6 @@ import {
   FileQuestion,
   MessageSquare,
   ShieldAlert,
-  RefreshCw,
 } from "lucide-react";
 import { KpiCard, Panel, StatusBadge } from "@alc/ui/components";
 import { useData, when } from "./data";
@@ -71,16 +70,7 @@ export function Overview() {
   }
   return (
     <main className="page">
-      <div className="page-tools">
-        <button
-          className="icon-button"
-          title="Atualizar indicadores"
-          aria-label="Atualizar indicadores"
-          onClick={() => void refresh()}
-        >
-          <RefreshCw size={18} />
-        </button>
-      </div>
+
       {error && (
         <p role="alert" className="notice error">
           {error}

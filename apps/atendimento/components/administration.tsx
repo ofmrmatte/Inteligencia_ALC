@@ -1,8 +1,9 @@
 "use client";
-import { useState, type FormEvent } from "react";
+import { useEffect, useState, type FormEvent } from "react";
 import { api, useData, labels, when } from "./data";
 import { Collector } from "./collector";
 import { AgentPanel } from "./agent-panel";
+import { Copy, Eye, EyeOff } from "lucide-react";
 type Channel = {
   channel: "driver" | "client";
   number: string;
@@ -83,7 +84,7 @@ export function Administration() {
     </main>
   );
 }
-function ChannelCard({
+export function ChannelCard({
   channel,
   refresh,
 }: {
@@ -93,6 +94,8 @@ function ChannelCard({
   const [edit, setEdit] = useState(false),
     [notice, setNotice] = useState(""),
     [busy, setBusy] = useState(false),
+    [revealBusy, setRevealBusy] = useState(false),
+    [revealedVerifyToken, setRevealedVerifyToken] = useState<string | null>(null),
     [models, setModels] = useState<
       {
         name: string;
@@ -101,6 +104,12 @@ function ChannelCard({
         components: { text?: string }[];
       }[]
     >([]);
+  useEffect(() => {
+    if (!revealedVerifyToken) return;
+    const conceal = window.setTimeout(() => setRevealedVerifyToken(null), 60_000);
+    return () => window.clearTimeout(conceal);
+  }, [revealedVerifyToken]);
+
   async function save(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     setBusy(true);
@@ -112,6 +121,7 @@ function ChannelCard({
       });
       setNotice("Configuração salva.");
       setEdit(false);
+      setRevealedVerifyToken(null);
       await refresh();
     } catch (e) {
       setNotice((e as Error).message);
@@ -144,6 +154,66 @@ function ChannelCard({
         <dt>Webhook</dt>
         <dd className="wrap">{channel.webhook}</dd>
       </dl>
+      <div className="webhook-verify-panel" aria-label={`Token para validação do webhook — ${labels[channel.channel]}`}>
+        <strong>Token de verificação para o painel Meta</strong>
+        <p className="muted">
+          Este valor vai no campo <strong>Token de verificação</strong> ao configurar a URL de callback
+          deste canal na Meta. Não é o token de acesso ao WhatsApp.
+        </p>
+        <div className="webhook-verify-row">
+          <code className="webhook-verify-value" aria-label="Valor do token de verificação">
+            {revealedVerifyToken ?? (channel.verifyConfigured ? "•••••••••••• (oculto)" : "Ainda não configurado")}
+          </code>
+          {channel.verifyConfigured ? (
+            <>
+              <button
+                type="button"
+                disabled={revealBusy}
+                aria-label={revealedVerifyToken ? "Ocultar token de verificação" : "Mostrar token de verificação"}
+                onClick={async () => {
+                  if (revealedVerifyToken) {
+                    setRevealedVerifyToken(null);
+                    return;
+                  }
+                  setRevealBusy(true);
+                  setNotice("");
+                  try {
+                    const result = await api<{ verifyToken: string }>(
+                      `webhook-verify-token?channel=${channel.channel}`,
+                    );
+                    setRevealedVerifyToken(result.verifyToken);
+                  } catch (error) {
+                    setNotice(error instanceof Error ? error.message : "Falha ao consultar token.");
+                  } finally {
+                    setRevealBusy(false);
+                  }
+                }}
+              >
+                {revealedVerifyToken ? <EyeOff size={15} /> : <Eye size={15} />}
+                {revealBusy ? "Consultando…" : revealedVerifyToken ? "Ocultar" : "Mostrar"}
+              </button>
+              {revealedVerifyToken ? (
+                <button
+                  type="button"
+                  aria-label="Copiar token de verificação"
+                  onClick={async () => {
+                    try {
+                      await navigator.clipboard.writeText(revealedVerifyToken);
+                      setNotice("Token de verificação copiado. Cole no campo correspondente da Meta.");
+                    } catch {
+                      setNotice("Não foi possível copiar. Selecione o valor exibido.");
+                    }
+                  }}
+                >
+                  <Copy size={15} /> Copiar
+                </button>
+              ) : null}
+            </>
+          ) : (
+            <span className="muted">Clique em Configurar canal para cadastrar um token.</span>
+          )}
+        </div>
+      </div>
       <p className="muted">
         Configure este endereço no aplicativo Meta, assine o campo messages e
         confirme a verificação antes de ativar os disparos.
