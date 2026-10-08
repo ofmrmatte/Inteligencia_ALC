@@ -79,9 +79,16 @@ export function clientReply(
   state: AgentState,
   text: string,
   customerName?: string,
-  context?: { shipmentId?: string; deliveryAt?: string },
+  context?: { shipmentId?: string; deliveryAt?: string; overrides?: Record<string,string> },
 ): { state: AgentState; reply: string; handoff?: boolean } {
   const t = normalize(text);
+  const texts = context?.overrides;
+  const message = (id: string) => {
+    const code = CUSTOMER_STEPS.find(step => step.id === id)?.code || "";
+    return (code && texts?.[code]) || CUSTOMER_STEPS.find(step => step.id === id)?.example || "";
+  };
+  const addressed = (id: string, name?: string) =>
+    message(id).replaceAll("[Nome do Cliente]", name?.trim() || "cliente");
   const human = () => ({ state: { ...state, step: "human" }, reply: message("handoff"), handoff: true });
   if (state.step === "done" || state.step === "human")
     return { state, reply: "" }; // Prevent another automatic message after conclusion/takeover.
