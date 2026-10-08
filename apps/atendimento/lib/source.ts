@@ -149,6 +149,7 @@ export async function upsertCases(
   sourceAt: string,
   baseline: boolean,
   actor: string | null = null,
+  allowAutomaticOutreach = true,
 ) {
   const client = await db().connect();
   const newlySeen: CaseRecord[] = [];
@@ -212,6 +213,8 @@ export async function upsertCases(
   } finally {
     client.release();
   }
+  // A manual collection is data-only, even if automatic outreach is enabled.
+  if (!allowAutomaticOutreach) return { processed: records.length, new: newlySeen.length };
   const automation = await setting<Automation>("automation");
   for (const record of newlySeen.filter((r) => r.competence === competence())) {
     for (const channel of ["driver", "client"] as const) {
@@ -267,7 +270,7 @@ export function fromCore(row: Record<string, unknown>): CaseRecord {
     },
   };
 }
-export async function syncCore(history = false) {
+export async function syncCore(history = false, allowAutomaticOutreach = true) {
   const source = await setting<{
     baselineComplete: boolean;
     lastSync?: string;
@@ -281,6 +284,8 @@ export async function syncCore(history = false) {
     result.rows.map(fromCore),
     new Date().toISOString(),
     history || !source.baselineComplete,
+    null,
+    allowAutomaticOutreach,
   );
   if (!history)
     await db().query(
