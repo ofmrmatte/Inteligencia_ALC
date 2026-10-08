@@ -154,7 +154,7 @@ async function caseCenterTabs() {
     if (!tab?.id || !tab.url) return false;
     try {
       const pathname = new URL(tab.url).pathname;
-      return pathname === caseCenterListPath || /^\\/logistics\\/case-center\\/cases\\/\\d{1,30}\\/?$/.test(pathname);
+      return pathname === caseCenterListPath || new RegExp("^/logistics/case-center/cases/[0-9]{1,30}/?$").test(pathname);
     } catch {
       return false;
     }
