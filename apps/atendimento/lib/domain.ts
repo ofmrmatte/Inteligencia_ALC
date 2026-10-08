@@ -85,16 +85,16 @@ export function clientReply(
   const human = () => ({ state: { ...state, step: "human" }, reply: message("handoff"), handoff: true });
   if (state.step === "done" || state.step === "human")
     return { state, reply: "" }; // Prevent another automatic message after conclusion/takeover.
-  if (/ATENDENTE|FALAR COM (ALGUEM|UMA PESSOA|UM HUMANO)|EQUIPE LOSS|HUMANO|PARAR|CANCELAR CONTATO|NAO QUERO/.test(t))
+  if (/ATENDENTE|FALAR COM (ALGUEM|UMA PESSOA|UM HUMANO|A EQUIPE|EQUIPE)|EQUIPE LOSS|HUMANO|PARAR|CANCELAR CONTATO|NAO QUERO/.test(t))
     return human();
   if (/RECLAMACAO|ENCERRAR (A )?RECLAMACAO|FECHAR (A )?RECLAMACAO/.test(t))
     return { state, reply: message("complaint-question") };
   if (/ATIVAR (O )?CARTAO|SENHA (DO )?CARTAO|CODIGO DE SEGURANCA/.test(t))
     return { state, reply: message("card") };
   const denied = /NAO (RECEBI|RECEBEU|FOI ENTREGUE)|NAO RECEB|NUNCA RECEB|NAO CHEGOU/.test(t);
-  const located = /ENCONTREI|LOCALIZEI|ACHEI|ESTAVA COM|RECEBI POR|RECEBEU POR/.test(t) && !denied;
+  const located = /ENCONTREI|LOCALIZEI|ACHEI|ESTAVA COM|RECEBI POR|RECEBEU POR/.test(t) && !denied && !/NAO (LOCALIZ|ENCONTR|ACHEI)/.test(t);
   const uncertain = /NAO (LEMBRO|RECORDO|SEI)|TALVEZ|NAO TENHO CERTEZA/.test(t);
-  const different = /PRODUTO (DIFERENTE|ERRADO|INCORRETO|DANIFICADO)|ITEM (ERRADO|DIFERENTE)|VEIO (ERRADO|DIFERENTE|QUEBRADO)|NAO (E|EH) O (PRODUTO|ITEM)/.test(t);
+  const different = /PRODUTO (ESTA |VEIO )?(DIFERENTE|ERRADO|INCORRETO|DANIFICADO)|ITEM (ERRADO|DIFERENTE)|VEIO (ERRADO|DIFERENTE|QUEBRADO)|NAO (E|EH) O (PRODUTO|ITEM)/.test(t);
   const thirdParty = /PORTARIA|PORTEIRO|VIZINH|FAMILIAR|TERCEIRO|OUTRA PESSOA|MINHA MAE|MEU PAI/.test(t);
   const yes = /^(SIM|RECEBI|RECEBIDO|FOI ENTREGUE|ESTA CORRETO|CORRETO|CERTO|ESTAVA CERTO)(\b|[.!])/.test(t);
   const answeredNo = /^(NAO|NEGATIVO)(\b|[.!])/.test(t);
