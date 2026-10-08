@@ -40,7 +40,7 @@ export function Administration() {
         {[
           ["channels", "Números & Meta"],
           ["automation", "Automações"],
-          ["agent", "Agente virtual"],
+          ["agent", "Modelo de instruções"],
           ["collector", "Conector & dados"],
           ["users", "Usuários"],
           ["audit", "Auditoria"],
