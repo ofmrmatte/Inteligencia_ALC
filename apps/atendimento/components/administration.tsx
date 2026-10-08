@@ -2,6 +2,7 @@
 import { useState, type FormEvent } from "react";
 import { api, useData, labels, when } from "./data";
 import { Collector } from "./collector";
+import { CUSTOMER_STEPS, DRIVER_STEPS, AGENT_GUARDRAILS, activeAgentEngine } from "../lib/agent-playbook";
 type Channel = {
   channel: "driver" | "client";
   number: string;
@@ -39,6 +40,7 @@ export function Administration() {
         {[
           ["channels", "Números & Meta"],
           ["automation", "Automações"],
+          ["agent", "Agente virtual"],
           ["collector", "Conector & dados"],
           ["users", "Usuários"],
           ["audit", "Auditoria"],
@@ -69,6 +71,8 @@ export function Administration() {
           initial={data.automation}
           refresh={refresh}
         />
+      ) : tab === "agent" ? (
+        <AgentPanel />
       ) : tab === "collector" ? (
         <Collector />
       ) : tab === "users" ? (
@@ -77,6 +81,44 @@ export function Administration() {
         <Audit />
       ) : null}
     </main>
+  );
+}
+function AgentPanel() {
+  return (
+    <section className="settings-section" aria-label="Instruções do agente virtual">
+      <p className="eyebrow">MOTOR DE ATENDIMENTO</p>
+      <h2>Agente virtual · instruções de tratativa</h2>
+      <p className="notice">
+        Motor atual: <strong>{activeAgentEngine("rules")}</strong>. A Meta entrega mensagens pelo WhatsApp;
+        OpenAI e Gemini não estão conectados. Nenhum provedor de IA será ativado nesta etapa.
+      </p>
+      <p className="muted">As regras abaixo orientam o fluxo atual e formam o roteiro para uma futura integração com IA, após homologação.</p>
+      <h3>Clientes</h3>
+      <div className="channel-grid">
+        {CUSTOMER_STEPS.map((step) => (
+          <article key={step.id} className="card">
+            <h3>{step.title}</h3>
+            <p>{step.goal}</p>
+          </article>
+        ))}
+      </div>
+      <h3>Motoristas</h3>
+      <div className="channel-grid">
+        {DRIVER_STEPS.map((step) => (
+          <article key={step.id} className="card">
+            <h3>{step.title}</h3>
+            <p>{step.goal}</p>
+          </article>
+        ))}
+      </div>
+      <h3>Limites obrigatórios</h3>
+      <ul>
+        {AGENT_GUARDRAILS.map((rule) => <li key={rule}>{rule}</li>)}
+      </ul>
+      <p className="notice">
+        Comprovantes devem refletir apenas mensagens reais da tratativa. Não usar conteúdo sintético como prova de atendimento.
+      </p>
+    </section>
   );
 }
 function ChannelCard({
@@ -312,9 +354,9 @@ function AutomationForm({
         </p>
       ) : null}
       <div className="notice">
-        Notificações de motoristas usam o texto aprovado “pnraberta”, referente
-        a Aguardando comprovante. Outros status ficam disponíveis na consulta,
-        mas precisam de modelo compatível para novo contato.
+        Notificações aos motoristas são limitadas a Aguardando comprovante e Com penalidade,
+        mediante modelo aprovado pela Meta. Casos em revisão e encerrados continuam consultáveis,
+        mas não geram disparos proativos.
       </div>
     </section>
   );
