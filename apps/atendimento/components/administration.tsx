@@ -99,7 +99,7 @@ function AgentPanel() {
           <article key={step.id} className="card">
             <h3>{step.title}</h3>
             <p>{step.goal}</p>
-            {"example" in step ? <p className="muted"><strong>Exemplo:</strong> {step.example}</p> : null}
+            {"example" in step ? <p className="muted" style={{ whiteSpace: "pre-wrap" }}><strong>Exemplo:</strong> {step.example}</p> : null}
           </article>
         ))}
       </div>
