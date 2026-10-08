@@ -26,19 +26,19 @@ export function EvidenceList() {
         const error = await response.json().catch(() => null);
         throw new Error(error?.error || "Não foi possível gerar o comprovante.");
       }
-      const image = await response.blob();
-      const fileUrl = URL.createObjectURL(image);
+      const archive = await response.blob();
+      const fileUrl = URL.createObjectURL(archive);
       try {
         const anchor = document.createElement("a");
         anchor.href = fileUrl;
-        anchor.download = `tratativa-${row.case_id}.png`;
+        anchor.download = `comprovante-${row.case_id}.zip`;
         document.body.appendChild(anchor);
         anchor.click();
         anchor.remove();
       } finally {
         URL.revokeObjectURL(fileUrl);
       }
-      setNotice("Registro visual criado usando somente mensagens confirmadas.");
+      setNotice("Pacote gerado: pasta da PNR, prints numerados e manifesto de integridade.");
     } catch (cause) {
       setNotice(cause instanceof Error ? cause.message : "Comprovante indisponível.");
     } finally {
@@ -49,12 +49,12 @@ export function EvidenceList() {
     <main className="page">
       <div className="page-tools">
         <p className="muted">
-          Comprovantes em PNG com aspecto de conversa WhatsApp, extraídos do histórico real.
+          Comprovantes em imagens curtas no estilo de conversa WhatsApp Web, extraídos do histórico real.
         </p>
         <span className="badge">Sem nomes de clientes</span>
       </div>
       <p className="notice">
-        O comprovante reproduz os registros confirmados no ALC Atendimento. Não é uma
+        O pacote ZIP contém a pasta com o ID da PNR, imagens print-01.png, print-02.png etc. e um manifesto. Não é uma
         captura nativa do WhatsApp Web. A exportação exige tratativa concluída, pelo
         menos três mensagens e nenhum trecho desconhecido, pendente ou omitido.
       </p>
@@ -79,7 +79,7 @@ export function EvidenceList() {
                     onClick={() => void saveEvidence(row)}
                   >
                     <Download size={15} />
-                    {busy === row.id ? "Gerando…" : "Comprovante PNG"}
+                    {busy === row.id ? "Gerando…" : "Baixar comprovantes ZIP"}
                   </button>
                 </td>
               </tr>
