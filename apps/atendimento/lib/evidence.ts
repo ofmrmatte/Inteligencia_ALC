@@ -18,8 +18,8 @@ export function validateEvidence(
 ): string | null {
   if (conversation.status !== "resolved")
     return "Resolva a tratativa antes de gerar o comprovante.";
-  if (hasMore || messages.length > 100)
-    return "Histórico muito longo para um único comprovante; exportação integral ainda não disponível.";
+  if (hasMore || messages.length > 500)
+    return "O histórico excede o limite de 500 mensagens para uma exportação integral. Nenhuma mensagem será omitida.";
   if (messages.length < 3 || !messages.some((m) => m.direction === "in") ||
       !messages.some((m) => m.direction === "out"))
     return "A tratativa precisa conter início, interação e conclusão confirmados.";
@@ -50,4 +50,60 @@ export function evidenceFingerprint(
       messages: messages.map((m) => [m.id, m.provider_id, m.direction, m.body, m.type, m.status, new Date(m.created_at).toISOString()]),
     }))
     .digest("hex");
+}
+
+export type EvidenceSlice = { message: EvidenceMessage; text: string; section: number; sections: number; lines: number };
+export type EvidencePage = { segments: EvidenceSlice[]; first: string; last: string };
+/** Split visual bubbles only, never delete or change their original content. */
+export function splitEvidenceMessage(message: EvidenceMessage): EvidenceSlice[] {
+  const body = message.body;
+  const slices: {text:string;lines:number}[] = [];
+  let current = "", lines = 0;
+  const flush = () => { if(current){ slices.push({text:current,lines:Math.max(lines,1)}); current="";lines=0; } };
+  // Literal lines are preserved. Long lines wrap visually every ~54 characters.
+  for (const part of body.split(/(\n)/)) {
+    if (part === "\n") { current+="\n"; lines++; if(lines>=10)flush(); continue; }
+    if (!part) continue;
+    let index=0;
+    while(index<part.length) {
+      const size=Math.min(54,part.length-index);
+      const token=part.slice(index,index+size);
+      if(lines>=10)flush();
+      current+=token;
+      lines++;
+      index+=size;
+    }
+  }
+  flush();
+  return slices.map((slice,index) => ({
+    message, text:slice.text, section:index+1, sections:slices.length, lines:slice.lines,
+  }));
+}
+/** WhatsApp Web-ish viewport 900x840: ~540px of message bubbles per image. */
+export function paginateEvidence(messages: readonly EvidenceMessage[], maxBodyHeight=535): EvidencePage[] {
+  const pages: EvidencePage[]=[];
+  let segments:EvidenceSlice[]=[],height=0;
+  const flush=()=>{
+    if(!segments.length)return;
+    pages.push({
+      segments,
+      first:new Date(segments[0].message.created_at).toISOString(),
+      last:new Date(segments[segments.length-1].message.created_at).toISOString(),
+    });
+    segments=[];height=0;
+  };
+  for(const message of messages)for(const slice of splitEvidenceMessage(message)){
+    const size=49 + slice.lines*21 + (slice.sections>1?18:0);
+    if(size>maxBodyHeight)throw new Error("Um trecho excede a altura máxima do print.");
+    if(height+size>maxBodyHeight)flush();
+    segments.push(slice);height+=size;
+  }
+  flush();
+  if(pages.length>80)throw new Error("O histórico precisa de mais de 80 prints; solicite exportação em lotes.");
+  // Integrity: no character from a message may be dropped during visual partitioning.
+  for(const m of messages){
+    const actual=pages.flatMap(p=>p.segments).filter(s=>s.message.id===m.id).map(s=>s.text).join("");
+    if(actual!==m.body)throw new Error("Falha de integridade: trecho de conversa incompleto.");
+  }
+  return pages;
 }
