@@ -84,7 +84,7 @@ export function Administration() {
     </main>
   );
 }
-function ChannelCard({
+export function ChannelCard({
   channel,
   refresh,
 }: {
