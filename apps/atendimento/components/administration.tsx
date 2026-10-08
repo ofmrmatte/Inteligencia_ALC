@@ -319,7 +319,7 @@ function AutomationForm({
     </section>
   );
 }
-function Users() {
+export function Users() {
   const { data, error, refresh } = useData<{
     records: {
       id: string;
@@ -331,13 +331,17 @@ function Users() {
     }[];
   }>("users");
   const [notice, setNotice] = useState("");
+  const enabledUsers = (data?.records ?? []).filter(
+    (user) => user.active && user.atendimentoActive,
+  );
   return (
     <section className="card">
       <h2>Usuários do Atendimento</h2>
       <p className="muted">
         Contas compartilhadas com o Inteligência ALC. Perfis, bases e MFA
-        permanecem no cadastro central; aqui você controla o acesso a esta
-        aplicação.
+        permanecem no cadastro central. Somente usuários habilitados são
+        exibidos. Novos acessos devem ser liberados nas Configurações do
+        Inteligência ALC.
       </p>
       {error ? <p className="notice error">{error}</p> : null}
       <div className="table-wrap">
@@ -351,7 +355,7 @@ function Users() {
             </tr>
           </thead>
           <tbody>
-            {data?.records.map((u) => (
+            {enabledUsers.map((u) => (
               <tr key={u.id}>
                 <td>
                   {u.full_name}
@@ -359,9 +363,7 @@ function Users() {
                 </td>
                 <td>{u.role}</td>
                 <td>
-                  {u.active && u.atendimentoActive
-                    ? "Habilitado"
-                    : "Desativado"}
+                  Habilitado
                 </td>
                 <td>
                   <button
@@ -378,7 +380,7 @@ function Users() {
                       }
                     }}
                   >
-                    {u.atendimentoActive ? "Desativar" : "Habilitar"}
+                    Desativar
                   </button>
                 </td>
               </tr>
@@ -386,6 +388,9 @@ function Users() {
           </tbody>
         </table>
       </div>
+      {data && !enabledUsers.length ? (
+        <p className="empty">Nenhum usuário habilitado no Atendimento.</p>
+      ) : null}
       {notice ? <p className="notice">{notice}</p> : null}
     </section>
   );
