@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import Link from "next/link";
-import { ChevronDown, ChevronLeft, ChevronRight, ClipboardList, HardDriveUpload, MessageSquare, ArrowUpRight } from "lucide-react";
+import { ChevronDown, ChevronLeft, ChevronRight, ClipboardList, HardDriveUpload, ArrowUpRight } from "lucide-react";
 import { Brand } from "@/components/brand";
 import { canAccessSection } from "@/lib/access-control";
 import type { AuthProfile } from "@/lib/auth";
@@ -74,7 +74,7 @@ export function Sidebar({
                       </button>
 
                       {!collapsed && open ? (
-                        <div className="sidebar__subnav" aria-label="Subcategorias de Gestão PNR">
+                        <div className="sidebar__subnav" aria-label="Subcategorias de Prevenção de Perdas">
                           <Link
                             className={active === "gestao-pnr" ? "sidebar__subitem is-active" : "sidebar__subitem"}
                             href="/gestao-pnr"
@@ -103,10 +103,15 @@ export function Sidebar({
 
                 return (
                   <div className="sidebar__branch" key={item.id}>
-                    <Link className={itemClass} href={item.href} title={collapsed ? item.label : undefined}>
+                    {item.newTab ? (
+                      <a className={itemClass} href={item.href} target="_blank" rel="noopener noreferrer" title={collapsed ? `${item.label} (nova aba)` : undefined}>
+                        <Icon size={19} strokeWidth={1.9} />
+                        {!collapsed && <><span>{item.label}</span><ArrowUpRight size={15} aria-label="Abre em nova aba" /></>}
+                      </a>
+                    ) : <Link className={itemClass} href={item.href} title={collapsed ? item.label : undefined}>
                       <Icon size={19} strokeWidth={1.9} />
                       {!collapsed && <span>{item.label}</span>}
-                    </Link>
+                    </Link>}
 
                     {!collapsed && children.length ? (
                       <div className="sidebar__subnav" aria-label={`Subcategorias de ${item.label}`}>
@@ -131,12 +136,6 @@ export function Sidebar({
             </div>
           );
         })}
-        {canAccessSection(profile, "gestao-pnr") ? (
-          <a className="sidebar__item" href="/atendimento" target="_blank" rel="noopener noreferrer" title={collapsed ? "ALC Atendimento" : undefined}>
-            <MessageSquare size={19} strokeWidth={1.9} />
-            {!collapsed && <><span>ALC Atendimento</span><ArrowUpRight size={15} /></>}
-          </a>
-        ) : null}
       </nav>
       <div className="sidebar__footer">
         {canImport ? (

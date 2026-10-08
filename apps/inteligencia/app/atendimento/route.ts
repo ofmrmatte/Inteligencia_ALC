@@ -12,7 +12,7 @@ export async function GET(request: Request) {
   const login = new URL("/login", request.url);
   login.searchParams.set("next", "/atendimento");
   if (!profile) return NextResponse.redirect(login);
-  if (!canAccessSection(profile, "gestao-pnr"))
+  if (!canAccessSection(profile, "atendimento"))
     return NextResponse.json({ error: "Acesso restrito." }, { status: 403 });
   const destination =
     process.env.ALC_ATENDIMENTO_URL ||

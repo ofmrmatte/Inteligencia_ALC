@@ -1,4 +1,4 @@
-import type { AuthProfile, UserRole } from "@/lib/auth";
+import { canAccessAtendimento, type AuthProfile, type UserRole } from "@/lib/auth";
 import type { SectionId } from "@/lib/navigation";
 import { canAccessHr } from "@/lib/hr/permissions";
 
@@ -65,7 +65,8 @@ export function modulesForProfile(profile: Pick<AuthProfile, "role" | "moduleSco
   return canAccessHr(profile) ? [...modules, "rh"] : modules;
 }
 
-export function canAccessSection(profile: Pick<AuthProfile, "role" | "moduleScope">, section: SectionId) {
+export function canAccessSection(profile: Pick<AuthProfile, "role" | "moduleScope" | "atendimentoAccess">, section: SectionId) {
+  if (section === "atendimento") return canAccessAtendimento(profile);
   if (section === "auditoria-pnr" || section === "bandeja-pnr") return modulesForProfile(profile).includes("gestao-pnr");
   return modulesForProfile(profile).includes(section);
 }

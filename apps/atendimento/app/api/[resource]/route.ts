@@ -30,7 +30,7 @@ import {
   normalize,
   type CaseRecord,
 } from "@/lib/domain";
-import { canManageUsers, canManageRole, isUserRole } from "@alc/identity/auth";
+import { canAccessAtendimento, canManageUsers, canManageRole, isUserRole } from "@alc/identity/auth";
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 const channel = z.enum(["driver", "client"]);
@@ -262,7 +262,7 @@ export async function GET(
         )
           continue;
         const access = await setting<{ active: boolean }>(`access_${user.id}`);
-        records.push({ ...user, atendimentoActive: access?.active !== false });
+        records.push({ ...user, atendimentoActive: user.active !== false && isUserRole(user.role) && canAccessAtendimento({ role: user.role, moduleScope: user.module_scope ?? undefined, atendimentoAccess: access?.active }) });
       }
       return Response.json({ records });
     }
@@ -660,7 +660,7 @@ export async function POST(
       });
       const { data, error } = await client
         .from("profiles")
-        .select("id,role")
+        .select("id,role,active")
         .eq("id", parsed.id)
         .maybeSingle();
       if (
@@ -670,6 +670,8 @@ export async function POST(
         !canManageRole(profile, data.role)
       )
         throw new HttpError(403, "Você não pode gerenciar este perfil.");
+      if (parsed.active && (data.active === false || !canAccessAtendimento({ role: data.role, atendimentoAccess: true })))
+        throw new HttpError(403, "Este perfil não pode receber acesso ao Atendimento.");
       await db().query(
         "INSERT INTO alc_atendimento.settings(key,value,updated_by) VALUES($1,$2,$3) ON CONFLICT(key) DO UPDATE SET value=excluded.value,updated_by=excluded.updated_by,updated_at=now()",
         [`access_${parsed.id}`, { active: parsed.active }, profile.id],

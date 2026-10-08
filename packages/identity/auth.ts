@@ -33,6 +33,7 @@ export interface AuthProfile {
   siglaScope: string[];
   xptScope?: string[];
   moduleScope?: string[];
+  atendimentoAccess?: boolean;
 }
 
 export const ROLE_LABELS: Record<UserRole, string> = {
@@ -101,6 +102,17 @@ export function canManageUsers(
   profile: Pick<AuthProfile, "role" | "globalAccess">,
 ) {
   return USER_MANAGER_ROLES.includes(profile.role);
+}
+
+// Explicit grants/revocations are stored in the Atendimento settings database.
+// Unconfigured users retain the existing PNR permission during migration.
+export function canAccessAtendimento(
+  profile: Pick<AuthProfile, "role" | "moduleScope" | "atendimentoAccess">,
+) {
+  const full = GLOBAL_OPERATIONAL_ROLES.includes(profile.role);
+  if (!full && !["coordinator", "supervisor"].includes(profile.role)) return false;
+  if (typeof profile.atendimentoAccess === "boolean") return profile.atendimentoAccess;
+  return full || profile.moduleScope == null || profile.moduleScope.includes("gestao-pnr");
 }
 
 export function manageableUserRoles(

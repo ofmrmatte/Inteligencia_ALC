@@ -3,6 +3,7 @@ import { isUserRole, type AuthProfile } from "@/lib/auth";
 import { isSupabaseConfigured } from "@/lib/supabase/config";
 import { createClient } from "@/lib/supabase/server";
 import { retrySupabaseResult } from "@/lib/supabase/retry";
+import { readAtendimentoAccess } from "@/lib/atendimento-access";
 
 type ProfileResolution =
   | { status: "authenticated"; profile: AuthProfile }
@@ -34,6 +35,11 @@ async function resolveCurrentProfile(): Promise<ProfileResolution> {
   const role = isUserRole(profile.role) ? profile.role : null;
   if (!role) return { status: "forbidden" };
 
+  // An unavailable permission store closes only Atendimento, never the main panel.
+  const atendimentoAccess = await readAtendimentoAccess([userId])
+    .then((flags) => flags.get(userId))
+    .catch(() => false);
+
   return {
     status: "authenticated",
     profile: {
@@ -41,6 +47,7 @@ async function resolveCurrentProfile(): Promise<ProfileResolution> {
       email: profile.email ?? claims?.email ?? "",
       fullName: profile.full_name ?? profile.email ?? claims?.email ?? "Usuário ALC",
       role,
+      atendimentoAccess,
       setor: typeof profile.setor === "string" ? profile.setor : "",
       globalAccess: Boolean(profile.global_access) || role === "loss_admin",
       baseScope: Array.isArray(profile.base_scope) ? profile.base_scope : [],

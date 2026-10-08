@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { canAccessSection, modulesForProfile } from "@/lib/access-control";
+import { canAccessOperationalData, canAccessSection, modulesForProfile } from "@/lib/access-control";
 import { canManageImports, canManageUsers, hasFullAccess, type AuthProfile } from "@/lib/auth";
 
 function profile(role: AuthProfile["role"], moduleScope?: string[]): AuthProfile {
@@ -54,5 +54,26 @@ describe("matriz de acesso do painel", () => {
     const current = profile("coordinator");
     expect(canAccessSection(current, "visao-geral")).toBe(true);
     expect(canAccessSection(current, "configuracoes")).toBe(false);
+  });
+
+  it("permite Atendimento independente de PNR sem liberar outras APIs operacionais", () => {
+    const current = { ...profile("supervisor", ["perfil"]), atendimentoAccess: true };
+    expect(canAccessSection(current, "atendimento")).toBe(true);
+    expect(canAccessSection(current, "gestao-pnr")).toBe(false);
+    expect(canAccessOperationalData(current)).toBe(false);
+  });
+
+  it("revoga Atendimento mesmo de cargos globais sem remover Prevenção de Perdas", () => {
+    const current = { ...profile("director"), atendimentoAccess: false };
+    expect(canAccessSection(current, "atendimento")).toBe(false);
+    expect(canAccessSection(current, "gestao-pnr")).toBe(true);
+  });
+
+  it("preserva acesso legado e respeita o teto dos cargos nas novas liberações", () => {
+    expect(canAccessSection(profile("coordinator", ["gestao-pnr"]), "atendimento")).toBe(true);
+    expect(canAccessSection(profile("coordinator", ["perfil"]), "atendimento")).toBe(false);
+    for (const role of ["admin", "administration_supervisor", "driver"] as const) {
+      expect(canAccessSection({ ...profile(role), atendimentoAccess: true }, "atendimento")).toBe(false);
+    }
   });
 });

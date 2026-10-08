@@ -3,7 +3,7 @@ import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
 import {
   canManageUsers,
-  hasFullAccess,
+  canAccessAtendimento,
   hasFullOperationalScope,
   isUserRole,
   type AuthProfile,
@@ -94,14 +94,9 @@ export async function currentProfile(): Promise<AuthProfile> {
     siglaScope: row.sigla_scope ?? [],
     moduleScope: row.module_scope ?? undefined,
   };
-  if (
-    !hasFullAccess(profile) &&
-    (!["coordinator", "supervisor"].includes(profile.role) ||
-      (profile.moduleScope && !profile.moduleScope.includes("gestao-pnr")))
-  )
-    throw new HttpError(403, "O acesso exige permissão de Gestão PNR.");
   const access = await setting<{ active: boolean }>(`access_${profile.id}`);
-  if (access?.active === false)
+  profile.atendimentoAccess = access?.active;
+  if (!canAccessAtendimento(profile))
     throw new HttpError(403, "Seu acesso ao Atendimento está desativado.");
   return profile;
 }
