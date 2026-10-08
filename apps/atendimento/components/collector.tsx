@@ -2,6 +2,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { Download, RefreshCw } from "lucide-react";
 import connector from "alc-pnr-connector/package.json";
+import { connectorStatus, type ConnectorPing } from "../lib/connector-status";
 import { api, useData, when } from "./data";
 export function request<T>(
   type: string,
@@ -14,7 +15,9 @@ export function request<T>(
       window.removeEventListener("message", receive);
       reject(
         new Error(
-          "Conector não respondeu. Atualize a extensão e recarregue esta página.",
+          type === "PING"
+            ? "A extensão não respondeu à verificação. Se já estiver instalada, recarregue esta aba e verifique novamente."
+            : "O conector não respondeu dentro do prazo. Confira a última sincronização antes de tentar novamente.",
         ),
       );
     }, timeoutMs);
@@ -39,25 +42,34 @@ export function request<T>(
   });
 }
 export function Collector() {
-  const [connectorState, setConnectorState] = useState<{
-    installed: boolean;
-    version?: string;
-    mlTabAvailable?: boolean;
-  } | null>(null);
-  const check = useCallback(
-    () =>
-      request<{
-        installed: boolean;
-        version?: string;
-        mlTabAvailable?: boolean;
-      }>("PING", {}, 5000)
-        .then(setConnectorState)
-        .catch(() => setConnectorState({ installed: false })),
-    [],
-  );
+  const [connectorState, setConnectorState] = useState<ConnectorPing | null>(null);
+  const [checked, setChecked] = useState(false);
+  const [checking, setChecking] = useState(false);
+  const check = useCallback(async () => {
+    setChecking(true);
+    try {
+      setConnectorState(await request<ConnectorPing>("PING", {}, 8_000));
+    } catch {
+      // A stale content script after an extension update is not evidence of an outdated version.
+      setConnectorState(null);
+    } finally {
+      setChecked(true);
+      setChecking(false);
+    }
+  }, []);
   useEffect(() => {
     void check();
+    const whenVisible = () => {
+      if (document.visibilityState === "visible") void check();
+    };
+    window.addEventListener("focus", whenVisible);
+    document.addEventListener("visibilitychange", whenVisible);
+    return () => {
+      window.removeEventListener("focus", whenVisible);
+      document.removeEventListener("visibilitychange", whenVisible);
+    };
   }, [check]);
+  const detection = connectorStatus(connectorState, connector.version, checked);
   const [notice, setNotice] = useState(""),
     [busy, setBusy] = useState(false);
   const { data, refresh } = useData<{
@@ -84,8 +96,8 @@ export function Collector() {
       <p className="eyebrow">FONTE / MERCADO LIVRE</p>
       <h2>Conector Case Center</h2>
       <p>
-        Instale a versão {connector.version} no computador de teste. Mantenha a
-        Bandeja de suporte autenticada e uma aba do ALC Atendimento abertas.
+        Versão necessária: {connector.version}. A verificação é feita na aba atual
+        do navegador. Mantenha a Bandeja de suporte e o ALC Atendimento abertos.
       </p>
       <a
         className="primary"
@@ -95,19 +107,19 @@ export function Collector() {
         <Download size={16} /> Baixar extensão
       </a>
       <dl>
-        <dt>Este computador</dt>
-        <dd>
-          {connectorState === null
-            ? "Verificando conector"
-            : !connectorState.installed
-              ? "Conector não encontrado"
-              : `Conector ${connectorState.version || "instalado"}`}
-        </dd>
+        <dt>Extensão no navegador</dt>
+        <dd role="status">{checking ? "Verificando extensão…" : detection.label}</dd>
+        {connectorState?.extensionId ? (
+          <>
+            <dt>ID da extensão</dt>
+            <dd className="wrap">{connectorState.extensionId}</dd>
+          </>
+        ) : null}
         <dt>Bandeja Mercado Livre</dt>
         <dd>
           {connectorState?.mlTabAvailable
-            ? "Aba disponível; sessão verificada na coleta"
-            : "Abra a Bandeja autenticada neste navegador"}
+            ? "Aba identificada; autenticação confirmada somente durante a coleta"
+            : "Aba não identificada; abra a Bandeja autenticada neste navegador"}
         </dd>
         <dt>Frequência</dt>
         <dd>30 minutos</dd>
@@ -123,23 +135,23 @@ export function Collector() {
         </dd>
       </dl>
       <div className="actions">
-        <button onClick={() => void check()}>
-          <RefreshCw size={15} /> Verificar conector
+        <button type="button" disabled={checking} onClick={() => void check()}>
+          <RefreshCw size={15} /> {checking ? "Verificando…" : "Verificar extensão"}
         </button>
         <button
-          disabled={busy || !connectorState?.mlTabAvailable}
+          disabled={busy || !detection.ready || !connectorState?.mlTabAvailable}
           onClick={() => run("ATENDIMENTO_COLLECT")}
         >
           Coletar agora
         </button>
         <button
-          disabled={busy || !connectorState?.installed}
+          disabled={busy || !detection.ready}
           onClick={() => run("ATENDIMENTO_ENABLE")}
         >
           Ativar coleta a cada 30 min
         </button>
         <button
-          disabled={busy || !connectorState?.installed}
+          disabled={busy || !detection.ready}
           onClick={() => run("ATENDIMENTO_DISABLE")}
         >
           Pausar coleta
@@ -167,6 +179,12 @@ export function Collector() {
         </p>
       ) : null}
       <div className="notice">
+        Se a extensão estiver instalada e atualizada, mas sem resposta, recarregue
+        a aba do ALC Atendimento: o Chrome injeta a ponte na abertura da página.
+        A presença da extensão não confirma o login no Mercado Livre.
+      </div>
+      <div className="notice">
+        Coleta manual não envia nem enfileira mensagens, mesmo com automações habilitadas.
         O coletor depende deste computador e das sessões abertas. Se houver
         falha ou a máquina estiver desligada, a próxima coleta ocorrerá quando
         estiver disponível. O histórico já coletado continua acessível.

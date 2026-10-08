@@ -40,10 +40,12 @@ export function currentAtendimentoCompetence(now = new Date()) {
   const parts = Object.fromEntries(new Intl.DateTimeFormat("en-CA", { timeZone: "America/Sao_Paulo", year: "numeric", month: "2-digit", day: "2-digit" }).formatToParts(now).map((p) => [p.type, p.value]));
   return `${parts.year}${parts.month}Q${Number(parts.day) <= 15 ? 1 : 2}`;
 }
-async function collectAtendimento() {
+async function collectAtendimento({ channel = null, collectOnly = false } = {}) {
   if (atendimentoCollecting) return connectorError("INVALID_RESPONSE", "Já existe uma coleta em andamento.");
   atendimentoCollecting = true;
   try {
+    if (channel !== null && channel !== "client" && channel !== "driver")
+      throw new Error("Tipo de coleta inválido.");
     const tab = await atendimentoTab();
     if (!tab?.id) throw new Error("Mantenha uma aba autenticada do ALC Atendimento aberta.");
     const competence = currentAtendimentoCompetence();
@@ -60,18 +62,27 @@ async function collectAtendimento() {
         const details = await handle({ type: "FETCH_TIMELINES", payload: { caseIds: records.map((r) => r.caseId), concurrency: 2 } });
         if (details.ok) for (const item of details.data.results) {
           const record = records.find((r) => r.caseId === item.caseId);
-          if (record && item.ok) Object.assign(record, {
-            driverId: item.data.detail?.driverId || "", driverPhone: item.data.detail?.driverPhone || "",
-            customerName: item.data.detail?.buyerName || "", products: item.data.detail?.products || [], deliveryAt: item.data.detail?.deliveryAt || "",
-          });
+          if (record && item.ok) {
+            const detail = item.data.detail || {};
+            if (channel !== "client") Object.assign(record, {
+              driverId: detail.driverId || "", driverPhone: detail.driverPhone || "",
+            });
+            if (channel !== "driver") Object.assign(record, {
+              customerName: detail.buyerName || "", products: detail.products || [],
+              deliveryAt: detail.deliveryAt || "",
+            });
+          }
         }
       }
-      await persistInAtendimento(tab.id, "import", { syncId, competence, completed: page >= Math.max(totalPages, 1), records });
+      await persistInAtendimento(tab.id, "import", {
+        syncId, competence, channel, collectOnly,
+        completed: page >= Math.max(totalPages, 1), records,
+      });
       processed += records.length;
       page += 1;
     } while (page <= totalPages);
     await chrome.storage.local.set({ atendimentoLastSync: new Date().toISOString(), atendimentoError: "" });
-    return { ok: true, data: { message: `${processed} PNRs da competência ${competence} atualizadas. Próxima coleta automática em 30 minutos, se ativada.` } };
+    return { ok: true, data: { message: `${processed} PNRs da competência ${competence} atualizadas${channel === "client" ? " (dados de clientes)" : channel === "driver" ? " (dados de motoristas)" : ""}. ${collectOnly ? "Nenhuma mensagem foi enviada ou enfileirada por esta coleta." : "Próxima coleta automática em 30 minutos, se ativada."}` } };
   } catch (error) {
     await chrome.storage.local.set({ atendimentoError: error.message });
     return connectorError("INVALID_RESPONSE", error.message);
@@ -389,7 +400,8 @@ async function handle(message) {
     await persistCollectorState(false);
     return { ok: true, data: { message: "Coleta automática pausada." } };
   }
-  if (message.type === "ATENDIMENTO_COLLECT") return collectAtendimento();
+  if (message.type === "ATENDIMENTO_COLLECT")
+    return collectAtendimento({ channel: message.payload?.channel || null, collectOnly: true });
 
   const tabs = await caseCenterTabs();
   const authenticatedTab = tabs[0] ?? null;
@@ -398,6 +410,7 @@ async function handle(message) {
     return { ok: true, data: {
       installed: true,
       version,
+      extensionId: chrome.runtime.id,
       mlTabAvailable: Boolean(authenticatedTab?.id),
       sessionAvailable: Boolean(authenticatedTab?.id),
     } };

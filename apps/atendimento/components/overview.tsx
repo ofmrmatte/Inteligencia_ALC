@@ -1,4 +1,8 @@
 "use client";
+import { useState } from "react";
+import { request } from "./collector";
+import { connectorStatus, type ConnectorPing } from "../lib/connector-status";
+import connector from "alc-pnr-connector/package.json";
 import Link from "next/link";
 import {
   Clock3,
@@ -18,7 +22,15 @@ type OverviewData = {
   unread: number;
   competence: string;
   source: { lastSync?: string };
-  collector: { enabled: boolean; lastSync: string | null; completed: boolean };
+  collector: {
+    enabled: boolean;
+    lastSync: string | null;
+    completed: boolean;
+    channelSync?: Partial<Record<"client" | "driver", {
+      lastSync: string;
+      completed: boolean;
+    }>>;
+  };
   queue: {
     id: string;
     name: string;
@@ -31,6 +43,32 @@ type OverviewData = {
 };
 export function Overview() {
   const { data, error, refresh } = useData<OverviewData>("overview", 15_000);
+  const [collecting, setCollecting] = useState<"client" | "driver" | null>(null);
+  const [collectionNotice, setCollectionNotice] = useState("");
+  const [collectionError, setCollectionError] = useState(false);
+  async function collect(channel: "client" | "driver") {
+    setCollecting(channel);
+    setCollectionNotice("");
+    setCollectionError(false);
+    try {
+      const ping = await request<ConnectorPing>("PING", {}, 8_000);
+      const status = connectorStatus(ping, connector.version, true);
+      if (!status.ready) {
+        throw new Error(`${status.label} Acesse Ajustes > Conector & dados.`);
+      }
+      if (!ping.mlTabAvailable) {
+        throw new Error("Abra a listagem do Case Center no Mercado Livre antes de coletar.");
+      }
+      const result = await request<{ message: string }>("ATENDIMENTO_COLLECT", { channel });
+      setCollectionNotice(result.message || "Coleta de dados concluída, sem disparos.");
+      await refresh();
+    } catch (cause) {
+      setCollectionError(true);
+      setCollectionNotice(cause instanceof Error ? cause.message : "Não foi possível coletar dados.");
+    } finally {
+      setCollecting(null);
+    }
+  }
   return (
     <main className="page">
       <div className="page-tools">
@@ -129,14 +167,38 @@ export function Overview() {
                 : "Coleta ainda não concluída"}
             </dd>
           </dl>
+          <p className="muted">
+            Sincronização de dados do Case Center. Estes botões não enviam mensagens.
+          </p>
           <div className="actions">
-            <Link className="primary" href="/conversas?channel=client">
-              Disparo Cliente
-            </Link>
-            <Link className="text-link" href="/conversas?channel=driver">
-              Atendimento motoristas
-            </Link>
+            <button
+              className="primary"
+              type="button"
+              disabled={collecting !== null}
+              onClick={() => void collect("client")}
+            >
+              {collecting === "client" ? "Coletando clientes…" : "Coletar Cliente"}
+            </button>
+            <button
+              type="button"
+              disabled={collecting !== null}
+              onClick={() => void collect("driver")}
+            >
+              {collecting === "driver" ? "Coletando motoristas…" : "Coletar Driver"}
+            </button>
           </div>
+          <dl>
+            <dt>Última coleta de clientes</dt>
+            <dd>{when(data?.collector.channelSync?.client?.lastSync)}</dd>
+            <dt>Última coleta de motoristas</dt>
+            <dd>{when(data?.collector.channelSync?.driver?.lastSync)}</dd>
+          </dl>
+          {collectionNotice ? (
+            <p role="status" className={collectionError ? "notice error" : "notice"}>
+              {collectionNotice}
+              {collectionError ? <> <Link href="/admin">Verificar extensão nos Ajustes</Link></> : null}
+            </p>
+          ) : null}
         </Panel>
       </div>
     </main>
