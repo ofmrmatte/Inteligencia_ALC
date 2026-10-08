@@ -337,7 +337,7 @@ export function PnrInboxView({ profile }: { profile: AuthProfile }) {
   }, [caseCenterCompetence]);
 
   const readCaseCenterCompetence = useCallback(async () => {
-    const result = await requestPnrConnector<{ competence: string }>("READ_CASE_CENTER_PERIOD", {}, 10_000);
+    const result = await requestPnrConnector<{ competence: string }>("READ_CASE_CENTER_PERIOD", {}, 30_000);
     const selected = String(result?.competence || "");
     if (!/^20\d{4}Q[12]$/.test(selected)) {
       throw new Error("Não foi possível identificar a competência selecionada no Case Center.");
@@ -365,7 +365,7 @@ export function PnrInboxView({ profile }: { profile: AuthProfile }) {
     setConnection("checking");
     setConnectionMessage(null);
     try {
-      const handshake = await requestPnrConnector<PnrConnectorHandshake>("PING", {}, 10_000);
+      const handshake = await requestPnrConnector<PnrConnectorHandshake>("PING", {}, 25_000);
       const state = handshake?.installed ? connectorStateFromHandshake(handshake) : "unsupported";
       if (checkId === connectorCheckRef.current) {
         setInstalledVersion(handshake?.installed ? handshake.version : null);

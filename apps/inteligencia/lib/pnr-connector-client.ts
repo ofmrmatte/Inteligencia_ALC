@@ -13,6 +13,7 @@ export interface PnrConnectorHandshake {
   sessionAvailable: boolean;
   sessionError?: string;
   sessionMessage?: string;
+  backgroundTabManaged?: boolean;
 }
 
 export type PnrConnectorState = "checking" | "connected" | "outdated" | "unsupported" | "ml-missing" | "expired" | "extension-missing" | "error";
@@ -76,7 +77,7 @@ export class PnrConnectorError extends Error {
 }
 
 export function connectorStatusFromCode(code?: string) {
-  if (code === "MERCADO_LIVRE_NOT_DETECTED") return "Mercado Livre não detectado";
+  if (code === "MERCADO_LIVRE_NOT_DETECTED") return "Não foi possível abrir o Case Center em segundo plano";
   if (code === "MERCADO_LIVRE_SESSION_REQUIRED") return "Sessão Mercado Livre expirada";
   if (code === "EXTENSION_NOT_FOUND") return "Extensão ALC não encontrada";
   return "Falha na conexão com o Mercado Livre";

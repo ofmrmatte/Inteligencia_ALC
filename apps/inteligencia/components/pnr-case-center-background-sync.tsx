@@ -254,7 +254,7 @@ export function PnrCaseCenterBackgroundSync() {
           }
 
           emptyPolls = 0;
-          const handshake = await requestPnrConnector<PnrConnectorHandshake>("PING", {}, 10_000);
+          const handshake = await requestPnrConnector<PnrConnectorHandshake>("PING", {}, 25_000);
           const connectorState = connectorStateFromHandshake(handshake);
           if (connectorState === "unsupported" || connectorState === "outdated") {
             nextDelayMs = 300_000;
