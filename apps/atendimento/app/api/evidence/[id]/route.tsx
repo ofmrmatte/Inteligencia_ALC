@@ -1,141 +1,148 @@
 import { ImageResponse } from "next/og";
+import { createHash } from "node:crypto";
 import { z } from "zod";
 import { currentProfile, scopeFor, visible } from "@/lib/auth";
 import { audit, db } from "@/lib/db";
-import { evidenceFingerprint, validateEvidence, type EvidenceMessage } from "@/lib/evidence";
+import { evidenceFingerprint, validateEvidence, paginateEvidence, type EvidenceMessage, type EvidencePage } from "@/lib/evidence";
+import { packZip } from "@/lib/zip";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
+const failed=(message:string,status:number)=>
+  Response.json({error:message},{status,headers:{"Cache-Control":"private, no-store"}});
+const time=(d:Date|string)=>new Date(d).toLocaleTimeString("pt-BR",{
+  timeZone:"America/Sao_Paulo",hour:"2-digit",minute:"2-digit",
+});
+const date=(d:Date|string)=>new Date(d).toLocaleDateString("pt-BR",{
+  timeZone:"America/Sao_Paulo",
+});
+function RenderPage({page,phone,caseId,pageNumber,total}:{
+  page:EvidencePage;phone:string;caseId:string;pageNumber:number;total:number;
+}) {
+  return <div style={{
+    height:840,width:900,display:"flex",flexDirection:"column",
+    backgroundColor:"#efeae2",fontFamily:"Arial, sans-serif",color:"#111b21",
+  }}>
+    <div style={{height:77,flexShrink:0,display:"flex",alignItems:"center",
+      gap:14,padding:"12px 23px",backgroundColor:"#f0f2f5",borderBottom:"1px solid #d8dfe2"}}>
+      <span style={{color:"#8696a0",fontSize:25,marginRight:4}}>‹</span>
+      <div style={{width:48,height:48,borderRadius:48,backgroundColor:"#dfe5e7",
+        display:"flex",alignItems:"center",justifyContent:"center",color:"#687a84"}}>
+        <svg width="34" height="34" viewBox="0 0 34 34">
+          <circle cx="17" cy="12" r="7" fill="currentColor"/>
+          <path d="M3 31C3 21 10 19 17 19C24 19 31 21 31 31" fill="currentColor"/>
+        </svg>
+      </div>
+      <div style={{display:"flex",flexDirection:"column",gap:4}}>
+        <strong style={{fontSize:21,fontWeight:600}}>+{phone}</strong>
+        <span style={{color:"#667781",fontSize:13}}>Contato · Atendimento ALC</span>
+      </div>
+      <div style={{marginLeft:"auto",color:"#64777e",fontSize:23,display:"flex",gap:22}}>
+        <span>⌕</span><span>⋮</span>
+      </div>
+    </div>
+    <div style={{display:"flex",flexDirection:"column",flexGrow:1,padding:"20px 42px",
+      gap:8,backgroundColor:"#efeae2"}}>
+      <div style={{alignSelf:"center",borderRadius:7,backgroundColor:"#fff",
+        padding:"7px 13px",fontSize:12,color:"#65777d",marginBottom:5}}>
+        {date(page.first)} · parte {pageNumber} de {total}
+      </div>
+      {page.segments.map((slice,index)=><div key={slice.message.id+":"+slice.section+":"+index}
+        style={{backgroundColor:slice.message.direction==="out"?"#d9fdd3":"#fff",
+          maxWidth:690,minWidth:145,alignSelf:slice.message.direction==="out"?"flex-end":"flex-start",
+          display:"flex",flexDirection:"column",gap:6,
+          padding:"9px 12px 7px",borderRadius:8,
+        }}>
+        {slice.sections>1?<span style={{fontSize:11,color:"#667781"}}>
+          Mensagem em continuação · trecho {slice.section}/{slice.sections}
+        </span>:null}
+        <div style={{fontSize:17,lineHeight:1.25,whiteSpace:"pre-wrap",overflowWrap:"break-word"}}>
+          {slice.text}
+        </div>
+        <div style={{alignSelf:"flex-end",fontSize:11,color:"#667781",display:"flex",gap:8}}>
+          <span>{time(slice.message.created_at)}</span>
+          {slice.message.direction==="out" ?
+            <span style={{color:slice.message.status==="read"?"#53bdeb":"#667781"}}>
+              {slice.message.status==="read"?"✓✓":slice.message.status==="delivered"?"✓✓":"✓"}
+            </span>:null}
+        </div>
+      </div>)}
+    </div>
+    <div style={{height:51,flexShrink:0,backgroundColor:"#f0f2f5",borderTop:"1px solid #d8dfe2",
+      display:"flex",alignItems:"center",justifyContent:"space-between",padding:"10px 19px",
+      fontSize:11,color:"#53646a",gap:12}}>
+      <span>ALC Atendimento · Registro visual reconstruído de mensagens verificadas, não captura nativa do WhatsApp Web</span>
+      <strong>PNR {caseId} · {pageNumber}/{total}</strong>
+    </div>
+  </div>;
+}
 
-const timeLabel = (value: string | Date) =>
-  new Date(value).toLocaleTimeString("pt-BR", {
-    timeZone: "America/Sao_Paulo", hour: "2-digit", minute: "2-digit",
-  });
-const dateLabel = (value: string | Date) =>
-  new Date(value).toLocaleDateString("pt-BR", { timeZone: "America/Sao_Paulo" });
-const failed = (message: string, status: number) =>
-  Response.json({ error: message }, { status, headers: { "Cache-Control": "private, no-store" } });
-
-export async function GET(
-  _request: Request,
-  { params }: { params: Promise<{ id: string }> },
-) {
-  const profile = await currentProfile();
-  const parsed = z.string().uuid().safeParse((await params).id);
-  if (!parsed.success) return failed("Conversa inválida.", 400);
-  const result = await db().query(
+export async function GET(_request:Request,{params}:{params:Promise<{id:string}>}) {
+  const profile=await currentProfile();
+  const parsed=z.string().uuid().safeParse((await params).id);
+  if(!parsed.success)return failed("Conversa inválida.",400);
+  const result=await db().query(
     "SELECT id,phone,channel,status,case_id,base_key,sigla FROM alc_atendimento.conversations WHERE id=$1",
     [parsed.data],
   );
-  const conversation = result.rows[0];
-  if (!conversation || !visible(await scopeFor(profile), conversation))
-    return failed("Conversa não encontrada.", 404);
-  if (conversation.channel !== "client")
-    return failed("O comprovante de tratativa do cliente está disponível somente no canal de clientes.", 422);
-  if (!conversation.case_id)
-    return failed("A conversa ainda não está vinculada a uma PNR.", 422);
-  const linkedCases = await db().query(
+  const conversation=result.rows[0];
+  if(!conversation || !visible(await scopeFor(profile),conversation))
+    return failed("Conversa não encontrada.",404);
+  if(conversation.channel!=="client")return failed("Comprovantes são restritos ao canal de clientes.",422);
+  if(!conversation.case_id)return failed("Conversa sem vínculo com PNR.",422);
+  const matches=await db().query(
     "SELECT DISTINCT case_id FROM alc_atendimento.outbox WHERE conversation_id=$1 AND case_id IS NOT NULL LIMIT 2",
     [parsed.data],
   );
-  if (linkedCases.rows.length > 1 ||
-      (linkedCases.rows.length === 1 && linkedCases.rows[0].case_id !== conversation.case_id))
-    return failed("Há registros de mais de uma PNR nesta conversa; a tratativa precisa ser delimitada antes da exportação.", 422);
-  const resultMessages = await db().query(
+  if(matches.rows.length>1 || (matches.rows.length===1 && matches.rows[0].case_id!==conversation.case_id))
+    return failed("Mensagens associadas a mais de uma PNR. A tratativa deve ser delimitada antes da exportação.",422);
+  const resultMessages=await db().query(
     `SELECT id,provider_id,direction,body,type,status,created_at,attachment
-     FROM alc_atendimento.messages
-     WHERE conversation_id=$1 ORDER BY created_at ASC,id ASC LIMIT 102`,
-    [parsed.data],
+      FROM alc_atendimento.messages WHERE conversation_id=$1
+      ORDER BY created_at ASC,id ASC LIMIT 502`,[parsed.data],
   );
-  const all = resultMessages.rows as EvidenceMessage[];
-  // Never silently crop a conversation: omitted messages would misrepresent the actual treatment.
-  const reason = validateEvidence(conversation, all, all.length > 100);
-  if (reason) return failed(reason, 422);
-  const height = 186 + all.reduce((sum, message) =>
-    sum + 38 + Math.ceil(message.body.length / 42) * 21 +
-      (message.body.match(/\n/g)?.length || 0) * 19, 0) + 104;
-  if (height > 7800)
-    return failed("O histórico excede a altura suportada por uma única imagem; não será cortado.", 422);
-  const fingerprint = evidenceFingerprint(conversation.phone, conversation.case_id, all);
-  await audit(profile.id, "evidence_export", parsed.data, {
-    caseId: conversation.case_id,
-    count: all.length,
-    sha256: fingerprint,
+  const messages=resultMessages.rows as EvidenceMessage[];
+  const reason=validateEvidence(conversation,messages,messages.length>500);
+  if(reason)return failed(reason,422);
+  const caseId=String(conversation.case_id);
+  if(!/^[a-zA-Z0-9_-]{1,80}$/.test(caseId))
+    return failed("ID da PNR incompatível com a nomenclatura de pasta; exportação não executada.",422);
+  let pages:EvidencePage[];
+  try{pages=paginateEvidence(messages);}
+  catch(e){return failed(e instanceof Error?e.message:"Falha no recorte dos prints.",422);}
+  if(!pages.length)return failed("Não há páginas para exportar.",422);
+  const checksum=evidenceFingerprint(conversation.phone,caseId,messages);
+  const entries:{path:string;data:Buffer}[]=[];
+  const manifestFiles:{file:string;sha256:string;part:number}[]=[];
+  for(let i=0;i<pages.length;i++){
+    const png=new ImageResponse(
+      <RenderPage page={pages[i]} phone={conversation.phone} caseId={caseId}
+        pageNumber={i+1} total={pages.length}/>,
+      {width:900,height:840},
+    );
+    const bytes=Buffer.from(await png.arrayBuffer());
+    const name=`print-${String(i+1).padStart(2,"0")}.png`;
+    entries.push({path:`${caseId}/${name}`,data:bytes});
+    manifestFiles.push({file:name,sha256:createHash("sha256").update(bytes).digest("hex"),part:i+1});
+  }
+  const manifest={
+    origem:"ALC Atendimento — reconstituição visual; não captura nativa do WhatsApp Web",
+    case_id:caseId,conversation_id:parsed.data,phone:conversation.phone,
+    messages:messages.length,prints:pages.length,sha256_conversa:checksum,
+    files:manifestFiles,exported_at:new Date().toISOString(),
+  };
+  entries.push({path:`${caseId}/manifesto.json`,data:Buffer.from(JSON.stringify(manifest,null,2),"utf8")});
+  const archive=packZip(entries);
+  await audit(profile.id,"evidence_export",parsed.data,{
+    caseId,prints:pages.length,messages:messages.length,sha256:checksum,
+    format:"zip/screenshots",
   });
-
-  const image = (
-    <div style={{
-      width: 900, height, display: "flex", flexDirection: "column",
-      backgroundColor: "#eae6df", color: "#111b21",
-      fontFamily: "Arial, sans-serif", fontSize: 19,
-    }}>
-      <div style={{
-        height: 86, flexShrink: 0, display: "flex", alignItems: "center",
-        gap: 16, padding: "15px 25px", backgroundColor: "#f0f2f5",
-        borderBottom: "1px solid #d5dfe3",
-      }}>
-        <div style={{
-          width: 50, height: 50, display: "flex", alignItems: "center",
-          justifyContent: "center", borderRadius: 50,
-          backgroundColor: "#dfe5e7", color: "#5f6f76", fontSize: 25,
-        }}>●</div>
-        <div style={{ display: "flex", flexDirection: "column", gap: 5 }}>
-          <span style={{ fontSize: 23, fontWeight: 700 }}>+{conversation.phone}</span>
-          <span style={{ fontSize: 14, color: "#667781" }}>Conversa de atendimento · Cliente</span>
-        </div>
-      </div>
-      <div style={{
-        padding: "20px 45px", display: "flex", flexDirection: "column", gap: 10,
-        flexGrow: 1, backgroundColor: "#efeae2",
-      }}>
-        <div style={{
-          display: "flex", alignSelf: "center", padding: "6px 14px",
-          borderRadius: 8, backgroundColor: "#fff", fontSize: 14, color: "#54656f",
-        }}>Tratativa de {dateLabel(all[0].created_at)} a {dateLabel(all[all.length - 1].created_at)}</div>
-        {all.map((message) => (
-          <div key={message.id} style={{
-            display: "flex", flexDirection: "column",
-            alignSelf: message.direction === "out" ? "flex-end" : "flex-start",
-            backgroundColor: message.direction === "out" ? "#d9fdd3" : "#fff",
-            borderRadius: 9, maxWidth: 685, minWidth: 140,
-            padding: "11px 15px 8px", gap: 8,
-          }}>
-            <div style={{
-              display: "flex", whiteSpace: "pre-wrap",
-              overflowWrap: "break-word", lineHeight: 1.35,
-              fontSize: 18,
-            }}>{message.body}</div>
-            <div style={{
-              display: "flex", alignSelf: "flex-end", gap: 9,
-              fontSize: 12, color: "#667781",
-            }}>
-              <span>{dateLabel(message.created_at)} {timeLabel(message.created_at)}</span>
-              {message.direction === "out" ? (
-                <span>{message.status === "read" ? "✓✓ Lida" :
-                  message.status === "delivered" ? "✓✓ Entregue" : "✓ Enviada"}</span>
-              ) : null}
-            </div>
-          </div>
-        ))}
-      </div>
-      <div style={{
-        display: "flex", flexDirection: "column", gap: 5, padding: "16px 24px",
-        backgroundColor: "#f0f2f5", borderTop: "1px solid #d5dfe3",
-        fontSize: 13, color: "#47555e",
-      }}>
-        <span>Registro visual do ALC Atendimento · Mensagens verificadas na integração Meta</span>
-        <span>Reconstituição visual, não captura nativa do WhatsApp Web · Caso {conversation.case_id}</span>
-        <span>Integridade SHA-256: {fingerprint}</span>
-      </div>
-    </div>
-  );
-  return new ImageResponse(image, {
-    width: 900,
-    height,
-    headers: {
-      "Cache-Control": "private, no-store",
-      "Content-Disposition": `attachment; filename="tratativa-${conversation.case_id}.png"`,
-      "X-Content-Type-Options": "nosniff",
+  return new Response(new Uint8Array(archive),{
+    status:200,headers:{
+      "Content-Type":"application/zip",
+      "Content-Disposition":`attachment; filename="comprovante-${caseId}.zip"`,
+      "Cache-Control":"private, no-store",
+      "X-Content-Type-Options":"nosniff",
     },
   });
 }
