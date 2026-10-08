@@ -16,6 +16,7 @@ import {
   type PnrCaseDetailSnapshot,
 } from "@/lib/pnr-case-detail";
 import { pnrDetailNextSyncDelayMs, pnrDetailRetryDelayMs } from "@/lib/pnr-case-sync";
+import { pnrTimestampIso } from "@/lib/pnr-timestamps";
 import { createAdminClient } from "@/lib/supabase/admin";
 
 export const dynamic = "force-dynamic";
@@ -179,7 +180,7 @@ export async function POST(request: Request) {
     if (parsed.data.status === "ERROR") {
       const { error } = await admin.from("pnr_case_center_cases").update({
         detail_sync_status: "ERROR",
-        detail_last_attempt_at: record.detail_last_attempt_at || now,
+        detail_last_attempt_at: pnrTimestampIso(record.detail_last_attempt_at ?? now),
         detail_next_sync_at: new Date(Date.now() + pnrDetailRetryDelayMs(attempts || 1)).toISOString(),
         detail_last_error: parsed.data.errorMessage || "Falha temporária ao sincronizar detalhes.",
         updated_at: now,
@@ -209,7 +210,7 @@ export async function POST(request: Request) {
       actor_name: event.actorName || String(existingEvents.get(event.eventId)?.actor_name || "") || null,
       actor_user_id: event.actorUserId || String(existingEvents.get(event.eventId)?.actor_user_id || "") || null,
       cached_by: profile.id,
-      first_captured_at: String(existingEvents.get(event.eventId)?.first_captured_at || now),
+      first_captured_at: pnrTimestampIso(existingEvents.get(event.eventId)?.first_captured_at ?? now),
       last_captured_at: now,
       cached_at: now,
     }));
@@ -221,7 +222,7 @@ export async function POST(request: Request) {
     const previousDetail = detailSnapshot(record.raw_snapshot_jsonb);
     const detail = mergePnrCaseDetail(previousDetail, parsed.data.detail);
     const snapshots = uniquePnrCaseDetailSnapshots([
-      ...(previousDetail ? [{ payload: previousDetail, capturedAt: record.timeline_synced_at || now }] : []),
+      ...(previousDetail ? [{ payload: previousDetail, capturedAt: pnrTimestampIso(record.timeline_synced_at ?? now) }] : []),
       ...(parsed.data.detail ? [{ payload: parsed.data.detail, capturedAt: now }] : []),
     ]);
     if (snapshots.length) {
@@ -243,7 +244,7 @@ export async function POST(request: Request) {
       case_capture_status: "COMPLETE",
       detail_sync_status: "COMPLETE",
       detail_parser_version: CASE_CENTER_TIMELINE_PARSER_VERSION,
-      detail_last_attempt_at: record.detail_last_attempt_at || now,
+      detail_last_attempt_at: pnrTimestampIso(record.detail_last_attempt_at ?? now),
       detail_last_success_at: now,
       detail_next_sync_at: new Date(Date.now() + pnrDetailNextSyncDelayMs(record.main_status)).toISOString(),
       detail_sync_attempts: 0,
