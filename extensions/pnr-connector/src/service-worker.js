@@ -219,9 +219,23 @@ async function ensureCaseCenterTab() {
 }
 async function usableCaseCenterTab() {
   const tab = await ensureCaseCenterTab();
-  await waitForTabReady(tab.id);
-  await updateManagedTab(tab.id);
-  return tab;
+  try {
+    await waitForTabReady(tab.id);
+    await updateManagedTab(tab.id);
+    return tab;
+  } catch (error) {
+    // A failed background navigation can redirect to login. Do not leave
+    // an extension-created tab behind or accidentally close a user's tab.
+    const state = await managedTabState();
+    if (state?.id === tab.id) {
+      const latest = await chrome.tabs.get(tab.id).catch(() => null);
+      if (latest?.id && !latest.active) {
+        await chrome.tabs.remove(tab.id).catch(() => undefined);
+        await forgetManagedTab();
+      }
+    }
+    throw error;
+  }
 }
 
 async function execute(tabId, func, args = []) {
