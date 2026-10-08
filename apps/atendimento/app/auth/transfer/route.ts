@@ -1,5 +1,12 @@
 import { NextResponse } from "next/server";
-import { openSession, ticketHash } from "@alc/identity/transfer";
+import { cookies } from "next/headers";
+import {
+  openSession,
+  ticketHash,
+  ENTRY_COOKIE,
+  ENTRY_SECONDS,
+  entryReceipt,
+} from "@alc/identity/transfer";
 import { db } from "@/lib/db";
 import { supabase, currentProfile } from "@/lib/auth";
 export async function POST(request: Request) {
@@ -20,7 +27,10 @@ export async function POST(request: Request) {
     [ticketHash(ticket)],
   );
   if (!result.rows.length)
-    return NextResponse.redirect(new URL("/login", destination), 303);
+    return NextResponse.redirect(
+      new URL("/acesso-indisponivel", destination),
+      303,
+    );
   try {
     const session = openSession(
       result.rows[0].encrypted_session,
@@ -32,9 +42,38 @@ export async function POST(request: Request) {
       throw new Error("Sessão inválida.");
     const set = await client.auth.setSession(session);
     if (set.error) throw set.error;
+    const verified = await client.auth.getClaims();
+    const verifiedClaims = verified.data?.claims;
+    if (
+      verified.error ||
+      !verifiedClaims ||
+      verifiedClaims.sub !== result.rows[0].profile_id ||
+      typeof verifiedClaims.session_id !== "string"
+    )
+      throw new Error("Sessão central inválida.");
+    const store = await cookies();
+    store.set(
+      ENTRY_COOKIE,
+      entryReceipt(
+        verifiedClaims.sub,
+        verifiedClaims.session_id,
+        process.env.ATENDIMENTO_ENCRYPTION_KEY || "",
+      ),
+      {
+        httpOnly: true,
+        secure: process.env.NODE_ENV === "production",
+        sameSite: "lax",
+        path: "/",
+        maxAge: ENTRY_SECONDS,
+      },
+    );
     await currentProfile();
     return NextResponse.redirect(new URL("/", destination), 303);
   } catch {
-    return NextResponse.redirect(new URL("/login", destination), 303);
+    (await cookies()).delete(ENTRY_COOKIE);
+    return NextResponse.redirect(
+      new URL("/acesso-indisponivel", destination),
+      303,
+    );
   }
 }

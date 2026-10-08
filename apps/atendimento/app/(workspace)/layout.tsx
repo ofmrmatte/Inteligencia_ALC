@@ -9,7 +9,6 @@ import {
 } from "lucide-react";
 import { requireProfile } from "@/lib/auth";
 import { canManageUsers } from "@alc/identity/auth";
-import { Logout } from "@/components/logout";
 export const dynamic = "force-dynamic";
 export default async function Workspace({
   children,
@@ -72,7 +71,6 @@ export default async function Workspace({
               <small>{profile.role.replaceAll("_", " ")}</small>
             </div>
           </div>
-          <Logout />
         </div>
       </aside>
       <div className="app-main">

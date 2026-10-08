@@ -4,7 +4,7 @@ Escopo funcional implementado em `apps/atendimento`. Esta documentação não co
 
 ## Acesso e Administração
 
-O painel Inteligência terá um acesso ao Atendimento que abre em nova aba. A Administração pertence ao próprio Atendimento e permanece na mesma aba, configurando usuários, canais, integrações, modelos e automações conforme permissões.
+O botão ALC Atendimento no menu lateral do Inteligência abre uma nova aba usando sua sessão já autenticada, o mesmo Supabase Auth, perfil e MFA. Não existe login ou cadastro próprios no Atendimento; a entrada exige transferência autorizada pelo painel e a URL direta encaminha ao Inteligência. A Administração pertence ao próprio Atendimento e permanece na mesma aba, configurando usuários, canais, integrações, modelos e automações conforme permissões.
 
 ## Canais e tratamento de PNR
 

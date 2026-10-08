@@ -10,6 +10,14 @@ import {
 } from "@alc/identity/auth";
 import { core, setting } from "./db";
 import { normalize } from "./domain";
+import { ENTRY_COOKIE, validEntryReceipt } from "@alc/identity/transfer";
+export function inteligenciaEntryUrl() {
+  return new URL(
+    "/atendimento",
+    process.env.INTELIGENCIA_PUBLIC_URL ||
+      "https://inteligenciaalc-production.up.railway.app",
+  ).toString();
+}
 export class HttpError extends Error {
   constructor(
     public status: number,
@@ -49,6 +57,15 @@ export async function currentProfile(): Promise<AuthProfile> {
   const { data, error } = await client.auth.getClaims();
   if (error || !data?.claims?.sub)
     throw new HttpError(401, "Entre com sua conta do Inteligência ALC.");
+  const store = await cookies();
+  if (
+    !validEntryReceipt(
+      store.get(ENTRY_COOKIE)?.value,
+      process.env.ATENDIMENTO_ENCRYPTION_KEY || "",
+      data.claims,
+    )
+  )
+    throw new HttpError(401, "Abra o Atendimento pelo Inteligência ALC.");
   if (data.claims.aal !== "aal2") {
     const factors = await client.auth.mfa.listFactors();
     if (factors.error)
@@ -96,7 +113,9 @@ export async function requireProfile() {
       error instanceof HttpError &&
       (error.status === 401 || error.message === "MFA_REQUIRED")
     )
-      redirect("/login");
+      redirect(inteligenciaEntryUrl());
+    if (error instanceof HttpError && error.status === 403)
+      redirect("/acesso-indisponivel");
     throw error;
   }
 }

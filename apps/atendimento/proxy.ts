@@ -1,12 +1,14 @@
 import { createServerClient } from "@supabase/ssr";
 import { NextResponse, type NextRequest } from "next/server";
-import { authConfig } from "./lib/auth";
+import { authConfig, inteligenciaEntryUrl } from "./lib/auth";
+import { ENTRY_COOKIE, validEntryReceipt } from "@alc/identity/transfer";
 export async function proxy(request: NextRequest) {
   const path = request.nextUrl.pathname;
   if (
     path.startsWith("/webhooks/") ||
     path === "/health" ||
-    path === "/auth/transfer"
+    path === "/auth/transfer" ||
+    path === "/acesso-indisponivel"
   )
     return NextResponse.next();
   if (!["GET", "HEAD", "OPTIONS"].includes(request.method)) {
@@ -22,17 +24,16 @@ export async function proxy(request: NextRequest) {
         { status: 403 },
       );
   }
+  if (path === "/login") return NextResponse.redirect(inteligenciaEntryUrl());
   let response = NextResponse.next({ request });
   let config;
   try {
     config = authConfig();
   } catch {
-    return path === "/login"
-      ? response
-      : NextResponse.json(
-          { error: "Acesso não configurado." },
-          { status: 503 },
-        );
+    return NextResponse.json(
+      { error: "Acesso não configurado." },
+      { status: 503 },
+    );
   }
   const client = createServerClient(config.url, config.key, {
     cookies: {
@@ -46,11 +47,18 @@ export async function proxy(request: NextRequest) {
     },
   });
   const { data, error } = await client.auth.getClaims();
-  if (path === "/login") return response;
-  if (error || !data?.claims?.sub) {
+  if (
+    error ||
+    !data?.claims?.sub ||
+    !validEntryReceipt(
+      request.cookies.get(ENTRY_COOKIE)?.value,
+      process.env.ATENDIMENTO_ENCRYPTION_KEY || "",
+      data.claims,
+    )
+  ) {
     const next = path.startsWith("/api/")
       ? NextResponse.json({ error: "Sessão expirada." }, { status: 401 })
-      : NextResponse.redirect(new URL("/login", request.url));
+      : NextResponse.redirect(inteligenciaEntryUrl());
     response.cookies.getAll().forEach((c) => next.cookies.set(c));
     return next;
   }

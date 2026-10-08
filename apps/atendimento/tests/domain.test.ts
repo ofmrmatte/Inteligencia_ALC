@@ -15,6 +15,9 @@ import {
   openSession,
   newTicket,
   ticketHash,
+  entryReceipt,
+  validEntryReceipt,
+  ENTRY_SECONDS,
 } from "@alc/identity/transfer";
 describe("regras operacionais do Atendimento", () => {
   it("classifica os códigos reais do Case Center e preserva encerramento", () => {
@@ -128,5 +131,68 @@ describe("regras operacionais do Atendimento", () => {
     const ticket = newTicket();
     expect(ticket).toMatch(/^[a-f0-9]{64}$/);
     expect(ticketHash(ticket)).not.toBe(ticket);
+  });
+  it("aceita a entrada pelo painel somente com a mesma identidade e sessão Supabase", () => {
+    const key = "c".repeat(64),
+      now = 1000;
+    const receipt = entryReceipt("profile-a", "session-a", key, now);
+    expect(
+      validEntryReceipt(
+        receipt,
+        key,
+        { sub: "profile-a", session_id: "session-a" },
+        now,
+      ),
+    ).toBe(true);
+    expect(receipt).not.toContain("access_token");
+    expect(receipt).not.toContain("refresh_token");
+  });
+  it("uma entrada do painel não autoriza outro usuário ou outra sessão", () => {
+    const key = "c".repeat(64),
+      now = 1000;
+    const receipt = entryReceipt("profile-a", "session-a", key, now);
+    expect(
+      validEntryReceipt(
+        receipt,
+        key,
+        { sub: "profile-b", session_id: "session-a" },
+        now,
+      ),
+    ).toBe(false);
+    expect(
+      validEntryReceipt(
+        receipt,
+        key,
+        { sub: "profile-a", session_id: "session-b" },
+        now,
+      ),
+    ).toBe(false);
+    expect(validEntryReceipt(receipt, key, { sub: "profile-a" }, now)).toBe(
+      false,
+    );
+  });
+  it("rejeita entrada ausente ou adulterada mesmo com uma identidade Supabase válida", () => {
+    const key = "c".repeat(64),
+      now = 1000,
+      claims = { sub: "profile-a", session_id: "session-a" };
+    const receipt = entryReceipt(claims.sub, claims.session_id, key, now);
+    expect(validEntryReceipt(undefined, key, claims, now)).toBe(false);
+    expect(validEntryReceipt("x" + receipt, key, claims, now)).toBe(false);
+    expect(validEntryReceipt(receipt, "d".repeat(64), claims, now)).toBe(false);
+    expect(validEntryReceipt(receipt, key, {}, now)).toBe(false);
+  });
+  it("exige uma nova entrada pelo painel depois do prazo e falha sem configuração", () => {
+    const key = "c".repeat(64),
+      now = 1000,
+      claims = { sub: "profile-a", session_id: "session-a" };
+    const receipt = entryReceipt(claims.sub, claims.session_id, key, now);
+    expect(
+      validEntryReceipt(receipt, key, claims, now + ENTRY_SECONDS * 1000 - 1),
+    ).toBe(true);
+    expect(
+      validEntryReceipt(receipt, key, claims, now + ENTRY_SECONDS * 1000),
+    ).toBe(false);
+    expect(validEntryReceipt(receipt, "", claims, now)).toBe(false);
+    expect(() => entryReceipt("", claims.session_id, key, now)).toThrow();
   });
 });
