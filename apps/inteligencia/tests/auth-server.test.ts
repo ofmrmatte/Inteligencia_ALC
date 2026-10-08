@@ -1,16 +1,18 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-const { createClient, getClaims, from, select, eq, maybeSingle } = vi.hoisted(() => ({
+const { createClient, getClaims, from, select, eq, maybeSingle, readAtendimentoAccess } = vi.hoisted(() => ({
   createClient: vi.fn(),
   getClaims: vi.fn(),
   from: vi.fn(),
   select: vi.fn(),
   eq: vi.fn(),
   maybeSingle: vi.fn(),
+  readAtendimentoAccess: vi.fn(),
 }));
 
 vi.mock("@/lib/supabase/config", () => ({ isSupabaseConfigured: () => true }));
 vi.mock("@/lib/supabase/server", () => ({ createClient }));
+vi.mock("@/lib/atendimento-access", () => ({ readAtendimentoAccess }));
 vi.mock("next/navigation", () => ({ redirect: vi.fn() }));
 
 import { getCurrentProfile, requireCurrentProfile } from "@/lib/auth-server";
@@ -19,6 +21,7 @@ import { redirect } from "next/navigation";
 describe("perfil autenticado", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    readAtendimentoAccess.mockResolvedValue(new Map());
     createClient.mockResolvedValue({ auth: { getClaims }, from });
     getClaims.mockResolvedValue({ data: { claims: { sub: "user-1", email: "user@alc.test" } }, error: null });
     from.mockReturnValue({ select });
@@ -59,5 +62,14 @@ describe("perfil autenticado", () => {
     await requireCurrentProfile();
 
     expect(redirect).toHaveBeenCalledWith("/login?error=access");
+  });
+
+  it("consulta revogações atuais sem encerrar a sessão do Inteligência", async () => {
+    readAtendimentoAccess.mockResolvedValue(new Map([["user-1", false]]));
+    expect(await getCurrentProfile()).toMatchObject({ id: "user-1", atendimentoAccess: false });
+    expect(readAtendimentoAccess).toHaveBeenCalledWith(["user-1"]);
+    readAtendimentoAccess.mockRejectedValue(new Error("unavailable"));
+    expect(await requireCurrentProfile()).toMatchObject({ id: "user-1", atendimentoAccess: false });
+    expect(redirect).not.toHaveBeenCalled();
   });
 });

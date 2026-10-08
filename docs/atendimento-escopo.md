@@ -6,6 +6,10 @@ Escopo funcional implementado em `apps/atendimento`. Esta documentação não co
 
 O botão ALC Atendimento no menu lateral do Inteligência abre uma nova aba usando sua sessão já autenticada, o mesmo Supabase Auth, perfil e MFA. Não existe login ou cadastro próprios no Atendimento; a entrada exige transferência autorizada pelo painel e a URL direta encaminha ao Inteligência. A Administração pertence ao próprio Atendimento e permanece na mesma aba, configurando usuários, canais, integrações, modelos e automações conforme permissões.
 
+O menu fica em Análises, após Desempenho de motoristas. O grupo anteriormente chamado Gestão PNR é exibido como Prevenção de Perdas, mantendo as rotas e subcategorias existentes.
+
+Em Configurações → Usuários e permissões, a coluna ALC Atendimento permite liberar ou bloquear cada usuário dentro da hierarquia de gestão. Esta permissão é independente dos módulos do painel e utiliza a mesma configuração `access_<profile_id>` no Aux que a Administração do Atendimento. O servidor verifica a permissão ao emitir o ticket e a cada requisição do Atendimento, inclusive de sessões já abertas. Contas sem configuração específica mantêm a política anterior de acesso por cargo/PNR; a revogação explícita prevalece também para cargos globais. Indisponibilidade na leitura bloqueia somente o Atendimento, preservando o painel. Não há novo cadastro, coluna ou banco de autenticação.
+
 ## Canais e tratamento de PNR
 
 Haverá um canal para motoristas e outro para clientes, com configurações e credenciais próprias da Meta. O contato inicial proativo usará modelos aprovados; os roteiros enviados pelo usuário são a referência para a tratativa, sem assumir aprovação do texto.

@@ -19,8 +19,9 @@ interface ManagedUser {
   globalAccess: boolean;
   active: boolean;
   moduleScope: string[];
+  atendimentoAccess: boolean;
 }
-interface UsersPayload { roles: UserRole[]; users: ManagedUser[]; departments: DepartmentOption[] }
+interface UsersPayload { roles: UserRole[]; users: ManagedUser[]; departments: DepartmentOption[]; atendimentoReady: boolean }
 interface UserDraft {
   id?: string;
   email: string;
@@ -142,7 +143,7 @@ function HierarchyPanel() {
 }
 
 function UserManagementPanel({ currentUserId }: { currentUserId: string }) {
-  const [payload, setPayload] = useState<UsersPayload>({ roles: [], users: [], departments: [] });
+  const [payload, setPayload] = useState<UsersPayload>({ roles: [], users: [], departments: [], atendimentoReady: false });
   const [draft, setDraft] = useState<UserDraft>(blankDraft);
   const [editing, setEditing] = useState<UserDraft | null>(null);
   const [loading, setLoading] = useState(true);
@@ -153,7 +154,7 @@ function UserManagementPanel({ currentUserId }: { currentUserId: string }) {
     setLoading(true);
     try {
       const body = await readJson(await fetch("/api/users", { cache: "no-store" }), "Falha ao carregar usuários.");
-      setPayload({ roles: body.roles ?? [], users: body.users ?? [], departments: body.departments ?? [] });
+      setPayload({ roles: body.roles ?? [], users: body.users ?? [], departments: body.departments ?? [], atendimentoReady: body.atendimentoReady === true });
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "Falha ao carregar usuários.");
     } finally {
@@ -173,7 +174,7 @@ function UserManagementPanel({ currentUserId }: { currentUserId: string }) {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(draft),
       }), "Falha ao cadastrar usuário.");
-      setPayload({ roles: body.roles ?? [], users: body.users ?? [], departments: body.departments ?? [] });
+      setPayload({ roles: body.roles ?? [], users: body.users ?? [], departments: body.departments ?? [], atendimentoReady: body.atendimentoReady === true });
       setDraft(blankDraft());
       setMessage("Usuário cadastrado com setor e módulos definidos.");
     } catch (error) {
@@ -193,7 +194,7 @@ function UserManagementPanel({ currentUserId }: { currentUserId: string }) {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(editing),
       }), "Falha ao atualizar usuário.");
-      setPayload({ roles: body.roles ?? [], users: body.users ?? [], departments: body.departments ?? [] });
+      setPayload({ roles: body.roles ?? [], users: body.users ?? [], departments: body.departments ?? [], atendimentoReady: body.atendimentoReady === true });
       setEditing(null);
       setMessage("Acesso do usuário atualizado.");
     } catch (error) {
@@ -209,10 +210,28 @@ function UserManagementPanel({ currentUserId }: { currentUserId: string }) {
     setMessage("");
     try {
       const body = await readJson(await fetch(`/api/users?id=${encodeURIComponent(user.id)}`, { method: "DELETE" }), "Falha ao remover usuário.");
-      setPayload({ roles: body.roles ?? [], users: body.users ?? [], departments: body.departments ?? [] });
+      setPayload({ roles: body.roles ?? [], users: body.users ?? [], departments: body.departments ?? [], atendimentoReady: body.atendimentoReady === true });
       setMessage("Usuário removido.");
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "Falha ao remover usuário.");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function changeAtendimentoAccess(user: ManagedUser, active: boolean) {
+    setSaving(true);
+    setMessage("");
+    try {
+      const body = await readJson(await fetch("/api/users", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ intent: "atendimento-access", id: user.id, active }),
+      }), "Falha ao atualizar acesso ao Atendimento.");
+      setPayload((current) => ({ ...current, users: current.users.map((item) => item.id === user.id ? { ...item, atendimentoAccess: body.atendimentoAccess } : item) }));
+      setMessage(`Acesso ao ALC Atendimento ${active ? "liberado" : "bloqueado"}.`);
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "Falha ao atualizar acesso ao Atendimento.");
     } finally {
       setSaving(false);
     }
@@ -245,15 +264,18 @@ function UserManagementPanel({ currentUserId }: { currentUserId: string }) {
       {message ? <p className="admin-message">{message}</p> : null}
 
       <div className={styles.tableHeader}><div><strong>Usuários cadastrados</strong><span>{payload.users.length} conta(s) interna(s)</span></div></div>
+      <p className={styles.muted}>ALC Atendimento: libere ou bloqueie o acesso por usuário. A permissão é independente de Prevenção de Perdas e utiliza o mesmo login do Inteligência.</p>
+      {!loading && !payload.atendimentoReady ? <p className="admin-message">Controle de acesso ao Atendimento indisponível. Recarregue para tentar novamente.</p> : null}
       <TableWrap>
-        <thead><tr><th>Usuário</th><th>Cargo</th><th>Setor</th><th>Módulos</th><th>Status</th><th className="align-right">Ações</th></tr></thead>
+        <thead><tr><th>Usuário</th><th>Cargo</th><th>Setor</th><th>Módulos</th><th>ALC Atendimento</th><th>Status</th><th className="align-right">Ações</th></tr></thead>
         <tbody>
-          {loading ? <tr><td colSpan={6}>Carregando usuários...</td></tr> : payload.users.map((user) => (
+          {loading ? <tr><td colSpan={7}>Carregando usuários...</td></tr> : payload.users.map((user) => (
             <tr key={user.id}>
               <td><strong>{user.fullName || user.email}</strong><span className="cell-subtitle">{user.email}</span></td>
               <td>{ROLE_LABELS[user.role]}</td>
               <td>{user.setor || "—"}</td>
               <td><div className={styles.badges}>{(isFullRole(user.role) ? ["Acesso total"] : user.moduleScope.map((id) => MODULE_LABELS.get(id as SectionId) ?? id)).slice(0, 3).map((label) => <span className={styles.badge} key={label}>{label}</span>)}{!isFullRole(user.role) && user.moduleScope.length > 3 ? <span className={styles.badge}>+{user.moduleScope.length - 3}</span> : null}</div></td>
+              <td><label className={styles.checkItem} title={user.id === currentUserId ? "Sua própria conta não pode ser alterada aqui" : undefined}><input type="checkbox" checked={user.atendimentoAccess} disabled={user.id === currentUserId || !user.active || saving || !payload.atendimentoReady} aria-label={`Acesso ao ALC Atendimento de ${user.fullName || user.email}`} onChange={(event) => void changeAtendimentoAccess(user, event.target.checked)} /><span>{!payload.atendimentoReady ? "Indisponível" : user.atendimentoAccess ? "Liberado" : "Bloqueado"}</span></label></td>
               <td><StatusBadge tone={user.active ? "green" : "amber"}>{user.active ? "Ativo" : "Inativo"}</StatusBadge></td>
               <td className="align-right"><div className={styles.actions}><button className="table-action" disabled={user.id === currentUserId || saving} type="button" title={user.id === currentUserId ? "Sua própria conta não pode ser alterada aqui" : "Editar"} onClick={() => setEditing({ ...user, password: "" })}><Edit3 size={14} /></button><button className="table-action" disabled={user.id === currentUserId || saving} type="button" title="Remover" onClick={() => void removeUser(user)}><Trash2 size={14} /></button></div></td>
             </tr>

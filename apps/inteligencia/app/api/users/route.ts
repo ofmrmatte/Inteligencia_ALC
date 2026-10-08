@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { roleModuleCap } from "@/lib/access-control";
-import { canManageRole, canManageUserTransition, canManageUsers, isUserRole, manageableUserRoles, MANAGED_USER_ROLES, type AuthProfile, type UserRole } from "@/lib/auth";
+import { canAccessAtendimento, canManageRole, canManageUserTransition, canManageUsers, isUserRole, manageableUserRoles, MANAGED_USER_ROLES, type AuthProfile, type UserRole } from "@/lib/auth";
+import { readAtendimentoAccess, writeAtendimentoAccess } from "@/lib/atendimento-access";
 import { getCurrentProfile } from "@/lib/auth-server";
 import { hrDb } from "@/lib/hr/db";
 import { normalizeText } from "@/lib/normalize";
@@ -54,6 +55,7 @@ function ensureCanManageRole(manager: Pick<AuthProfile, "role">, role: UserRole)
 function userManagementStatus(error: unknown) {
   const message = error instanceof Error ? error.message : "Falha na gestão de usuários.";
   if (error instanceof UserManagementAccessError) return { message, status: 403 };
+  if (message.includes("ATENDIMENTO_DATABASE_UNAVAILABLE")) return { message: "Controle de acesso ao Atendimento indisponível. Tente novamente.", status: 503 };
   if (message.includes("SERVICE_ROLE") || message.includes("HR_DATABASE_UNAVAILABLE")) return { message, status: 503 };
   if (message.includes("Sessão expirada")) return { message, status: 401 };
   if (message.includes("restrita")) return { message, status: 403 };
@@ -186,9 +188,15 @@ async function responsePayload(manager: AuthProfile) {
     loadDepartments(),
   ]);
   if (usersResult.error) throw new Error(usersResult.error.message);
+  const users = ((usersResult.data ?? []) as DbRow[]).map(mapManagedUser);
+  const access = await readAtendimentoAccess(users.map((user) => user.id)).catch(() => null);
   return NextResponse.json({
     roles: allowedRoles,
-    users: ((usersResult.data ?? []) as DbRow[]).map(mapManagedUser),
+    users: users.map((user) => ({
+      ...user,
+      atendimentoAccess: Boolean(access && user.active && canAccessAtendimento({ ...user, atendimentoAccess: access.get(user.id) })),
+    })),
+    atendimentoReady: access !== null,
     departments,
   }, { headers: { "Cache-Control": "private, no-store" } });
 }
@@ -261,6 +269,15 @@ export async function PATCH(request: Request) {
 
     const before = await loadTargetProfile(admin, id);
     const currentRole = parseRole(before.role);
+    if (body.intent === "atendimento-access") {
+      ensureCanManageRole(manager, currentRole);
+      if (typeof body.active !== "boolean") throw new Error("Informe se o acesso deve ser liberado ou bloqueado.");
+      if (body.active && (before.active === false || !canAccessAtendimento({ role: currentRole, atendimentoAccess: true }))) {
+        throw new UserManagementAccessError("Este perfil não pode receber acesso ao Atendimento.");
+      }
+      await writeAtendimentoAccess(manager.id, id, body.active);
+      return NextResponse.json({ id, atendimentoAccess: body.active }, { headers: { "Cache-Control": "private, no-store" } });
+    }
     const payload = parseUserPayload(body, false);
     validateManagedPassword(payload.password, false);
     if (!canManageUserTransition(manager, currentRole, payload.role)) {
