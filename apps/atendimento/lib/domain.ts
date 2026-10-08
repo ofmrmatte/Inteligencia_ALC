@@ -72,6 +72,8 @@ export type AgentState = {
   receivedAt?: string;
   correctProduct?: boolean;
   result?: string;
+  selectedCaseId?: string;
+  selectedShipmentId?: string;
 };
 export function clientReply(
   state: AgentState,
