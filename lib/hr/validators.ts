@@ -8,9 +8,9 @@ const optionalId = idSchema.nullable().optional();
 const optionalDate = dateSchema.nullable().optional();
 const name = z.string().trim().min(1).max(160);
 export const employeeSchema = z.strictObject({
-  employee_code: z.string().trim().min(1).max(80), full_name: name, preferred_name: optionalText,
+  employee_code: z.string().trim().min(1).max(80).nullable().optional(), full_name: name, preferred_name: optionalText,
   corporate_email: z.email().max(254).nullable().optional(), phone: z.string().trim().max(40).nullable().optional(),
-  status: z.enum(EMPLOYEE_STATUSES), employment_type: z.enum(EMPLOYMENT_TYPES),
+  status: z.enum(EMPLOYEE_STATUSES), employment_type: z.enum(EMPLOYMENT_TYPES).nullable().optional(),
   department_id: optionalId, position_id: optionalId, manager_employee_id: optionalId,
   admission_date: optionalDate, termination_date: optionalDate,
   secullum_employee_code: z.string().trim().min(1).max(80).nullable().optional(), notes: optionalText,
