@@ -16,6 +16,7 @@ import {
   FileCheck2,
   LayoutDashboard,
   Menu,
+  RefreshCw,
   MessageSquare,
   Settings,
   ShieldCheck,
@@ -24,7 +25,7 @@ import {
 } from "lucide-react";
 import { Brand } from "@alc/ui/brand";
 import { canManageUsers, ROLE_LABELS, type AuthProfile } from "@alc/identity/auth";
-import { useData, when } from "./data";
+import { HEADER_REFRESH_EVENT, useData, when } from "./data";
 
 const navigation = [
   { href: "/conversas", label: "Conversas", title: "Conversas", eyebrow: "CAIXA DE ATENDIMENTO", icon: MessageSquare },
@@ -233,6 +234,15 @@ export function WorkspaceShell({
               <ShieldCheck size={15} />
               {ROLE_LABELS[current.role]}
             </span>
+            <button
+              type="button"
+              className="icon-button header-refresh"
+              title="Atualizar dados desta página"
+              aria-label="Atualizar dados desta página"
+              onClick={() => window.dispatchEvent(new Event(HEADER_REFRESH_EVENT))}
+            >
+              <RefreshCw size={18} />
+            </button>
           </div>
         </header>
         {sessionError ? <main className="page"><p className="notice error" role="alert">{sessionError}<button onClick={() => void checkSession()}>Tentar novamente</button></p></main> : accountChanged ? <main className="page" role="status">Atualizando sessão…</main> : children}
