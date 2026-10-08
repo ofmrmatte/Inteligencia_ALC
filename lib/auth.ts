@@ -27,6 +27,7 @@ export interface AuthProfile {
   email: string;
   fullName: string;
   role: UserRole;
+  setor?: string;
   globalAccess: boolean;
   baseScope: string[];
   siglaScope: string[];

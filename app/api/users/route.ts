@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { roleModuleCap } from "@/lib/access-control";
 import { canManageRole, canManageUserTransition, canManageUsers, isUserRole, manageableUserRoles, MANAGED_USER_ROLES, type AuthProfile, type UserRole } from "@/lib/auth";
 import { getCurrentProfile } from "@/lib/auth-server";
+import { hrDb } from "@/lib/hr/db";
 import { normalizeText } from "@/lib/normalize";
 import { createAdminClient } from "@/lib/supabase/admin";
 
@@ -9,9 +10,10 @@ export const dynamic = "force-dynamic";
 
 type DbRow = Record<string, unknown>;
 type AdminClient = ReturnType<typeof createAdminClient>;
+type DepartmentRow = { id: string; name: string };
 
 function jsonError(message: string, status = 400) {
-  return NextResponse.json({ error: message }, { status });
+  return NextResponse.json({ error: message }, { status, headers: { "Cache-Control": "private, no-store" } });
 }
 
 function toStringValue(value: unknown) {
@@ -52,7 +54,7 @@ function ensureCanManageRole(manager: Pick<AuthProfile, "role">, role: UserRole)
 function userManagementStatus(error: unknown) {
   const message = error instanceof Error ? error.message : "Falha na gestão de usuários.";
   if (error instanceof UserManagementAccessError) return { message, status: 403 };
-  if (message.includes("SERVICE_ROLE")) return { message, status: 503 };
+  if (message.includes("SERVICE_ROLE") || message.includes("HR_DATABASE_UNAVAILABLE")) return { message, status: 503 };
   if (message.includes("Sessão expirada")) return { message, status: 401 };
   if (message.includes("restrita")) return { message, status: 403 };
   return { message, status: 400 };
@@ -68,14 +70,6 @@ function fullRole(role: UserRole) {
 
 function globalOperationalRole(role: UserRole) {
   return ["director", "developer", "loss_supervisor", "loss_admin"].includes(role);
-}
-
-function supportsXptScope(role: UserRole) {
-  return role === "coordinator" || role === "supervisor";
-}
-
-function requiresOperationalScope(role: UserRole) {
-  return role === "coordinator" || role === "supervisor";
 }
 
 function allowedSubset(values: string[], allowed: readonly string[]) {
@@ -95,13 +89,13 @@ function parseUserPayload(payload: DbRow, requirePassword: boolean) {
   if (!email || !email.includes("@")) throw new Error("Informe um e-mail válido.");
   validateManagedPassword(password, requirePassword);
 
+  const setor = toStringValue(payload.setor).trim();
+  if (setor.length > 160) throw new Error("Setor inválido.");
+
   const moduleCap = roleModuleCap(role);
   const hasModules = hasPayloadField(payload, "moduleScope", "module_scope");
   const requestedModules = toStringArray(payload.moduleScope ?? payload.module_scope);
-
-  const moduleScope = fullRole(role)
-    ? moduleCap
-    : allowedSubset(hasModules ? requestedModules : moduleCap, moduleCap);
+  const moduleScope = fullRole(role) ? moduleCap : allowedSubset(hasModules ? requestedModules : moduleCap, moduleCap);
 
   if (!fullRole(role) && moduleScope.length === 0) {
     throw new Error("Selecione ao menos um módulo permitido para o usuário.");
@@ -112,105 +106,39 @@ function parseUserPayload(payload: DbRow, requirePassword: boolean) {
     password,
     fullName: toStringValue(payload.fullName ?? payload.full_name).trim(),
     role,
+    setor,
     globalAccess: globalOperationalRole(role),
     active: payload.active !== false,
-    baseScope: globalOperationalRole(role) ? [] : toStringArray(payload.baseScope ?? payload.base_scope),
-    xptScope: supportsXptScope(role) ? toStringArray(payload.xptScope ?? payload.xpt_scope) : [],
     moduleScope,
   };
 }
 
-async function loadBaseRows(admin: AdminClient) {
-  const { data, error } = await admin
-    .from("operational_units")
-    .select("unit_key,base_key,base_name,sigla,xpt_code,coordinator_name,active")
-    .eq("active", true)
-    .order("sigla", { ascending: true })
-    .order("base_name", { ascending: true });
-  if (error) throw new Error(error.message);
-  return (data ?? []) as DbRow[];
+async function loadDepartments(): Promise<DepartmentRow[]> {
+  const { rows } = await hrDb().query<DepartmentRow>(
+    "SELECT id::text,name FROM hr_departments WHERE active=true ORDER BY name",
+  );
+  return rows;
 }
 
-async function loadXptRows(admin: AdminClient) {
-  const { data, error } = await admin
-    .from("operational_xpts")
-    .select("xpt_code,active")
-    .eq("active", true)
-    .order("xpt_code", { ascending: true });
-  if (error) throw new Error(error.message);
-  return (data ?? []) as DbRow[];
-}
-
-function canonicalBaseFor(requested: string, bases: DbRow[], siglaHints: string[] = []) {
+function canonicalSetor(requested: string, departments: DepartmentRow[], current = "") {
+  if (!requested) return "";
   const normalized = normalizeText(requested);
-  if (!normalized) return null;
-
-  const exactUnit = bases.filter((row) => normalizeText(row.unit_key) === normalized);
-  if (exactUnit.length === 1) return exactUnit[0];
-
-  const exactBase = bases.filter((row) => normalizeText(row.base_key) === normalized);
-  if (exactBase.length === 1) return exactBase[0];
-  if (exactBase.length > 1) {
-    const hints = new Set(siglaHints.map(normalizeText));
-    const hinted = exactBase.filter((row) => hints.has(normalizeText(row.sigla)));
-    if (hinted.length === 1) return hinted[0];
-  }
-
-  const exactSigla = bases.filter((row) => normalizeText(row.sigla) === normalized);
-  return exactSigla.length === 1 ? exactSigla[0] : null;
+  const match = departments.find((department) => normalizeText(department.name) === normalized);
+  if (match) return match.name;
+  if (current && normalizeText(current) === normalized) return current;
+  throw new Error("Selecione um setor ativo do Recursos Humanos.");
 }
 
-async function resolveBaseScopes(admin: AdminClient, requested: string[], role: UserRole, preloadedBases?: DbRow[]) {
-  if (!requested.length) return { baseScope: [] as string[], siglaScope: [] as string[] };
-  const bases = preloadedBases ?? await loadBaseRows(admin);
-  const resolved = requested.map((value) => canonicalBaseFor(value, bases));
-  const unresolved = requested.filter((_, index) => !resolved[index]);
-  if (unresolved.length) throw new Error(`Base(s) não reconhecida(s): ${unresolved.join(", ")}.`);
-  const rows = resolved.filter((row): row is DbRow => Boolean(row));
-  const useUnitKey = role === "coordinator" || role === "supervisor";
-  return {
-    baseScope: [...new Set(rows.map((row) => toStringValue(useUnitKey ? row.unit_key : row.base_key)).filter(Boolean))],
-    siglaScope: [...new Set(rows.map((row) => toStringValue(row.sigla)).filter(Boolean))],
-  };
-}
-
-async function resolveXptScope(admin: AdminClient, requested: string[], role: UserRole, preloadedXpts?: DbRow[]) {
-  if (!supportsXptScope(role) || !requested.length) return [] as string[];
-  const rows = preloadedXpts ?? await loadXptRows(admin);
-  const byNormalized = new Map(rows.map((row) => [normalizeText(row.xpt_code), toStringValue(row.xpt_code)]));
-  const resolved = requested.map((value) => byNormalized.get(normalizeText(value)) ?? "");
-  const unresolved = requested.filter((_, index) => !resolved[index]);
-  if (unresolved.length) throw new Error(`XPT(s) não reconhecido(s): ${unresolved.join(", ")}.`);
-  return [...new Set(resolved.filter(Boolean))];
-}
-
-function canonicalizeStoredBaseScope(values: string[], siglaScope: string[], bases: DbRow[]) {
-  if (!values.length) return [];
-  const result = values.map((value) => canonicalBaseFor(value, bases, siglaScope));
-  return [...new Set(result.map((row, index) => {
-    if (!row) return values[index];
-    return toStringValue(row.unit_key) || values[index];
-  }).filter(Boolean))];
-}
-
-function canonicalizeStoredXptScope(values: string[], xpts: DbRow[]) {
-  if (!values.length) return [];
-  const byNormalized = new Map(xpts.map((row) => [normalizeText(row.xpt_code), toStringValue(row.xpt_code)]));
-  return [...new Set(values.map((value) => byNormalized.get(normalizeText(value)) ?? value).filter(Boolean))];
-}
-
-function mapManagedUser(row: DbRow, bases: DbRow[], xpts: DbRow[]) {
+function mapManagedUser(row: DbRow) {
   const role = parseRole(row.role);
-  const siglaScope = toStringArray(row.sigla_scope);
   return {
     id: toStringValue(row.id),
     email: toStringValue(row.email),
     fullName: toStringValue(row.full_name),
     role,
+    setor: toStringValue(row.setor),
     globalAccess: globalOperationalRole(role),
     active: row.active !== false,
-    baseScope: canonicalizeStoredBaseScope(toStringArray(row.base_scope), siglaScope, bases),
-    xptScope: canonicalizeStoredXptScope(toStringArray(row.xpt_scope), xpts),
     moduleScope: toStringArray(row.module_scope),
     createdAt: toStringValue(row.created_at),
     updatedAt: toStringValue(row.updated_at),
@@ -225,11 +153,7 @@ async function requireUserManager() {
 }
 
 async function loadTargetProfile(admin: AdminClient, id: string) {
-  const { data, error } = await admin
-    .from("profiles")
-    .select("*")
-    .eq("id", id)
-    .maybeSingle();
+  const { data, error } = await admin.from("profiles").select("*").eq("id", id).maybeSingle();
   if (error) throw new Error(error.message);
   if (!data) throw new Error("Usuário não encontrado.");
   return data as DbRow;
@@ -257,26 +181,16 @@ async function writeUserAudit(
 async function responsePayload(manager: AuthProfile) {
   const admin = createAdminClient();
   const allowedRoles = manageableUserRoles(manager);
-  const [usersResult, bases, xpts] = await Promise.all([
+  const [usersResult, departments] = await Promise.all([
     admin.from("profiles").select("*").in("role", allowedRoles).order("email", { ascending: true }),
-    loadBaseRows(admin),
-    loadXptRows(admin),
+    loadDepartments(),
   ]);
   if (usersResult.error) throw new Error(usersResult.error.message);
   return NextResponse.json({
     roles: allowedRoles,
-    users: ((usersResult.data ?? []) as DbRow[]).map((row) => mapManagedUser(row, bases, xpts)),
-    bases: bases.map((row) => ({
-      baseKey: toStringValue(row.unit_key),
-      baseName: toStringValue(row.base_name) || toStringValue(row.base_key),
-      sigla: toStringValue(row.sigla),
-      label: `${toStringValue(row.sigla)} - ${toStringValue(row.base_name) || toStringValue(row.base_key)}`,
-    })),
-    xpts: xpts.map((row) => ({
-      xptCode: toStringValue(row.xpt_code),
-      label: toStringValue(row.xpt_code),
-    })),
-  });
+    users: ((usersResult.data ?? []) as DbRow[]).map(mapManagedUser),
+    departments,
+  }, { headers: { "Cache-Control": "private, no-store" } });
 }
 
 export async function GET() {
@@ -295,13 +209,8 @@ export async function POST(request: Request) {
     const admin = createAdminClient();
     const payload = parseUserPayload((await request.json()) as DbRow, true);
     ensureCanManageRole(manager, payload.role);
-    const [scopes, xptScope] = await Promise.all([
-      resolveBaseScopes(admin, payload.baseScope, payload.role),
-      resolveXptScope(admin, payload.xptScope, payload.role),
-    ]);
-    if (requiresOperationalScope(payload.role) && scopes.baseScope.length === 0 && xptScope.length === 0) {
-      throw new Error("Selecione ao menos uma SVC/base ou um XPT responsável para este cargo.");
-    }
+    const departments = await loadDepartments();
+    const setor = canonicalSetor(payload.setor, departments);
 
     const { data: created, error: createError } = await admin.auth.admin.createUser({
       email: payload.email,
@@ -312,33 +221,28 @@ export async function POST(request: Request) {
     if (createError) throw new Error(createError.message);
     if (!created.user) throw new Error("Usuário não retornado pelo Supabase Auth.");
 
-    const { error: profileError } = await admin.from("profiles").upsert({
+    const afterData = {
       id: created.user.id,
       email: payload.email,
       full_name: payload.fullName || payload.email,
       role: payload.role,
+      setor,
       global_access: payload.globalAccess,
       active: payload.active,
-      base_scope: scopes.baseScope,
-      sigla_scope: scopes.siglaScope,
-      xpt_scope: xptScope,
+      base_scope: [],
+      sigla_scope: [],
+      xpt_scope: [],
       module_scope: payload.moduleScope,
       updated_at: new Date().toISOString(),
-    });
-    if (profileError) throw new Error(profileError.message);
+    };
 
-    await writeUserAudit(admin, manager.id, "user.create", created.user.id, null, {
-      email: payload.email,
-      full_name: payload.fullName || payload.email,
-      role: payload.role,
-      global_access: payload.globalAccess,
-      active: payload.active,
-      base_scope: scopes.baseScope,
-      sigla_scope: scopes.siglaScope,
-      xpt_scope: xptScope,
-      module_scope: payload.moduleScope,
-    });
+    const { error: profileError } = await admin.from("profiles").upsert(afterData);
+    if (profileError) {
+      await admin.auth.admin.deleteUser(created.user.id);
+      throw new Error(profileError.message);
+    }
 
+    await writeUserAudit(admin, manager.id, "user.create", created.user.id, null, afterData);
     return await responsePayload(manager);
   } catch (error) {
     const result = userManagementStatus(error);
@@ -354,6 +258,7 @@ export async function PATCH(request: Request) {
     const id = toStringValue(body.id);
     if (!id) throw new Error("Usuário não informado.");
     if (id === manager.id) throw new UserManagementAccessError("Por segurança, sua própria conta não pode ser alterada pela gestão de usuários.");
+
     const before = await loadTargetProfile(admin, id);
     const currentRole = parseRole(before.role);
     const payload = parseUserPayload(body, false);
@@ -361,25 +266,37 @@ export async function PATCH(request: Request) {
     if (!canManageUserTransition(manager, currentRole, payload.role)) {
       throw new UserManagementAccessError("Você não possui permissão para alterar este usuário ou atribuir esse cargo.");
     }
-    const [scopes, xptScope] = await Promise.all([
-      resolveBaseScopes(admin, payload.baseScope, payload.role),
-      resolveXptScope(admin, payload.xptScope, payload.role),
-    ]);
-    if (requiresOperationalScope(payload.role) && scopes.baseScope.length === 0 && xptScope.length === 0) {
-      throw new Error("Selecione ao menos uma SVC/base ou um XPT responsável para este cargo.");
-    }
 
-    const { error: profileError } = await admin.from("profiles").update({
+    const departments = await loadDepartments();
+    const setor = canonicalSetor(payload.setor, departments, toStringValue(before.setor));
+
+    const afterData = {
+      ...before,
       email: payload.email,
       full_name: payload.fullName || payload.email,
       role: payload.role,
+      setor,
       global_access: payload.globalAccess,
       active: payload.active,
-      base_scope: scopes.baseScope,
-      sigla_scope: scopes.siglaScope,
-      xpt_scope: xptScope,
+      base_scope: [],
+      sigla_scope: [],
+      xpt_scope: [],
       module_scope: payload.moduleScope,
       updated_at: new Date().toISOString(),
+    };
+
+    const { error: profileError } = await admin.from("profiles").update({
+      email: afterData.email,
+      full_name: afterData.full_name,
+      role: afterData.role,
+      setor: afterData.setor,
+      global_access: afterData.global_access,
+      active: afterData.active,
+      base_scope: afterData.base_scope,
+      sigla_scope: afterData.sigla_scope,
+      xpt_scope: afterData.xpt_scope,
+      module_scope: afterData.module_scope,
+      updated_at: afterData.updated_at,
     }).eq("id", id);
     if (profileError) throw new Error(profileError.message);
 
@@ -391,19 +308,7 @@ export async function PATCH(request: Request) {
     const { error: authError } = await admin.auth.admin.updateUserById(id, updateAuth);
     if (authError) throw new Error(authError.message);
 
-    await writeUserAudit(admin, manager.id, "user.update", id, before, {
-      ...before,
-      email: payload.email,
-      full_name: payload.fullName || payload.email,
-      role: payload.role,
-      global_access: payload.globalAccess,
-      active: payload.active,
-      base_scope: scopes.baseScope,
-      sigla_scope: scopes.siglaScope,
-      xpt_scope: xptScope,
-      module_scope: payload.moduleScope,
-    });
-
+    await writeUserAudit(admin, manager.id, "user.update", id, before, afterData);
     return await responsePayload(manager);
   } catch (error) {
     const result = userManagementStatus(error);
