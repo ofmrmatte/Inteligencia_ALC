@@ -12,6 +12,7 @@ import {
 import { channelConfig, graph, type Channel } from "./meta";
 import { syncCore, type Automation } from "./source";
 import { fillScript, scriptText } from "./agent-playbook";
+import { loadInstructions, runtimeScripts } from "./agent-instructions";
 type Conversation = {
   id: string;
   channel: Channel;
@@ -71,11 +72,12 @@ async function driverAnswer(
   conversation: Conversation,
   text: string,
   transaction: PoolClient,
+  overrides?: Record<string,string>,
 ) {
   const n = normalize(text);
   const state = conversation.agent_state;
   const title = (code: string, values: Record<string, string> = {}) =>
-    fillScript(scriptText("driver", code), {
+    fillScript(overrides?.[code] || scriptText("driver", code), {
       "Nome do Motorista": conversation.name || state.name || "Motorista",
       Base: conversation.base_key || "sua base",
       ...values,
@@ -289,6 +291,7 @@ async function incoming(
     );
     return;
   }
+  const savedInstructions = await loadInstructions();
   let answer;
   if (!text)
     answer = {
@@ -299,7 +302,7 @@ async function incoming(
       handoff: true,
     };
   else if (channel === "driver") {
-    answer = await driverAnswer(conversation, text, transaction);
+    answer = await driverAnswer(conversation, text, transaction, runtimeScripts(savedInstructions, "driver"));
   } else if (!conversation.case_id || !conversation.identity_verified)
     answer = {
       state: { step: "human" },
@@ -307,7 +310,7 @@ async function incoming(
         "A equipe Loss vai identificar o envio relacionado ao seu atendimento.",
       handoff: true,
     };
-  else answer = clientReply(conversation.agent_state, text, conversation.name);
+  else answer = clientReply(conversation.agent_state, text, conversation.name, { shipmentId: conversation.case_id || "", overrides: runtimeScripts(savedInstructions,"client") });
   const updated = await transaction.query(
     "UPDATE alc_atendimento.conversations SET agent_state=$2,status=$3 WHERE id=$1 AND status='bot' AND agent_state=$4 RETURNING id",
     [
