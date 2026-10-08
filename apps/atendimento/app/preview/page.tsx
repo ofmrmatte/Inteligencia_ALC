@@ -7,7 +7,7 @@ import {
 import { Brand } from "@alc/ui/brand";
 import { groupCasesByDriver } from "@/lib/driver-groups";
 import { CUSTOMER_STEPS, DRIVER_STEPS, AGENT_GUARDRAILS } from "@/lib/agent-playbook";
-import { driverNotificationEligible } from "@/lib/domain";
+import { driverNotificationEligible, clientOpening, clientReply, type CaseRecord } from "@/lib/domain";
 
 type Item = {
   case_id: string;
@@ -31,12 +31,19 @@ const cases: Record<string,string> = {
   aberta:"Em aberto / revisão",
   encerrada:"Encerrada",
 };
+const demoClient = {
+  customerVerified:true, customerName:"Cliente Exemplo", customerPhone:"5511999990000",
+  products:[{title:"Produto demonstrativo"}], purchaseValue:285.5,
+  deliveryAt:"2026-10-07T17:00:00Z",shipmentId:"DEMO-ENV-101",
+} as CaseRecord;
 const demoMessages = [
-  {direction:"out",time:"09:01",body:"Olá! Estamos acompanhando uma ocorrência relacionada à entrega demonstrativa DEMO-ENV-101. Você recebeu o produto?"},
+  {direction:"out",time:"09:01",body:clientOpening(demoClient,"Equipe ALC")},
   {direction:"in",time:"09:03",body:"Sim, recebi o produto."},
-  {direction:"out",time:"09:04",body:"Obrigado! Em qual data recebeu? O produto estava correto?"},
-  {direction:"in",time:"09:05",body:"Recebi no dia 07/10, e o produto estava correto."},
-  {direction:"out",time:"09:06",body:"Obrigado pela confirmação. As informações foram registradas para análise da equipe."},
+  {direction:"out",time:"09:04",body:clientReply({step:"receipt"},"Sim","Cliente Exemplo").reply},
+  {direction:"in",time:"09:05",body:"07/10"},
+  {direction:"out",time:"09:06",body:clientReply({step:"date"},"07/10","Cliente Exemplo").reply},
+  {direction:"in",time:"09:07",body:"Sim, o produto estava correto."},
+  {direction:"out",time:"09:08",body:clientReply({step:"product",receivedAt:"07/10"},"Sim, correto","Cliente Exemplo").reply},
 ];
 const navigation = [
   {id:"overview",name:"Visão Geral",icon:LayoutDashboard},
@@ -113,12 +120,12 @@ export default function Preview() {
         </section>}
         {tab==="agent"&&<section>
           <p className="notice">Motor ativo em produção: <strong>regras determinísticas</strong>. Esta página mostra o roteiro de atendimento da PR #70. Nenhuma IA externa ou envio de mensagens está ativado no preview.</p>
-          <h2>Instruções para atender clientes</h2><div className="preview-step-grid">{CUSTOMER_STEPS.map((step,i)=><article className="card" key={step.id}><small>ETAPA {i+1}</small><h3>{step.title}</h3><p>{step.goal}</p>{"example" in step&&<blockquote>{step.example}</blockquote>}</article>)}</div>
-          <h2>Fluxos para motoristas</h2><div className="preview-step-grid">{DRIVER_STEPS.map(s=><article className="card" key={s.id}><h3>{s.title}</h3><p>{s.goal}</p></article>)}</div>
+          <h2>Instruções para atender clientes</h2><div className="preview-step-grid">{CUSTOMER_STEPS.map((step,i)=><article className="card" key={step.id}><small>ETAPA {i+1}</small><h3>{step.title}</h3><p>{step.goal}</p>{"example" in step&&<blockquote style={{whiteSpace:"pre-wrap"}}>{step.example}</blockquote>}</article>)}</div>
+          <h2>Fluxos para motoristas</h2><div className="preview-step-grid">{DRIVER_STEPS.map(s=><article className="card" key={s.id}><h3>{s.title}</h3><p>{s.goal}</p>{"example" in s && <blockquote style={{whiteSpace:"pre-wrap"}}>{s.example}</blockquote>}</article>)}</div>
           <h2>Restrições de atendimento</h2><div className="card"><ul>{AGENT_GUARDRAILS.map(s=><li key={s}>{s}</li>)}</ul></div>
         </section>}
         {tab==="proof"&&<section>
-          <div className="page-tools"><p>Modelo visual do comprovante; não é histórico real.</p><span className="badge">Caso DEMO-001</span></div>
+          <div className="page-tools"><p>Modelo visual com a abertura C01 e o encerramento C04 aprovados; não é histórico real.</p><span className="badge">Caso DEMO-001</span></div>
           <div className="preview-chat">
             <header className="preview-chat-head"><span className="preview-contact-icon"><UserCircle2 size={35}/></span><div><strong>+55 11 99999-0000</strong><small>Cliente · Atendimento demonstrativo</small></div></header>
             <div className="preview-chat-body"><small className="preview-chat-date">08/10/2026 · Conversa fictícia</small>{demoMessages.map((m,i)=><div key={i} className={"preview-bubble "+m.direction}><p>{m.body}</p><small>{m.time} {m.direction==="out"?"✓✓":""}</small></div>)}</div>
