@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { roleModuleCap } from "@/lib/access-control";
+import { roleDefaultModules, roleModuleCap } from "@/lib/access-control";
 import { canAccessAtendimento, canManageRole, canManageUserTransition, canManageUsers, isUserRole, manageableUserRoles, MANAGED_USER_ROLES, type AuthProfile, type UserRole } from "@/lib/auth";
 import { readAtendimentoAccess, writeAtendimentoAccess } from "@/lib/atendimento-access";
 import { getCurrentProfile } from "@/lib/auth-server";
@@ -97,7 +97,7 @@ function parseUserPayload(payload: DbRow, requirePassword: boolean) {
   const moduleCap = roleModuleCap(role);
   const hasModules = hasPayloadField(payload, "moduleScope", "module_scope");
   const requestedModules = toStringArray(payload.moduleScope ?? payload.module_scope);
-  const moduleScope = fullRole(role) ? moduleCap : allowedSubset(hasModules ? requestedModules : moduleCap, moduleCap);
+  const moduleScope = fullRole(role) ? moduleCap : allowedSubset(hasModules ? requestedModules : roleDefaultModules(role), moduleCap);
 
   if (!fullRole(role) && moduleScope.length === 0) {
     throw new Error("Selecione ao menos um módulo permitido para o usuário.");
