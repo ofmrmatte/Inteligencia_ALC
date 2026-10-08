@@ -150,7 +150,15 @@ let openingCaseCenter = null;
  */
 async function caseCenterTabs() {
   const tabs = await chrome.tabs.query({ url: "https://envios.adminml.com/logistics/case-center/cases*" });
-  return tabs.filter((tab) => Boolean(tab.id) && isCaseCenterListTab(tab) || (Boolean(tab.id) && /^\\/logistics\\/case-center\\/cases\\/\\d{1,30}\\/?$/.test(new URL(tab.url).pathname)));
+  return tabs.filter((tab) => {
+    if (!tab?.id || !tab.url) return false;
+    try {
+      const pathname = new URL(tab.url).pathname;
+      return pathname === caseCenterListPath || /^\\/logistics\\/case-center\\/cases\\/\\d{1,30}\\/?$/.test(pathname);
+    } catch {
+      return false;
+    }
+  });
 }
 async function managedTabState() {
   const saved = await chrome.storage.local.get(managedTabKey);
