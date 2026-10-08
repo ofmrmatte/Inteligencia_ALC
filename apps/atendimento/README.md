@@ -15,7 +15,7 @@ Na raiz: `npm ci`, `npm run dev:atendimento`, `npm run build:atendimento` e `npm
 - Tratativa determinística do cliente: recebimento, data, produto, confirmação no aplicativo; negativa, portaria/vizinhos e encaminhamento. O sistema registra o relato, sem afirmar que alterou o Mercado Livre.
 - Disparos idempotentes por caso/canal/contato. Carga inicial não dispara histórico. Erro ambíguo de rede não é reenviado automaticamente.
 - Administração interna para usuários já cadastrados, canais/credenciais, catálogo Meta, coleta, automações e auditoria. Credenciais editadas são cifradas; nenhum segredo é devolvido ao navegador.
-- Mesma identidade e MFA do Inteligência; perfis e bases continuam no cadastro central. O link abre outra aba com transferência de sessão por ticket de uso único cifrado, válido por 60 segundos; o domínio novo recebe cookies próprios após verificação de identidade e MFA. Se não houver transferência disponível, oferece login próprio.
+- Acesso exclusivamente pelo Inteligência, com o mesmo Supabase Auth, perfis e MFA. O botão no menu lateral abre outra aba com transferência de sessão por ticket cifrado de uso único, válido por 60 segundos. Não há login ou cadastro próprios. A entrada exige um comprovante de passagem pelo painel vinculado à mesma sessão Supabase; ele não contém credenciais nem concede permissões. Abrir a URL diretamente encaminha ao Inteligência. Encerrar a conta permanece uma ação do painel central.
 
 ## Dados e coleta
 

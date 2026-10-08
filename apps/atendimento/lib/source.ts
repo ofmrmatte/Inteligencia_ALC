@@ -101,6 +101,10 @@ export async function queueTemplate(
   const conversation = await db().query(
     `INSERT INTO alc_atendimento.conversations(channel,phone,name,base_key,sigla,case_id,driver_id,identity_verified,agent_state)
     VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9) ON CONFLICT(channel,phone) DO UPDATE SET
+      name=CASE WHEN alc_atendimento.conversations.channel='client' AND alc_atendimento.conversations.status='resolved' AND alc_atendimento.conversations.case_id IS DISTINCT FROM excluded.case_id THEN excluded.name ELSE alc_atendimento.conversations.name END,
+      base_key=CASE WHEN alc_atendimento.conversations.channel='client' AND alc_atendimento.conversations.status='resolved' AND alc_atendimento.conversations.case_id IS DISTINCT FROM excluded.case_id THEN excluded.base_key ELSE alc_atendimento.conversations.base_key END,
+      sigla=CASE WHEN alc_atendimento.conversations.channel='client' AND alc_atendimento.conversations.status='resolved' AND alc_atendimento.conversations.case_id IS DISTINCT FROM excluded.case_id THEN excluded.sigla ELSE alc_atendimento.conversations.sigla END,
+      driver_id=CASE WHEN alc_atendimento.conversations.channel='client' AND alc_atendimento.conversations.status='resolved' AND alc_atendimento.conversations.case_id IS DISTINCT FROM excluded.case_id THEN excluded.driver_id ELSE alc_atendimento.conversations.driver_id END,
       case_id=CASE WHEN alc_atendimento.conversations.channel='client' AND alc_atendimento.conversations.status='resolved' THEN excluded.case_id ELSE alc_atendimento.conversations.case_id END,
       agent_state=CASE WHEN alc_atendimento.conversations.channel='client' AND alc_atendimento.conversations.status='resolved' AND alc_atendimento.conversations.case_id IS DISTINCT FROM excluded.case_id THEN excluded.agent_state ELSE alc_atendimento.conversations.agent_state END,
       status=CASE WHEN alc_atendimento.conversations.channel='client' AND alc_atendimento.conversations.status='resolved' AND alc_atendimento.conversations.case_id IS DISTINCT FROM excluded.case_id THEN 'bot' ELSE alc_atendimento.conversations.status END,

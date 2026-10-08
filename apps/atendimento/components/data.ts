@@ -8,6 +8,8 @@ export async function api<T>(path: string, body?: unknown): Promise<T> {
     cache: "no-store",
   });
   const data = await response.json();
+  if (response.status === 401 || data.error === "MFA_REQUIRED")
+    window.location.assign(new URL("/login", window.location.origin).href);
   if (!response.ok) throw new Error(data.error || "Falha ao carregar.");
   return data;
 }

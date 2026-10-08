@@ -46,7 +46,7 @@ O Atendimento tem os comandos separados `dev:atendimento`, `build:atendimento` e
 
 O contrato do Railway permanece: raiz do repositório, `npm run build` e `npm start`, publicando apenas o painel. A separação dos serviços e os filtros de arquivos estão descritos em [docs/monorepo.md](docs/monorepo.md).
 
-O acesso ALC Atendimento no menu do painel abre uma nova aba. Uma credencial de uso único, válida por 60 segundos, transfere a sessão autenticada e preserva MFA e perfil. A Administração permanece dentro do Atendimento, na mesma aba.
+O botão ALC Atendimento no menu lateral abre uma nova aba com a sessão já autenticada do Inteligência, preservando o mesmo Supabase Auth, MFA e perfil. A transferência usa um ticket cifrado de uso único, válido por 60 segundos. O Atendimento não possui login ou cadastro próprios; entradas diretas são encaminhadas ao painel. A Administração permanece dentro do Atendimento, na mesma aba.
 
 - [Painel Inteligência ALC](apps/inteligencia/README.md)
 - [Workspace do Atendimento](apps/atendimento/README.md)

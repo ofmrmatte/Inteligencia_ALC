@@ -9,20 +9,25 @@ const globalTransfer = globalThis as unknown as {
 };
 export async function GET(request: Request) {
   const profile = await getCurrentProfile();
-  if (!profile) return NextResponse.redirect(new URL("/login", request.url));
+  const login = new URL("/login", request.url);
+  login.searchParams.set("next", "/atendimento");
+  if (!profile) return NextResponse.redirect(login);
   if (!canAccessSection(profile, "gestao-pnr"))
     return NextResponse.json({ error: "Acesso restrito." }, { status: 403 });
   const destination =
     process.env.ALC_ATENDIMENTO_URL ||
     "https://alc-atendimento-production.up.railway.app";
   if (!process.env.ATENDIMENTO_SSO_KEY || !process.env.PNR_DATABASE_URL)
-    return NextResponse.redirect(destination);
+    return NextResponse.json(
+      { error: "Acesso ao Atendimento ainda não configurado." },
+      { status: 503 },
+    );
   const client = await createClient();
   const { data, error } = await client.auth.getSession();
-  if (error || !data.session) return NextResponse.redirect(destination);
+  if (error || !data.session) return NextResponse.redirect(login);
   const verified = await client.auth.getClaims(data.session.access_token);
   if (verified.error || verified.data?.claims.sub !== profile.id)
-    return NextResponse.redirect(destination);
+    return NextResponse.redirect(login);
   const pool = (globalTransfer.atendimentoTransferPool ??= new pg.Pool({
     connectionString: process.env.PNR_DATABASE_URL,
     max: 2,
@@ -58,6 +63,12 @@ export async function GET(request: Request) {
       },
     });
   } catch {
-    return NextResponse.redirect(destination);
+    return NextResponse.json(
+      {
+        error:
+          "Não foi possível abrir o Atendimento. Tente novamente pelo menu do Inteligência.",
+      },
+      { status: 503 },
+    );
   }
 }

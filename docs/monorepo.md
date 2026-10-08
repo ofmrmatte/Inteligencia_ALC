@@ -6,7 +6,7 @@ O painel foi movido da raiz para `apps/inteligencia`, incluindo `app`, `componen
 
 A extensão saiu de `extension-pnr` para `extensions/pnr-connector`. O painel declara esse workspace como dependência local e importa seu `package.json` para obter a versão do conector. Os testes de integração usam o novo caminho da extensão.
 
-O build do conector continua produzindo um ZIP em `apps/inteligencia/public/downloads`. A URL pública de download do painel permanece `/downloads/alc-pnr-connector-v<versão>.zip`. A versão e as permissões do manifest não foram alteradas.
+O build do conector produz o ZIP em ambas as aplicações. A URL de download permanece `/downloads/alc-pnr-connector-v<versão>.zip`. A versão atual é 1.2.0, incluindo o domínio do Atendimento e o agendamento com chrome.alarms.
 
 O Atendimento tem um workspace próprio em `apps/atendimento`, implementado com serviço e domínio próprios. O pacote `@alc/identity` compartilha perfil, permissões e cifragem de tickets de acesso entre as aplicações.
 
@@ -30,7 +30,7 @@ O serviço atual do painel utiliza a raiz do repositório, `npm run build` e `np
 
 Ao configurar os filtros de deploy do painel, incluir `/apps/inteligencia/**`, `/extensions/pnr-connector/**`, `/packages/**`, `/package.json` e `/package-lock.json`. Alterações exclusivas em `/apps/atendimento/**` devem pertencer ao serviço do Atendimento. A instalação e o lockfile compartilhados exigem incluir os arquivos da raiz nos filtros relevantes.
 
-O serviço ALC-Atendimento possui domínio, processo e variáveis próprios. O pré-deploy aplica somente seu schema alc_atendimento no Aux. O acesso pelo painel será um link para outra aba, e a Administração permanecerá dentro do Atendimento.
+O serviço ALC-Atendimento possui domínio, processo e variáveis próprios. O pré-deploy aplica somente seu schema `alc_atendimento` no Aux. O botão do menu lateral abre outra aba, e a Administração permanece dentro do Atendimento. O Supabase Auth é o mesmo do painel: login, cadastro e MFA são centralizados no Inteligência. Uma entrada de uso único transfere a mesma sessão; não existe formulário de login no Atendimento.
 
 Referência: [monorepos no Railway](https://docs.railway.com/deployments/monorepo). Não foi introduzido `railway.json` ou `railway.toml`; os comandos existentes já são suficientes para o serviço atual.
 
@@ -44,18 +44,10 @@ A CI instala as dependências na raiz e usa os comandos de lint, typecheck, test
 
 Para revisar a mudança, conferir renomes e diferenças com `git diff --find-renames`. Uma reorganização de diretórios não deve alterar o conteúdo das rotas, componentes ou migrations.
 
-## Validação desta reorganização
+## Validação
 
-Verificações locais em 7 de outubro de 2026 (Brasil), sobre a base `6c990fa` que já inclui o módulo RH:
+A organização inicial preservou os 323 testes do painel. A implementação e o ajuste de acesso exclusivo pelo Inteligência totalizam 337 testes em 40 arquivos, com typecheck e builds das duas aplicações aprovados. O lint do Atendimento passa sem erros ou warnings. O painel mantém os 4 erros e 3 warnings anteriores de lint. A auditoria de dependências de produção não apontou vulnerabilidades na publicação inicial.
 
-- `npm ci --offline --no-audit --no-fund`: instalação limpa concluída.
-- `npm test`: 39 arquivos e 323 testes passaram, tanto antes quanto após a movimentação.
-- `npm run typecheck`: passou.
-- `npm run build`: passou e gerou o ZIP do conector no diretório público do painel.
-- `npm start -- --hostname 127.0.0.1 --port 3101`: iniciou o painel pelo comando da raiz; `/login` respondeu 200, e `/` e o download protegido redirecionaram ao login sem sessão. A API de usuários respondeu 503 no ambiente sem configuração de autenticação, sem validar acesso real.
-- ZIP local do conector: 4 arquivos, manifest 1.1.17 e service worker clássico preservados.
-- `npm run audit:perf`: passou.
-- `npm audit --omit=dev --audit-level=high`: nenhuma vulnerabilidade reportada.
-- `npm run lint`: permanece com os mesmos 4 erros e 3 warnings anteriores no painel; não foi tratado como aprovação.
+A atualização concorrente de RH/configurações foi incorporada antes da publicação, incluindo setores, organograma e política de escopo operacional. O script de build preexistente prepara uma cor em `reports-view-v2.tsx`; esse efeito local foi restaurado e não integra as alterações.
 
-As versões externas do lockfile foram preservadas. O script de build preexistente prepara uma cor em `reports-view-v2.tsx`; esse efeito local não foi incluído no diff da reorganização. Não foram testadas conexões com serviços de produção, autenticação real, novas funcionalidades do Atendimento ou configurações de deploy externas.
+A saúde do serviço Atendimento e a proteção das APIs foram verificadas em produção. A confirmação do fluxo completo com uma conta real, MFA, recebimento/envio de WhatsApp e coleta complementar requer sessão autorizada e as configurações externas indicadas no README do Atendimento. Nenhum teste enviou WhatsApp real.
