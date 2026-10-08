@@ -29,8 +29,9 @@ const navigation = [
   { href: "/conversas", label: "Conversas", title: "Conversas", eyebrow: "CAIXA DE ATENDIMENTO", icon: MessageSquare },
   { href: "/visao-geral", label: "Visão Geral", title: "Visão Geral", eyebrow: "MONITORAMENTO OPERACIONAL", icon: LayoutDashboard },
   { href: "/pnrs", label: "Motoristas e PNRs", title: "PNRs", eyebrow: "GESTÃO DE CASOS", icon: ClipboardList },
-  { href: "/disparos", label: "Clientes e envios", title: "Disparos e histórico", eyebrow: "MENSAGENS OPERACIONAIS", icon: Send },
-  { href: "/admin", label: "Administração", title: "Administração", eyebrow: "CONTROLE DA OPERAÇÃO", icon: Settings },
+  { href: "/disparos/clientes", label: "Disparo Cliente", title: "Disparo Cliente", eyebrow: "MENSAGENS OPERACIONAIS", icon: Send },
+  { href: "/disparos/motoristas", label: "Disparo Motorista", title: "Disparo Motorista", eyebrow: "MENSAGENS OPERACIONAIS", icon: Send },
+  { href: "/admin", label: "Ajustes", title: "Ajustes", eyebrow: "CONFIGURAÇÕES", icon: Settings },
 ] as const;
 function subscribeViewport(change: () => void) {
   const query = window.matchMedia("(max-width:800px)");
@@ -160,16 +161,16 @@ export function WorkspaceShell({
           ))}
           {canManageUsers(current) && (
             <>
-              <p className="nav-label">ADMINISTRAÇÃO</p>
+              <p className="nav-label">CONFIGURAÇÕES</p>
               <Link
                 href="/admin"
                 onClick={close}
-                title="Administração"
-                aria-label="Administração"
+                title="Ajustes"
+                aria-label="Ajustes"
                 aria-current={path === "/admin" ? "page" : undefined}
               >
                 <Settings size={19} />
-                <span>Administração</span>
+                <span>Ajustes</span>
               </Link>
             </>
           )}

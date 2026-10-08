@@ -39,6 +39,20 @@ Foram reutilizados os roteiros deterministas de cliente/motorista, classificacoe
 
 A extensao 1.2.0 ja coleta a competencia vigente a cada 30 minutos, mais recentes primeiro, e le os dados disponiveis do Case Center antes do complemento conservador em package-management. Nao foi alterada. A administracao mostra deteccao local/versionamento/aba ML, ultima coleta e agendamento armazenado. Uma aba presente nao prova sessao autenticada: a coleta verifica isso. O cadastro de agendamento nao prova que o computador esteja ligado. Conversas atualizam em 5s/8s; resumo da fonte em 30s.
 
+### Disparos por publico
+
+`/disparos/clientes` e `/disparos/motoristas` reutilizam a mesma fila e o endpoint de envio existente. `/disparos` redireciona para clientes para preservar links antigos. Cada area separa previa e historico, com busca, base, status, competencia e paginas de 25 registros. Trocar de publico descarta a previa selecionada. A conferencia mostra o destinatario, telefone, pacote, caso e modelo antes de enfileirar um contato individual; somente os gestores ja autorizados podem confirmar.
+
+A previa consulta ate 10.000 PNRs e o historico ate 1.000 jobs por canal, sempre com escopo aplicado antes do limite. O painel informa quando o limite e atingido; os contadores descrevem apenas o recorte consultado. O historico nao mistura publico de cliente e motorista. Telefone ausente, contato inicial ja registrado, competencia anterior e PNR encerrada continuam consultaveis, mas nao oferecem novo disparo inicial.
+
+Nao foram criados modelos, regras de envio ou reenvios alternativos: `pnraberta` e `cliente_loss`, parametros confirmados, aprovacao Meta, janela de 24h e idempotencia por canal/caso/telefone permanecem validados no servidor. O endpoint tambem verifica o escopo da PNR escolhida. Envios incertos nao possuem botao de reenvio. Automacoes existentes nao sao ativadas por esta entrega.
+
+### Entrada e ajustes
+
+A transferencia `/atendimento` mostra a marca ALC e loading enquanto submete automaticamente o ticket de uso unico. O botao manual aparece somente se a submissao falhar ou JavaScript estiver desativado. Nao ha retry automatico, alteracao de prazo do ticket ou de validacao SSO. A pagina continua sem cache e sem referrer.
+
+O grupo lateral agora e CONFIGURACOES e `/admin` e identificado como Ajustes, sem mudar permissoes ou URL. Automacoes e conector usam a largura da secao e se reorganizam em uma coluna no celular, sem paineis estreitos com espaco vazio ao lado.
+
 ## Migracao e rollback
 
 O arquivo idempotente `apps/atendimento/db/001_atendimento.sql` adiciona etiquetas e indices e amplia a restricao de status para `pending`, exclusivamente em `alc_atendimento`. O pre-deploy existente aplica o arquivo no Aux. Nao apaga nem recria historico, mensagens, usuarios ou Core/RH. Nao houve execucao manual em banco remoto durante a implementacao.
@@ -47,17 +61,18 @@ Em rollback, mantenha a coluna/indices e a restricao ampliada: sao aditivos. Ant
 
 ## Referencia antiga e menus
 
-O endereco do comunicador antigo foi informado, mas nao havia sessao autorizada disponivel para inspecao. Capturas historicas de PNR nao constituem prova dos seus menus. Nao afirmamos reproduzir menus que nao foram observados.
+O comunicador antigo foi inspecionado em 08/10/2026 na sessao aberta pelo usuario, somente em leitura. Foram observados os menus e as telas Disparo Cliente e Disparo de PNR: filtros, previa de destinatario, modelo e acompanhamento de envio. Esses recursos foram incorporados ao fluxo atual sem salvar configuracoes, ativar automacoes ou enviar mensagens no sistema antigo.
 
 | Area essencial solicitada | Destino implementado |
 | --- | --- |
 | Caixas, atendentes, notas, status, detalhes | Conversas |
 | Filas/pendencias e fonte | Visao Geral |
 | Motoristas, PNRs e historico | Motoristas e PNRs |
-| Contato inicial, resultados e falhas de envio | Clientes e envios + detalhe da conversa |
-| Usuarios existentes/permissoes, canais, modelos, automacoes, auditoria | Administracao, nesta mesma aba |
+| Contato inicial de clientes, resultados e falhas | Disparo Cliente + detalhe da conversa |
+| Notificacoes de motoristas, resultados e falhas | Disparo Motorista + detalhe da conversa |
+| Usuarios existentes/permissoes, canais, modelos, automacoes, auditoria | Configuracoes > Ajustes, nesta mesma aba |
 
-Mapeamento exaustivo de outros menus depende de acesso ao comunicador antigo; nenhuma funcionalidade adicional desse sistema foi presumida ou declarada entregue.
+Nao foi feita uma copia exaustiva de outros menus. Custos estimados, envio em lote e selecao arbitraria de modelos nao foram adicionados: dependem de precificacao confirmada e regras operacionais especificas. A entrega reutiliza os modelos e o envio individual ja existentes.
 
 ## Evidencia e dependencias externas
 
@@ -68,6 +83,10 @@ Capturas locais de componentes reais, exclusivamente com dados sinteticos:
 ![Navegacao progressiva mobile](atendimento/mobile-conversa.jpg)
 
 Testes de fila, dominio, identidade e inbox usam mocks. A revisao visual usa componentes reais com dados sinteticos em fixture ignorada `.testagent/visual`, sem bypass dentro dos aplicativos, sem credenciais e sem envio real. Isso nao prova concorrencia PostgreSQL real nem um fluxo autenticado/MFA em producao.
+
+Nesta revisao foram exercitados no navegador filtros, historico por publico, troca de area, conferencia do destinatario, enfileiramento exclusivamente sintetico, modal/Escape, loading e fallback. Geometria e controles foram verificados em 320px e desktop, sem overflow global; tabelas mantem scroll proprio. A captura de tela pelo navegador falhou por timeout: as imagens acima sao da revisao anterior, nao prova visual destes novos fluxos.
+
+Validacao da entrega: 215 testes do Atendimento e 346 do Inteligencia passaram, assim como typecheck e ambos os builds. Lint do Atendimento e dos arquivos alterados do Inteligencia passou. O lint global do Inteligencia permanece bloqueado por quatro erros preexistentes de setState em effects, fora deste diff.
 
 O acesso inicial da CLI Railway pertence a outra conta, sem o projeto ALC listado. A publicacao deve seguir a integracao GitHub existente, sem duplicar deployments ou mudar servicos/credenciais. A rota publica `/health` inclui `RAILWAY_GIT_COMMIT_SHA` quando disponivel para confirmar a versao; status HTTP e SHA publicados devem ser verificados antes de declarar publicacao confirmada.
 

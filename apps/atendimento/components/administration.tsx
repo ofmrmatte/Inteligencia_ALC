@@ -35,7 +35,7 @@ export function Administration() {
           </p>
         <span className="badge">Acesso administrativo</span>
       </div>
-      <nav className="tabs" aria-label="Áreas da Administração">
+      <nav className="tabs" aria-label="Áreas dos Ajustes">
         {[
           ["channels", "Números & Meta"],
           ["automation", "Automações"],
@@ -246,14 +246,14 @@ function AutomationForm({
     [notice, setNotice] = useState(""),
     [busy, setBusy] = useState(false);
   return (
-    <section className="card narrow">
+    <section className="settings-section">
       <h2>Automação de PNRs</h2>
       <p className="muted">
         A ativação exige canais configurados e os webhooks verificados na Meta.
         A carga inicial não gera disparos.
       </p>
       <form
-        className="stack"
+        className="stack automation-fields"
         onSubmit={async (e) => {
           e.preventDefault();
           setBusy(true);

@@ -139,6 +139,20 @@ export async function GET(
         competence: competence(),
       });
     }
+    if (resource === "dispatch-preview") {
+      // ponytail: bounded previews; move filters/paging server-side if scoped reads reach 10k cases.
+      const target = channel.parse(query.get("channel")), values: unknown[] = [];
+      const scope = inboxScopeSql(await scopeFor(profile), values);
+      values.push(target);
+      const bind = `$${values.length}`;
+      const result = await db().query(
+        `SELECT c.case_id,c.competence,c.classification,c.record,o.status AS initial_status
+         FROM alc_atendimento.cases c LEFT JOIN alc_atendimento.outbox o
+           ON o.dedupe_key=${bind}||':'||c.case_id||':'||CASE WHEN ${bind}='driver' THEN c.driver_phone ELSE c.customer_phone END||':initial'
+         WHERE ${scope} ORDER BY c.updated_at DESC,c.case_id DESC LIMIT 10000`, values,
+      );
+      return Response.json({ records: result.rows, competence: competence(), limit: 10000 });
+    }
     if (resource === "conversations")
       return Response.json(
         await listConversations(profile, Object.fromEntries(query)),
@@ -200,12 +214,17 @@ export async function GET(
       });
     }
     if (resource === "outbox") {
-      const scope = await scopeFor(profile);
+      const target = query.has("channel") ? channel.parse(query.get("channel")) : null;
+      const values: unknown[] = [], scope = inboxScopeSql(await scopeFor(profile), values);
+      if (target) values.push(target);
       const result = await db().query(
-        "SELECT o.id,o.case_id,o.channel,o.phone,o.status,o.error,o.created_at,o.provider_id,c.base_key,c.sigla FROM alc_atendimento.outbox o LEFT JOIN alc_atendimento.conversations c ON c.id=o.conversation_id ORDER BY o.created_at DESC LIMIT 1000",
+        `SELECT o.id,o.case_id,o.channel,o.phone,o.status,o.error,o.created_at,o.provider_id,c.base_key,c.sigla,c.name,
+           o.payload->>'type' AS message_type,o.payload#>>'{template,name}' AS template_name
+         FROM alc_atendimento.outbox o LEFT JOIN alc_atendimento.conversations c ON c.id=o.conversation_id
+         WHERE ${scope}${target ? ` AND o.channel=$${values.length}` : ""} ORDER BY o.created_at DESC,o.id DESC LIMIT 1000`, values,
       );
       return Response.json({
-        records: result.rows.filter((r) => visible(scope, r)),
+        records: result.rows, limit: 1000,
       });
     }
     if (resource === "overview") {
@@ -517,10 +536,11 @@ export async function POST(
           "Configure o App Secret e o webhook antes de enviar.",
         );
       const result = await db().query(
-        "SELECT record FROM alc_atendimento.cases WHERE case_id=$1",
+        "SELECT record,base_key,sigla FROM alc_atendimento.cases WHERE case_id=$1",
         [parsed.caseId],
       );
-      if (!result.rows.length) throw new HttpError(404, "PNR não encontrada.");
+      if (!result.rows.length || !visible(await scopeFor(profile), result.rows[0]))
+        throw new HttpError(404, "PNR não encontrada.");
       const automation = await setting<Automation>("automation");
       const queued = await queueTemplate(
         parsed.channel,

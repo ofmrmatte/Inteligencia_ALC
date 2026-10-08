@@ -80,7 +80,7 @@ export function Collector() {
     }
   }
   return (
-    <section className="card narrow">
+    <section className="settings-section collector-settings">
       <p className="eyebrow">FONTE / MERCADO LIVRE</p>
       <h2>Conector Case Center</h2>
       <p>
