@@ -7,7 +7,7 @@ import {
 import { Brand } from "@alc/ui/brand";
 import { groupCasesByDriver } from "@/lib/driver-groups";
 import { CUSTOMER_STEPS, DRIVER_STEPS, AGENT_GUARDRAILS } from "@/lib/agent-playbook";
-import { driverNotificationEligible, clientOpening, clientReply, type CaseRecord } from "@/lib/domain";
+import { driverNotificationEligible, clientOpening, clientReply, type CaseRecord, type AgentState } from "@/lib/domain";
 
 type Item = {
   case_id: string;
@@ -59,6 +59,25 @@ export default function Preview() {
   const [term,setTerm]=useState("");
   const [filter,setFilter]=useState("all");
   const [caseSelected,setCaseSelected]=useState<Item|null>(null);
+  const [simState,setSimState]=useState<AgentState>({step:"receipt"});
+  const [simInput,setSimInput]=useState("");
+  const [simHistory,setSimHistory]=useState<{role:"agent"|"client";text:string}[]>([
+    {role:"agent",text:clientOpening(demoClient,"Equipe ALC")},
+  ]);
+  const simulate = () => {
+    const message=simInput.trim();
+    if(!message || simState.step==="done" || simState.step==="human")return;
+    const answer=clientReply(simState,message,"Cliente Exemplo",{shipmentId:demoClient.shipmentId});
+    setSimHistory(history=>[...history,{role:"client",text:message},
+      ...(answer.reply ? [{role:"agent" as const,text:answer.reply}] : [])]);
+    setSimState(answer.state);
+    setSimInput("");
+  };
+  const resetSim = () => {
+    setSimState({step:"receipt"});
+    setSimHistory([{role:"agent",text:clientOpening(demoClient,"Equipe ALC")}]);
+    setSimInput("");
+  };
   const filtered=useMemo(()=>samples.filter(x=>(filter==="all"||filter===x.classification)&&
     [x.record.driverName,x.record.baseKey,x.record.shipmentId,x.case_id].join(" ").toLowerCase().includes(term.toLowerCase())),[term,filter]);
   const groups=useMemo(()=>groupCasesByDriver(filtered),[filtered]);
@@ -120,8 +139,24 @@ export default function Preview() {
         </section>}
         {tab==="agent"&&<section>
           <p className="notice">Motor ativo em produção: <strong>regras determinísticas</strong>. Esta página mostra o roteiro de atendimento da PR #70. Nenhuma IA externa ou envio de mensagens está ativado no preview.</p>
-          <h2>Instruções para atender clientes</h2><div className="preview-step-grid">{CUSTOMER_STEPS.map((step,i)=><article className="card" key={step.id}><small>ETAPA {i+1}</small><h3>{step.title}</h3><p>{step.goal}</p>{"example" in step&&<blockquote style={{whiteSpace:"pre-wrap"}}>{step.example}</blockquote>}</article>)}</div>
-          <h2>Fluxos para motoristas</h2><div className="preview-step-grid">{DRIVER_STEPS.map(s=><article className="card" key={s.id}><h3>{s.title}</h3><p>{s.goal}</p>{"example" in s && <blockquote style={{whiteSpace:"pre-wrap"}}>{s.example}</blockquote>}</article>)}</div>
+          <h2>Simulador de respostas · Cliente (sem WhatsApp)</h2>
+          <div className="card" style={{maxWidth:900,marginBottom:25}}>
+            <p className="muted">Simulação local do motor de regras. Digite respostas como “Sim, recebi”, “Não recebi”, “Não lembro”, “Ainda não verifiquei”, “Encontrei”, “Produto diferente” ou “Quero atendente”. Não envia mensagens.</p>
+            <div aria-live="polite" style={{maxHeight:340,overflowY:"auto",padding:14,background:"#efeae2",display:"flex",flexDirection:"column",gap:9}}>
+              {simHistory.map((item,i)=><div key={i} className={"preview-bubble "+(item.role==="agent"?"out":"in")} style={{whiteSpace:"pre-wrap"}}>{item.text}</div>)}
+            </div>
+            <p className="muted" style={{marginTop:9}}>Estado: <strong>{simState.step==="done"?"Atendimento encerrado (C04)":simState.step==="human"?"Transferido ao Loss":simState.step}</strong></p>
+            <div className="actions" style={{alignItems:"center",flexWrap:"wrap"}}>
+              <input aria-label="Resposta fictícia do cliente" placeholder="Digite uma resposta fictícia..." value={simInput}
+                disabled={simState.step==="done"||simState.step==="human"}
+                onChange={e=>setSimInput(e.target.value)}
+                onKeyDown={e=>{if(e.key==="Enter"){e.preventDefault();simulate();}}}/>
+              <button disabled={!simInput.trim()||simState.step==="done"||simState.step==="human"} onClick={simulate}>Responder</button>
+              <button onClick={resetSim}>Reiniciar simulação</button>
+            </div>
+          </div>
+          <h2>Script completo de clientes · C01 a C15</h2><div className="preview-step-grid">{CUSTOMER_STEPS.map((step)=><article className="card" key={step.id}><small>{step.code}</small><h3>{step.title}</h3><p>{step.goal}</p>{"example" in step&&<blockquote style={{whiteSpace:"pre-wrap"}}>{step.example}</blockquote>}</article>)}</div>
+          <h2>Script completo de motoristas · M01 a M15 (sem M12)</h2><div className="preview-step-grid">{DRIVER_STEPS.map(s=><article className="card" key={s.id}><small>{s.code}</small><h3>{s.title}</h3><p>{s.goal}</p>{"example" in s && <blockquote style={{whiteSpace:"pre-wrap"}}>{s.example}</blockquote>}</article>)}</div>
           <h2>Restrições de atendimento</h2><div className="card"><ul>{AGENT_GUARDRAILS.map(s=><li key={s}>{s}</li>)}</ul></div>
         </section>}
         {tab==="proof"&&<section>
