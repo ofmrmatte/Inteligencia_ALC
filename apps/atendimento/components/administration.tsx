@@ -1,5 +1,5 @@
 "use client";
-import { useState, type FormEvent } from "react";
+import { useEffect, useState, type FormEvent } from "react";
 import { api, useData, labels, when } from "./data";
 import { Collector } from "./collector";
 import { AgentPanel } from "./agent-panel";
@@ -104,6 +104,12 @@ function ChannelCard({
         components: { text?: string }[];
       }[]
     >([]);
+  useEffect(() => {
+    if (!revealedVerifyToken) return;
+    const conceal = window.setTimeout(() => setRevealedVerifyToken(null), 60_000);
+    return () => window.clearTimeout(conceal);
+  }, [revealedVerifyToken]);
+
   async function save(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     setBusy(true);
