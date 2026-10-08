@@ -37,7 +37,11 @@ it.each([
   expect(html).not.toContain("<strong>ALC Atendimento</strong>");
   expect(html).toContain("Desenvolvedor");
   // The sole global refresh control is immediately to the right of the role badge.
-  expect(html).toMatch(/class="user-chip"[\\s\\S]*?Desenvolvedor<\\/span>[\\s\\S]*?aria-label="Atualizar dados desta página"/);
+  const roleIndex = html.indexOf('class="user-chip"');
+  const refreshIndex = html.indexOf('aria-label="Atualizar dados desta página"');
+  expect(roleIndex).toBeGreaterThan(-1);
+  expect(refreshIndex).toBeGreaterThan(roleIndex);
+  expect(html.slice(roleIndex, refreshIndex)).toContain("Desenvolvedor");
   expect(html.match(/aria-label="Atualizar dados desta página"/g)).toHaveLength(1);
   expect(html).not.toContain('aria-label="Atualizar indicadores"');
   expect(html).not.toContain('aria-label="Atualizar disparos"');
