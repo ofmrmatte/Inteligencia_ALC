@@ -103,6 +103,10 @@ async function collectAtendimento({ channel = null, collectOnly = false } = {}) 
   } finally { atendimentoCollecting = false; }
 }
 chrome.alarms?.onAlarm.addListener(async (alarm) => {
+  if (alarm.name === managedTabCleanupAlarm) {
+    await cleanManagedTab();
+    return;
+  }
   if (alarm.name !== "alc-atendimento-collect") return;
   const state = await chrome.storage.local.get("atendimentoEnabled");
   if (state.atendimentoEnabled) await collectAtendimento();
@@ -133,9 +137,83 @@ function isCaseCenterListTab(tab) {
   }
 }
 
+const managedTabKey = "alcPnrManagedCaseCenter";
+const managedTabCleanupAlarm = "alc-pnr-managed-case-center-cleanup";
+const managedTabIdleMs = 5 * 60_000;
+let openingCaseCenter = null;
+
+/**
+ * A user does not need to manually keep a Case Center tab open.
+ * Chrome executeScript still requires a real tab at the ML origin: create it
+ * inactive, reuse it while processing and close only extension-owned tabs after idle.
+ * Never navigate or close the user's own Case Center tab.
+ */
 async function caseCenterTabs() {
   const tabs = await chrome.tabs.query({ url: "https://envios.adminml.com/logistics/case-center/cases*" });
-  return tabs.filter((tab) => tab.id);
+  return tabs.filter((tab) => Boolean(tab.id) && isCaseCenterListTab(tab) || (Boolean(tab.id) && /^\\/logistics\\/case-center\\/cases\\/\\d{1,30}\\/?$/.test(new URL(tab.url).pathname)));
+}
+async function managedTabState() {
+  const saved = await chrome.storage.local.get(managedTabKey);
+  return saved[managedTabKey] ?? null;
+}
+async function forgetManagedTab() {
+  await chrome.storage.local.remove(managedTabKey);
+}
+async function updateManagedTab(tabId) {
+  const state = await managedTabState();
+  if (state?.id !== tabId) return;
+  await chrome.storage.local.set({ [managedTabKey]: { id: tabId, lastUsed: Date.now() } });
+}
+async function cleanManagedTab() {
+  const state = await managedTabState();
+  if (!state?.id) return;
+  const tab = await chrome.tabs.get(state.id).catch(() => null);
+  if (!tab) return forgetManagedTab();
+  // Never touch a tab that the user has actively selected or navigated.
+  if (tab.active || !tab.url?.startsWith("https://envios.adminml.com/logistics/case-center/")) {
+    return forgetManagedTab();
+  }
+  if (Date.now() - (state.lastUsed || 0) < managedTabIdleMs) return;
+  await chrome.tabs.remove(state.id).catch(() => undefined);
+  await forgetManagedTab();
+}
+async function ensureCaseCenterTab() {
+  const existing = await caseCenterTabs();
+  const userTab = existing.find((tab) => tab.active && isCaseCenterListTab(tab))
+    || existing.find((tab) => isCaseCenterListTab(tab));
+  if (userTab?.id) {
+    await updateManagedTab(userTab.id);
+    return userTab;
+  }
+  if (openingCaseCenter) return openingCaseCenter;
+  openingCaseCenter = (async () => {
+    const state = await managedTabState();
+    if (state?.id) {
+      const current = await chrome.tabs.get(state.id).catch(() => null);
+      if (current?.id && isCaseCenterListTab(current)) {
+        await updateManagedTab(current.id);
+        return current;
+      }
+      await forgetManagedTab();
+    }
+    // Only an inactive tab is opened automatically; it is not brought to foreground.
+    const created = await chrome.tabs.create({ url: caseCenterListUrl, active: false });
+    if (!created?.id) throw Object.assign(new Error("Falha ao abrir sessão auxiliar do Case Center."), { code: "MERCADO_LIVRE_NOT_DETECTED" });
+    await chrome.storage.local.set({ [managedTabKey]: { id: created.id, lastUsed: Date.now() } });
+    await chrome.alarms.create(managedTabCleanupAlarm, { periodInMinutes: 1 });
+    return created;
+  })();
+  try {
+    return await openingCaseCenter;
+  } finally {
+    openingCaseCenter = null;
+  }
+}
+async function usableCaseCenterTab() {
+  const tab = await ensureCaseCenterTab();
+  await waitForTabReady(tab.id);
+  await updateManagedTab(tab.id);
+  return tab;
 }
 
 async function execute(tabId, func, args = []) {
@@ -148,9 +226,12 @@ async function waitForTabReady(tabId, timeoutMs = 20_000) {
   while (Date.now() < deadline) {
     const tab = await chrome.tabs.get(tabId);
     if (tab.status === "complete" && isCaseCenterListTab(tab)) return;
+    if (tab.status === "complete" && tab.url && !tab.url.startsWith("https://envios.adminml.com/logistics/case-center/cases")) {
+      throw Object.assign(new Error("A sessão Mercado Livre redirecionou para uma página de acesso. Autentique-se no Mercado Livre."), { code: "MERCADO_LIVRE_SESSION_REQUIRED" });
+    }
     await new Promise((resolve) => setTimeout(resolve, 200));
   }
-  throw Object.assign(new Error("A Bandeja Mercado Livre não terminou de carregar."), { code: "MERCADO_LIVRE_NOT_DETECTED" });
+  throw Object.assign(new Error("O Case Center não terminou de carregar em segundo plano."), { code: "REQUEST_TIMEOUT" });
 }
 
 export function readCaseCenterPeriodInTab() {
@@ -417,27 +498,31 @@ async function handle(message) {
   if (message.type === "ATENDIMENTO_COLLECT")
     return collectAtendimento({ channel: message.payload?.channel || null, collectOnly: true });
 
-  const tabs = await caseCenterTabs();
-  const authenticatedTab = tabs[0] ?? null;
+  // Explicit requests may create an inactive tab. PING confirms connection,
+  // without mutating the Case Center selection or triggering any collection.
   if (message.type === "PING") {
     const version = chrome.runtime.getManifest().version;
-    return { ok: true, data: {
-      installed: true,
-      version,
-      extensionId: chrome.runtime.id,
-      mlTabAvailable: Boolean(authenticatedTab?.id),
-      sessionAvailable: Boolean(authenticatedTab?.id),
-    } };
+    try {
+      const tab = await usableCaseCenterTab();
+      return { ok: true, data: {
+        installed: true, version, extensionId: chrome.runtime.id,
+        mlTabAvailable: true, sessionAvailable: true,
+        backgroundTabManaged: Boolean((await managedTabState())?.id === tab.id),
+      } };
+    } catch (error) {
+      return { ok: true, data: {
+        installed: true, version, extensionId: chrome.runtime.id,
+        mlTabAvailable: false, sessionAvailable: false,
+        sessionError: error?.code || "MERCADO_LIVRE_NOT_DETECTED",
+        sessionMessage: error?.message || "Não foi possível acessar o Case Center.",
+      } };
+    }
   }
+  const tabs = await caseCenterTabs();
+  const authenticatedTab = tabs[0] ?? null;
 
   if (message.type === "READ_CASE_CENTER_PERIOD") {
-    const listTab = tabs.find((tab) => tab.active && isCaseCenterListTab(tab))
-      ?? tabs.find(isCaseCenterListTab)
-      ?? null;
-    if (!listTab?.id) {
-      return connectorError("MERCADO_LIVRE_NOT_DETECTED", "Abra a listagem do Case Center.");
-    }
-    await waitForTabReady(listTab.id);
+    const listTab = await usableCaseCenterTab();
     const result = await execute(listTab.id, readCaseCenterPeriodInTab);
     if (!result?.ok || !/^20\d{4}Q[12]$/.test(String(result.period || ""))) {
       return connectorError(result?.code || "INVALID_RESPONSE", result?.message || "Competência do Case Center não identificada.");
@@ -467,13 +552,15 @@ async function handle(message) {
     return { ok: true, data: result };
   }
 
-  if (!authenticatedTab?.id) return connectorError("MERCADO_LIVRE_NOT_DETECTED", "Abra a Bandeja de suporte do Mercado Livre.");
+  if (!["FETCH_PAGE", "FETCH_PACKAGE_CUSTOMERS", "FETCH_TIMELINES", "FETCH_TIMELINE"].includes(message.type))
+    return connectorError("INVALID_RESPONSE", "Operação não reconhecida.");
+  const workingTab = await usableCaseCenterTab();
 
   if (message.type === "FETCH_PAGE") {
     const page = Number(message.payload?.page);
     if (!Number.isInteger(page) || page < 1 || page > 500) return connectorError("INVALID_RESPONSE", "Página inválida.");
     const details = periodDetails(String(message.payload?.competence || ""));
-    const result = await execute(authenticatedTab.id, fetchCaseCenterPageInTab, [{ ...details, page, size: CASE_CENTER_PAGE_SIZE, order: message.payload?.order }]);
+    const result = await execute(workingTab.id, fetchCaseCenterPageInTab, [{ ...details, page, size: CASE_CENTER_PAGE_SIZE, order: message.payload?.order }]);
     if (!result?.ok) return connectorError(result?.code || "INVALID_RESPONSE", result?.message || "Falha ao consultar Case Center.");
     return { ok: true, data: normalizeCaseCenterPage(result.data, page) };
   }
@@ -481,7 +568,7 @@ async function handle(message) {
   if (message.type === "FETCH_PACKAGE_CUSTOMERS") {
     const shipmentIds = [...new Set((Array.isArray(message.payload?.shipmentIds) ? message.payload.shipmentIds : []).map(String))];
     if (!shipmentIds.length || shipmentIds.length > 50 || shipmentIds.some((id) => !/^\d{1,30}$/.test(id))) return connectorError("INVALID_RESPONSE", "Lote de envios inválido.");
-    const result = await execute(authenticatedTab.id, readPackageBuyersInTab, [{ shipmentIds }]);
+    const result = await execute(workingTab.id, readPackageBuyersInTab, [{ shipmentIds }]);
     return result?.ok ? result : connectorError(result?.code || "INVALID_RESPONSE", result?.message || "Falha na consulta do comprador.");
   }
 
@@ -492,7 +579,7 @@ async function handle(message) {
       return connectorError("INVALID_RESPONSE", "Lote de casos PNR inválido.");
     }
     const concurrency = Math.max(1, Math.min(Number(message.payload?.concurrency) || 1, 2));
-    const batch = await execute(authenticatedTab.id, fetchCaseDetailStatesInTab, [{ caseIds, concurrency }]);
+    const batch = await execute(workingTab.id, fetchCaseDetailStatesInTab, [{ caseIds, concurrency }]);
     if (!Array.isArray(batch)) return connectorError("INVALID_RESPONSE", "Resposta em lote do Case Center inválida.");
 
     const results = batch.map((item) => {
@@ -528,7 +615,7 @@ async function handle(message) {
   if (message.type === "FETCH_TIMELINE") {
     const caseId = String(message.payload?.caseId || "");
     if (!/^\d{1,30}$/.test(caseId)) return connectorError("INVALID_RESPONSE", "Caso PNR inválido.");
-    const [result] = await execute(authenticatedTab.id, fetchCaseDetailStatesInTab, [{ caseIds: [caseId], concurrency: 1 }]);
+    const [result] = await execute(workingTab.id, fetchCaseDetailStatesInTab, [{ caseIds: [caseId], concurrency: 1 }]);
     if (!result?.ok) return connectorError(result?.code || "INVALID_RESPONSE", result?.message || "Falha ao consultar timeline.");
     const caseState = result.data?.caseState;
     const events = Array.isArray(caseState?.events) ? caseState.events : [];
