@@ -5,7 +5,7 @@ Este repositório contém aplicações operacionais distintas. Leia o README da 
 ## Limites dos workspaces
 
 - `apps/inteligencia`: painel existente, incluindo RH, APIs, testes, scripts e migrations próprios. Siga também `apps/inteligencia/AGENTS.md`.
-- `apps/comunicador`: workspace reservado para o Comunicador ALC. Ainda não contém uma aplicação executável.
+- `apps/atendimento`: aplicação ALC Atendimento, com identidade compartilhada e schema próprio no Aux.
 - `extensions/pnr-connector`: extensão compartilhada de coleta do Case Center. Preserve os contratos e permissões do navegador.
 - `packages`: espaço para contratos e bibliotecas compartilhados quando houver consumidores reais.
 
@@ -17,7 +17,7 @@ Não importe componentes, APIs ou serviços privados de uma aplicação na outra
 - Credenciais privilegiadas permanecem no servidor da aplicação que as utiliza.
 - Preserve autenticação, MFA, RLS, filtros por perfil/base e a separação dos bancos existentes.
 - Reorganizar diretórios não autoriza migrations, disparos de mensagens ou mudanças de produção.
-- O Comunicador será aberto pelo painel em outra aba; sua Administração pertencerá à mesma aplicação do Comunicador.
+- O Atendimento é aberto pelo painel em outra aba; sua Administração pertencerá à mesma aplicação do Atendimento.
 
 ## Comandos e validação
 

@@ -140,7 +140,7 @@ export async function overview(sensitive: boolean): Promise<HrOverview> {
       UNION SELECT employee_id FROM hr_occurrences WHERE occurrence_date=${TODAY} AND type='LATE' AND minutes>0) delayed)::int AS late,
     (SELECT count(*) FROM hr_attendance_daily WHERE attendance_date=${TODAY} AND divergence)::int AS divergence`);
   const departments = (await db.query<HrRow>(`SELECT coalesce(d.name,'Sem setor') AS label,count(*)::int AS count FROM hr_employees e LEFT JOIN hr_departments d ON d.id=e.department_id WHERE e.status='ACTIVE' GROUP BY d.name ORDER BY count DESC`)).rows;
-  const employmentTypes = (await db.query<HrRow>("SELECT employment_type AS label,count(*)::int AS count FROM hr_employees WHERE status='ACTIVE' GROUP BY employment_type ORDER BY count DESC")).rows;
+  const employmentTypes = (await db.query<HrRow>("SELECT coalesce(employment_type,'Sem vínculo') AS label,count(*)::int AS count FROM hr_employees WHERE status='ACTIVE' GROUP BY employment_type ORDER BY count DESC")).rows;
   const upcomingLeave = (await db.query<HrRow>(`SELECT l.id,l.type,l.status,l.start_date::text,l.end_date::text,e.full_name AS employee_name FROM hr_leave l JOIN hr_employees e ON e.id=l.employee_id
     WHERE l.status IN ('PLANNED','APPROVED','ACTIVE') AND l.end_date >= ${TODAY} AND l.start_date <= ${TODAY}+30 ORDER BY l.start_date LIMIT 20`)).rows;
   const attendanceAlerts = (await db.query<HrRow>(`SELECT e.id,${TODAY}::text AS attendance_date,

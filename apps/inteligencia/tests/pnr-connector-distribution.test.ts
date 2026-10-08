@@ -21,7 +21,7 @@ describe("distribuição do Conector PNR", () => {
     expect(connectorStateFromHandshake({ installed: true, version: "1.1.17", mlTabAvailable: true, sessionAvailable: false })).toBe("expired");
     expect(connectorStateFromHandshake({ installed: true, version: "1.1.17", mlTabAvailable: true, sessionAvailable: false, sessionError: "INVALID_RESPONSE" })).toBe("error");
     expect(connectorStateFromHandshake({ installed: true, version: "1.1.10", mlTabAvailable: true, sessionAvailable: true })).toBe("unsupported");
-    expect(connectorStateFromHandshake({ installed: true, version: "1.1.17", mlTabAvailable: true, sessionAvailable: true })).toBe("connected");
+    expect(connectorStateFromHandshake({ installed: true, version: "1.2.0", mlTabAvailable: true, sessionAvailable: true })).toBe("connected");
   });
 
   it("bloqueia versões anteriores ao mínimo e avisa quando há uma versão mais recente", () => {
@@ -30,7 +30,7 @@ describe("distribuição do Conector PNR", () => {
     expect(connectorStateFromHandshake({ ...ready, version: "1.1.8" }, { minimumSupportedVersion: "1.1.0", latestVersion: "1.2.0" })).toBe("outdated");
     expect(connectorStateFromHandshake({ ...ready, version: "invalid" })).toBe("unsupported");
     expect(connectorStateFromHandshake({ ...ready, version: "99999999999999999999.0.0" })).toBe("unsupported");
-    expect(LATEST_CONNECTOR_VERSION).toBe("1.1.17");
+    expect(LATEST_CONNECTOR_VERSION).toBe("1.2.0");
     expect(MINIMUM_SUPPORTED_CONNECTOR_VERSION).toBe("1.1.17");
   });
 
@@ -38,10 +38,11 @@ describe("distribuição do Conector PNR", () => {
     expect(connectorManifest.host_permissions).toEqual([
       "https://envios.adminml.com/*",
       "https://inteligenciaalc-production.up.railway.app/*",
+      "https://alc-atendimento-production.up.railway.app/*",
     ]);
     expect(connectorManifest.content_scripts).toEqual([
       expect.objectContaining({
-        matches: ["https://inteligenciaalc-production.up.railway.app/*"],
+        matches: ["https://inteligenciaalc-production.up.railway.app/*", "https://alc-atendimento-production.up.railway.app/*"],
         js: ["panel-bridge.js"],
       }),
     ]);

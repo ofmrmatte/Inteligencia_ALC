@@ -1,0 +1,40 @@
+# ALC Atendimento
+
+Aplicação própria de atendimento operacional, separada do Inteligência ALC. Next.js, Supabase Auth/MFA, PostgreSQL no Railway e WhatsApp Cloud API. Sem dependência do Chatwoot.
+
+## Executar
+
+Na raiz: `npm ci`, `npm run dev:atendimento`, `npm run build:atendimento` e `npm run start:atendimento`. Aplique o schema dedicado com `npm run migrate --workspace=@alc/atendimento` antes de iniciar. O serviço executa web e processamento de eventos/fila no mesmo container; não exige outro worker pago.
+
+## Funcionalidades
+
+- Visão geral de PNRs na competência vigente e atendimentos humanos.
+- Caixa por canal, busca, histórico, anexos recebidos, notas internas, assumir, concluir e retomar robô.
+- PNRs com filtros, comprador, produtos, entrega, contato validado e histórico preservado.
+- Consulta do motorista exige nome, base e vínculo de telefone/ID; ambiguidades vão para a equipe. Consultas anteriores são explícitas, incluindo casos encerrados.
+- Tratativa determinística do cliente: recebimento, data, produto, confirmação no aplicativo; negativa, portaria/vizinhos e encaminhamento. O sistema registra o relato, sem afirmar que alterou o Mercado Livre.
+- Disparos idempotentes por caso/canal/contato. Carga inicial não dispara histórico. Erro ambíguo de rede não é reenviado automaticamente.
+- Administração interna para usuários já cadastrados, canais/credenciais, catálogo Meta, coleta, automações e auditoria. Credenciais editadas são cifradas; nenhum segredo é devolvido ao navegador.
+- Mesma identidade e MFA do Inteligência; perfis e bases continuam no cadastro central. O link abre outra aba com transferência de sessão por ticket de uso único cifrado, válido por 60 segundos; o domínio novo recebe cookies próprios após verificação de identidade e MFA. Se não houver transferência disponível, oferece login próprio.
+
+## Dados e coleta
+
+O Atendimento lê o Core para reutilizar casos existentes. Seus dados e fila ficam exclusivamente no schema `alc_atendimento` do Aux, sem alterar tabelas do painel ou RH. A extensão 1.2.0 coleta a competência vigente de 30 em 30 minutos, ordenada do mais recente. Necessita de navegador, aba autenticada do Mercado Livre e aba autenticada do Atendimento no computador de teste.
+
+A extensão também lê campos explicitamente identificados como comprador em uma única página package-management já aberta. Exige que o envio corresponda à PNR e confirmação humana antes de salvar o telefone/documento/endereço. Esse adaptador é conservador e precisa ser validado no layout real com acesso restabelecido. Não inventa endpoint privado, nem usa documento/telefone de recebedor como comprador.
+
+## Variáveis (somente nomes; configure no Railway)
+
+`ATENDIMENTO_DATABASE_URL`, `CORE_DATABASE_URL`, `NEXT_PUBLIC_SUPABASE_URL`, `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY`, `SUPABASE_SERVICE_ROLE_KEY`, `ATENDIMENTO_ENCRYPTION_KEY` (32 bytes em hexadecimal), `ATENDIMENTO_PUBLIC_URL`, `INTELIGENCIA_PUBLIC_URL`, `HOSTNAME`, `PORT`.
+
+Para cada prefixo `WHATSAPP_DRIVER` / `WHATSAPP_CLIENT`: `_NUMBER`, `_PHONE_ID`, `_WABA_ID`, `_TOKEN`, `_VERIFY_TOKEN`, `_APP_SECRET`. `_TOKEN`, `_VERIFY_TOKEN` e `_APP_SECRET` também podem ser substituídos com segurança na Administração. `META_GRAPH_VERSION` é opcional, padrão v24.0.
+
+## Ativação externa
+
+Configure `/webhooks/whatsapp/driver` e `/webhooks/whatsapp/client` na Meta com seus respectivos tokens de verificação e assine `messages`. App Secret é distinto do token de verificação. Sem App Secret o webhook POST responde 503 e a fila não envia. Disparos automáticos começam desativados e só podem ser ativados com os canais configurados. Confirme a entrega real dos eventos antes de ativar a operação.
+
+Modelos iniciais: `cliente_loss` e `pnraberta`, consultados na Meta antes de enviar. O modelo de motorista menciona Aguardando comprovante; demais classificações podem ser notificadas por texto dentro da janela de 24h de um motorista validado, ou exigem outro modelo aprovado. Dados insuficientes geram registro de bloqueio, sem envio.
+
+## Verificação
+
+`npm run lint --workspace=@alc/atendimento`, `npm run typecheck`, `npm test`, `npm run build:atendimento` e `npm run build` (painel). Nenhum teste dispara WhatsApp para destinatários reais.

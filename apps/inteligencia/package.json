@@ -39,7 +39,8 @@
     "xlsx": "https://cdn.sheetjs.com/xlsx-0.20.3/xlsx-0.20.3.tgz",
     "zod": "^4.4.3",
     "zustand": "^5.0.15",
-    "alc-pnr-connector": "*"
+    "alc-pnr-connector": "*",
+    "@alc/identity": "*"
   },
   "devDependencies": {
     "@types/node": "^26.2.0",

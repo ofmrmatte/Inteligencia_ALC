@@ -23,7 +23,7 @@ async function resolveCurrentProfile(): Promise<ProfileResolution> {
   const { data: profile, error: profileError } = await retrySupabaseResult(
     () => supabase
       .from("profiles")
-      .select("id,email,full_name,role,global_access,base_scope,sigla_scope,xpt_scope,module_scope,active")
+      .select("id,email,full_name,role,setor,global_access,base_scope,sigla_scope,xpt_scope,module_scope,active")
       .eq("id", userId)
       .maybeSingle(),
     [200],
@@ -41,6 +41,7 @@ async function resolveCurrentProfile(): Promise<ProfileResolution> {
       email: profile.email ?? claims?.email ?? "",
       fullName: profile.full_name ?? profile.email ?? claims?.email ?? "Usuário ALC",
       role,
+      setor: typeof profile.setor === "string" ? profile.setor : "",
       globalAccess: Boolean(profile.global_access) || role === "loss_admin",
       baseScope: Array.isArray(profile.base_scope) ? profile.base_scope : [],
       siglaScope: Array.isArray(profile.sigla_scope) ? profile.sigla_scope : [],

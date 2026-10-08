@@ -1,15 +1,18 @@
 {
   "manifest_version": 3,
   "name": "ALC PNR Connector",
-  "version": "1.1.17",
-  "description": "Conecta a Bandeja PNR autenticada do Mercado Livre ao Inteligência ALC.",
+  "version": "1.2.0",
+  "description": "Conecta o Case Center ao Intelig\u00eancia ALC e ao ALC Atendimento, com coleta a cada 30 minutos.",
   "permissions": [
     "tabs",
-    "scripting"
+    "scripting",
+    "storage",
+    "alarms"
   ],
   "host_permissions": [
     "https://envios.adminml.com/*",
-    "https://inteligenciaalc-production.up.railway.app/*"
+    "https://inteligenciaalc-production.up.railway.app/*",
+    "https://alc-atendimento-production.up.railway.app/*"
   ],
   "background": {
     "service_worker": "service-worker.js",
@@ -18,7 +21,8 @@
   "content_scripts": [
     {
       "matches": [
-        "https://inteligenciaalc-production.up.railway.app/*"
+        "https://inteligenciaalc-production.up.railway.app/*",
+        "https://alc-atendimento-production.up.railway.app/*"
       ],
       "js": [
         "panel-bridge.js"

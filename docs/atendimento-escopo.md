@@ -1,10 +1,10 @@
-# Escopo inicial do Comunicador ALC
+# Escopo inicial do Atendimento ALC
 
-Planejamento funcional para implementação posterior em `apps/comunicador`. Esta documentação não contém números, IDs de contas, tokens, segredos de webhook ou dados reais de clientes/motoristas.
+Escopo funcional implementado em `apps/atendimento`. Esta documentação não contém números, IDs de contas, tokens, segredos de webhook ou dados reais de clientes/motoristas.
 
 ## Acesso e Administração
 
-O painel Inteligência terá um acesso ao Comunicador que abre em nova aba. A Administração pertence ao próprio Comunicador e permanece na mesma aba, configurando usuários, canais, integrações, modelos e automações conforme permissões.
+O painel Inteligência terá um acesso ao Atendimento que abre em nova aba. A Administração pertence ao próprio Atendimento e permanece na mesma aba, configurando usuários, canais, integrações, modelos e automações conforme permissões.
 
 ## Canais e tratamento de PNR
 
@@ -24,4 +24,4 @@ Competências anteriores entram na consulta solicitada pelo motorista. PNRs aber
 
 ## Limites da primeira etapa
 
-Esta reorganização não implementa agentes, telas, envios, webhooks ou migrations. A entrada do Comunicador na navegação do painel será feita quando existir um destino funcional. A aprovação dos modelos da Meta, os dados completos do cliente e os contratos entre coletor e Comunicador serão validados antes da implementação dos disparos.
+A aplicação implementa telas, APIs, agente determinístico, webhooks assinados, fila de envio e schema dedicado no Aux. O painel oferece o acesso em outra aba. App Secrets, configuração externa dos webhooks e validação real de package-management permanecem condições externas para ativação completa dos canais e coleta complementar. Consulte apps/atendimento/README.md.

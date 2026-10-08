@@ -8,7 +8,7 @@ A extensão saiu de `extension-pnr` para `extensions/pnr-connector`. O painel de
 
 O build do conector continua produzindo um ZIP em `apps/inteligencia/public/downloads`. A URL pública de download do painel permanece `/downloads/alc-pnr-connector-v<versão>.zip`. A versão e as permissões do manifest não foram alteradas.
 
-O Comunicador tem um workspace próprio em `apps/comunicador`, reservado para implementação posterior. O diretório `packages` receberá somente compartilhamentos explícitos e necessários.
+O Atendimento tem um workspace próprio em `apps/atendimento`, implementado com serviço e domínio próprios. O pacote `@alc/identity` compartilha perfil, permissões e cifragem de tickets de acesso entre as aplicações.
 
 ## Dependências e ambiente
 
@@ -16,7 +16,7 @@ O Comunicador tem um workspace próprio em `apps/comunicador`, reservado para im
 - Um único `package-lock.json` controla os workspaces.
 - As dependências do painel permanecem em seu `package.json`; a extensão declara `fflate`, usado em seu próprio build.
 - Os scripts npm executam no diretório do workspace, preservando os caminhos relativos dos testes, scripts e migrations locais.
-- O ambiente local do painel fica em `apps/inteligencia/.env.local`. Não coloque segredos do Comunicador nesse arquivo.
+- O ambiente local do painel fica em `apps/inteligencia/.env.local`. Não coloque segredos do Atendimento nesse arquivo.
 - Next.js identifica a raiz do monorepo explicitamente para Turbopack e tracing de dependências.
 
 ## Railway
@@ -26,11 +26,11 @@ O serviço atual do painel utiliza a raiz do repositório, `npm run build` e `np
 | Serviço | Raiz | Build | Start |
 | --- | --- | --- | --- |
 | Inteligência ALC | Raiz do repositório | `npm run build:inteligencia` ou o atual `npm run build` | `npm run start:inteligencia` ou o atual `npm start` |
-| Comunicador ALC | Raiz do repositório | Definir quando existir aplicação executável, direcionado a `@alc/comunicador` | Definir quando existir servidor próprio. |
+| Atendimento ALC | Raiz do repositório | `npm run build:atendimento` | `npm run start:atendimento` |
 
-Ao configurar os filtros de deploy do painel, incluir `/apps/inteligencia/**`, `/extensions/pnr-connector/**`, `/packages/**`, `/package.json` e `/package-lock.json`. Alterações exclusivas em `/apps/comunicador/**` devem pertencer ao serviço do Comunicador. A instalação e o lockfile compartilhados exigem incluir os arquivos da raiz nos filtros relevantes.
+Ao configurar os filtros de deploy do painel, incluir `/apps/inteligencia/**`, `/extensions/pnr-connector/**`, `/packages/**`, `/package.json` e `/package-lock.json`. Alterações exclusivas em `/apps/atendimento/**` devem pertencer ao serviço do Atendimento. A instalação e o lockfile compartilhados exigem incluir os arquivos da raiz nos filtros relevantes.
 
-Esta etapa prepara o código e documenta os filtros; não altera configurações ou variáveis de produção, não cria serviços e não aplica migrations. O futuro serviço do Comunicador terá domínio, processo e variáveis próprios. O acesso pelo painel será um link para outra aba, e a Administração permanecerá dentro do Comunicador.
+O serviço ALC-Atendimento possui domínio, processo e variáveis próprios. O pré-deploy aplica somente seu schema alc_atendimento no Aux. O acesso pelo painel será um link para outra aba, e a Administração permanecerá dentro do Atendimento.
 
 Referência: [monorepos no Railway](https://docs.railway.com/deployments/monorepo). Não foi introduzido `railway.json` ou `railway.toml`; os comandos existentes já são suficientes para o serviço atual.
 
@@ -58,4 +58,4 @@ Verificações locais em 7 de outubro de 2026 (Brasil), sobre a base `6c990fa` q
 - `npm audit --omit=dev --audit-level=high`: nenhuma vulnerabilidade reportada.
 - `npm run lint`: permanece com os mesmos 4 erros e 3 warnings anteriores no painel; não foi tratado como aprovação.
 
-As versões externas do lockfile foram preservadas. O script de build preexistente prepara uma cor em `reports-view-v2.tsx`; esse efeito local não foi incluído no diff da reorganização. Não foram testadas conexões com serviços de produção, autenticação real, novas funcionalidades do Comunicador ou configurações de deploy externas.
+As versões externas do lockfile foram preservadas. O script de build preexistente prepara uma cor em `reports-view-v2.tsx`; esse efeito local não foi incluído no diff da reorganização. Não foram testadas conexões com serviços de produção, autenticação real, novas funcionalidades do Atendimento ou configurações de deploy externas.

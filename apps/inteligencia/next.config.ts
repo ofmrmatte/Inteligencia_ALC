@@ -43,6 +43,10 @@ const nextConfig: NextConfig = {
         source: "/:path*",
         headers: securityHeaders,
       },
+      {
+        source: "/atendimento",
+        headers: [{ key: "Content-Security-Policy", value: contentSecurityPolicy.replace("form-action 'self'", "form-action 'self' https://alc-atendimento-production.up.railway.app") }],
+      },
     ];
   },
 };

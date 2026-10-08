@@ -1,5 +1,5 @@
 import { buildAccessScope, type AccessScope } from "@/lib/access-scope";
-import { hasFullAccess, type AuthProfile } from "@/lib/auth";
+import { hasFullAccess, hasFullOperationalScope, type AuthProfile } from "@/lib/auth";
 import { normalizeText } from "@/lib/normalize";
 import { createAdminClient } from "@/lib/supabase/admin";
 
@@ -12,6 +12,13 @@ interface UnitRow {
 
 export async function getUserAccessScope(profile: AuthProfile): Promise<AccessScope> {
   if (hasFullAccess(profile)) return buildAccessScope(profile);
+
+  // SVC/base e XPT deixaram de ser escopos configuráveis de usuário.
+  // Coordenadores e supervisores continuam limitados pelos módulos da função,
+  // mas enxergam o conjunto operacional completo dentro desses módulos.
+  if (hasFullOperationalScope(profile)) {
+    return { ...buildAccessScope(profile), fullAccess: true, allowedBaseKeys: [], allowedSiglas: [], allowedPairs: [], safeSiglaOnly: [] };
+  }
 
   const admin = createAdminClient();
   const { data, error } = await admin

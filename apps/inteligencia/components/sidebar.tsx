@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import Link from "next/link";
-import { ChevronDown, ChevronLeft, ChevronRight, ClipboardList, HardDriveUpload } from "lucide-react";
+import { ChevronDown, ChevronLeft, ChevronRight, ClipboardList, HardDriveUpload, MessageSquare, ArrowUpRight } from "lucide-react";
 import { Brand } from "@/components/brand";
 import { canAccessSection } from "@/lib/access-control";
 import type { AuthProfile } from "@/lib/auth";
@@ -131,6 +131,12 @@ export function Sidebar({
             </div>
           );
         })}
+        {canAccessSection(profile, "gestao-pnr") ? (
+          <a className="sidebar__item" href="/atendimento" target="_blank" rel="noopener noreferrer" title={collapsed ? "ALC Atendimento" : undefined}>
+            <MessageSquare size={19} strokeWidth={1.9} />
+            {!collapsed && <><span>ALC Atendimento</span><ArrowUpRight size={15} /></>}
+          </a>
+        ) : null}
       </nav>
       <div className="sidebar__footer">
         {canImport ? (

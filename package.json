@@ -3,7 +3,11 @@
   "version": "1.0.0",
   "private": true,
   "type": "module",
-  "workspaces": ["apps/*", "extensions/*", "packages/*"],
+  "workspaces": [
+    "apps/*",
+    "extensions/*",
+    "packages/*"
+  ],
   "engines": {
     "node": ">=22"
   },
@@ -21,6 +25,9 @@
     "audit:perf": "npm run audit:perf --workspace=alc-painel-inteligencia",
     "extension:build": "npm run build --workspace=alc-pnr-connector",
     "prefatura:backfill": "npm run prefatura:backfill --workspace=alc-painel-inteligencia --",
-    "drivers:sync": "npm run drivers:sync --workspace=alc-painel-inteligencia --"
+    "drivers:sync": "npm run drivers:sync --workspace=alc-painel-inteligencia --",
+    "dev:atendimento": "npm run dev --workspace=@alc/atendimento --",
+    "build:atendimento": "npm run build --workspace=@alc/atendimento",
+    "start:atendimento": "npm run start --workspace=@alc/atendimento"
   }
 }

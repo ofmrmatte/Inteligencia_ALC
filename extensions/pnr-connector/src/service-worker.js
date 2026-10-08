@@ -7,13 +7,85 @@ import {
   normalizeCaseTimelineEvents,
   periodDetails,
 } from "./case-center.js";
+import { readPackageBuyerInTab } from "./package-management.js";
 
 const panelOrigins = new Set([
   "https://inteligenciaalc-production.up.railway.app",
+  "https://alc-atendimento-production.up.railway.app",
 ]);
 
 const caseCenterListUrl = "https://envios.adminml.com/logistics/case-center/cases";
 const caseCenterListPath = "/logistics/case-center/cases";
+
+const atendimentoOrigin = "https://alc-atendimento-production.up.railway.app";
+let atendimentoCollecting = false;
+async function atendimentoTab() {
+  const tabs = await chrome.tabs.query({ url: `${atendimentoOrigin}/*` });
+  return tabs.find((tab) => tab.id && new URL(tab.url).pathname !== "/login");
+}
+async function persistInAtendimento(tabId, path, payload) {
+  const result = await execute(tabId, async (args) => {
+    const response = await fetch(`/api/${args.path}`, { method: "POST", credentials: "same-origin", headers: { "Content-Type": "application/json" }, body: JSON.stringify(args.payload) });
+    const data = await response.json();
+    return { ok: response.ok, data };
+  }, [{ path, payload }]);
+  if (!result?.ok) throw new Error(result?.data?.error || "Não foi possível salvar a coleta no Atendimento.");
+  return result.data;
+}
+async function persistCollectorState(enabled) {
+  const tab = await atendimentoTab();
+  if (tab?.id) await persistInAtendimento(tab.id, "collector-state", { enabled });
+}
+export function currentAtendimentoCompetence(now = new Date()) {
+  const parts = Object.fromEntries(new Intl.DateTimeFormat("en-CA", { timeZone: "America/Sao_Paulo", year: "numeric", month: "2-digit", day: "2-digit" }).formatToParts(now).map((p) => [p.type, p.value]));
+  return `${parts.year}${parts.month}Q${Number(parts.day) <= 15 ? 1 : 2}`;
+}
+async function collectAtendimento() {
+  if (atendimentoCollecting) return connectorError("INVALID_RESPONSE", "Já existe uma coleta em andamento.");
+  atendimentoCollecting = true;
+  try {
+    const tab = await atendimentoTab();
+    if (!tab?.id) throw new Error("Mantenha uma aba autenticada do ALC Atendimento aberta.");
+    const competence = currentAtendimentoCompetence();
+    const syncId = crypto.randomUUID();
+    let page = 1, processed = 0, totalPages = 1;
+    do {
+      const result = await handle({ type: "FETCH_PAGE", payload: { competence, page, order: "desc" } });
+      if (!result.ok) throw new Error(result.error.message);
+      const records = result.data.records;
+      totalPages = result.data.totalPages;
+      if (totalPages > 500) throw new Error("Coleta excede 500 páginas; revisão necessária.");
+      if (result.data.invalidCount) throw new Error("A fonte retornou registros inválidos. Coleta interrompida sem concluir a carga inicial.");
+      if (records.length) {
+        const details = await handle({ type: "FETCH_TIMELINES", payload: { caseIds: records.map((r) => r.caseId), concurrency: 2 } });
+        if (details.ok) for (const item of details.data.results) {
+          const record = records.find((r) => r.caseId === item.caseId);
+          if (record && item.ok) Object.assign(record, {
+            driverId: item.data.detail?.driverId || "", driverPhone: item.data.detail?.driverPhone || "",
+            customerName: item.data.detail?.buyerName || "", products: item.data.detail?.products || [], deliveryAt: item.data.detail?.deliveryAt || "",
+          });
+        }
+      }
+      await persistInAtendimento(tab.id, "import", { syncId, competence, completed: page >= Math.max(totalPages, 1), records });
+      processed += records.length;
+      page += 1;
+    } while (page <= totalPages);
+    await chrome.storage.local.set({ atendimentoLastSync: new Date().toISOString(), atendimentoError: "" });
+    return { ok: true, data: { message: `${processed} PNRs da competência ${competence} atualizadas. Próxima coleta automática em 30 minutos, se ativada.` } };
+  } catch (error) {
+    await chrome.storage.local.set({ atendimentoError: error.message });
+    return connectorError("INVALID_RESPONSE", error.message);
+  } finally { atendimentoCollecting = false; }
+}
+chrome.alarms?.onAlarm.addListener(async (alarm) => {
+  if (alarm.name !== "alc-atendimento-collect") return;
+  const state = await chrome.storage.local.get("atendimentoEnabled");
+  if (state.atendimentoEnabled) await collectAtendimento();
+});
+chrome.runtime.onStartup?.addListener(async () => {
+  const state = await chrome.storage.local.get("atendimentoEnabled");
+  if (state.atendimentoEnabled) await chrome.alarms.create("alc-atendimento-collect", { periodInMinutes: 30, delayInMinutes: 30 });
+});
 
 function allowedPanel(url) {
   try {
@@ -144,7 +216,7 @@ export async function applyCaseCenterPeriodInTab({ period, year, month, half }) 
   return { ok: true, period };
 }
 
-async function fetchCaseCenterPageInTab({ period, dateFrom, dateTo, page, size }) {
+async function fetchCaseCenterPageInTab({ period, dateFrom, dateTo, page, size, order }) {
   let store = globalThis._n?.ctx?.r?.appProps?.pageProps?.preloadedStore;
   if (!store) {
     const renderingContext = document.getElementById("__NORDIC_RENDERING_CTX__")?.textContent || "";
@@ -171,7 +243,7 @@ async function fetchCaseCenterPageInTab({ period, dateFrom, dateTo, page, size }
   const searchParams = {
     date_from: dateFrom,
     date_to: dateTo,
-    order: "asc",
+    order: order === "desc" ? "desc" : "asc",
     sort: "date_created",
     carrier: String(carrier),
     period,
@@ -298,6 +370,27 @@ async function fetchCaseDetailStatesInTab({ caseIds, concurrency }) {
 }
 
 async function handle(message) {
+  if (message.type === "READ_PACKAGE_CUSTOMER") {
+    const tabs = await chrome.tabs.query({ url: "https://envios.adminml.com/*" });
+    const target = tabs.filter((tab) => tab.id && new URL(tab.url).pathname.includes("package-management"));
+    if (target.length !== 1) return connectorError("INVALID_RESPONSE", "Mantenha exatamente uma aba de detalhes do envio aberta em package-management.");
+    const result = await execute(target[0].id, readPackageBuyerInTab);
+    return result?.ok ? result : connectorError("INVALID_RESPONSE", result?.message || "Dados do comprador não identificados.");
+  }
+  if (message.type === "ATENDIMENTO_ENABLE") {
+    await chrome.storage.local.set({ atendimentoEnabled: true });
+    await chrome.alarms.create("alc-atendimento-collect", { periodInMinutes: 30, delayInMinutes: 30 });
+    await persistCollectorState(true);
+    return { ok: true, data: { message: "Coleta ativada a cada 30 minutos neste computador." } };
+  }
+  if (message.type === "ATENDIMENTO_DISABLE") {
+    await chrome.storage.local.set({ atendimentoEnabled: false });
+    await chrome.alarms.clear("alc-atendimento-collect");
+    await persistCollectorState(false);
+    return { ok: true, data: { message: "Coleta automática pausada." } };
+  }
+  if (message.type === "ATENDIMENTO_COLLECT") return collectAtendimento();
+
   const tabs = await caseCenterTabs();
   const authenticatedTab = tabs[0] ?? null;
   if (message.type === "PING") {
@@ -353,7 +446,7 @@ async function handle(message) {
     const page = Number(message.payload?.page);
     if (!Number.isInteger(page) || page < 1 || page > 500) return connectorError("INVALID_RESPONSE", "Página inválida.");
     const details = periodDetails(String(message.payload?.competence || ""));
-    const result = await execute(authenticatedTab.id, fetchCaseCenterPageInTab, [{ ...details, page, size: CASE_CENTER_PAGE_SIZE }]);
+    const result = await execute(authenticatedTab.id, fetchCaseCenterPageInTab, [{ ...details, page, size: CASE_CENTER_PAGE_SIZE, order: message.payload?.order }]);
     if (!result?.ok) return connectorError(result?.code || "INVALID_RESPONSE", result?.message || "Falha ao consultar Case Center.");
     return { ok: true, data: normalizeCaseCenterPage(result.data, page) };
   }
@@ -431,6 +524,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 chrome.runtime.onInstalled.addListener(() => {
   chrome.tabs.query({ url: [
     "https://inteligenciaalc-production.up.railway.app/*",
+    "https://alc-atendimento-production.up.railway.app/*",
   ] }).then((tabs) => Promise.all(tabs.filter((tab) => tab.id && allowedPanel(tab.url || "")).map((tab) => (
     chrome.scripting.executeScript({ target: { tabId: tab.id }, files: ["panel-bridge.js"] }).catch(() => undefined)
   )))).catch(() => undefined);

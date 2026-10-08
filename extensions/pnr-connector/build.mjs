@@ -20,12 +20,14 @@ const distributedManifest = structuredClone(manifest);
 delete distributedManifest.background?.type;
 
 const caseCenterSource = await readFile(join(root, "src", "case-center.js"), "utf8");
+const packageManagementSource = await readFile(join(root, "src", "package-management.js"), "utf8");
 const serviceWorkerSource = await readFile(join(root, "src", "service-worker.js"), "utf8");
 const bundledCaseCenter = caseCenterSource.replace(/^export\s+/gm, "");
 const bundledWorker = serviceWorkerSource
   .replace(/import\s*\{[\s\S]*?\}\s*from\s*["']\.\/case-center\.js["'];\s*/m, "")
+  .replace(/import\s*\{[\s\S]*?\}\s*from\s*["']\.\/package-management\.js["'];\s*/m, "")
   .replace(/^export\s+/gm, "");
-const serviceWorkerBundle = `${bundledCaseCenter}\n\n${bundledWorker}`;
+const serviceWorkerBundle = `${bundledCaseCenter}\n\n${packageManagementSource.replace(/^export\s+/gm, "")}\n\n${bundledWorker}`;
 
 // Validate syntax during the application build without executing Chrome APIs.
 new Function(serviceWorkerBundle);
@@ -44,7 +46,9 @@ for (const [file, content] of distributedFiles) {
   await writeFile(join(output, file), content);
   archive[`alc-pnr-connector/${file}`] = new Uint8Array(content);
 }
-const downloads = join(root, "..", "..", "apps", "inteligencia", "public", "downloads");
-await mkdir(downloads, { recursive: true });
-await writeFile(join(downloads, `alc-pnr-connector-v${version}.zip`), zipSync(archive, { level: 6 }));
+for (const app of ["inteligencia", "atendimento"]) {
+  const downloads = join(root, "..", "..", "apps", app, "public", "downloads");
+  await mkdir(downloads, { recursive: true });
+  await writeFile(join(downloads, `alc-pnr-connector-v${version}.zip`), zipSync(archive, { level: 6 }));
+}
 console.log(`ALC PNR Connector v${version} gerado em extensions/pnr-connector/dist e apps/inteligencia/public/downloads`);

@@ -2,6 +2,7 @@
 
 const allowedOrigins = new Set([
   "https://inteligenciaalc-production.up.railway.app",
+  "https://alc-atendimento-production.up.railway.app",
 ]);
 
 function allowed(origin) {

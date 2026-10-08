@@ -103,7 +103,7 @@ const options = (values: readonly string[]) => values.map((v): [string, string] 
 function EmployeePicker({ value, onChange }: { value: string; onChange: (v: string) => void }) {
   const [search, setSearch] = useState("");
   const data = useHrData<List>(`employees?search=${encodeURIComponent(search)}`);
-  return <div className={styles.picker}><input className="inline-select" aria-label="Buscar colaborador por nome ou matrícula" placeholder="Nome ou matrícula" value={search} onChange={(e) => setSearch(e.target.value)} /><select className="inline-select" value={value} onChange={(e) => onChange(e.target.value)} aria-label="Selecionar colaborador"><option value="">Selecionar</option>{value && !data.value?.rows.some((r) => r.id === value) && <option value={value}>Colaborador selecionado</option>}{data.value?.rows.map((r) => <option key={str(r.id)} value={str(r.id)}>{r.employee_code} · {r.full_name}</option>)}</select>{data.error && <small role="alert">{data.error}</small>}</div>;
+  return <div className={styles.picker}><input className="inline-select" aria-label="Buscar colaborador por nome ou matrícula" placeholder="Nome ou matrícula" value={search} onChange={(e) => setSearch(e.target.value)} /><select className="inline-select" value={value} onChange={(e) => onChange(e.target.value)} aria-label="Selecionar colaborador"><option value="">Selecionar</option>{value && !data.value?.rows.some((r) => r.id === value) && <option value={value}>Colaborador selecionado</option>}{data.value?.rows.map((r) => <option key={str(r.id)} value={str(r.id)}>{r.employee_code ? `${r.employee_code} · ${r.full_name}` : r.full_name}</option>)}</select>{data.error && <small role="alert">{data.error}</small>}</div>;
 }
 function Dialog({ title, children, close }: { title: string; children: ReactNode; close: () => void }) {
   const ref = useRef<HTMLDialogElement>(null);
@@ -158,7 +158,7 @@ function Employees({ profile }: { profile: AuthProfile }) {
         <Filter title="Cargo" values={positions.map((r) => [str(r.id), str(r.title)])} value={filters.position_id} onChange={(v) => change("position_id", v)} />
         <Filter title="Vínculo" values={options(EMPLOYMENT_TYPES)} value={filters.employment_type} onChange={(v) => change("employment_type", v)} />
       </div>
-      <LoadState {...data} retry={data.reload}><Rows rows={data.value?.rows ?? []} columns={["Matrícula", "Nome", "Cargo", "Setor", "Vínculo", "Status", "Admissão", "Ações"]} render={(r) => <><td>{r.employee_code}</td><td><button className={styles.link} onClick={() => setSelected(r)}>{r.full_name}</button></td><td>{r.position_title || "—"}</td><td>{r.department_name || "—"}</td><td>{label(r.employment_type)}</td><td><StatusBadge>{label(r.status)}</StatusBadge></td><td>{date(r.admission_date)}</td><td>{manager && <IconButton title="Editar colaborador" onClick={() => setEdit(r)}><Pencil size={16} /></IconButton>}</td></>} /><Pager offset={offset} total={data.value?.total ?? 0} onChange={setOffset} /></LoadState>
+      <LoadState {...data} retry={data.reload}><Rows rows={data.value?.rows ?? []} columns={["Matrícula", "Nome", "Cargo", "Setor", "Vínculo", "Status", "Admissão", "Ações"]} render={(r) => <><td>{r.employee_code || "—"}</td><td><button className={styles.link} onClick={() => setSelected(r)}>{r.full_name}</button></td><td>{r.position_title || "—"}</td><td>{r.department_name || "—"}</td><td>{label(r.employment_type)}</td><td><StatusBadge>{label(r.status)}</StatusBadge></td><td>{date(r.admission_date)}</td><td>{manager && <IconButton title="Editar colaborador" onClick={() => setEdit(r)}><Pencil size={16} /></IconButton>}</td></>} /><Pager offset={offset} total={data.value?.total ?? 0} onChange={setOffset} /></LoadState>
     </Panel>
     {edit && <EditForm title={edit.id ? "Editar colaborador" : "Cadastrar colaborador"} resource="employees" initial={edit} fields={employeeFields(departments, positions, edit)} close={() => setEdit(null)} done={refresh} />}
     {selected && <EmployeeDrawer employee={selected} profile={profile} close={() => setSelected(null)} />}
@@ -186,13 +186,13 @@ function useDirectory(resource: "departments" | "positions", revision = 0) {
 }
 function employeeFields(departments: HrRow[], positions: HrRow[], initial: HrRow): Field[] {
   return [
-    { name: "employee_code", title: "Matrícula", required: true }, { name: "full_name", title: "Nome completo", required: true }, { name: "preferred_name", title: "Nome preferido" },
+    { name: "employee_code", title: "Matrícula" }, { name: "full_name", title: "Nome completo", required: true }, { name: "preferred_name", title: "Nome preferido" },
     { name: "corporate_email", title: "E-mail corporativo", kind: "email" }, { name: "phone", title: "Telefone" },
     { name: "status", title: "Status", kind: "select", options: options(EMPLOYEE_STATUSES), required: true },
     { name: "department_id", title: "Setor", kind: "select", options: departments.filter((r) => r.active || r.id === initial.department_id).map((r) => [str(r.id), str(r.name)]) },
     { name: "position_id", title: "Cargo", kind: "select", options: positions.filter((r) => r.active || r.id === initial.position_id).map((r) => [str(r.id), `${r.title} · ${departments.find((d) => d.id === r.department_id)?.name ?? ""}`]) },
     { name: "manager_employee_id", title: "Gestor", kind: "employee" }, { name: "admission_date", title: "Admissão", kind: "date" }, { name: "termination_date", title: "Desligamento", kind: "date" },
-    { name: "employment_type", title: "Vínculo", kind: "select", options: options(EMPLOYMENT_TYPES), required: true }, { name: "secullum_employee_code", title: "Matrícula Secullum" }, { name: "notes", title: "Observações", kind: "textarea" },
+    { name: "employment_type", title: "Vínculo", kind: "select", options: options(EMPLOYMENT_TYPES) }, { name: "secullum_employee_code", title: "Matrícula Secullum" }, { name: "notes", title: "Observações", kind: "textarea" },
   ];
 }
 function EmployeeDrawer({ employee, profile, close }: { employee: HrRow; profile: AuthProfile; close: () => void }) {
