@@ -29,3 +29,11 @@ O arquivo PNG apresenta um **layout inspirado no WhatsApp Web**, mas identifica 
 - **M12:** não existe no roteiro dos motoristas; o relato de não recebimento é tratado pelo fluxo do cliente e, se trazido por motorista, encaminhado para análise humana.
 - Os textos de referência estão versionados em `lib/agent-playbook.ts`. O motor determinístico usa os mesmos textos para C04, C05 e C07. O painel administrativo exibe os modelos e exemplos para homologação.
 - **Não disparar mensagens reais em preview**, nem publicar automaticamente a PR #70 em produção.
+
+## Inventário integral do roteiro (v3)
+- **Clientes:** C01, C02, C03, C04, C05, C06, C07, C08, C09, C10, C11, C12, C13, C14 e C15. Todas as mensagens integrais estão em `CUSTOMER_STEPS` e disponíveis no painel Agente virtual e no preview.
+- **Motoristas:** M01, M02, M03, M04, M05, M06, M07, M08, M09, M10, M11, M13, M14 e M15. M12 foi intencionalmente excluída do canal do motorista.
+- **Fluxos executáveis em regras:** cliente: recebeu→data→produto correto→C04 (conversa concluída); não recebeu→consulta terceiros/portaria→C06 aguarda ou C07 Loss; recebimento por terceiro→autorização→data→produto; dúvida C10; produto divergente→C09 Loss; C12 dúvida sobre reclamação; C13 orientação de cartão; C14 takeover. C15 fica reservado a encerramento por equipe após tratativa humana, não é enviada depois da C04.
+- **Motoristas em regras:** M01 boas-vindas, M02 nome, base e telefone/ID verificados→M03 identificação→M04 seleção por status; M05 comprovante, M06 penalidade, M07 revisão (consulta), M08 não faturado ainda sem mapeamento (Loss), M09 resultado vazio, M10 orientações, M11 acareação manual/dispatcher, M13 transferência, M14 menu, M15 encerramento. Para iniciar outra consulta após encerramento é necessário nova solicitação e validação de identidade.
+- **Dados dinâmicos:** nome e base vêm do cadastro verificado; PNR e caso só são apresentados após controle de identidade. Placeholders não verificados não devem ser expostos como dados reais. O roteiro M08 não presume equivalência entre Não faturado e penalidade.
+- **Preview:** simulador de cliente usa o mesmo `clientReply` determinístico do backend, com dados sintéticos e sem qualquer conexão Meta ou banco de produção; os textos completos de ambas as audiências aparecem no painel.
