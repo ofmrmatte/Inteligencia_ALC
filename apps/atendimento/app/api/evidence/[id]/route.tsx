@@ -34,6 +34,13 @@ export async function GET(
     return failed("O comprovante de tratativa do cliente está disponível somente no canal de clientes.", 422);
   if (!conversation.case_id)
     return failed("A conversa ainda não está vinculada a uma PNR.", 422);
+  const linkedCases = await db().query(
+    "SELECT DISTINCT case_id FROM alc_atendimento.outbox WHERE conversation_id=$1 AND case_id IS NOT NULL LIMIT 2",
+    [parsed.data],
+  );
+  if (linkedCases.rows.length > 1 ||
+      (linkedCases.rows.length === 1 && linkedCases.rows[0].case_id !== conversation.case_id))
+    return failed("Há registros de mais de uma PNR nesta conversa; a tratativa precisa ser delimitada antes da exportação.", 422);
   const resultMessages = await db().query(
     `SELECT id,provider_id,direction,body,type,status,created_at,attachment
      FROM alc_atendimento.messages
