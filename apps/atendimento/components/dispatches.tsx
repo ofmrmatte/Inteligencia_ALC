@@ -6,6 +6,7 @@ import {
   normalize,
   phone,
   templateParameters,
+  driverNotificationEligible,
   type CaseRecord,
 } from "@/lib/domain";
 import { api, useData, labels, when } from "./data";
@@ -50,6 +51,8 @@ export function previewBlock(
     )
   )
     return "Sem telefone válido";
+  if (channel === "driver" && !driverNotificationEligible(row.classification))
+    return "Classificação fora das notificações de motoristas";
   if (
     channel === "client" &&
     !["aguardando_comprovante", "penalidade"].includes(row.classification)
