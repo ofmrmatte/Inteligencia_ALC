@@ -96,9 +96,9 @@ export function clientReply(
   const uncertain = /NAO (LEMBRO|RECORDO|SEI)|TALVEZ|NAO TENHO CERTEZA/.test(t);
   const different = /PRODUTO (DIFERENTE|ERRADO|INCORRETO|DANIFICADO)|ITEM (ERRADO|DIFERENTE)|VEIO (ERRADO|DIFERENTE|QUEBRADO)|NAO (E|EH) O (PRODUTO|ITEM)/.test(t);
   const thirdParty = /PORTARIA|PORTEIRO|VIZINH|FAMILIAR|TERCEIRO|OUTRA PESSOA|MINHA MAE|MEU PAI/.test(t);
-  const yes = /^(SIM|RECEBI|RECEBIDO|FOI ENTREGUE|ESTA CORRETO|CORRETO|CERTO|ESTAVA CERTO)(\\b|[.!])/.test(t);
-  const answeredNo = /^(NAO|NEGATIVO)(\\b|[.!])/.test(t);
-  const acceptedDate = /\\b(\\d{1,2})\\/(\\d{1,2})(?:\\/(\\d{2,4}))?\\b/.exec(text);
+  const yes = /^(SIM|RECEBI|RECEBIDO|FOI ENTREGUE|ESTA CORRETO|CORRETO|CERTO|ESTAVA CERTO)(\b|[.!])/.test(t);
+  const answeredNo = /^(NAO|NEGATIVO)(\b|[.!])/.test(t);
+  const acceptedDate = /\b(\d{1,2})\/(\d{1,2})(?:\/(\d{2,4}))?\b/.exec(text);
   const day = Number(acceptedDate?.[1]), month = Number(acceptedDate?.[2]);
   const year = acceptedDate?.[3] ? Number(acceptedDate[3].length === 2 ? "20"+acceptedDate[3] : acceptedDate[3]) : new Date().getFullYear();
   const validDate = Boolean(acceptedDate && year >= 2000 && month >= 1 && month <= 12 &&
