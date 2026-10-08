@@ -268,6 +268,7 @@ export async function GET(
           enabled: collector?.enabled || false,
           lastSync: collector?.lastSync || null,
           completed: collector?.completed || false,
+          channelSync: collector?.channelSync || {},
         },
         queue: queue.rows,
         competence: competence(),
@@ -389,6 +390,8 @@ export async function POST(
           syncId: z.string().uuid(),
           competence: z.string().regex(/^20\d{4}Q[12]$/),
           completed: z.boolean(),
+          channel: z.enum(["client", "driver"]).nullable().optional(),
+          collectOnly: z.boolean().optional(),
           records: z.array(listRecord).max(300),
         })
         .parse(body);
@@ -401,6 +404,8 @@ export async function POST(
         syncId?: string;
         baseline: boolean;
         baselineComplete?: boolean;
+        channelSync?: Record<string, { lastSync: string; completed: boolean }>;
+        enabled?: boolean;
       }>("collector");
       const baseline =
         state?.syncId === parsed.syncId
@@ -443,21 +448,36 @@ export async function POST(
         new Date().toISOString(),
         baseline,
         profile.id,
+        parsed.collectOnly !== true,
       );
+      const collectedAt = new Date().toISOString();
+      const channelSync = { ...(state?.channelSync || {}) };
+      if (parsed.channel) {
+        channelSync[parsed.channel] = {
+          lastSync: collectedAt,
+          completed: parsed.completed,
+        };
+      }
       await db().query(
-        `INSERT INTO alc_atendimento.settings(key,value,updated_by) VALUES('collector',$1,$2) ON CONFLICT(key) DO UPDATE SET value=excluded.value,updated_by=excluded.updated_by,updated_at=now()`,
+        `INSERT INTO alc_atendimento.settings(key,value,updated_by) VALUES('collector',$1,$2) ON CONFLICT(key) DO UPDATE SET value=excluded.value,updated_by=excluded.value,updated_at=now()`,
         [
           {
+            ...state,
             syncId: parsed.syncId,
             baseline,
             baselineComplete: parsed.completed || state?.baselineComplete,
-            lastSync: new Date().toISOString(),
+            lastSync: collectedAt,
             completed: parsed.completed,
+            channelSync,
           },
           profile.id,
         ],
       );
-      await audit(profile.id, "collector_import", parsed.syncId, stats);
+      await audit(profile.id, "collector_import", parsed.syncId, {
+        ...stats,
+        channel: parsed.channel || "all",
+        collectOnly: parsed.collectOnly === true,
+      });
       return Response.json(stats);
     }
     if (resource === "collector-state") {
@@ -523,7 +543,7 @@ export async function POST(
     }
     requireAdmin(profile);
     if (resource === "sync") {
-      const stats = await syncCore(false);
+      const stats = await syncCore(false, false);
       await audit(profile.id, "manual_source_sync", "core", stats);
       return Response.json(stats);
     }
