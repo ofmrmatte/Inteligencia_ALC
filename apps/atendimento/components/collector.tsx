@@ -48,7 +48,7 @@ export function Collector() {
   const check = useCallback(async () => {
     setChecking(true);
     try {
-      setConnectorState(await request<ConnectorPing>("PING", {}, 8_000));
+      setConnectorState(await request<ConnectorPing>("PING", {}, 20_000));
     } catch {
       // A stale content script after an extension update is not evidence of an outdated version.
       setConnectorState(null);
@@ -118,8 +118,8 @@ export function Collector() {
         <dt>Bandeja Mercado Livre</dt>
         <dd>
           {connectorState?.mlTabAvailable
-            ? "Aba identificada; autenticação confirmada somente durante a coleta"
-            : "Aba não identificada; abra a Bandeja autenticada neste navegador"}
+            ? "Case Center preparado para consulta; autorização validada ao buscar dados"
+            : "Sessão não disponível. Verifique o login do Mercado Livre neste navegador."}
         </dd>
         <dt>Frequência</dt>
         <dd>30 minutos</dd>
@@ -139,7 +139,7 @@ export function Collector() {
           <RefreshCw size={15} /> {checking ? "Verificando…" : "Verificar extensão"}
         </button>
         <button
-          disabled={busy || !detection.ready || !connectorState?.mlTabAvailable}
+          disabled={busy || !detection.ready}
           onClick={() => run("ATENDIMENTO_COLLECT")}
         >
           Coletar agora
@@ -185,7 +185,7 @@ export function Collector() {
       </div>
       <div className="notice">
         Coleta manual não envia nem enfileira mensagens, mesmo com automações habilitadas.
-        O coletor depende deste computador e das sessões abertas. Se houver
+        O coletor depende deste computador, do navegador ativo e da autenticação válida no Mercado Livre. Se houver
         falha ou a máquina estiver desligada, a próxima coleta ocorrerá quando
         estiver disponível. O histórico já coletado continua acessível.
       </div>
