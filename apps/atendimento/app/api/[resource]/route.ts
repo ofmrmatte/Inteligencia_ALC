@@ -290,6 +290,23 @@ export async function GET(
     }
     if (resource === "collector")
       return Response.json({ collector: await setting("collector") });
+    if (resource === "webhook-verify-token") {
+      // Deliberate, permission-gated secret retrieval for configuring Meta webhooks.
+      // Never return verify tokens from the normal admin summary response.
+      const target = channel.parse(query.get("channel"));
+      const cfg = await channelConfig(target);
+      if (!cfg.verifyToken)
+        throw new HttpError(404, "Token de verificação ainda não configurado neste canal.");
+      await audit(profile.id, "webhook_verify_token_revealed", target);
+      return Response.json({ verifyToken: cfg.verifyToken }, {
+        headers: {
+          "Cache-Control": "private, no-store, max-age=0",
+          "Pragma": "no-cache",
+          "X-Robots-Tag": "noindex, noarchive",
+          "X-Content-Type-Options": "nosniff",
+        },
+      });
+    }
     if (resource === "admin") {
       const [automation, source, driver, client] = await Promise.all([
         setting("automation"),
