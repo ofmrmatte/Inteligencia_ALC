@@ -249,6 +249,7 @@ export async function GET(
             enabled?: boolean;
             lastSync?: string;
             completed?: boolean;
+            channelSync?: Record<string, { lastSync: string; completed: boolean }>;
           }>("collector"),
           db().query(
             `SELECT id,name,phone,channel,status,unread,updated_at FROM alc_atendimento.conversations c WHERE ${conversationScope} AND status IN ('human','pending') ORDER BY unread DESC,updated_at DESC,id DESC LIMIT 10`,
