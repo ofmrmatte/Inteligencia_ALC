@@ -31,6 +31,7 @@ const OPERATIONAL_MODULES: SectionId[] = [
 const LOSS_MODULES: SectionId[] = [...ALL_MODULES];
 const LOSS_ADMIN_MODULES: SectionId[] = [...OPERATIONAL_MODULES, "importacoes"];
 const FULL_PANEL_ROLES = new Set<UserRole>(["director", "developer", "loss_supervisor", "loss_admin", "super_admin"]);
+const ASSIGNABLE_RH_ROLES = new Set<UserRole>(["coordinator", "supervisor"]);
 
 const ROLE_MODULE_CAP: Record<UserRole, SectionId[]> = {
   director: ALL_MODULES,
@@ -51,34 +52,48 @@ function normalizeList<T extends string>(values: unknown, allowed: readonly T[])
   return [...new Set(values.filter((value): value is T => typeof value === "string" && allowedSet.has(value)))];
 }
 
-function configuredScope<T extends string>(values: unknown, cap: readonly T[]): T[] {
-  return values === undefined || values === null ? [...cap] : normalizeList(values, cap);
-}
-
 export function isFullPanelRole(role: UserRole) {
   return FULL_PANEL_ROLES.has(role);
 }
 
-export function modulesForProfile(profile: Pick<AuthProfile, "role" | "moduleScope">): SectionId[] {
-  const cap = ROLE_MODULE_CAP[profile.role] ?? [];
-  const modules = isFullPanelRole(profile.role) ? [...cap] : configuredScope(profile.moduleScope, cap);
-  return canAccessHr(profile) ? [...modules, "rh"] : modules;
+export function roleDefaultModules(role: UserRole): SectionId[] {
+  const base = [...(ROLE_MODULE_CAP[role] ?? [])];
+  return canAccessHr({ role }) ? [...base, "rh"] : base;
 }
 
-export function canAccessSection(profile: Pick<AuthProfile, "role" | "moduleScope" | "atendimentoAccess">, section: SectionId) {
+export function roleModuleCap(role: UserRole): SectionId[] {
+  const base = [...(ROLE_MODULE_CAP[role] ?? [])];
+  const rhAvailable = canAccessHr({ role }) || ASSIGNABLE_RH_ROLES.has(role);
+  return rhAvailable ? [...base, "rh"] : base;
+}
+
+export function modulesForProfile(profile: Pick<AuthProfile, "role" | "moduleScope" | "setor">): SectionId[] {
+  const baseCap = ROLE_MODULE_CAP[profile.role] ?? [];
+  const allowedCap = roleModuleCap(profile.role);
+  let modules: SectionId[];
+
+  if (isFullPanelRole(profile.role)) {
+    modules = [...baseCap];
+  } else if (profile.moduleScope === undefined || profile.moduleScope === null) {
+    modules = roleDefaultModules(profile.role);
+  } else {
+    modules = normalizeList(profile.moduleScope, allowedCap);
+  }
+
+  if (canAccessHr(profile) && !modules.includes("rh")) modules.push("rh");
+  return modules;
+}
+
+export function canAccessSection(profile: Pick<AuthProfile, "role" | "moduleScope" | "setor" | "atendimentoAccess">, section: SectionId) {
   if (section === "atendimento") return canAccessAtendimento(profile);
   if (section === "auditoria-pnr" || section === "bandeja-pnr") return modulesForProfile(profile).includes("gestao-pnr");
   return modulesForProfile(profile).includes(section);
 }
 
-export function firstAllowedSection(profile: Pick<AuthProfile, "role" | "moduleScope">): SectionId | null {
+export function firstAllowedSection(profile: Pick<AuthProfile, "role" | "moduleScope" | "setor">): SectionId | null {
   return modulesForProfile(profile)[0] ?? null;
 }
 
-export function canAccessOperationalData(profile: Pick<AuthProfile, "role" | "moduleScope">) {
+export function canAccessOperationalData(profile: Pick<AuthProfile, "role" | "moduleScope" | "setor">) {
   return modulesForProfile(profile).some((section) => section !== "configuracoes" && section !== "perfil" && section !== "rh");
-}
-
-export function roleModuleCap(role: UserRole) {
-  return [...(ROLE_MODULE_CAP[role] ?? []), ...(canAccessHr({ role }) ? ["rh" as const] : [])];
 }
