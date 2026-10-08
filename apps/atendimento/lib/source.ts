@@ -2,6 +2,7 @@ import { core, db, setting, audit } from "./db";
 import {
   competence,
   classification,
+  driverNotificationEligible,
   phone,
   templateParameters,
   type CaseRecord,
@@ -30,45 +31,8 @@ export async function queueTemplate(
     !["aguardando_comprovante", "penalidade"].includes(record.classification)
   )
     throw new Error("Classificação fora da tratativa de clientes.");
-  if (
-    channel === "driver" &&
-    record.classification !== "aguardando_comprovante"
-  ) {
-    const existing = (
-      await db().query(
-        "SELECT * FROM alc_atendimento.conversations WHERE channel='driver' AND phone=$1",
-        [to],
-      )
-    ).rows[0];
-    if (
-      !existing?.identity_verified ||
-      existing.driver_id !== record.driverId ||
-      !existing.last_inbound_at ||
-      Date.now() - new Date(existing.last_inbound_at).getTime() > 86_400_000
-    )
-      throw new Error(
-        "Fora da janela de 24h: é necessário modelo aprovado para esta classificação.",
-      );
-    const payload = {
-      messaging_product: "whatsapp",
-      to,
-      type: "text",
-      text: {
-        body: `Olá ${record.driverName}, há uma nova PNR em aberto: envio ${record.shipmentId}. Envie Verificar PNR para consultar.`,
-      },
-    };
-    const result = await db().query(
-      "INSERT INTO alc_atendimento.outbox(dedupe_key,conversation_id,case_id,channel,phone,payload) VALUES($1,$2,$3,'driver',$4,$5) ON CONFLICT(dedupe_key) DO NOTHING RETURNING id",
-      [
-        `driver:${record.caseId}:${to}:initial`,
-        existing.id,
-        record.caseId,
-        to,
-        payload,
-      ],
-    );
-    return Boolean(result.rowCount);
-  }
+  if (channel === "driver" && !driverNotificationEligible(record.classification))
+    throw new Error("Classificação fora das notificações de motoristas.");
   if (channel === "client") {
     const active = await db().query(
       "SELECT case_id,status FROM alc_atendimento.conversations WHERE channel='client' AND phone=$1",
