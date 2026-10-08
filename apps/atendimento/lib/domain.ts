@@ -25,6 +25,10 @@ export function competence(now = new Date()) {
   );
   return `${parts.year}${parts.month}Q${Number(parts.day) <= 15 ? 1 : 2}`;
 }
+// Proactive PNR notifications are intentionally narrower than self-service lookup.
+export function driverNotificationEligible(classification: string) {
+  return classification === "aguardando_comprovante" || classification === "penalidade";
+}
 export function classification(main: unknown, sub: unknown) {
   const t = normalize(`${main ?? ""} ${sub ?? ""}`);
   if (/CLOSED|ENCERRAD|CANCELAD|RESOLVID/.test(t)) return "encerrada";
