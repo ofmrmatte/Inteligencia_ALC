@@ -64,7 +64,7 @@ beforeEach(() => {
   });
   mocks.templates.mockReset().mockResolvedValue([
     { name: "pnraberta", status: "APPROVED", language: "pt_BR" },
-    { name: "cliente_loss", status: "APPROVED", language: "pt_BR" },
+    { name: "cliente_loss_v2", status: "APPROVED", language: "pt_BR" },
   ]);
   mocks.channelConfig.mockReset().mockResolvedValue({ phoneId: "synthetic-phone-id" });
   mocks.graph.mockReset().mockRejectedValue(new Error("Unexpected provider send"));
