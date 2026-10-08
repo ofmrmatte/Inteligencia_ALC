@@ -11,6 +11,9 @@ let updatedTab;
 let createdTab;
 let injectedTabs = [];
 let serviceWorker;
+let onAlarm;
+let removedTab;
+let store = {};
 const panelUrl = "https://inteligenciaalc-production.up.railway.app/bandeja-pnr";
 const listUrl = "https://envios.adminml.com/logistics/case-center/cases";
 const detailUrl = `${listUrl}/198912360`;
@@ -37,11 +40,18 @@ beforeAll(async () => {
       },
       create: async (options) => {
         createdTab = options;
-        const created = { id: 8, status: "complete", url: options.url };
+        const created = { id: 8, status: "complete", url: options.url, active: options.active };
         tabs = [...tabs, created];
         return created;
       },
+      remove: async (id) => { removedTab = id; tabs = tabs.filter(tab => tab.id !== id); },
     },
+    storage: { local: {
+      get: async (name) => ({ [name]: store[name] }),
+      set: async (entries) => { store = { ...store, ...entries }; },
+      remove: async (name) => { delete store[name]; },
+    } },
+    alarms: { create: async () => undefined, onAlarm: { addListener: (fn) => { onAlarm = fn; } } },
     scripting: { executeScript: async ({ args, files, target }) => {
       if (files) {
         injectedTabs.push(target.tabId);
@@ -61,6 +71,8 @@ beforeEach(() => {
   updatedTab = undefined;
   createdTab = undefined;
   injectedTabs = [];
+  removedTab = undefined;
+  store = {};
 });
 
 function ping(competence = "202608Q2") {
@@ -72,19 +84,56 @@ function ping(competence = "202608Q2") {
 }
 
 describe("handshake do Conector PNR", () => {
-  it("identifica a extensão mesmo sem aba Mercado Livre", async () => {
+  it("prepara automaticamente uma aba inativa quando o Case Center não está aberto", async () => {
     tabs = [];
-    expect(await ping()).toEqual({ ok: true, data: {
-      installed: true, version: "1.1.17", mlTabAvailable: false, sessionAvailable: false,
+    expect(await ping()).toMatchObject({ ok: true, data: {
+      installed: true, version: "1.1.17", mlTabAvailable: true, sessionAvailable: true,
+      backgroundTabManaged: true,
     } });
+    expect(createdTab).toEqual({ url: listUrl, active: false });
+    expect(tabs).toHaveLength(1);
   });
 
-  it("faz PING leve sem consultar uma página do Case Center", async () => {
+  it("não altera a aba de detalhes do usuário, usando a listagem auxiliar inativa", async () => {
     tabs = [{ id: 7, status: "complete", url: detailUrl }];
-    expect(await ping()).toEqual({ ok: true, data: {
+    expect(await ping()).toMatchObject({ ok: true, data: {
       installed: true, version: "1.1.17", mlTabAvailable: true, sessionAvailable: true,
     } });
+    expect(updatedTab).toBeUndefined();
+    expect(createdTab).toEqual({ url: listUrl, active: false });
     expect(probeArgs).toBeUndefined();
+  });
+
+  it("lê competência sem requerer listagem aberta pelo usuário", async () => {
+    tabs = [];
+    probeResult = { ok: true, period: "202610Q1" };
+    const response = await new Promise(resolve => onMessage(
+      { source: "alc-pnr-panel", type: "READ_CASE_CENTER_PERIOD", payload: {} },
+      { url: panelUrl }, resolve,
+    ));
+    expect(response).toMatchObject({ ok: true, data: { competence: "202610Q1" } });
+    expect(createdTab).toEqual({ url: listUrl, active: false });
+  });
+
+  it("reutiliza o mesmo ambiente em consultas repetidas e só remove a aba própria após inatividade", async () => {
+    tabs = [];
+    await ping();
+    const first = createdTab;
+    await ping();
+    expect(createdTab).toBe(first);
+    store.alcPnrManagedCaseCenter = { id: 8, lastUsed: Date.now() - 6 * 60_000 };
+    await onAlarm({ name: "alc-pnr-managed-case-center-cleanup" });
+    expect(removedTab).toBe(8);
+    expect(store.alcPnrManagedCaseCenter).toBeUndefined();
+  });
+
+  it("nunca fecha uma aba auxiliar que o usuário ativou", async () => {
+    tabs = [];
+    await ping();
+    tabs = tabs.map(tab => ({ ...tab, active: true }));
+    store.alcPnrManagedCaseCenter.lastUsed = Date.now() - 6 * 60_000;
+    await onAlarm({ name: "alc-pnr-managed-case-center-cleanup" });
+    expect(removedTab).toBeUndefined();
   });
 
   it("lê a competência atualmente selecionada sem alterar filtros", async () => {
