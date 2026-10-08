@@ -6,7 +6,7 @@ import {
   uniquePnrCaseDetailSnapshots,
 } from "@/lib/pnr-case-detail";
 import { dedupeCaseTimelineEvents } from "@/lib/pnr-case-center";
-import { pnrDetailEmptySyncDelayMs, pnrDetailQueuePriority, runWithPnrSyncLock } from "@/lib/pnr-case-sync";
+import { pnrDetailBatchIssue, pnrDetailEmptySyncDelayMs, pnrDetailQueuePriority, runWithPnrSyncLock } from "@/lib/pnr-case-sync";
 
 describe("histórico durável de detalhes PNR", () => {
   it("mantém valores e listas antigas quando a captura nova vem vazia", () => {
@@ -71,12 +71,28 @@ describe("histórico durável de detalhes PNR", () => {
     }, Date.parse("2026-09-17T13:00:00.000Z"))).toBe(1);
   });
 
-  it("aumenta o intervalo quando a fila está vazia e limita o backoff em cinco minutos", () => {
-    expect(pnrDetailEmptySyncDelayMs(1)).toBe(30_000);
-    expect(pnrDetailEmptySyncDelayMs(2)).toBe(60_000);
-    expect(pnrDetailEmptySyncDelayMs(3)).toBe(120_000);
-    expect(pnrDetailEmptySyncDelayMs(4)).toBe(300_000);
-    expect(pnrDetailEmptySyncDelayMs(50)).toBe(300_000);
+  it("respeita consultas automáticas de 30 em 30 minutos", () => {
+    expect(pnrDetailEmptySyncDelayMs(1)).toBe(1_800_000);
+    expect(pnrDetailEmptySyncDelayMs(2)).toBe(1_800_000);
+    expect(pnrDetailEmptySyncDelayMs(3)).toBe(1_800_000);
+    expect(pnrDetailEmptySyncDelayMs(4)).toBe(1_800_000);
+    expect(pnrDetailEmptySyncDelayMs(50)).toBe(1_800_000);
+  });
+
+  it("conta somente as falhas consultadas e mantém os casos pulados pendentes", () => {
+    const batch = Array.from({ length: 50 }, (_, index) => ({ ok: false, error: { code: index ? "BATCH_PAUSED" : "INVALID_RESPONSE", message: "Formato indisponível" } }));
+    expect(pnrDetailBatchIssue(batch)).toMatchObject({ code: "INVALID_RESPONSE", failedCount: 1 });
+    expect(pnrDetailBatchIssue([])).toMatchObject({ code: "INVALID_RESPONSE" });
+    expect(pnrDetailBatchIssue([{ ok: true }, { ok: false, error: { code: "HTTP_ERROR", message: "HTTP 404" } }])).toBeNull();
+  });
+
+  it("pausa uma falha geral mesmo depois de um primeiro detalhe bem-sucedido", () => {
+    const batch = [
+      { ok: true },
+      { ok: false, error: { code: "HTTP_ERROR", message: "HTTP 500" } },
+      ...Array.from({ length: 48 }, () => ({ ok: false, error: { code: "BATCH_PAUSED" } })),
+    ];
+    expect(pnrDetailBatchIssue(batch)).toEqual({ code: "HTTP_ERROR", message: "HTTP 500", failedCount: 1 });
   });
 
   it("permite somente uma aba por vez quando Web Locks está disponível", async () => {

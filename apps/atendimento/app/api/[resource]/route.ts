@@ -1,3 +1,4 @@
+import { packageBuyerSchema, packageBuyerFields } from "@/lib/package-buyer";
 import { createClient } from "@supabase/supabase-js";
 import { z } from "zod";
 import {
@@ -64,11 +65,14 @@ const listRecord = z.object({
   driverPhone: short.optional(),
   customerName: short.optional(),
   customerPhone: short.optional(),
+  packageBuyer: packageBuyerSchema.optional(),
   products: z
     .array(z.object({ title: z.string().max(600) }))
     .max(50)
     .optional(),
   deliveryAt: z.string().max(64).optional(),
+}).superRefine((record, ctx) => {
+  if (record.packageBuyer && record.packageBuyer.shipmentId !== record.shipmentId) ctx.addIssue({ code: "custom", path: ["packageBuyer", "shipmentId"], message: "Comprador não corresponde ao envio." });
 });
 async function allowedRows(
   table: "cases" | "conversations",
@@ -439,6 +443,7 @@ export async function POST(
         products: r.products || [],
         deliveryAt: r.deliveryAt || "",
         purchaseValue: r.purchaseValue,
+        ...packageBuyerFields(r.packageBuyer, r.shipmentId),
       }));
       // Resolve station to exactly one operational unit; ambiguous rows remain inaccessible to scoped users.
       const units = (
@@ -528,8 +533,8 @@ export async function POST(
       if (parsed.sourceUrl) {
         const source = new URL(parsed.sourceUrl);
         if (
-          source.hostname !== "envios.adminml.com" ||
-          !source.pathname.includes("package-management")
+          source.protocol !== "https:" || source.hostname !== "envios.adminml.com" || source.port || source.search || source.hash ||
+          source.pathname !== `/logistics/package-management/package/${result.rows[0].record.shipmentId}`
         )
           throw new HttpError(400, "Fonte do comprador inválida.");
       }

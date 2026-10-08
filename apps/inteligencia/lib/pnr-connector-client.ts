@@ -44,11 +44,16 @@ export function connectorStateFromHandshake(
   return compareConnectorVersions(handshake.version, versions.latestVersion) < 0 ? "outdated" : "connected";
 }
 
-export type PnrConnectorRequestType = "PING" | "OPEN_CASE_CENTER" | "READ_CASE_CENTER_PERIOD" | "FETCH_PAGE" | "FETCH_TIMELINE" | "FETCH_TIMELINES";
+export type PnrConnectorRequestType = "PING" | "OPEN_CASE_CENTER" | "READ_CASE_CENTER_PERIOD" | "FETCH_PAGE" | "FETCH_TIMELINE" | "FETCH_TIMELINES" | "READ_PACKAGE_CUSTOMER" | "FETCH_PACKAGE_CUSTOMERS";
 export type PnrConnectorErrorCode =
   | "EXTENSION_NOT_FOUND"
   | "MERCADO_LIVRE_NOT_DETECTED"
   | "MERCADO_LIVRE_SESSION_REQUIRED"
+  | "MERCADO_LIVRE_ACCESS_DENIED"
+  | "RATE_LIMITED"
+  | "REQUEST_TIMEOUT"
+  | "INCOMPLETE_TIMELINE"
+  | "PERSISTENCE_ERROR"
   | "CARRIER_NOT_FOUND"
   | "CASE_CENTER_LIST_REQUIRED"
   | "CASE_CENTER_PERIOD_NOT_FOUND"
@@ -86,7 +91,7 @@ export function requestPnrConnector<T>(type: PnrConnectorRequestType, payload: R
     const requestId = crypto.randomUUID();
     const timer = window.setTimeout(() => {
       window.removeEventListener("message", onMessage);
-      reject(new PnrConnectorError("EXTENSION_NOT_FOUND", "Extensão ALC não encontrada."));
+      reject(new PnrConnectorError(type === "PING" ? "EXTENSION_NOT_FOUND" : "REQUEST_TIMEOUT", type === "PING" ? "Extensão ALC não encontrada." : "O conector excedeu o prazo da consulta. Os casos permanecem pendentes."));
     }, timeoutMs);
 
     function onMessage(event: MessageEvent<ConnectorResponse<T>>) {

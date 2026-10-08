@@ -16,9 +16,10 @@ const listUrl = "https://envios.adminml.com/logistics/case-center/cases";
 const detailUrl = `${listUrl}/198912360`;
 
 beforeAll(async () => {
+  const manifest = JSON.parse(await readFile("../../extensions/pnr-connector/src/manifest.json", "utf8"));
   vi.stubGlobal("chrome", {
     runtime: {
-      getManifest: () => ({ version: "1.1.17" }),
+      getManifest: () => ({ ...manifest, version: "1.1.17" }),
       onMessage: { addListener: (listener) => { onMessage = listener; } },
       onInstalled: { addListener: (listener) => { onInstalled = listener; } },
     },
@@ -137,21 +138,21 @@ describe("handshake do Conector PNR", () => {
 
   it("mantém PING e FETCH_TIMELINE em uma aba de detalhe sem navegação", async () => {
     tabs = [{ id: 7, status: "complete", url: detailUrl }];
-    probeResult = { ok: true, data: { caseState: { events: [], caseDetail: {} } } };
+    probeResult = [{ ok: true, data: { caseState: { events: [{ id: 1, event_type: "CREATE_CASE_BY_CONSUMER", date_created: "2026-10-01T12:00:00Z" }], caseDetail: {} } } }];
     expect(await ping()).toMatchObject({ ok: true, data: { mlTabAvailable: true, sessionAvailable: true } });
     const response = await new Promise((resolve) => onMessage(
       { source: "alc-pnr-panel", type: "FETCH_TIMELINE", payload: { caseId: "198912360" } },
       { url: panelUrl },
       resolve,
     ));
-    expect(response).toMatchObject({ ok: true, data: { caseId: "198912360", sourceEventCount: 0 } });
+    expect(response).toMatchObject({ ok: true, data: { caseId: "198912360", sourceEventCount: 1 } });
     expect(updatedTab).toBeUndefined();
   });
 
   it("busca timelines em lote sem navegar a aba e preserva erros por caso", async () => {
     tabs = [{ id: 7, status: "complete", url: detailUrl }];
     probeResult = [
-      { caseId: "198912360", ok: true, data: { caseState: { events: [], caseDetail: {} } } },
+      { caseId: "198912360", ok: true, data: { caseState: { events: [{ id: 1, event_type: "CREATE_CASE_BY_CONSUMER", date_created: "2026-10-01T12:00:00Z" }], caseDetail: {} } } },
       { caseId: "198912361", ok: false, code: "HTTP_ERROR", message: "Case Center respondeu HTTP 429." },
     ];
     const response = await new Promise((resolve) => onMessage(
@@ -167,12 +168,12 @@ describe("handshake do Conector PNR", () => {
       ok: true,
       data: {
         results: [
-          { caseId: "198912360", ok: true, data: { sourceEventCount: 0 } },
+          { caseId: "198912360", ok: true, data: { sourceEventCount: 1 } },
           { caseId: "198912361", ok: false, error: { code: "HTTP_ERROR" } },
         ],
       },
     });
-    expect(probeArgs).toEqual({ caseIds: ["198912360", "198912361"], concurrency: 6 });
+    expect(probeArgs).toEqual({ caseIds: ["198912360", "198912361"], concurrency: 2 });
     expect(updatedTab).toBeUndefined();
   });
 

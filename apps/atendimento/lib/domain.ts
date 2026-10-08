@@ -63,6 +63,8 @@ export type CaseRecord = {
   customerDocument?: string;
   customerAddress?: string;
   customerSource?: string;
+  customerCapturedAt?: string;
+  customerAddressFields?: Record<string, string>;
   products: { title: string }[];
   deliveryAt: string;
   purchaseValue: number;

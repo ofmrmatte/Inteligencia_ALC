@@ -3,12 +3,25 @@ import { CASE_CENTER_TIMELINE_PARSER_VERSION } from "@/lib/pnr-case-center";
 export const PNR_DETAIL_SYNC_LOCK = "alc-pnr-case-detail-sync";
 export const PNR_DETAIL_SYNC_BATCH_SIZE = 50;
 export const PNR_DETAIL_QUEUE_CANDIDATE_LIMIT = 500;
-export const PNR_DETAIL_SYNC_CONCURRENCY = 6;
+export const PNR_DETAIL_SYNC_CONCURRENCY = 2;
 export const PNR_DETAIL_PERSIST_BATCH_SIZE = 10;
-export const PNR_DETAIL_SYNC_ACTIVE_INTERVAL_MS = 1_000;
-export const PNR_DETAIL_SYNC_EMPTY_BACKOFF_MS = [30_000, 60_000, 120_000, 300_000] as const;
-export const PNR_DETAIL_SYNC_RATE_LIMIT_BACKOFF_MS = 30_000;
+export const PNR_DETAIL_SYNC_ACTIVE_INTERVAL_MS = 30 * 60 * 1000;
+export const PNR_DETAIL_SYNC_EMPTY_BACKOFF_MS = [PNR_DETAIL_SYNC_ACTIVE_INTERVAL_MS] as const;
+export const PNR_DETAIL_SYNC_RATE_LIMIT_BACKOFF_MS = PNR_DETAIL_SYNC_ACTIVE_INTERVAL_MS;
 export const PNR_DETAIL_SYNC_LEADER_LEASE_MS = 15_000;
+
+export function pnrDetailBatchIssue(results: Array<{ ok: boolean; error?: { code?: string; message?: string } }>) {
+  const failures = results.filter((item) => !item.ok && item.error?.code !== "BATCH_PAUSED");
+  const fatal = failures.find((item) => ["MERCADO_LIVRE_SESSION_REQUIRED", "MERCADO_LIVRE_ACCESS_DENIED", "INVALID_RESPONSE", "REQUEST_TIMEOUT", "RATE_LIMITED"].includes(item.error?.code || ""));
+  const interrupted = results.some((item) => !item.ok && item.error?.code === "BATCH_PAUSED");
+  const failure = fatal || (results.length && (interrupted || results.every((item) => !item.ok)) ? failures[0] : null);
+  if (results.length && !failure && !interrupted) return null;
+  return {
+    code: failure?.error?.code || "INVALID_RESPONSE",
+    message: failure?.error?.message || "O conector não retornou nenhum detalhe. Atualize a extensão antes de retomar.",
+    failedCount: failures.length,
+  };
+}
 
 export function pnrDetailEmptySyncDelayMs(consecutiveEmptyPolls: number) {
   const index = Math.min(

@@ -316,6 +316,7 @@ export function Cases() {
                   try {
                     const data = await request<NonNullable<typeof candidate>>(
                       "READ_PACKAGE_CUSTOMER",
+                      { shipmentId: selected.record.shipmentId },
                     );
                     if (data.shipmentId !== selected.record.shipmentId)
                       throw new Error(
