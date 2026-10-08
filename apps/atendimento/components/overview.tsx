@@ -50,13 +50,13 @@ export function Overview() {
     setCollectionNotice("");
     setCollectionError(false);
     try {
-      const ping = await request<ConnectorPing>("PING", {}, 8_000);
+      const ping = await request<ConnectorPing>("PING", {}, 20_000);
       const status = connectorStatus(ping, connector.version, true);
       if (!status.ready) {
         throw new Error(`${status.label} Acesse Ajustes > Conector & dados.`);
       }
       if (!ping.mlTabAvailable) {
-        throw new Error("Abra a listagem do Case Center no Mercado Livre antes de coletar.");
+        throw new Error("O Case Center não pôde ser preparado em segundo plano. Confira a sessão Mercado Livre e o conector.");
       }
       const result = await request<{ message: string }>("ATENDIMENTO_COLLECT", { channel });
       setCollectionNotice(result.message || "Coleta de dados concluída, sem disparos.");
