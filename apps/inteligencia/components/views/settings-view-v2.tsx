@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useState, type FormEvent } from "react";
 import { Edit3, Save, ShieldCheck, Trash2, UserPlus, UsersRound, X } from "lucide-react";
-import { roleModuleCap } from "@/lib/access-control";
+import { roleDefaultModules, roleModuleCap } from "@/lib/access-control";
 import { MANAGED_USER_ROLES, ROLE_LABELS, canManageUsers, type AuthProfile, type UserRole } from "@/lib/auth";
 import { NAVIGATION, type SectionId } from "@/lib/navigation";
 import { Panel, PageIntro, StatusBadge } from "@/components/ui";
@@ -58,12 +58,12 @@ function blankDraft(): UserDraft {
     role,
     setor: "",
     active: true,
-    moduleScope: roleModuleCap(role),
+    moduleScope: roleDefaultModules(role),
   };
 }
 
 function roleChanged(draft: UserDraft, role: UserRole): UserDraft {
-  return { ...draft, role, moduleScope: roleModuleCap(role) };
+  return { ...draft, role, moduleScope: roleDefaultModules(role) };
 }
 
 function toggleValue(values: string[], value: string) {
