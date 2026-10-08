@@ -41,10 +41,9 @@ describe("matriz de acesso do painel", () => {
     expect(canManageUsers(current)).toBe(false);
   });
 
-  it("nega módulos aos cargos aposentados do Portal do Motorista", () => {
-    for (const role of ["admin", "administration_supervisor", "driver"] as const) {
-      expect(modulesForProfile(profile(role))).toEqual([]);
-    }
+  it("concede somente RH à administração e mantém motorista sem módulos", () => {
+    for (const role of ["admin", "administration_supervisor"] as const) expect(modulesForProfile(profile(role))).toEqual(["rh"]);
+    expect(modulesForProfile(profile("driver"))).toEqual([]);
   });
 
   it("não restaura permissões quando um escopo explícito está vazio", () => {

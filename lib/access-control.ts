@@ -1,5 +1,6 @@
 import type { AuthProfile, UserRole } from "@/lib/auth";
 import type { SectionId } from "@/lib/navigation";
+import { canAccessHr } from "@/lib/hr/permissions";
 
 const ALL_MODULES: SectionId[] = [
   "visao-geral",
@@ -60,8 +61,8 @@ export function isFullPanelRole(role: UserRole) {
 
 export function modulesForProfile(profile: Pick<AuthProfile, "role" | "moduleScope">): SectionId[] {
   const cap = ROLE_MODULE_CAP[profile.role] ?? [];
-  if (isFullPanelRole(profile.role)) return [...cap];
-  return configuredScope(profile.moduleScope, cap);
+  const modules = isFullPanelRole(profile.role) ? [...cap] : configuredScope(profile.moduleScope, cap);
+  return canAccessHr(profile) ? [...modules, "rh"] : modules;
 }
 
 export function canAccessSection(profile: Pick<AuthProfile, "role" | "moduleScope">, section: SectionId) {
@@ -74,9 +75,9 @@ export function firstAllowedSection(profile: Pick<AuthProfile, "role" | "moduleS
 }
 
 export function canAccessOperationalData(profile: Pick<AuthProfile, "role" | "moduleScope">) {
-  return modulesForProfile(profile).some((section) => section !== "configuracoes" && section !== "perfil");
+  return modulesForProfile(profile).some((section) => section !== "configuracoes" && section !== "perfil" && section !== "rh");
 }
 
 export function roleModuleCap(role: UserRole) {
-  return [...(ROLE_MODULE_CAP[role] ?? [])];
+  return [...(ROLE_MODULE_CAP[role] ?? []), ...(canAccessHr({ role }) ? ["rh" as const] : [])];
 }

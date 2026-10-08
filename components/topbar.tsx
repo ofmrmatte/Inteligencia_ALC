@@ -80,6 +80,7 @@ export function Topbar({ section, profile, canImport, onImport, onMobileMenu }: 
           : "Nenhum dado importado";
 
   const notifications = useMemo<NotificationItem[]>(() => {
+    if (section === "rh") return [];
     const items: NotificationItem[] = [];
     if (loadError) {
       items.push({ id: `sync:${loadError}`, title: "Falha na sincronização", detail: loadError, tone: "error" });
@@ -98,7 +99,7 @@ export function Topbar({ section, profile, canImport, onImport, onMobileMenu }: 
       });
     }
     return items.slice(0, 8);
-  }, [data.imports, loadError]);
+  }, [data.imports, loadError, section]);
 
   useEffect(() => {
     function handleOutside(event: MouseEvent) {
@@ -147,11 +148,11 @@ export function Topbar({ section, profile, canImport, onImport, onMobileMenu }: 
         <h1>{meta.title}</h1>
       </div>
       <div className="topbar__actions">
-        <div className="data-state" title={loadError || (refreshing ? "Atualizando dados em segundo plano" : "Dados sincronizados no Supabase")}>
+        {section !== "rh" && <div className="data-state" title={loadError || (refreshing ? "Atualizando dados em segundo plano" : "Dados sincronizados no Supabase")}>
           <Database size={16} />
           <span>{dataLabel}</span>
           <i className={hydrated && last ? "status-dot status-dot--ok" : "status-dot"} />
-        </div>
+        </div>}
         <div className="user-chip" title={profile.email}>
           <ShieldCheck size={15} />
           <span>{ROLE_LABELS[profile.role]}</span>

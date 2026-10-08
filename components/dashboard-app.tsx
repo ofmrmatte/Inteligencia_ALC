@@ -22,7 +22,7 @@ const SIDEBAR_KEY = "alc-inteligencia:sidebar-collapsed";
 const SIDEBAR_EVENT = "alc-inteligencia:sidebar-change";
 const GLOBAL_SYNC_EVENT = "alc-inteligencia:global-data-sync";
 const GLOBAL_SYNC_INTERVAL_MS = 300_000;
-const ADMIN_SECTIONS: SectionId[] = ["configuracoes", "perfil"];
+const ADMIN_SECTIONS: SectionId[] = ["configuracoes", "perfil", "rh"];
 const STANDALONE_SECTIONS: SectionId[] = ["bandeja-pnr", "gestao-descontos", ...ADMIN_SECTIONS];
 const NO_GLOBAL_DATA_SECTIONS: SectionId[] = ["gestao-descontos", ...ADMIN_SECTIONS];
 
@@ -61,7 +61,7 @@ export function DashboardApp({ section, profile }: { section: SectionId; profile
   const [importOpen, setImportOpen] = useState(false);
   const [viewRevision, setViewRevision] = useState(0);
   const meta = SECTION_META[section];
-  const canImport = canManageImports(profile);
+  const canImport = section !== "rh" && canManageImports(profile);
   const canLoadOperationalData = canAccessOperationalData(profile);
   const standalone = STANDALONE_SECTIONS.includes(section);
   const remountOnGlobalSync = section === "gestao-descontos";
@@ -171,7 +171,7 @@ export function DashboardApp({ section, profile }: { section: SectionId; profile
         <main className="page-canvas">
           <div className="page-heading">
             <div><p>{meta.description}</p></div>
-            {data.isDemo && <span className="demo-badge"><FlaskConical size={14} />Dados de demonstração</span>}
+            {section !== "rh" && data.isDemo && <span className="demo-badge"><FlaskConical size={14} />Dados de demonstração</span>}
           </div>
           {initialDataLoad ? (
             <div className="view-loading" role="status" aria-live="polite" aria-label="Carregando dados do painel">

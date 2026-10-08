@@ -19,6 +19,7 @@ const QualityView = dynamic(() => import("./quality-view").then((module) => modu
 const ImportsView = dynamic(() => import("./imports-view").then((module) => module.ImportsView), { loading });
 const SettingsView = dynamic(() => import("./settings-view-v3").then((module) => module.SettingsViewV3), { loading });
 const ProfileView = dynamic(() => import("./profile-view").then((module) => module.ProfileView), { loading });
+const HrView = dynamic(() => import("./hr-view").then((module) => module.HrView), { loading });
 
 export function ViewRouter({ section, profile }: { section: SectionId; profile: AuthProfile }) {
   switch (section) {
@@ -35,6 +36,7 @@ export function ViewRouter({ section, profile }: { section: SectionId; profile: 
     case "importacoes": return <ImportsView />;
     case "configuracoes": return <SettingsView profile={profile} />;
     case "perfil": return <ProfileView profile={profile} />;
+    case "rh": return <HrView profile={profile} />;
     default: return <OverviewView />;
   }
 }

@@ -11,6 +11,7 @@ import {
   Inbox,
   Settings,
   UserRound,
+  UsersRound,
   ReceiptText,
   ShieldAlert,
 } from "lucide-react";
@@ -30,6 +31,7 @@ export const SECTION_IDS = [
   "importacoes",
   "configuracoes",
   "perfil",
+  "rh",
 ] as const;
 
 export type SectionId = (typeof SECTION_IDS)[number];
@@ -40,7 +42,7 @@ export interface NavigationItem {
   shortLabel: string;
   href: string;
   icon: LucideIcon;
-  group: "Análises" | "Controle de dados" | "Administração";
+  group: "Análises" | "Controle de dados" | "Administração" | "Ajustes";
   parentId?: SectionId;
 }
 
@@ -57,8 +59,9 @@ export const NAVIGATION: NavigationItem[] = [
   { id: "conciliacao-ids", label: "Conciliação de IDs", shortLabel: "Conciliação", href: "/conciliacao-ids", icon: ClipboardCheck, group: "Controle de dados" },
   { id: "qualidade-dados", label: "Qualidade dos dados", shortLabel: "Qualidade", href: "/qualidade-dados", icon: DatabaseZap, group: "Controle de dados" },
   { id: "importacoes", label: "Histórico de importações", shortLabel: "Importações", href: "/importacoes", icon: FileClock, group: "Controle de dados" },
-  { id: "configuracoes", label: "Configurações", shortLabel: "Configurações", href: "/configuracoes", icon: Settings, group: "Administração" },
-  { id: "perfil", label: "Perfil", shortLabel: "Perfil", href: "/perfil", icon: UserRound, group: "Administração" },
+  { id: "rh", label: "Recursos Humanos", shortLabel: "RH", href: "/rh", icon: UsersRound, group: "Administração" },
+  { id: "configuracoes", label: "Configurações", shortLabel: "Configurações", href: "/configuracoes", icon: Settings, group: "Ajustes" },
+  { id: "perfil", label: "Perfil", shortLabel: "Perfil", href: "/perfil", icon: UserRound, group: "Ajustes" },
 ];
 
 export const SECTION_META: Record<SectionId, { title: string; eyebrow: string; description: string }> = {
@@ -76,4 +79,5 @@ export const SECTION_META: Record<SectionId, { title: string; eyebrow: string; d
   importacoes: { title: "Histórico de importações", eyebrow: "Rastreabilidade", description: "Gerencie lotes independentes e acompanhe alertas de processamento." },
   configuracoes: { title: "Configurações", eyebrow: "Administração", description: "Controle acesso, parâmetros do Supabase e regras operacionais do painel." },
   perfil: { title: "Perfil", eyebrow: "Conta e escopo", description: "Consulte sua permissão, bases autorizadas e vínculo operacional." },
+  rh: { title: "Recursos Humanos", eyebrow: "Administração · Matriz", description: "Colaboradores, jornada e ausências da matriz." },
 };
