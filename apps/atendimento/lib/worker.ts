@@ -97,7 +97,7 @@ async function driverAnswer(
       if (/^(1|VERIFICAR PNR|CONSULTAR PNR|MINHAS PNRS|VERIFICAR|CONSULTAR)$/.test(n))
         return { state: { step: "driver_name" }, reply: title("M02") };
       // Do not use supplied names to grant permissions; require database verification.
-      if (text.trim().split(/\\s+/).length < 2)
+      if (text.trim().split(/\s+/).length < 2)
         return { state: { step: "driver_name" }, reply: title("M02") };
       return {
         state: { step: "driver_base", name: text.trim() },
@@ -144,12 +144,12 @@ async function driverAnswer(
   )).rows.map(r => r.record as CaseRecord);
   if (justVerified) return {
     state: { step: "driver_select" },
-    reply: `${title("M03")}\\n\\n${title("M04", { Quantidade: String(records.length) })}`,
+    reply: `${title("M03")}\n\n${title("M04", { Quantidade: String(records.length) })}`,
   };
   const exactCase = records.find(r => normalize(r.caseId) === n || normalize(r.shipmentId) === n);
   if (exactCase) return {
     state: { step: "driver_continue", selectedCaseId: exactCase.caseId },
-    reply: `Envio ${exactCase.shipmentId} | Caso ${exactCase.caseId} | Status: ${exactCase.classification === "aberta" ? "Em revisão" : exactCase.classification === "penalidade" ? "Com penalidade" : exactCase.classification === "aguardando_comprovante" ? "Aguardando comprovante" : "Encerrada"}.\\n\\n${title("M14")}`,
+    reply: `Envio ${exactCase.shipmentId} | Caso ${exactCase.caseId} | Status: ${exactCase.classification === "aberta" ? "Em revisão" : exactCase.classification === "penalidade" ? "Com penalidade" : exactCase.classification === "aguardando_comprovante" ? "Aguardando comprovante" : "Encerrada"}.\n\n${title("M14")}`,
   };
   const selected = records.find(r => r.caseId === state.selectedCaseId || r.shipmentId === state.selectedShipmentId);
   const related = selected || (records.length === 1 ? records[0] : null);
@@ -188,17 +188,17 @@ async function driverAnswer(
   };
   const list = filtered.slice(0,20).map(r =>
     `• Envio ${r.shipmentId} | Caso ${r.caseId} | ${labels[r.classification] || "Em revisão"} | ${r.competence}`
-  ).join("\\n") + (filtered.length > 20 ? "\\nHá mais ocorrências; solicite apoio ao Loss para a lista completa." : "");
+  ).join("\n") + (filtered.length > 20 ? "\nHá mais ocorrências; solicite apoio ao Loss para a lista completa." : "");
   const c = filtered.length === 0 ? "M09"
     : status === "aguardando_comprovante" ? "M05"
       : status === "penalidade" ? "M06"
         : status === "aberta" ? "M07" : "";
   const response = c === "M09" ? title(c, { Competência: records[0]?.competence || "vigente" })
     : c ? title(c, { Quantidade: String(filtered.length), Ocorrências: list })
-      : `PNRs localizadas: ${filtered.length}.\\n${list}`;
+      : `PNRs localizadas: ${filtered.length}.\n${list}`;
   return {
     state: { step: "driver_continue" },
-    reply: `${response}\\n\\n${title("M14")}`,
+    reply: `${response}\n\n${title("M14")}`,
   };
 }
 async function incoming(
