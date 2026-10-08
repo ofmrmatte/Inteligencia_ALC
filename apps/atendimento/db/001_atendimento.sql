@@ -20,6 +20,11 @@ CREATE TABLE IF NOT EXISTS alc_atendimento.conversations (
  updated_at timestamptz NOT NULL DEFAULT now(), created_at timestamptz NOT NULL DEFAULT now(), UNIQUE(channel,phone)
 );
 CREATE INDEX IF NOT EXISTS atendimento_conversation_scope ON alc_atendimento.conversations(base_key,sigla,updated_at DESC);
+ALTER TABLE alc_atendimento.conversations ADD COLUMN IF NOT EXISTS labels text[] NOT NULL DEFAULT '{}';
+ALTER TABLE alc_atendimento.conversations DROP CONSTRAINT IF EXISTS conversations_status_check;
+ALTER TABLE alc_atendimento.conversations ADD CONSTRAINT conversations_status_check CHECK(status IN ('bot','human','pending','resolved'));
+CREATE INDEX IF NOT EXISTS atendimento_conversation_assignee ON alc_atendimento.conversations(assigned_to,updated_at DESC);
+CREATE INDEX IF NOT EXISTS atendimento_conversation_labels ON alc_atendimento.conversations USING gin(labels);
 CREATE TABLE IF NOT EXISTS alc_atendimento.messages (
  id uuid PRIMARY KEY DEFAULT gen_random_uuid(), conversation_id uuid NOT NULL REFERENCES alc_atendimento.conversations(id),
  provider_id text UNIQUE, direction text NOT NULL CHECK(direction IN ('in','out','note')), body text NOT NULL,

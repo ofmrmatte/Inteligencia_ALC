@@ -1,8 +1,13 @@
 "use client";
-import { useState } from "react";
+import { useCallback, useEffect, useState } from "react";
+import { Download, RefreshCw } from "lucide-react";
 import connector from "alc-pnr-connector/package.json";
 import { api, useData, when } from "./data";
-export function request<T>(type: string, payload: unknown = {}): Promise<T> {
+export function request<T>(
+  type: string,
+  payload: unknown = {},
+  timeoutMs = 600_000,
+): Promise<T> {
   return new Promise((resolve, reject) => {
     const requestId = crypto.randomUUID();
     const timer = setTimeout(() => {
@@ -12,7 +17,7 @@ export function request<T>(type: string, payload: unknown = {}): Promise<T> {
           "Conector não respondeu. Atualize a extensão e recarregue esta página.",
         ),
       );
-    }, 600_000);
+    }, timeoutMs);
     function receive(event: MessageEvent) {
       if (
         event.origin !== location.origin ||
@@ -34,6 +39,25 @@ export function request<T>(type: string, payload: unknown = {}): Promise<T> {
   });
 }
 export function Collector() {
+  const [connectorState, setConnectorState] = useState<{
+    installed: boolean;
+    version?: string;
+    mlTabAvailable?: boolean;
+  } | null>(null);
+  const check = useCallback(
+    () =>
+      request<{
+        installed: boolean;
+        version?: string;
+        mlTabAvailable?: boolean;
+      }>("PING", {}, 5000)
+        .then(setConnectorState)
+        .catch(() => setConnectorState({ installed: false })),
+    [],
+  );
+  useEffect(() => {
+    void check();
+  }, [check]);
   const [notice, setNotice] = useState(""),
     [busy, setBusy] = useState(false);
   const { data, refresh } = useData<{
@@ -68,9 +92,23 @@ export function Collector() {
         href={`/downloads/alc-pnr-connector-v${connector.version}.zip`}
         download
       >
-        Baixar extensão →
+        <Download size={16} /> Baixar extensão
       </a>
       <dl>
+        <dt>Este computador</dt>
+        <dd>
+          {connectorState === null
+            ? "Verificando conector"
+            : !connectorState.installed
+              ? "Conector não encontrado"
+              : `Conector ${connectorState.version || "instalado"}`}
+        </dd>
+        <dt>Bandeja Mercado Livre</dt>
+        <dd>
+          {connectorState?.mlTabAvailable
+            ? "Aba disponível; sessão verificada na coleta"
+            : "Abra a Bandeja autenticada neste navegador"}
+        </dd>
         <dt>Frequência</dt>
         <dd>30 minutos</dd>
         <dt>Período automático</dt>
@@ -80,18 +118,30 @@ export function Collector() {
         <dt>Agendamento</dt>
         <dd>
           {data?.collector?.enabled
-            ? "Ativado neste computador"
+            ? "Ativado no cadastro do coletor"
             : "Verifique o conector neste computador"}
         </dd>
       </dl>
       <div className="actions">
-        <button disabled={busy} onClick={() => run("ATENDIMENTO_COLLECT")}>
+        <button onClick={() => void check()}>
+          <RefreshCw size={15} /> Verificar conector
+        </button>
+        <button
+          disabled={busy || !connectorState?.mlTabAvailable}
+          onClick={() => run("ATENDIMENTO_COLLECT")}
+        >
           Coletar agora
         </button>
-        <button disabled={busy} onClick={() => run("ATENDIMENTO_ENABLE")}>
+        <button
+          disabled={busy || !connectorState?.installed}
+          onClick={() => run("ATENDIMENTO_ENABLE")}
+        >
           Ativar coleta a cada 30 min
         </button>
-        <button disabled={busy} onClick={() => run("ATENDIMENTO_DISABLE")}>
+        <button
+          disabled={busy || !connectorState?.installed}
+          onClick={() => run("ATENDIMENTO_DISABLE")}
+        >
           Pausar coleta
         </button>
         <button

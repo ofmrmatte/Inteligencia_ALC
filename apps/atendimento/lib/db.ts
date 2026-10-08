@@ -42,8 +42,9 @@ export async function audit(
   action: string,
   target = "",
   data: Record<string, unknown> = {},
+  transaction?: pg.PoolClient,
 ) {
-  await db().query(
+  await (transaction || db()).query(
     "INSERT INTO alc_atendimento.audit(actor_id,action,target,data) VALUES($1,$2,$3,$4)",
     [actor, action, target, data],
   );

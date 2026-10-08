@@ -21,6 +21,7 @@
     "node": ">=22"
   },
   "dependencies": {
+    "@alc/ui": "*",
     "@supabase/ssr": "^0.12.4",
     "@supabase/supabase-js": "^2.112.3",
     "clsx": "^2.1.1",

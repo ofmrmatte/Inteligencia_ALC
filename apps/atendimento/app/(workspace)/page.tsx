@@ -1,4 +1,4 @@
-import { Overview } from "@/components/overview";
+import { redirect } from "next/navigation";
 export default function Page() {
-  return <Overview />;
+  redirect("/conversas");
 }

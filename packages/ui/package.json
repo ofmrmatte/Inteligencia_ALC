@@ -1,0 +1,8 @@
+{
+  "name": "@alc/ui",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "exports": { "./brand": "./brand.tsx", "./components": "./components.tsx", "./tokens.css": "./tokens.css" },
+  "peerDependencies": { "next": "^16.3.5", "react": "^19.2.8", "lucide-react": "^1.31.0" }
+}
