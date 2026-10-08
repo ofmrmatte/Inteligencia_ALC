@@ -105,6 +105,44 @@ describe("regras operacionais do Atendimento", () => {
     expect(result[0].parameters.find(p => p.parameter_name === "purchase_value")?.text).toBe("R$ 199,90");
     expect(templateParameters("driver", r, "Equipe Loss")).toHaveLength(2);
   });
+  it("gera C01 com dados reais do caso, incluindo valor, data, operador e ID", () => {
+    const record = {
+      customerVerified: true,
+      customerName: "Cliente Exemplo",
+      customerPhone: "5511999990000",
+      products: [{ title: "Produto Teste" }],
+      deliveryAt: "2026-10-08T13:00:00Z",
+      shipmentId: "ENV-ABC-123",
+      purchaseValue: 285.5,
+    } as CaseRecord;
+    const text = clientOpening(record, "Equipe ALC");
+    expect(text).toContain("Prezado(a) cliente Cliente Exemplo, tudo bem?");
+    expect(text).toContain("Meu nome é Equipe ALC, sou da ALC Transportadora");
+    expect(text).toContain("Produto: Produto Teste");
+    expect(text).toMatch(/Valor da compra: R\$\s*285,50/);
+    expect(text).toContain("Entrega registrada: 08/10/2026");
+    expect(text).toContain("ID de envio: ENV-ABC-123");
+    expect(text).toContain("confirmar se o produto foi recebido?");
+    expect(text).not.toMatch(/\[[^\]]+\]/);
+    expect(() => clientOpening({ ...record, purchaseValue: 0 }, "Equipe ALC"))
+      .toThrow("incompletos");
+    expect(() => clientOpening({ ...record, customerVerified: false }, "Equipe ALC"))
+      .toThrow("incompletos");
+    expect(() => clientOpening(record, "")).toThrow("incompletos");
+  });
+  it("C05 espera resposta espontânea e C04 termina sem cobrar confirmação", () => {
+    const negative = clientReply({ step: "receipt" }, "Não recebi", "Cliente Exemplo");
+    expect(negative.state.step).toBe("neighbors");
+    expect(negative.reply).toContain("Cliente Exemplo");
+    expect(negative.reply).toContain("Você chegou a verificar");
+    expect(negative.reply).not.toMatch(/Opções:|1\.|2\.|3\./);
+    const afterDate = clientReply({ step: "date" }, "07/10", "Cliente Exemplo");
+    const final = clientReply(afterDate.state, "Sim, está correto", "Cliente Exemplo");
+    expect(final).toMatchObject({ state: { step: "done", result: "recebimento_confirmado" } });
+    expect(final.reply).toContain("Cliente Exemplo");
+    expect(final.reply).toContain("encerre a reclamação");
+    expect(final.reply).not.toMatch(/conseguiu encerrar|confirme depois|aguardo sua confirmação/i);
+  });
   it("não amplia o acesso de bases com a mesma sigla", () => {
     const scope = {
       full: false,
