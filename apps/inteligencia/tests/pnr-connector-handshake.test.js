@@ -13,6 +13,7 @@ let injectedTabs = [];
 let serviceWorker;
 let onAlarm;
 let removedTab;
+let redirectNewTab = false;
 let store = {};
 const panelUrl = "https://inteligenciaalc-production.up.railway.app/bandeja-pnr";
 const listUrl = "https://envios.adminml.com/logistics/case-center/cases";
@@ -40,7 +41,7 @@ beforeAll(async () => {
       },
       create: async (options) => {
         createdTab = options;
-        const created = { id: 8, status: "complete", url: options.url, active: options.active };
+        const created = { id: 8, status: "complete", url: redirectNewTab ? "https://envios.adminml.com/login" : options.url, active: options.active };
         tabs = [...tabs, created];
         return created;
       },
@@ -72,6 +73,7 @@ beforeEach(() => {
   createdTab = undefined;
   injectedTabs = [];
   removedTab = undefined;
+  redirectNewTab = false;
   store = {};
 });
 
@@ -134,6 +136,18 @@ describe("handshake do Conector PNR", () => {
     store.alcPnrManagedCaseCenter.lastUsed = Date.now() - 6 * 60_000;
     await onAlarm({ name: "alc-pnr-managed-case-center-cleanup" });
     expect(removedTab).toBeUndefined();
+  });
+
+  it("informa sessão expirada e fecha a aba auxiliar em um redirecionamento para login", async () => {
+    tabs = [];
+    redirectNewTab = true;
+    const response = await ping();
+    expect(response).toMatchObject({ ok: true, data: {
+      mlTabAvailable: false, sessionAvailable: false,
+      sessionError: "MERCADO_LIVRE_SESSION_REQUIRED",
+    } });
+    expect(removedTab).toBe(8);
+    expect(store.alcPnrManagedCaseCenter).toBeUndefined();
   });
 
   it("lê a competência atualmente selecionada sem alterar filtros", async () => {
