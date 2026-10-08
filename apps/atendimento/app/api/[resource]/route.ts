@@ -448,7 +448,8 @@ export async function POST(
         new Date().toISOString(),
         baseline,
         profile.id,
-        parsed.collectOnly !== true,
+        // Legacy extension requests omit collectOnly: default to no outbound messages.
+        parsed.collectOnly === false,
       );
       const collectedAt = new Date().toISOString();
       const channelSync = { ...(state?.channelSync || {}) };
@@ -476,7 +477,7 @@ export async function POST(
       await audit(profile.id, "collector_import", parsed.syncId, {
         ...stats,
         channel: parsed.channel || "all",
-        collectOnly: parsed.collectOnly === true,
+        collectOnly: parsed.collectOnly !== false,
       });
       return Response.json(stats);
     }
