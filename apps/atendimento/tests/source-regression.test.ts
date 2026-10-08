@@ -143,6 +143,16 @@ describe("source import regressions", () => {
     expect(mocks.graph).not.toHaveBeenCalled();
   });
 
+  it("refuses to send the old C01 Meta template without the approved purchase value", async () => {
+    mocks.templates.mockResolvedValueOnce([
+      { name: "cliente_loss", status: "APPROVED", language: "pt_BR" },
+    ]);
+    await expect(queueTemplate("client", record(), OPERATOR))
+      .rejects.toThrow("Modelo aprovado indisponível");
+    expect(queuedKeys.size).toBe(0);
+    expect(mocks.graph).not.toHaveBeenCalled();
+  });
+
   it("imports new verified contacts once and reimport does not queue duplicate outreach", async () => {
     const initial = record();
     expect(await upsertCases([initial], NOW.toISOString(), false)).toEqual({ processed: 1, new: 1 });
