@@ -71,12 +71,12 @@ describe("histórico durável de detalhes PNR", () => {
     }, Date.parse("2026-09-17T13:00:00.000Z"))).toBe(1);
   });
 
-  it("respeita consultas automáticas de 30 em 30 minutos", () => {
-    expect(pnrDetailEmptySyncDelayMs(1)).toBe(1_800_000);
-    expect(pnrDetailEmptySyncDelayMs(2)).toBe(1_800_000);
-    expect(pnrDetailEmptySyncDelayMs(3)).toBe(1_800_000);
-    expect(pnrDetailEmptySyncDelayMs(4)).toBe(1_800_000);
-    expect(pnrDetailEmptySyncDelayMs(50)).toBe(1_800_000);
+  it("recua gradualmente apenas com a fila vazia, sem usar os 30 minutos do Atendimento", () => {
+    expect(pnrDetailEmptySyncDelayMs(1)).toBe(60_000);
+    expect(pnrDetailEmptySyncDelayMs(2)).toBe(120_000);
+    expect(pnrDetailEmptySyncDelayMs(3)).toBe(300_000);
+    expect(pnrDetailEmptySyncDelayMs(4)).toBe(300_000);
+    expect(pnrDetailEmptySyncDelayMs(50)).toBe(300_000);
   });
 
   it("conta somente as falhas consultadas e mantém os casos pulados pendentes", () => {

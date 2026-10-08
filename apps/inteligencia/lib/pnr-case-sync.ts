@@ -5,9 +5,13 @@ export const PNR_DETAIL_SYNC_BATCH_SIZE = 50;
 export const PNR_DETAIL_QUEUE_CANDIDATE_LIMIT = 500;
 export const PNR_DETAIL_SYNC_CONCURRENCY = 2;
 export const PNR_DETAIL_PERSIST_BATCH_SIZE = 10;
-export const PNR_DETAIL_SYNC_ACTIVE_INTERVAL_MS = 30 * 60 * 1000;
-export const PNR_DETAIL_SYNC_EMPTY_BACKOFF_MS = [PNR_DETAIL_SYNC_ACTIVE_INTERVAL_MS] as const;
-export const PNR_DETAIL_SYNC_RATE_LIMIT_BACKOFF_MS = PNR_DETAIL_SYNC_ACTIVE_INTERVAL_MS;
+// Only Atendimento uses a fixed 30-minute collector alarm.
+// Sync PNR drains its pending detail queue continuously while this view is active.
+// Backoff is used for idle queues, rate limits and connection recovery, not for pending batches.
+export const PNR_DETAIL_SYNC_ACTIVE_INTERVAL_MS = 2_000;
+export const PNR_DETAIL_SYNC_EMPTY_BACKOFF_MS = [60_000, 120_000, 300_000] as const;
+export const PNR_DETAIL_SYNC_RATE_LIMIT_BACKOFF_MS = 5 * 60 * 1000;
+export const PNR_DETAIL_SYNC_CONNECTION_RETRY_MS = 60_000;
 export const PNR_DETAIL_SYNC_LEADER_LEASE_MS = 15_000;
 
 export function pnrDetailBatchIssue(results: Array<{ ok: boolean; error?: { code?: string; message?: string } }>) {
@@ -50,7 +54,8 @@ export function pnrDetailQueuePriority(record: PnrDetailQueueRecord, now = Date.
 }
 
 export function pnrDetailNextSyncDelayMs(mainStatus: string | null | undefined) {
-  return (mainStatus || "").toUpperCase() === "CLOSED" ? 6 * 60 * 60 * 1000 : 30 * 60 * 1000;
+  // Refresh the same stored case only when due. This is not the queue batch cadence.
+  return (mainStatus || "").toUpperCase() === "CLOSED" ? 6 * 60 * 60 * 1000 : 60 * 60 * 1000;
 }
 
 export function pnrDetailRetryDelayMs(attempts: number) {

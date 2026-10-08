@@ -7,6 +7,7 @@ import type { PnrCaseTimelineEvent } from "@/lib/pnr-case-center";
 import {
   PNR_DETAIL_PERSIST_BATCH_SIZE,
   PNR_DETAIL_SYNC_ACTIVE_INTERVAL_MS,
+  PNR_DETAIL_SYNC_CONNECTION_RETRY_MS,
   PNR_DETAIL_SYNC_BATCH_SIZE,
   PNR_DETAIL_SYNC_CONCURRENCY,
   PNR_DETAIL_SYNC_LEADER_LEASE_MS,
@@ -120,7 +121,7 @@ async function persistTimelineBatch(items: TimelinePersistPayload[]) {
 function pausedMessage(error: unknown) {
   if (!(error instanceof PnrConnectorError)) return null;
   if (error.code === "EXTENSION_NOT_FOUND") return "Pausada — Conector PNR não encontrado";
-  if (error.code === "MERCADO_LIVRE_NOT_DETECTED") return "Pausada — abra a Bandeja Mercado Livre";
+  if (error.code === "MERCADO_LIVRE_NOT_DETECTED") return "Pausada — não foi possível preparar a sessão Mercado Livre";
   if (error.code === "MERCADO_LIVRE_SESSION_REQUIRED") return "Pausada — sessão Mercado Livre necessária";
   return null;
 }
@@ -257,12 +258,12 @@ export function PnrCaseCenterBackgroundSync() {
           const handshake = await requestPnrConnector<PnrConnectorHandshake>("PING", {}, 25_000);
           const connectorState = connectorStateFromHandshake(handshake);
           if (connectorState === "unsupported" || connectorState === "outdated") {
-            nextDelayMs = 300_000;
+            nextDelayMs = PNR_DETAIL_SYNC_CONNECTION_RETRY_MS;
             publishPnrBackgroundSyncStatus({ phase: "paused", message: "Pausada — atualize o Conector PNR" });
             return;
           }
           if (connectorState === "ml-missing") {
-            throw new PnrConnectorError("MERCADO_LIVRE_NOT_DETECTED", "Abra a Bandeja Mercado Livre.");
+            throw new PnrConnectorError("MERCADO_LIVRE_NOT_DETECTED", "Não foi possível preparar o Case Center neste navegador.");
           }
           if (connectorState === "expired") {
             throw new PnrConnectorError(
@@ -343,7 +344,7 @@ export function PnrCaseCenterBackgroundSync() {
           }
           publishPnrBackgroundSyncStatus({
             phase: "idle",
-            message: "Lote concluído · nova consulta em 30 minutos",
+            message: "Lote concluído · continuando a fila de detalhes",
           });
         });
 
@@ -366,9 +367,11 @@ export function PnrCaseCenterBackgroundSync() {
         failureBlocked = !paused && !(error instanceof PnrConnectorError && error.code === "RATE_LIMITED");
         publishPnrBackgroundSyncStatus({
           phase: "paused",
-          message: paused || `Sincronização interrompida — ${error instanceof Error ? error.message : "Falha na sincronização automática"}${failureBlocked ? " Use Sincronizar agora após corrigir a causa." : " Nova consulta em 30 minutos."}`,
+          message: paused || `Sincronização interrompida — ${error instanceof Error ? error.message : "Falha na sincronização automática"}${failureBlocked ? " Use Sincronizar agora após corrigir a causa." : " Aguardando liberação da origem."}`,
         });
-        if (!paused) nextDelayMs = Math.max(nextDelayMs, 30_000);
+        nextDelayMs = paused
+          ? PNR_DETAIL_SYNC_CONNECTION_RETRY_MS
+          : Math.max(nextDelayMs, PNR_DETAIL_SYNC_CONNECTION_RETRY_MS);
       } finally {
         running = false;
         if (!disposed && !authBlocked && !getPnrBackgroundSyncStatus().manuallyPaused) {
@@ -395,7 +398,7 @@ export function PnrCaseCenterBackgroundSync() {
       emptyPolls = 0;
       failureBlocked = false;
       lastRunAt = 0;
-      publishPnrBackgroundSyncStatus({ phase: "idle", message: "Retomando sincronização automática" });
+      publishPnrBackgroundSyncStatus({ phase: "idle", message: "Retomando processamento contínuo da fila" });
       void run();
     };
     const onFocus = () => {

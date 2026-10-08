@@ -9,6 +9,13 @@ vi.mock("@/lib/pnr-connector-client", async (load) => ({
 }));
 import { PnrCaseCenterBackgroundSync } from "@/components/pnr-case-center-background-sync";
 import {
+  PNR_DETAIL_SYNC_ACTIVE_INTERVAL_MS,
+  PNR_DETAIL_SYNC_RATE_LIMIT_BACKOFF_MS,
+  pnrDetailEmptySyncDelayMs,
+  pnrDetailNextSyncDelayMs,
+} from "@/lib/pnr-case-sync";
+
+import {
   LATEST_CONNECTOR_VERSION,
   requestPnrConnector,
 } from "@/lib/pnr-connector-client";
@@ -187,15 +194,41 @@ describe("sincronização de detalhes em background", () => {
     });
     expect(getPnrBackgroundSyncStatus().message).toContain("Campos: events");
   });
-  it("não repete consultas ao trocar de foco e aguarda 30 minutos", async () => {
+  it("processa lotes consecutivos de PNRs sem esperar 30 minutos", async () => {
+    let queueReads = 0;
+    fetchMock.mockImplementation(async (path, options) => {
+      if (path.endsWith("/queue")) {
+        queueReads += 1;
+        const cases = queueReads <= 2 ? ids.map((caseId) => ({ caseId, priority: 1 })) : [];
+        return Response.json({ pending: Math.max(0, 150 - queueReads * 50), cases, case: cases[0] ?? null });
+      }
+      const items = JSON.parse(options.body).items as Array<{ caseId: string }>;
+      return Response.json({
+        results: items.map(({ caseId }) => ({ caseId, ok: true, status: 200 })),
+      });
+    });
     await start();
-    expect(fetchMock).toHaveBeenCalledTimes(6);
+    expect(fetchMock).toHaveBeenCalledTimes(6); // 1 fila e 5 gravações de 10 casos
     await act(async () => {
       window.dispatchEvent(new Event("focus"));
-      await vi.advanceTimersByTimeAsync(60_000);
+      await vi.advanceTimersByTimeAsync(PNR_DETAIL_SYNC_ACTIVE_INTERVAL_MS - 1);
     });
     expect(fetchMock).toHaveBeenCalledTimes(6);
-    await act(async () => vi.advanceTimersByTimeAsync(1_740_000));
-    expect(fetchMock).toHaveBeenCalledTimes(12);
+    await act(async () => vi.advanceTimersByTimeAsync(1));
+    expect(fetchMock).toHaveBeenCalledTimes(12); // segundo lote imediatamente após intervalo curto
+    expect(getPnrBackgroundSyncStatus().processed).toBe(100);
+    await act(async () => vi.advanceTimersByTimeAsync(PNR_DETAIL_SYNC_ACTIVE_INTERVAL_MS));
+    expect(queueReads).toBe(3);
+    expect(fetchMock).toHaveBeenCalledTimes(13); // fila vazia: só leitura, sem replay
+    expect(getPnrBackgroundSyncStatus().message).toContain("nova verificação");
+  });
+
+  it("separa a cadência do Sync PNR da coleta de 30 minutos do Atendimento", () => {
+    expect(PNR_DETAIL_SYNC_ACTIVE_INTERVAL_MS).toBeLessThan(10_000);
+    expect(PNR_DETAIL_SYNC_RATE_LIMIT_BACKOFF_MS).toBeGreaterThanOrEqual(60_000);
+    expect(pnrDetailEmptySyncDelayMs(1)).toBe(60_000);
+    expect(pnrDetailEmptySyncDelayMs(10)).toBe(300_000);
+    expect(pnrDetailNextSyncDelayMs("IN_PROGRESS")).toBe(60 * 60_000);
+    expect(pnrDetailNextSyncDelayMs("CLOSED")).toBe(6 * 60 * 60_000);
   });
 });
