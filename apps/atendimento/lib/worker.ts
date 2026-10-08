@@ -11,6 +11,7 @@ import {
 } from "./domain";
 import { channelConfig, graph, type Channel } from "./meta";
 import { syncCore, type Automation } from "./source";
+import { DRIVER_STEPS } from "./agent-playbook";
 type Conversation = {
   id: string;
   channel: Channel;
@@ -18,6 +19,7 @@ type Conversation = {
   status: string;
   identity_verified: boolean;
   driver_id: string;
+  name?: string;
   agent_state: AgentState & { name?: string };
   last_inbound_at: string;
   case_id: string;
@@ -118,9 +120,24 @@ async function driverAnswer(
     );
     conversation.identity_verified = true;
     conversation.driver_id = record.driverId;
+    conversation.name = record.driverName;
     conversation.base_key = record.baseKey;
     conversation.sigla = record.sigla;
   }
+  // M11 applies only to a verified driver. Acareação is delivered physically
+  // to the responsible dispatcher; the bot never accepts photo/upload as proof.
+  if (/ACAREACAO|TENHO (UM )?COMPROVANTE|TENHO EVIDENCIA|COMO (ENVIAR|ENTREGAR) (O )?COMPROVANTE|COMO (FAZER|RESOLVER) (A )?PNR/.test(n)) {
+    const text = DRIVER_STEPS.find((step) => step.id === "evidence")!.example;
+    return {
+      state: { step: "driver_verified" },
+      reply: text.replace("[Nome do Motorista]", conversation.name || "motorista"),
+    };
+  }
+  if (/CLIENTE (NAO|NUNCA) RECEBEU|DESTINATARIO (NAO|NUNCA) RECEBEU/.test(n))
+    return {
+      state: { step: "human" }, handoff: true,
+      reply: "Vou encaminhar sua solicitação ao setor de Loss para análise do relato do destinatário.",
+    };
   const historical = /ANTERIOR|HISTOR|ENCERRAD/.test(n);
   if (historical) await syncCore(true);
   const records = (
@@ -237,7 +254,9 @@ async function incoming(
   if (!text)
     answer = {
       state: { step: "human" },
-      reply: "Recebemos seu anexo. Vou encaminhar à equipe para análise.",
+      reply: channel === "driver"
+        ? "Para tratar a PNR, a evidência é a acareação manual entregue ao dispatcher responsável. Não é necessário enviar arquivos por este canal. Vou direcionar sua mensagem ao setor de Loss."
+        : "Recebemos seu anexo. Vou encaminhar à equipe para análise.",
       handoff: true,
     };
   else if (channel === "driver") {
@@ -258,7 +277,7 @@ async function incoming(
         "A equipe Loss vai identificar o envio relacionado ao seu atendimento.",
       handoff: true,
     };
-  else answer = clientReply(conversation.agent_state, text);
+  else answer = clientReply(conversation.agent_state, text, conversation.name);
   const updated = await transaction.query(
     "UPDATE alc_atendimento.conversations SET agent_state=$2,status=$3 WHERE id=$1 AND status='bot' AND agent_state=$4 RETURNING id",
     [
@@ -277,7 +296,12 @@ async function incoming(
   if ("result" in answer.state)
     await transaction.query(
       "INSERT INTO alc_atendimento.audit(action,target,data) VALUES('treatment_recorded',$1,$2)",
-      [conversation.id, { result: answer.state.result }],
+      [conversation.id, {
+        result: answer.state.result,
+        caseCenterStatus: "unchanged",
+        complaintClosure: "not_verified",
+        // Resolve the conversation, never mutate the Mercado Livre PNR.
+      }],
     );
 }
 export async function processEvents() {
