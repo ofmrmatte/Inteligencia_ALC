@@ -33,11 +33,7 @@ export function Overview() {
   const { data, error, refresh } = useData<OverviewData>("overview", 15_000);
   return (
     <main className="page">
-      <div className="page-title">
-        <div>
-          <p className="eyebrow">MONITORAMENTO OPERACIONAL</p>
-          <h1>Visão Geral</h1>
-        </div>
+      <div className="page-tools">
         <button
           className="icon-button"
           title="Atualizar indicadores"

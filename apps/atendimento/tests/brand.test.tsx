@@ -3,6 +3,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
 import { Brand } from "../../../packages/ui/brand";
 import { readFileSync } from "node:fs";
+import manifest from "../app/manifest";
 
 vi.mock("next/image", () => ({
   default: ({
@@ -59,10 +60,16 @@ describe("Shared brand with independent application assets", () => {
         <Brand application="atendimento" compact={compact} />,
       );
       const asset = compact
-        ? "atendimento-icon.png"
+        ? "alc-symbol.png"
         : "atendimento-horizontal-dark.png";
       expect(markup).toContain(`/brand/${asset}`);
       expect(markup).toContain('aria-label="ALC Atendimento"');
+      if (compact) {
+        expect(markup).toContain('class="brand__symbol"');
+        expect(readFileSync(new URL(`../public/brand/${asset}`, import.meta.url))).toEqual(
+          readFileSync(new URL(`../../inteligencia/public/brand/${asset}`, import.meta.url)),
+        );
+      }
       expect(
         readFileSync(new URL(`../public/brand/${asset}`, import.meta.url))
           .subarray(0, 8)
@@ -70,6 +77,18 @@ describe("Shared brand with independent application assets", () => {
       ).toBe("89504e470d0a1a0a");
     },
   );
+  it("provides standalone installation with correctly sized public icons and no private offline cache", () => {
+    const config = manifest();
+    expect(config).toMatchObject({ id: "/", start_url: "/conversas", scope: "/", display: "standalone", name: "ALC Atendimento" });
+    expect(config.icons).toHaveLength(2);
+    for (const icon of config.icons || []) {
+      const png = readFileSync(new URL(`../public${icon.src}`, import.meta.url));
+      expect(icon.sizes).toBe(`${png.readUInt32BE(16)}x${png.readUInt32BE(20)}`);
+    }
+    const proxy = readFileSync(new URL("../proxy.ts", import.meta.url), "utf8");
+    expect(proxy).toContain('path === "/manifest.webmanifest"');
+    expect(proxy).toContain('"private, no-store"');
+  });
   it("uses standalone provided favicon and Apple icon assets without active SVG content", () => {
     const svg = readFileSync(
       new URL("../app/icon.svg", import.meta.url),

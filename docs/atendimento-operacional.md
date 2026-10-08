@@ -6,9 +6,21 @@
 
 `packages/ui` possui consumidores reais nos dois aplicativos: Brand, componentes de indicadores/painel e tokens. O comportamento padrao continua sendo a marca do Inteligencia. O Atendimento usa os logos, icone, favicon SVG/ICO e Apple icon fornecidos em `ALC_Atendimento_Logos_Icones_Favicons.zip`; nao substitui os assets do painel. Os icones de comandos continuam sendo os mesmos componentes Lucide do pacote instalado, correspondente ao conjunto fornecido.
 
-Core, RH, RLS, perfis e `packages/identity` nao foram alterados. O backend continua verificando a sessao, o comprovante de transferencia, MFA, perfil ativo e permissao independente do Atendimento em cada requisicao. A entrada direta encaminha ao fluxo central; nao existe login alternativo ou conta de demonstracao.
+Core, RH, RLS e perfis nao foram alterados. O backend verifica a sessao, o comprovante de transferencia, MFA, perfil ativo e permissao independente do Atendimento em cada requisicao. `packages/identity/transfer` tambem valida o vinculo revogavel de entrada, sem tokens ou permissoes armazenados nele. A entrada direta encaminha ao fluxo central; nao existe login alternativo ou conta de demonstracao.
 
 Tipografia igualada ao painel: Poppins global em 13px (pesos carregados 400/500/600), Montserrat nos titulos, titulo principal de 21px/700 e titulos de painel de 14px/650. As fontes sao carregadas por `next/font`, nao por CDN em tempo de execucao. A marca vetorizada fornecida permanece intacta.
+
+O menu recolhido reutiliza o simbolo do Inteligencia em 38px. O cabeçalho concentra a area e o titulo da secao, sem titulo duplicado no corpo. Menu, navegacao e drawer usam transicoes de 140/180ms e respeitam movimento reduzido. O manifest publico permite instalacao com icones fornecidos de 192/512px; nao existe cache offline de dados privados ou service worker.
+
+## Revogacao central
+
+Um JWT Supabase assinado pode sobreviver ao logout ate expirar. Por isso, o painel registra um vinculo `sso_session_<session_id>` na tabela `alc_atendimento.settings` existente, com usuario, validade de 12h e estado ativo, sem credenciais. O comprovante assinado continua obrigatorio e vinculado ao mesmo usuario/sessao; o vinculo nao concede permissao nem substitui MFA ou consulta atual do perfil.
+
+Logout e troca de conta revogam os vinculos do usuario e removem seus tickets pendentes em uma transacao. A sessao atual recebe um registro revogado mesmo se a abertura do Atendimento estiver em andamento; abrir outro ticket nao reativa esse registro. Falha de verificacao ou persistencia nao e anunciada como logout/troca bem-sucedidos. Sem integracao Aux configurada, o logout do painel independente permanece disponivel.
+
+O Atendimento consulta o vinculo em cada requisicao autenticada. A interface revalida o perfil a cada 5s e em foco/visibilidade/pageshow, remove conteudo privado em erro e recarrega se mudar o usuario, sem reutilizar os dados da conta anterior. Abas suspensas dependem do retorno ao foco, enquanto as APIs continuam protegidas. Sessoes anteriores a esta versao nao possuem vinculo e devem reentrar pelo painel. Revogacoes externas feitas diretamente no provedor nao substituem este fluxo central.
+
+Publique painel e Atendimento juntos: o painel anterior nao registra o vinculo exigido pelo Atendimento novo. Durante a troca de versoes o acesso pode ficar temporariamente indisponivel, sem liberar dados. Rollback deste contrato deve abranger os dois aplicativos; os registros de revogacao podem permanecer no Aux e nao exigem migracao ou exclusao de historico.
 
 ## Caixa e persistencia
 

@@ -13,17 +13,19 @@ export function Brand({
         className={`brand brand--atendimento${compact ? " brand--compact" : ""}`}
         aria-label="ALC Atendimento"
       >
-        <Image
-          src={
-            compact
-              ? "/brand/atendimento-icon.png"
-              : "/brand/atendimento-horizontal-dark.png"
-          }
-          alt=""
-          width={compact ? 40 : 218}
-          height={compact ? 40 : 46}
-          priority
-        />
+        {compact ? (
+          <div className="brand__symbol">
+            <Image src="/brand/alc-symbol.png" alt="" width={31} height={31} priority />
+          </div>
+        ) : (
+          <Image
+            src="/brand/atendimento-horizontal-dark.png"
+            alt=""
+            width={218}
+            height={46}
+            priority
+          />
+        )}
       </div>
     );
   return (

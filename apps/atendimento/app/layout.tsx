@@ -1,4 +1,4 @@
-import type { Metadata } from "next";
+import type { Metadata, Viewport } from "next";
 import { Montserrat, Poppins } from "next/font/google";
 import "./globals.css";
 const montserrat = Montserrat({ subsets: ["latin"], variable: "--font-heading", display: "swap" });
@@ -7,7 +7,10 @@ export const metadata: Metadata = {
   title: "ALC Atendimento",
   applicationName: "ALC Atendimento",
   description: "Atendimento e acompanhamento de PNRs da ALC",
+  manifest: "/manifest.webmanifest",
+  appleWebApp: { capable: true, title: "ALC Atendimento", statusBarStyle: "default" },
 };
+export const viewport: Viewport = { themeColor: "#e30613" };
 export default function RootLayout({
   children,
 }: {

@@ -10,7 +10,7 @@ import {
 } from "@alc/identity/auth";
 import { core, setting } from "./db";
 import { normalize } from "./domain";
-import { ENTRY_COOKIE, validEntryReceipt } from "@alc/identity/transfer";
+import { ENTRY_COOKIE, entrySessionKey, validEntryGrant, validEntryReceipt } from "@alc/identity/transfer";
 export function inteligenciaEntryUrl() {
   return new URL(
     "/atendimento",
@@ -59,13 +59,16 @@ export async function currentProfile(): Promise<AuthProfile> {
     throw new HttpError(401, "Entre com sua conta do Inteligência ALC.");
   const store = await cookies();
   if (
-    !validEntryReceipt(
+    typeof data.claims.session_id !== "string" || !validEntryReceipt(
       store.get(ENTRY_COOKIE)?.value,
       process.env.ATENDIMENTO_ENCRYPTION_KEY || "",
       data.claims,
     )
   )
     throw new HttpError(401, "Abra o Atendimento pelo Inteligência ALC.");
+  // A signed JWT can outlive logout; the panel owns this revocable entry grant.
+  if (!validEntryGrant(await setting(entrySessionKey(data.claims.session_id)), data.claims.sub))
+    throw new HttpError(401, "Sessão encerrada. Abra o Atendimento pelo Inteligência ALC.");
   if (data.claims.aal !== "aal2") {
     const factors = await client.auth.mfa.listFactors();
     if (factors.error)

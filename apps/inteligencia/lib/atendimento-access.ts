@@ -1,4 +1,5 @@
 import pg from "pg";
+import { entrySessionKey, ENTRY_SECONDS } from "@alc/identity/transfer";
 
 const globalAccessDb = globalThis as typeof globalThis & { atendimentoAccessPool?: pg.Pool };
 
@@ -44,6 +45,37 @@ export async function writeAtendimentoAccess(actorId: string, targetId: string, 
   } catch {
     await client.query("ROLLBACK").catch(() => undefined);
     throw new Error("ATENDIMENTO_DATABASE_UNAVAILABLE");
+  } finally {
+    client.release();
+  }
+}
+
+export async function registerAtendimentoSession(profileId: string, sessionId: string) {
+  const { rows } = await accessDb().query(
+    "INSERT INTO alc_atendimento.settings(key,value,updated_by) VALUES($1,$2,$3) ON CONFLICT(key) DO UPDATE SET value=excluded.value,updated_at=now() WHERE alc_atendimento.settings.value->>'active'='true' AND alc_atendimento.settings.value->>'profileId'=$3::text RETURNING key",
+    [entrySessionKey(sessionId), { profileId, active: true, expiresAt: Date.now() + ENTRY_SECONDS * 1000 }, profileId],
+  );
+  if (!rows.length) throw new Error("ATENDIMENTO_SESSION_REVOKED");
+}
+
+export async function revokeAtendimentoSessions(profileId: string, sessionId?: string) {
+  if (!process.env.PNR_DATABASE_URL) return;
+  const client = await accessDb().connect();
+  try {
+    await client.query("BEGIN");
+    if (sessionId) await client.query(
+      "INSERT INTO alc_atendimento.settings(key,value,updated_by) VALUES($1,$2,$3) ON CONFLICT(key) DO UPDATE SET value=excluded.value,updated_at=now()",
+      [entrySessionKey(sessionId), { profileId, active: false, expiresAt: Date.now() + ENTRY_SECONDS * 1000 }, profileId],
+    );
+    await client.query(
+      "UPDATE alc_atendimento.settings SET value=jsonb_set(value,'{active}','false'::jsonb),updated_at=now() WHERE starts_with(key,'sso_session_') AND value->>'profileId'=$1",
+      [profileId],
+    );
+    await client.query("DELETE FROM alc_atendimento.login_tickets WHERE profile_id=$1", [profileId]);
+    await client.query("COMMIT");
+  } catch (error) {
+    await client.query("ROLLBACK").catch(() => undefined);
+    throw error;
   } finally {
     client.release();
   }

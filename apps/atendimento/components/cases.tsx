@@ -89,14 +89,10 @@ export function Cases() {
   }
   return (
     <main className="page">
-      <div className="page-title">
-        <div>
-          <p className="eyebrow">GESTÃO DE CASOS</p>
-          <h1>PNRs</h1>
+      <div className="page-tools">
           <p className="muted">
             Classificação, dados coletados e histórico de cada envio.
           </p>
-        </div>
         <span className="badge">
           {data?.competence || "Competência vigente"}
         </span>

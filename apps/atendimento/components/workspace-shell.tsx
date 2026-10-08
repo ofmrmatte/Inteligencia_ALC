@@ -7,7 +7,6 @@ import {
   type ReactNode,
 } from "react";
 import Link from "next/link";
-import Image from "next/image";
 import { usePathname } from "next/navigation";
 import {
   ArrowUpRight,
@@ -23,14 +22,15 @@ import {
   X,
 } from "lucide-react";
 import { Brand } from "@alc/ui/brand";
-import { canManageUsers, type AuthProfile } from "@alc/identity/auth";
+import { canManageUsers, ROLE_LABELS, type AuthProfile } from "@alc/identity/auth";
 import { useData, when } from "./data";
 
 const navigation = [
-  ["/conversas", "Conversas", MessageSquare],
-  ["/visao-geral", "Visão Geral", LayoutDashboard],
-  ["/pnrs", "Motoristas e PNRs", ClipboardList],
-  ["/disparos", "Clientes e envios", Send],
+  { href: "/conversas", label: "Conversas", title: "Conversas", eyebrow: "CAIXA DE ATENDIMENTO", icon: MessageSquare },
+  { href: "/visao-geral", label: "Visão Geral", title: "Visão Geral", eyebrow: "MONITORAMENTO OPERACIONAL", icon: LayoutDashboard },
+  { href: "/pnrs", label: "Motoristas e PNRs", title: "PNRs", eyebrow: "GESTÃO DE CASOS", icon: ClipboardList },
+  { href: "/disparos", label: "Clientes e envios", title: "Disparos e histórico", eyebrow: "MENSAGENS OPERACIONAIS", icon: Send },
+  { href: "/admin", label: "Administração", title: "Administração", eyebrow: "CONTROLE DA OPERAÇÃO", icon: Settings },
 ] as const;
 function subscribeViewport(change: () => void) {
   const query = window.matchMedia("(max-width:800px)");
@@ -47,6 +47,7 @@ export function WorkspaceShell({
   children: ReactNode;
 }) {
   const path = usePathname();
+  const section = navigation.find((item) => item.href === path) || navigation[0];
   const [collapsed, setCollapsed] = useState(false),
     [mobile, setMobile] = useState(false);
   const smallScreen = useSyncExternalStore(
@@ -60,6 +61,23 @@ export function WorkspaceShell({
     competence: string;
     source: { lastSync?: string };
   }>("overview", 30_000);
+  const { data: session, error: sessionError, refresh: checkSession } = useData<{ profile: AuthProfile }>("profile", 5_000);
+  const current = session?.profile || profile;
+  const accountChanged = current.id !== profile.id;
+  useEffect(() => {
+    const check = () => { if (!document.hidden) void checkSession(); };
+    window.addEventListener("focus", check);
+    window.addEventListener("pageshow", check);
+    document.addEventListener("visibilitychange", check);
+    return () => {
+      window.removeEventListener("focus", check);
+      window.removeEventListener("pageshow", check);
+      document.removeEventListener("visibilitychange", check);
+    };
+  }, [checkSession]);
+  useEffect(() => {
+    if (accountChanged) window.location.replace("/conversas");
+  }, [accountChanged]);
   useEffect(() => {
     if (!mobile || !smallScreen) return;
     const previous = document.body.style.overflow;
@@ -127,20 +145,20 @@ export function WorkspaceShell({
         </div>
         <nav aria-label="Áreas do Atendimento">
           <p className="nav-label">ATENDIMENTO</p>
-          {navigation.map(([href, title, Icon]) => (
+          {navigation.filter((item) => item.href !== "/admin").map(({ href, label, icon: Icon }) => (
             <Link
               key={href}
               href={href}
               onClick={close}
-              title={title}
-              aria-label={title}
+              title={label}
+              aria-label={label}
               aria-current={path === href ? "page" : undefined}
             >
-              <Icon size={19} />
-              <span>{title}</span>
+              <Icon size={19} strokeWidth={1.9} />
+              <span>{label}</span>
             </Link>
           ))}
-          {canManageUsers(profile) && (
+          {canManageUsers(current) && (
             <>
               <p className="nav-label">ADMINISTRAÇÃO</p>
               <Link
@@ -166,13 +184,13 @@ export function WorkspaceShell({
             <ArrowUpRight size={18} />
             <span>Inteligência ALC</span>
           </a>
-          <div className="profile" title={profile.fullName || profile.email}>
+          <div className="profile" title={current.fullName || current.email}>
             <span className="avatar">
-              {(profile.fullName || profile.email).slice(0, 1)}
+              {(current.fullName || current.email).slice(0, 1)}
             </span>
             <div>
-              {profile.fullName || profile.email}
-              <small>{profile.role.replaceAll("_", " ")}</small>
+              {current.fullName || current.email}
+              <small>{ROLE_LABELS[current.role]}</small>
             </div>
           </div>
           <button
@@ -197,14 +215,10 @@ export function WorkspaceShell({
           >
             <Menu size={21} />
           </button>
-          <Image
-            className="mobile-only"
-            src="/brand/atendimento-icon.png"
-            alt=""
-            width={28}
-            height={28}
-          />
-          <strong>ALC Atendimento</strong>
+          <div className="header-title">
+            <span>{section.eyebrow}</span>
+            <h1>{section.title}</h1>
+          </div>
           <div className="header-actions">
             <span className="source-state" title={when(data?.source?.lastSync)}>
               {data?.competence || "Fonte PNR"} ·{" "}
@@ -214,11 +228,11 @@ export function WorkspaceShell({
             </span>
             <span className="user-chip">
               <ShieldCheck size={15} />
-              {profile.role.replaceAll("_", " ")}
+              {ROLE_LABELS[current.role]}
             </span>
           </div>
         </header>
-        {children}
+        {sessionError ? <main className="page"><p className="notice error" role="alert">{sessionError}<button onClick={() => void checkSession()}>Tentar novamente</button></p></main> : accountChanged ? <main className="page" role="status">Atualizando sessão…</main> : children}
       </div>
     </div>
   );

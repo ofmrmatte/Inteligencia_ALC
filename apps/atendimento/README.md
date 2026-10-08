@@ -17,6 +17,12 @@ Na raiz: `npm ci`, `npm run dev:atendimento`, `npm run build:atendimento` e `npm
 - Administração interna para usuários já cadastrados, canais/credenciais, catálogo Meta, coleta, automações e auditoria. Credenciais editadas são cifradas; nenhum segredo é devolvido ao navegador.
 - Acesso exclusivamente pelo Inteligência, com o mesmo Supabase Auth, perfis e MFA. O botão no menu lateral abre outra aba com transferência de sessão por ticket cifrado de uso único, válido por 60 segundos. Não há login ou cadastro próprios. A entrada exige um comprovante de passagem pelo painel vinculado à mesma sessão Supabase; ele não contém credenciais nem concede permissões. Abrir a URL diretamente encaminha ao Inteligência. Encerrar a conta permanece uma ação do painel central.
 
+## Sessao central e aplicativo instalavel
+
+O logout central e a troca de conta revogam os vinculos do Atendimento e tickets pendentes do usuario no Aux, antes de encerrar ou substituir a sessao Supabase. Cada requisicao verifica esse vinculo, alem de MFA, perfil e escopo. A aba aberta verifica o perfil a cada 5 segundos e ao recuperar foco; erros de verificacao removem o conteudo privado. Sessoes anteriores a esta correcao precisam entrar novamente pelo painel. Nao basta manter um JWT ainda nao expirado para continuar acessando.
+
+O Atendimento possui manifest, icones 192/512 e metadados Apple para instalacao como aplicativo em navegadores compativeis. Continua online: nao foi adicionado service worker, cache offline de conversas, anexos ou dados privados. O menu recolhido usa o mesmo simbolo do Inteligencia; a marca expandida e os icones de instalacao usam os arquivos fornecidos.
+
 ## Dados e coleta
 
 O Atendimento lê o Core para reutilizar casos existentes. Seus dados e fila ficam exclusivamente no schema `alc_atendimento` do Aux, sem alterar tabelas do painel ou RH. A extensão 1.2.0 coleta a competência vigente de 30 em 30 minutos, ordenada do mais recente. Necessita de navegador, aba autenticada do Mercado Livre e aba autenticada do Atendimento no computador de teste.
