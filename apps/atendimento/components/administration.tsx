@@ -2,6 +2,7 @@
 import { useState, type FormEvent } from "react";
 import { api, useData, labels, when } from "./data";
 import { Collector } from "./collector";
+import { AgentPanel } from "./agent-panel";
 type Channel = {
   channel: "driver" | "client";
   number: string;
@@ -39,6 +40,7 @@ export function Administration() {
         {[
           ["channels", "Números & Meta"],
           ["automation", "Automações"],
+          ["agent", "Modelo de instruções"],
           ["collector", "Conector & dados"],
           ["users", "Usuários"],
           ["audit", "Auditoria"],
@@ -69,6 +71,8 @@ export function Administration() {
           initial={data.automation}
           refresh={refresh}
         />
+      ) : tab === "agent" ? (
+        <AgentPanel />
       ) : tab === "collector" ? (
         <Collector />
       ) : tab === "users" ? (
@@ -312,9 +316,9 @@ function AutomationForm({
         </p>
       ) : null}
       <div className="notice">
-        Notificações de motoristas usam o texto aprovado “pnraberta”, referente
-        a Aguardando comprovante. Outros status ficam disponíveis na consulta,
-        mas precisam de modelo compatível para novo contato.
+        Notificações aos motoristas são limitadas a Aguardando comprovante e Com penalidade,
+        mediante modelo aprovado pela Meta. Casos em revisão e encerrados continuam consultáveis,
+        mas não geram disparos proativos.
       </div>
     </section>
   );

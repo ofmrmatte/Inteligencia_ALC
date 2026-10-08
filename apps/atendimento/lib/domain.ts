@@ -1,3 +1,10 @@
+import { CUSTOMER_STEPS, fillScript } from "./agent-playbook";
+function message(id: string) {
+  return CUSTOMER_STEPS.find((step) => step.id === id)?.example || "";
+}
+function addressed(id: string, customerName?: string) {
+  return message(id).replaceAll("[Nome do Cliente]", customerName?.trim() || "cliente");
+}
 export function normalize(value: unknown) {
   return String(value ?? "")
     .normalize("NFD")
@@ -24,6 +31,10 @@ export function competence(now = new Date()) {
       .map((p) => [p.type, p.value]),
   );
   return `${parts.year}${parts.month}Q${Number(parts.day) <= 15 ? 1 : 2}`;
+}
+// Proactive PNR notifications are intentionally narrower than self-service lookup.
+export function driverNotificationEligible(classification: string) {
+  return classification === "aguardando_comprovante" || classification === "penalidade";
 }
 export function classification(main: unknown, sub: unknown) {
   const t = normalize(`${main ?? ""} ${sub ?? ""}`);
@@ -61,115 +72,126 @@ export type AgentState = {
   receivedAt?: string;
   correctProduct?: boolean;
   result?: string;
+  selectedCaseId?: string;
+  selectedShipmentId?: string;
 };
 export function clientReply(
   state: AgentState,
   text: string,
+  customerName?: string,
+  context?: { shipmentId?: string; deliveryAt?: string; overrides?: Record<string,string> },
 ): { state: AgentState; reply: string; handoff?: boolean } {
   const t = normalize(text);
-  if (/HUMAN|ATENDENTE|EQUIPE|PESSOA|PARAR|CANCELAR|NAO QUERO/.test(t))
-    return {
-      state: { ...state, step: "human" },
-      reply: "Vou encaminhar seu atendimento à equipe Loss da ALC.",
-      handoff: true,
-    };
-  const denied = /NAO (RECEBI|RECEBEU|FOI ENTREGUE)|NAO RECEB|NUNCA RECEB/.test(
-    t,
-  );
-  const yes =
-    /^(SIM|RECEBI|RECEBIDO|FOI ENTREGUE|ESTA CORRETO|CORRETO)(\b|[.!])/.test(t);
-  if (state.step === "receipt" || state.step === "start") {
-    if (denied)
-      return {
-        state: { step: "neighbors" },
-        reply:
-          "Você já verificou se alguém da portaria, um familiar ou vizinho recebeu o produto?",
-      };
-    if (yes)
-      return {
-        state: { step: "date" },
-        reply:
-          "Obrigado pela confirmação. Em qual data você recebeu o produto? Informe dia e mês (dd/mm).",
-      };
-    return {
-      state: { step: "receipt" },
-      reply:
-        "Poderia confirmar se recebeu o produto mencionado no nosso contato?",
-    };
+  const texts = context?.overrides;
+  const message = (id: string) => {
+    const code = CUSTOMER_STEPS.find(step => step.id === id)?.code || "";
+    return (code && texts?.[code]) || CUSTOMER_STEPS.find(step => step.id === id)?.example || "";
+  };
+  const addressed = (id: string, name?: string) =>
+    message(id).replaceAll("[Nome do Cliente]", name?.trim() || "cliente");
+  const human = () => ({ state: { ...state, step: "human" }, reply: message("handoff"), handoff: true });
+  if (state.step === "done" || state.step === "human")
+    return { state, reply: "" }; // Prevent another automatic message after conclusion/takeover.
+  if (/ATENDENTE|FALAR COM (ALGUEM|UMA PESSOA|UM HUMANO|A EQUIPE|EQUIPE)|EQUIPE LOSS|HUMANO|PARAR|CANCELAR CONTATO|NAO QUERO/.test(t))
+    return human();
+  if (/RECLAMACAO|ENCERRAR (A )?RECLAMACAO|FECHAR (A )?RECLAMACAO/.test(t))
+    return { state, reply: message("complaint-question") };
+  if (/ATIVAR (O )?CARTAO|SENHA (DO )?CARTAO|CODIGO DE SEGURANCA/.test(t))
+    return { state, reply: message("card") };
+  const denied = /NAO (RECEBI|RECEBEU|FOI ENTREGUE)|NAO RECEB|NUNCA RECEB|NAO CHEGOU/.test(t);
+  const located = /ENCONTREI|LOCALIZEI|ACHEI|ESTAVA COM|RECEBI POR|RECEBEU POR/.test(t) && !denied && !/NAO (LOCALIZ|ENCONTR|ACHEI)/.test(t);
+  const uncertain = /NAO (LEMBRO|RECORDO|SEI)|TALVEZ|NAO TENHO CERTEZA/.test(t);
+  const different = /PRODUTO (ESTA |VEIO )?(DIFERENTE|ERRADO|INCORRETO|DANIFICADO)|ITEM (ERRADO|DIFERENTE)|VEIO (ERRADO|DIFERENTE|QUEBRADO)|NAO (E|EH) O (PRODUTO|ITEM)/.test(t);
+  const thirdParty = /PORTARIA|PORTEIRO|VIZINH|FAMILIAR|TERCEIRO|OUTRA PESSOA|MINHA MAE|MEU PAI/.test(t);
+  const yes = /^(SIM|RECEBI|RECEBIDO|FOI ENTREGUE|ESTA CORRETO|CORRETO|CERTO|ESTAVA CERTO)(\b|[.!])/.test(t);
+  const answeredNo = /^(NAO|NEGATIVO)(\b|[.!])/.test(t);
+  const acceptedDate = /\b(\d{1,2})\/(\d{1,2})(?:\/(\d{2,4}))?\b/.exec(text);
+  const day = Number(acceptedDate?.[1]), month = Number(acceptedDate?.[2]);
+  const year = acceptedDate?.[3] ? Number(acceptedDate[3].length === 2 ? "20"+acceptedDate[3] : acceptedDate[3]) : new Date().getFullYear();
+  const validDate = Boolean(acceptedDate && year >= 2000 && month >= 1 && month <= 12 &&
+    day >= 1 && day <= new Date(year, month, 0).getDate());
+  const formattedDate = validDate ? `${String(day).padStart(2,"0")}/${String(month).padStart(2,"0")}` : "";
+  const identified = addressed("uncertain", customerName);
+  const verifiedDelivery = context?.shipmentId?.trim();
+  const uncertainReply = verifiedDelivery
+    ? fillScript(identified, { ID: verifiedDelivery })
+    : identified.replace("Estamos consultando a entrega vinculada ao envio [ID].",
+      "Estamos consultando as informações da entrega mencionada no primeiro contato.");
+  if (state.step === "receipt" || state.step === "start" || state.step === "uncertain") {
+    if (denied) return { state: { step: "neighbors" }, reply: addressed("not-received", customerName) };
+    if (uncertain) return { state: { step: "uncertain" }, reply: uncertainReply };
+    if (different) return { state: { step: "human", correctProduct: false, result: "produto_divergente" }, reply: message("wrong-product"), handoff: true };
+    if (thirdParty && /RECEB|ENTREG|PEGOU/.test(t))
+      return { state: { step: "third_party" }, reply: message("third-party") };
+    if (yes) return { state: { step: "date" }, reply: message("received") };
+    return { state: { step: "receipt" }, reply: "Poderia confirmar se recebeu o produto mencionado no nosso contato?" };
   }
-  if (state.step === "date") {
-    const m = /\b(\d{1,2})\/(\d{1,2})\b/.exec(text);
-    const day = Number(m?.[1]),
-      month = Number(m?.[2]);
-    const valid =
-      m &&
-      month >= 1 &&
-      month <= 12 &&
-      day >= 1 &&
-      day <= new Date(2024, month, 0).getDate();
-    if (!valid)
-      return {
-        state,
-        reply: "Informe uma data válida no formato dd/mm, por favor.",
-      };
-    return {
-      state: {
-        step: "product",
-        receivedAt: `${String(day).padStart(2, "0")}/${String(month).padStart(2, "0")}`,
-      },
-      reply: "O produto recebido está correto, conforme sua compra?",
-    };
+  if (state.step === "date" || state.step === "found_later") {
+    if (different) return { state: { step: "human", correctProduct: false, result: "produto_divergente" }, reply: message("wrong-product"), handoff: true };
+    if (!validDate) return { state, reply: "Para registrar a data corretamente, informe o dia e mês em que recebeu o produto (dd/mm), por gentileza." };
+    return { state: { step: "product", receivedAt: formattedDate }, reply: message("date") };
   }
   if (state.step === "product") {
+    if (different || answeredNo)
+      return { state: { ...state, step: "human", correctProduct: false, result: "produto_divergente" }, reply: message("wrong-product"), handoff: true };
     if (yes)
-      return {
-        state: {
-          ...state,
-          step: "done",
-          correctProduct: true,
-          result: "recebimento_confirmado",
-        },
-        reply:
-          "Obrigado! Registramos suas informações para análise da equipe. Por favor, confirme também o recebimento diretamente no aplicativo do Mercado Livre.",
-      };
-    if (/NAO|ERRADO|DIFERENTE|INCORRETO/.test(t))
-      return {
-        state: {
-          ...state,
-          step: "human",
-          correctProduct: false,
-          result: "produto_divergente",
-        },
-        reply:
-          "Obrigado pelas informações. Vou encaminhar a divergência à equipe para análise.",
-        handoff: true,
-      };
-    return { state, reply: "O produto está correto? Responda sim ou não." };
+      return { state: { ...state, step: "done", correctProduct: true, result: "recebimento_confirmado" }, reply: addressed("closing", customerName) };
+    return { state, reply: "O produto recebido corresponde ao que você comprou? Pode responder com suas palavras." };
   }
-  if (state.step === "neighbors") {
-    if (/RECEBI|ENCONTREI|ESTA COM|ESTAVA COM/.test(t) && !denied)
-      return {
-        state: { step: "date" },
-        reply:
-          "Que bom que localizou. Em qual data você recebeu o produto? Informe dd/mm.",
-      };
-    if (denied || /NAO (LOCALIZ|ENCONTR)/.test(t))
-      return {
-        state: { step: "done", result: "nao_recebido" },
-        reply:
-          "Obrigado pelas informações. Registramos que o produto não foi localizado e encaminharemos seu relato à equipe responsável pelo contato com o Mercado Livre.",
-      };
-    return {
-      state,
-      reply:
-        "Após verificar com portaria, familiares ou vizinhos, o produto foi localizado?",
-    };
+  if (state.step === "neighbors" || state.step === "neighbors_wait") {
+    if (located) return { state: { step: "date" }, reply: message("found-later") };
+    if (/AINDA (NAO )?(VERIFIQUEI|OLHEI|CONFERI)|VOU VERIFICAR|VOU CONFERIR|PRECISO VERIFICAR|DEPOIS VEJO/.test(t))
+      return { state: { step: "neighbors_wait" }, reply: message("check-pending") };
+    if (denied || /NAO (LOCALIZ|ENCONTR|ACHEI)|VERIFIQUEI E NAO|NINGUEM RECEBEU/.test(t))
+      return { state: { step: "human", result: "nao_recebido" }, reply: addressed("not-found", customerName), handoff: true };
+    if (thirdParty && /RECEB|ENTREG|PEGOU/.test(t))
+      return { state: { step: "third_party" }, reply: message("third-party") };
+    // Do not interpret "Sim, verifiquei" as "Sim, recebi".
+    if (state.step === "neighbors_wait" && /^(OK|CERTO|ENTENDI|COMBINADO)$/.test(t))
+      return { state, reply: "" };
+    return { state, reply: "Obrigado. A encomenda foi localizada após verificar com as pessoas do endereço?" };
   }
-  return {
-    state: { ...state, step: "human" },
-    reply: "Vou encaminhar sua nova mensagem à equipe Loss da ALC.",
-    handoff: true,
-  };
+  if (state.step === "third_party") {
+    if (answeredNo || /NAO AUTORIZ|DESCONHEC|NAO CONHECO/.test(t))
+      return { state: { step: "human", result: "recebimento_terceiro_nao_autorizado" },
+        reply: "Entendi. Vou encaminhar essa informação à equipe de Prevenção de Perdas para análise, sem registrar o recebimento como confirmado.",
+        handoff: true };
+    if (/AUTORIZAD|CONHEC|E DA FAMILIA|MORA COMIGO/.test(t) || yes) {
+      if (validDate) return { state: { step: "product", receivedAt: formattedDate }, reply: message("date") };
+      return { state: { step: "date" }, reply: "Obrigado pela informação. Em que data a encomenda foi recebida pela pessoa autorizada (dd/mm)?" };
+    }
+    return { state, reply: "Essa pessoa estava autorizada a receber a encomenda em seu nome? Se possível, informe também a data." };
+  }
+  return human();
+}
+export function clientOpening(record: CaseRecord, operator: string) {
+  if (
+    !record.customerVerified ||
+    !record.customerName?.trim() ||
+    !phone(record.customerPhone) ||
+    !record.products?.length ||
+    !record.deliveryAt ||
+    !record.shipmentId?.trim() ||
+    !Number.isFinite(record.purchaseValue) ||
+    record.purchaseValue <= 0 ||
+    !operator.trim()
+  ) throw new Error("Cadastro do cliente ou detalhes da entrega incompletos.");
+  const date = new Date(record.deliveryAt);
+  if (!Number.isFinite(date.getTime())) throw new Error("Data de entrega inválida.");
+  const value = record.purchaseValue.toLocaleString("pt-BR", {
+    style: "currency", currency: "BRL",
+  });
+  const delivery = date.toLocaleString("pt-BR", {
+    timeZone: "America/Sao_Paulo", day: "2-digit", month: "2-digit",
+    year: "numeric", hour: "2-digit", minute: "2-digit",
+  });
+  return message("intro")
+    .replace("[Nome do Cliente]", record.customerName.trim())
+    .replace("[Seu Nome]", operator.trim())
+    .replace("[Produto]", record.products.map((p) => p.title).join(", ").slice(0, 900))
+    .replace("[Valor]", value)
+    .replace("[Data/Hora]", delivery)
+    .replace("[ID]", record.shipmentId.trim());
 }
 export function templateParameters(
   channel: "driver" | "client",
@@ -193,12 +215,14 @@ export function templateParameters(
     !record.customerName ||
     !record.customerPhone ||
     !record.products.length ||
-    !record.deliveryAt
+    !record.deliveryAt ||
+    !Number.isFinite(record.purchaseValue) ||
+    record.purchaseValue <= 0
   )
     throw new Error("Cadastro do cliente ou detalhes da entrega incompletos.");
+  // Validate that the approved C01 script can be fully rendered before queuing.
+  clientOpening(record, operator);
   const date = new Date(record.deliveryAt);
-  if (!Number.isFinite(date.getTime()))
-    throw new Error("Data de entrega inválida.");
   const values: Record<string, string> = {
     customer_name: record.customerName,
     nome_disparou: operator,
@@ -215,6 +239,9 @@ export function templateParameters(
       minute: "2-digit",
     }),
     product_id: record.shipmentId,
+    purchase_value: record.purchaseValue.toLocaleString("pt-BR", {
+      style: "currency", currency: "BRL",
+    }),
   };
   return [
     {

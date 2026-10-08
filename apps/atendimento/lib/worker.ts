@@ -5,11 +5,14 @@ import {
   phone,
   normalize,
   clientReply,
+  driverNotificationEligible,
   type CaseRecord,
   type AgentState,
 } from "./domain";
 import { channelConfig, graph, type Channel } from "./meta";
 import { syncCore, type Automation } from "./source";
+import { fillScript, scriptText } from "./agent-playbook";
+import { loadInstructions, runtimeScripts } from "./agent-instructions";
 type Conversation = {
   id: string;
   channel: Channel;
@@ -17,6 +20,7 @@ type Conversation = {
   status: string;
   identity_verified: boolean;
   driver_id: string;
+  name?: string;
   agent_state: AgentState & { name?: string };
   last_inbound_at: string;
   case_id: string;
@@ -68,94 +72,137 @@ async function driverAnswer(
   conversation: Conversation,
   text: string,
   transaction: PoolClient,
+  overrides?: Record<string,string>,
 ) {
-  const n = normalize(text),
-    state = conversation.agent_state;
-  if (/EQUIPE|LOSS|ATENDENTE|HUMANO/.test(n))
-    return {
-      state: { step: "human" },
-      reply: "Vou encaminhar seu atendimento à equipe Loss.",
-      handoff: true,
-    };
+  const n = normalize(text);
+  const state = conversation.agent_state;
+  const title = (code: string, values: Record<string, string> = {}) =>
+    fillScript(overrides?.[code] || scriptText("driver", code), {
+      "Nome do Motorista": conversation.name || state.name || "Motorista",
+      Base: conversation.base_key || "sua base",
+      ...values,
+    });
+  if (/LOSS|ATENDENTE|HUMANO|FALAR COM (A )?EQUIPE/.test(n) ||
+      (state.step === "driver_continue" && n === "3") ||
+      (state.step === "driver_name" && n === "2")) {
+    return { state: { step: "human" }, reply: title("M13", { ID: conversation.case_id || "em análise" }), handoff: true };
+  }
+  if (/^(ENCERRAR|SAIR|FINALIZAR|FIM)$/.test(n) ||
+    (state.step === "driver_select" && n === "6") ||
+    (state.step === "driver_continue" && n === "4") ||
+    (state.step === "driver_name" && n === "3")) {
+    return { state: { step: "done" }, reply: title("M15") };
+  }
+  let justVerified = false;
   if (!conversation.identity_verified) {
-    if (state.step !== "driver_base")
+    if (state.step !== "driver_base") {
+      if (/^(OI|OLA|BOM DIA|BOA TARDE|BOA NOITE|MENU|INICIO|0)$/.test(n))
+        return { state: { step: "driver_name" }, reply: title("M01") };
+      if (/^(1|VERIFICAR PNR|CONSULTAR PNR|MINHAS PNRS|VERIFICAR|CONSULTAR)$/.test(n))
+        return { state: { step: "driver_name" }, reply: title("M02") };
+      // Do not use supplied names to grant permissions; require database verification.
+      if (text.trim().split(/\s+/).length < 2)
+        return { state: { step: "driver_name" }, reply: title("M02") };
       return {
         state: { step: "driver_base", name: text.trim() },
-        reply: "Qual é sua base operacional?",
+        reply: "Obrigado! Para confirmar sua identificação, informe sua base operacional.",
       };
-    const rows = (
-      await transaction.query(
-        "SELECT record FROM alc_atendimento.cases WHERE driver_phone=$1",
-        [conversation.phone],
-      )
-    ).rows;
-    const matches = rows
-      .map((r) => r.record as CaseRecord)
-      .filter(
-        (r) =>
-          normalize(r.driverName) === normalize(state.name) &&
-          [normalize(r.baseKey), normalize(r.sigla)].includes(n),
-      );
-    const ids = new Set(matches.map((r) => r.driverId).filter(Boolean));
-    if (ids.size !== 1)
+    }
+    const rows = (await transaction.query(
+      "SELECT record FROM alc_atendimento.cases WHERE driver_phone=$1",
+      [conversation.phone],
+    )).rows;
+    const matches = rows.map(r => r.record as CaseRecord).filter(r =>
+      normalize(r.driverName) === normalize(state.name) &&
+      [normalize(r.baseKey), normalize(r.sigla)].includes(n),
+    );
+    const ids = new Set(matches.map(r => r.driverId).filter(Boolean));
+    if (ids.size !== 1 || !matches.length)
       return {
         state: { step: "human" },
-        reply:
-          "Não consegui confirmar seu cadastro com nome, base e telefone. A equipe vai validar sua identidade antes de mostrar as PNRs.",
+        reply: "Não consegui confirmar seu cadastro com nome, base e telefone. A equipe vai validar sua identidade antes de mostrar as PNRs.",
         handoff: true,
       };
     const record = matches[0];
     await transaction.query(
       `UPDATE alc_atendimento.conversations SET identity_verified=true,driver_id=$2,name=$3,base_key=$4,sigla=$5 WHERE id=$1`,
-      [
-        conversation.id,
-        record.driverId,
-        record.driverName,
-        record.baseKey,
-        record.sigla,
-      ],
+      [conversation.id, record.driverId, record.driverName, record.baseKey, record.sigla],
     );
     conversation.identity_verified = true;
     conversation.driver_id = record.driverId;
+    conversation.name = record.driverName;
     conversation.base_key = record.baseKey;
     conversation.sigla = record.sigla;
+    justVerified = true;
   }
-  const historical = /ANTERIOR|HISTOR|ENCERRAD/.test(n);
-  if (historical) await syncCore(true);
-  const records = (
-    await transaction.query(
-      `SELECT record FROM alc_atendimento.cases WHERE driver_id=$1 AND driver_phone=$2 AND base_key=$3 AND sigla=$4 ORDER BY competence DESC,source_at DESC`,
-      [
-        conversation.driver_id,
-        conversation.phone,
-        conversation.base_key,
-        conversation.sigla,
-      ],
-    )
-  ).rows.map((r) => r.record as CaseRecord);
-  const closed = /ENCERRAD/.test(n);
-  const selected = records.filter((r) =>
-    closed
-      ? r.classification === "encerrada"
-      : r.classification !== "encerrada",
-  );
-  const labels: Record<string, string> = {
-    penalidade: "Com penalidade",
-    aguardando_comprovante: "Aguardando comprovante",
-    encerrada: "Encerrada",
-    aberta: "Em aberto / revisão",
+  if (/NAO RECEBEU|NAO FOI ENTREGUE|DESTINATARIO NAO|CLIENTE NAO/.test(n))
+    return {
+      state: { step: "human" }, reply: title("M13", { ID: conversation.case_id || "em análise" }),
+      handoff: true,
+    };
+  // Historical imports remain subject to the existing authenticated query constraints.
+  if (/ANTERIOR|HISTOR/.test(n)) await syncCore(true);
+  const records = (await transaction.query(
+    `SELECT record FROM alc_atendimento.cases WHERE driver_id=$1 AND driver_phone=$2 AND base_key=$3 AND sigla=$4 ORDER BY competence DESC,source_at DESC`,
+    [conversation.driver_id, conversation.phone, conversation.base_key, conversation.sigla],
+  )).rows.map(r => r.record as CaseRecord);
+  if (justVerified) return {
+    state: { step: "driver_select" },
+    reply: `${title("M03")}\n\n${title("M04", { Quantidade: String(records.length) })}`,
   };
-  const lines = selected
-    .slice(0, 20)
-    .map(
-      (r) =>
-        `• Envio ${r.shipmentId} | ${labels[r.classification] || r.classification} | ${r.competence}`,
-    );
+  const exactCase = records.find(r => normalize(r.caseId) === n || normalize(r.shipmentId) === n);
+  if (exactCase) return {
+    state: { step: "driver_continue", selectedCaseId: exactCase.caseId },
+    reply: `Envio ${exactCase.shipmentId} | Caso ${exactCase.caseId} | Status: ${exactCase.classification === "aberta" ? "Em revisão" : exactCase.classification === "penalidade" ? "Com penalidade" : exactCase.classification === "aguardando_comprovante" ? "Aguardando comprovante" : "Encerrada"}.\n\n${title("M14")}`,
+  };
+  const selected = records.find(r => r.caseId === state.selectedCaseId || r.shipmentId === state.selectedShipmentId);
+  const related = selected || (records.length === 1 ? records[0] : null);
+  const evidenceText = () => {
+    if (related) return title("M11", {
+      ID: related.shipmentId, Caso: related.caseId, Base: related.baseKey,
+    });
+    return title("M11", { ID: "identifique o envio", Caso: "identifique o caso", Base: conversation.base_key || "sua base" });
+  };
+  if (/ACAREACAO|TENHO (UM )?COMPROVANTE|TENHO EVIDENCIA|COMO (ENVIAR|ENTREGAR) (O )?COMPROVANTE/.test(n))
+    return { state: { ...state, step: "driver_continue" }, reply: evidenceText() };
+  if (/COMO (RESOLVER|TRATAR|FAZER)|COMO PROCEDER/.test(n))
+    return { state: { ...state, step: "driver_continue" }, reply: title("M10") };
+  if (/NAO FATURAD/.test(n) || (state.step === "driver_select" && n === "2"))
+    return { state: { step: "human" }, reply: title("M08"), handoff: true };
+  if (/OUTRA (PNR|CONSULTA)|CONSULTAR OUTR|OUTRO STATUS|VERIFICAR PNR/.test(n) ||
+      (state.step === "driver_continue" && (n === "1" || n === "2"))) {
+    return {
+      state: { step: "driver_select" },
+      reply: title("M04", { Quantidade: String(records.length) }),
+    };
+  }
+  const closed = /ENCERRAD/.test(n);
+  const status = /AGUARDANDO|COMPROVANTE/.test(n) || (state.step === "driver_select" && n === "1")
+    ? "aguardando_comprovante"
+    : /PENALIDADE/.test(n) || (state.step === "driver_select" && n === "3")
+      ? "penalidade"
+      : /REVISAO|EM REVISAO/.test(n) || (state.step === "driver_select" && n === "4")
+        ? "aberta"
+        : closed ? "encerrada" : "all";
+  if (!conversation.identity_verified) throw new Error("Consulta sem identidade validada.");
+  const filtered = records.filter(r => status === "all" || r.classification === status);
+  const labels: Record<string,string> = {
+    aguardando_comprovante:"Aguardando comprovante",
+    penalidade:"Com penalidade", aberta:"Em aberto / revisão", encerrada:"Encerrada",
+  };
+  const list = filtered.slice(0,20).map(r =>
+    `• Envio ${r.shipmentId} | Caso ${r.caseId} | ${labels[r.classification] || "Em revisão"} | ${r.competence}`
+  ).join("\n") + (filtered.length > 20 ? "\nHá mais ocorrências; solicite apoio ao Loss para a lista completa." : "");
+  const c = filtered.length === 0 ? "M09"
+    : status === "aguardando_comprovante" ? "M05"
+      : status === "penalidade" ? "M06"
+        : status === "aberta" ? "M07" : "";
+  const response = c === "M09" ? title(c, { Competência: records[0]?.competence || "vigente" })
+    : c ? title(c, { Quantidade: String(filtered.length), Ocorrências: list })
+      : `PNRs localizadas: ${filtered.length}.\n${list}`;
   return {
-    state: { step: "driver_verified" },
-    reply: selected.length
-      ? `${selected.length} PNR(s) ${closed ? "encerrada(s)" : "em aberto"} em seu cadastro:\n${lines.join("\n")}${selected.length > 20 ? "\nA equipe pode enviar o restante." : ""}\nPara consultar o histórico, envie “PNRs encerradas”. Para atendimento, envie “Falar com equipe Loss”.`
-      : `Não localizei PNRs ${closed ? "encerradas" : "em aberto"} no seu cadastro com os dados disponíveis. Envie “PNRs anteriores” para atualizar competências anteriores ou “Falar com equipe Loss”.`,
+    state: { step: "driver_continue" },
+    reply: `${response}\n\n${title("M14")}`,
   };
 }
 async function incoming(
@@ -182,6 +229,18 @@ async function incoming(
     ],
   );
   const conversation = result.rows[0] as Conversation;
+  // A voluntary new consultation may restart a previously finished driver chat.
+  // Never override a human-owned conversation or auto-reopen resolved customer contacts.
+  if (channel === "driver" && conversation.status === "resolved" && !conversation.assigned_to &&
+      /^(VERIFICAR PNR|CONSULTAR PNR|OI|OLA)$/.test(normalize(text))) {
+    await transaction.query(
+      "UPDATE alc_atendimento.conversations SET status='bot',identity_verified=false,agent_state=$2,updated_at=now() WHERE id=$1 AND status='resolved' AND assigned_to IS NULL",
+      [conversation.id, { step: "driver_name" }],
+    );
+    conversation.status = "bot";
+    conversation.identity_verified = false;
+    conversation.agent_state = { step: "driver_name" };
+  }
   const type = String(value.type || "text");
   const media = ["image", "document", "audio", "video", "sticker"].includes(
     type,
@@ -232,24 +291,18 @@ async function incoming(
     );
     return;
   }
+  const savedInstructions = await loadInstructions();
   let answer;
   if (!text)
     answer = {
       state: { step: "human" },
-      reply: "Recebemos seu anexo. Vou encaminhar à equipe para análise.",
+      reply: channel === "driver"
+        ? "Para tratar a PNR, a evidência é a acareação manual entregue ao dispatcher responsável. Não é necessário enviar arquivos por este canal. Vou direcionar sua mensagem ao setor de Loss."
+        : "Recebemos seu anexo. Vou encaminhar à equipe para análise.",
       handoff: true,
     };
   else if (channel === "driver") {
-    if (
-      conversation.agent_state.step === "driver_name" &&
-      /VERIFICAR|PNR|^OI$|^OLA$/.test(normalize(text))
-    )
-      answer = {
-        state: { step: "driver_name" },
-        reply:
-          "Para consultar suas PNRs, informe seu nome completo. Em seguida pedirei sua base.",
-      };
-    else answer = await driverAnswer(conversation, text, transaction);
+    answer = await driverAnswer(conversation, text, transaction, runtimeScripts(savedInstructions, "driver"));
   } else if (!conversation.case_id || !conversation.identity_verified)
     answer = {
       state: { step: "human" },
@@ -257,7 +310,7 @@ async function incoming(
         "A equipe Loss vai identificar o envio relacionado ao seu atendimento.",
       handoff: true,
     };
-  else answer = clientReply(conversation.agent_state, text);
+  else answer = clientReply(conversation.agent_state, text, conversation.name, { shipmentId: conversation.case_id || "", overrides: runtimeScripts(savedInstructions,"client") });
   const updated = await transaction.query(
     "UPDATE alc_atendimento.conversations SET agent_state=$2,status=$3 WHERE id=$1 AND status='bot' AND agent_state=$4 RETURNING id",
     [
@@ -272,11 +325,16 @@ async function incoming(
     ],
   );
   if (!updated.rowCount) return;
-  await queueText(conversation, answer.reply, `reply:${id}`, null, transaction);
+  if (answer.reply) await queueText(conversation, answer.reply, `reply:${id}`, null, transaction);
   if ("result" in answer.state)
     await transaction.query(
       "INSERT INTO alc_atendimento.audit(action,target,data) VALUES('treatment_recorded',$1,$2)",
-      [conversation.id, { result: answer.state.result }],
+      [conversation.id, {
+        result: answer.state.result,
+        caseCenterStatus: "unchanged",
+        complaintClosure: "not_verified",
+        // Resolve the conversation, never mutate the Mercado Livre PNR.
+      }],
     );
 }
 export async function processEvents() {
@@ -352,9 +410,8 @@ export async function processOutbox() {
         current.classification === "encerrada" ||
         recipient !== job.phone ||
         (job.channel === "client" && !current.customerVerified) ||
-        (job.payload.type === "template" &&
-          job.channel === "driver" &&
-          current.classification !== "aguardando_comprovante");
+        (job.channel === "driver" &&
+          !driverNotificationEligible(current.classification));
       if (invalid) {
         await db().query(
           "UPDATE alc_atendimento.outbox SET status='cancelled',error='Caso ou contato mudou após entrar na fila.' WHERE id=$1",

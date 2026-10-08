@@ -257,6 +257,97 @@ describe("outbox handoff safety", () => {
   });
 });
 
+describe("driver manual acareação guidance", () => {
+  it("routes M11 to the dispatcher without asking for digital evidence", async () => {
+    Object.assign(conversation, {
+      channel: "driver", name: "Motorista Exemplo", status: "bot",
+      identity_verified: true, agent_state: { step: "driver_verified" },
+    });
+    const event = {
+      event_key: "synthetic-driver-evidence", channel: "driver",
+      payload: { entry: [{ changes: [{ value: {
+        metadata: { phone_number_id: config.phoneId },
+        messages: [{
+          id: "synthetic-driver-message", from: conversation.phone, type: "text",
+          timestamp: NOW.getTime() / 1000, text: { body: "Tenho comprovante da entrega" },
+        }],
+      } }] }] },
+    };
+    mocks.query.mockImplementation(async (sql) => sql.startsWith("SELECT * FROM alc_atendimento.webhook_events")
+      ? { rows: [event], rowCount: 1 } : empty());
+    mocks.transactionQuery.mockImplementation(async (sql, values) => {
+      if (sql.startsWith("INSERT INTO alc_atendimento.conversations"))
+        return { rows: [conversation], rowCount: 1 };
+      if (sql.startsWith("INSERT INTO alc_atendimento.messages"))
+        return { rows: [{ id: "synthetic-driver-inbound" }], rowCount: 1 };
+      if (sql.includes("SET agent_state=$2,status=$3"))
+        return { rows: [{ id: ID }], rowCount: 1 };
+      return empty();
+    });
+    await processEvents();
+    const replies = mocks.transactionQuery.mock.calls.filter(([sql]) =>
+      sql.startsWith("INSERT INTO alc_atendimento.outbox"));
+    expect(replies).toHaveLength(1);
+    const text = (replies[0][1]?.[4] as {text:{body:string}}).text.body;
+    expect(text).toContain("Motorista Exemplo");
+    expect(text).toContain("acareação manual");
+    expect(text).toContain("dispatcher");
+    expect(text).not.toMatch(/envie.*foto|anexe.*assinatura/i);
+    expect(mocks.transactionQuery.mock.calls.some(([sql]) => sql.startsWith("UPDATE alc_atendimento.cases"))).toBe(false);
+  });
+});
+
+describe("approved client C04 auto-closure", () => {
+  it("queues the approved C04, resolves the conversation and never changes the PNR", async () => {
+    Object.assign(conversation, {
+      channel: "client", status: "bot", identity_verified: true,
+      name: "Cliente Exemplo", case_id: "synthetic-case",
+      agent_state: { step: "product", receivedAt: "07/10" },
+    });
+    const event = {
+      event_key: "synthetic-client-final", channel: "client",
+      payload: { entry: [{ changes: [{ value: {
+        metadata: { phone_number_id: config.phoneId },
+        messages: [{
+          id: "synthetic-client-confirmation", from: conversation.phone, type: "text",
+          timestamp: NOW.getTime() / 1000, text: { body: "Sim, está correto" },
+        }],
+      } }] }] },
+    };
+    mocks.query.mockImplementation(async sql => sql.startsWith("SELECT * FROM alc_atendimento.webhook_events")
+      ? { rows: [event], rowCount: 1 } : empty());
+    mocks.transactionQuery.mockImplementation(async (sql, values) => {
+      if (sql.startsWith("INSERT INTO alc_atendimento.conversations"))
+        return { rows: [conversation], rowCount: 1 };
+      if (sql.startsWith("INSERT INTO alc_atendimento.messages"))
+        return { rows: [{ id: "synthetic-confirmation" }], rowCount: 1 };
+      if (sql.includes("SET agent_state=$2,status=$3")) {
+        Object.assign(conversation, { agent_state: values?.[1], status: values?.[2] });
+        return { rows: [{ id: ID }], rowCount: 1 };
+      }
+      return empty();
+    });
+    await processEvents();
+    expect(conversation.status).toBe("resolved");
+    expect(conversation.agent_state).toMatchObject({
+      step: "done", result: "recebimento_confirmado",
+    });
+    const replies = mocks.transactionQuery.mock.calls.filter(([sql]) =>
+      sql.startsWith("INSERT INTO alc_atendimento.outbox"),
+    );
+    expect(replies).toHaveLength(1);
+    const text = (replies[0][1]?.[4] as { text: { body: string } }).text.body;
+    expect(text).toContain("Cliente Exemplo");
+    expect(text).toContain("encerre a reclamação");
+    expect(text).not.toMatch(/conseguiu encerrar|aguardo sua confirmação/i);
+    expect(mocks.transactionQuery.mock.calls.some(([sql]) => sql.includes("UPDATE alc_atendimento.cases"))).toBe(false);
+    expect(mocks.transactionQuery).toHaveBeenCalledWith(
+      expect.stringContaining("INSERT INTO alc_atendimento.audit"),
+      [ID, expect.objectContaining({ caseCenterStatus: "unchanged", complaintClosure: "not_verified" })],
+    );
+  });
+});
+
 describe("incoming handoff acknowledgement", () => {
   it("queues exactly one acknowledgement for a fresh bot handoff and none for assigned staff", async () => {
     const event = {

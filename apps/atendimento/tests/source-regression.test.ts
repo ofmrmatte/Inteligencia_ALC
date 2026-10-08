@@ -64,7 +64,7 @@ beforeEach(() => {
   });
   mocks.templates.mockReset().mockResolvedValue([
     { name: "pnraberta", status: "APPROVED", language: "pt_BR" },
-    { name: "cliente_loss", status: "APPROVED", language: "pt_BR" },
+    { name: "cliente_loss_v2", status: "APPROVED", language: "pt_BR" },
   ]);
   mocks.channelConfig.mockReset().mockResolvedValue({ phoneId: "synthetic-phone-id" });
   mocks.graph.mockReset().mockRejectedValue(new Error("Unexpected provider send"));
@@ -139,6 +139,16 @@ describe("source import regressions", () => {
       expect.objectContaining({ baselineComplete: true, lastSync: NOW.toISOString(), processed: 1, new: 0 }),
     ]);
     expect(mocks.templates).not.toHaveBeenCalled();
+    expect(queuedKeys.size).toBe(0);
+    expect(mocks.graph).not.toHaveBeenCalled();
+  });
+
+  it("refuses to send the old C01 Meta template without the approved purchase value", async () => {
+    mocks.templates.mockResolvedValueOnce([
+      { name: "cliente_loss", status: "APPROVED", language: "pt_BR" },
+    ]);
+    await expect(queueTemplate("client", record(), OPERATOR))
+      .rejects.toThrow("Modelo aprovado indisponível");
     expect(queuedKeys.size).toBe(0);
     expect(mocks.graph).not.toHaveBeenCalled();
   });
@@ -251,7 +261,7 @@ describe("initial template regressions", () => {
     expect([...queuedKeys]).toEqual([`${channel}:${initial.caseId}:${to}:initial`]);
     expect(mocks.query).toHaveBeenCalledWith(expect.stringContaining("ON CONFLICT(dedupe_key) DO NOTHING RETURNING id"), [
       `${channel}:${initial.caseId}:${to}:initial`, ID, initial.caseId, channel, to,
-      expect.objectContaining({ type: "template", template: expect.objectContaining({ name: channel === "driver" ? "pnraberta" : "cliente_loss" }) }),
+      expect.objectContaining({ type: "template", template: expect.objectContaining({ name: channel === "driver" ? "pnraberta" : "cliente_loss_v2" }) }),
     ]);
     expect(mocks.audit).toHaveBeenLastCalledWith(null, "template_duplicate", initial.caseId, { channel, automatic: false });
     expect(mocks.graph).not.toHaveBeenCalled();
@@ -272,20 +282,31 @@ describe("initial template regressions", () => {
     expect(queuedKeys.size).toBe(0);
   });
 
-  it.each(["aberta", "penalidade"])("rejects driver initial template for %s without a verified service window", async (classification) => {
-    await expect(queueTemplate("driver", record({ classification }), OPERATOR)).rejects.toThrow("modelo aprovado");
-    expect(mocks.query).toHaveBeenCalledExactlyOnceWith(expect.stringContaining("WHERE channel='driver' AND phone=$1"), [record().driverPhone]);
+  it("blocks proactive driver outreach for review without looking up the service window", async () => {
+    await expect(queueTemplate("driver", record({ classification: "aberta" }), OPERATOR))
+      .rejects.toThrow("Classificação fora das notificações");
+    expect(mocks.query).not.toHaveBeenCalled();
     expect(mocks.templates).not.toHaveBeenCalled();
     expect(queuedKeys.size).toBe(0);
   });
 
-  it.each([
-    { identity_verified: false }, { driver_id: "another-driver" },
-    { last_inbound_at: "" }, { last_inbound_at: "2026-10-07T14:59:59.999Z" },
-  ])("rejects nonstandard driver outreach without matching verified identity and 24h window: %j", async (overrides) => {
-    mocks.query.mockResolvedValueOnce({ rows: [{ id: ID, identity_verified: true, driver_id: record().driverId, last_inbound_at: NOW.toISOString(), ...overrides }], rowCount: 1 });
-    await expect(queueTemplate("driver", record({ classification: "penalidade" }), OPERATOR)).rejects.toThrow("modelo aprovado");
-    expect(mocks.templates).not.toHaveBeenCalled();
+  it("allows penalty via approved driver template, not a free-text exception", async () => {
+    expect(await queueTemplate("driver", record({ classification: "penalidade" }), OPERATOR)).toBe(true);
+    expect(queuedKeys.size).toBe(1);
+    expect(mocks.templates).toHaveBeenCalled();
+    expect(mocks.query.mock.calls.some(([sql]) => sql.includes("WHERE channel='driver' AND phone"))).toBe(false);
+    expect(mocks.query).toHaveBeenCalledWith(
+      expect.stringContaining("INSERT INTO alc_atendimento.outbox"),
+      expect.arrayContaining([expect.objectContaining({
+        type: "template", template: expect.objectContaining({ name: "pnraberta" }),
+      })]),
+    );
+  });
+
+  it("refuses penalty notification when Meta has no approved driver template", async () => {
+    mocks.templates.mockResolvedValueOnce([]);
+    await expect(queueTemplate("driver", record({ classification: "penalidade" }), OPERATOR))
+      .rejects.toThrow("Modelo aprovado indisponível");
     expect(queuedKeys.size).toBe(0);
   });
 

@@ -1526,3 +1526,44 @@ dd {
     transition-duration: .01ms !important;
   }
 }
+
+
+/* Compact agent instruction cards, expanded on demand. */
+.agent-instruction-grid {
+  display:grid;
+  grid-template-columns:repeat(2,minmax(0,1fr));
+  gap:12px;
+  align-items:start;
+}
+.agent-instruction-card.card { margin:0; padding:14px 16px; }
+.agent-instruction-top {
+  display:flex;
+  gap:14px;
+  align-items:flex-start;
+  justify-content:space-between;
+}
+.agent-instruction-top > div:first-child { min-width:0;flex:1; }
+.agent-instruction-top h3 { margin:4px 0 6px; }
+.agent-instruction-top p { margin:0; }
+.agent-instruction-top .actions { margin:0;flex-shrink:0;flex-wrap:wrap; }
+.agent-instruction-top .actions button { white-space:nowrap; }
+.agent-instruction-details {
+  border-top:1px solid var(--line);
+  padding-top:14px;margin-top:14px;
+}
+.agent-instruction-text {
+  white-space:pre-wrap;
+  overflow-wrap:anywhere;
+  font-size:12px;
+  line-height:1.65;
+}
+.agent-guardrail-list { padding-left:20px;line-height:1.6; }
+.agent-guardrail-list li { margin-bottom:8px; }
+.agent-instruction-details textarea { min-height:125px;resize:vertical; }
+@media(max-width:1150px) {
+  .agent-instruction-grid { grid-template-columns:1fr; }
+}
+@media(max-width:540px){
+  .agent-instruction-top { flex-direction:column;gap:12px; }
+  .agent-instruction-top .actions { width:100%; }
+}
