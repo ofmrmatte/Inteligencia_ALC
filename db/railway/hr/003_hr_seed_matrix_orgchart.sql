@@ -92,7 +92,6 @@ names(full_name) AS (VALUES
   ('Marcos Vinicius'),
   ('João Marcelo'),
   ('Iago Moreira'),
-  ('Matheus Ferreira'),
   ('Sebastian Andrade')
 )
 INSERT INTO hr_employees(full_name,status,department_id,manager_employee_id,employment_type,notes)
@@ -148,7 +147,30 @@ WHERE lower(d.name)=lower('Administrativo')
   AND lower(e.full_name) IN (
     lower('Amanda Francisco'), lower('Larissa Sabrina'), lower('Isabela Oliveira'),
     lower('Eder Nogueira'), lower('Marcos Vinicius'), lower('João Marcelo'),
-    lower('Iago Moreira'), lower('Matheus Ferreira'), lower('Sebastian Andrade')
+    lower('Iago Moreira'), lower('Sebastian Andrade')
   );
+
+-- O organograma exibe "Matheus Ferreira". Se o cadastro completo já existir,
+-- preservamos matrícula/vínculo e apenas vinculamos à estrutura administrativa.
+WITH d AS (SELECT id FROM hr_departments WHERE lower(name)=lower('Administrativo') LIMIT 1),
+m AS (SELECT id FROM hr_employees WHERE lower(full_name)=lower('Vinicius Paes Landim') LIMIT 1)
+UPDATE hr_employees e
+SET department_id=d.id,
+    position_id=NULL,
+    manager_employee_id=m.id,
+    status='ACTIVE',
+    updated_at=now()
+FROM d,m
+WHERE lower(e.full_name)=lower('MATHEUS FERREIRA FOLGADO');
+
+WITH d AS (SELECT id FROM hr_departments WHERE lower(name)=lower('Administrativo') LIMIT 1),
+m AS (SELECT id FROM hr_employees WHERE lower(full_name)=lower('Vinicius Paes Landim') LIMIT 1)
+INSERT INTO hr_employees(full_name,status,department_id,manager_employee_id,employment_type,notes)
+SELECT 'Matheus Ferreira','ACTIVE',d.id,m.id,NULL,'Importado do organograma da matriz; cargo, matrícula, vínculo e demais dados cadastrais pendentes de homologação.'
+FROM d,m
+WHERE NOT EXISTS (
+  SELECT 1 FROM hr_employees
+  WHERE lower(full_name) IN (lower('Matheus Ferreira'),lower('MATHEUS FERREIRA FOLGADO'))
+);
 
 COMMIT;
