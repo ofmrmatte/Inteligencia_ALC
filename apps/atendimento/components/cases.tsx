@@ -2,7 +2,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { ArrowRight, ChevronDown, ChevronRight, X } from "lucide-react";
 import { api, useData, labels, when } from "./data";
-import type { CaseRecord } from "@/lib/domain";
+import { driverNotificationEligible, type CaseRecord } from "@/lib/domain";
 import { request } from "./collector";
 import { groupCasesByDriver } from "@/lib/driver-groups";
 type Row = {
@@ -367,7 +367,11 @@ export function Cases() {
                 <button disabled={busy} onClick={() => dispatch("client")}>
                   Enviar modelo ao cliente
                 </button>
-                <button disabled={busy} onClick={() => dispatch("driver")}>
+                <button
+                  disabled={busy || !driverNotificationEligible(selected.classification)}
+                  title={!driverNotificationEligible(selected.classification) ? "Esta classificação só pode ser consultada pelo motorista, sem disparo proativo." : undefined}
+                  onClick={() => dispatch("driver")}
+                >
                   Notificar motorista
                 </button>
               </div>
