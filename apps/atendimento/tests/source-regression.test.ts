@@ -261,7 +261,7 @@ describe("initial template regressions", () => {
     expect([...queuedKeys]).toEqual([`${channel}:${initial.caseId}:${to}:initial`]);
     expect(mocks.query).toHaveBeenCalledWith(expect.stringContaining("ON CONFLICT(dedupe_key) DO NOTHING RETURNING id"), [
       `${channel}:${initial.caseId}:${to}:initial`, ID, initial.caseId, channel, to,
-      expect.objectContaining({ type: "template", template: expect.objectContaining({ name: channel === "driver" ? "pnraberta" : "cliente_loss" }) }),
+      expect.objectContaining({ type: "template", template: expect.objectContaining({ name: channel === "driver" ? "pnraberta" : "cliente_loss_v2" }) }),
     ]);
     expect(mocks.audit).toHaveBeenLastCalledWith(null, "template_duplicate", initial.caseId, { channel, automatic: false });
     expect(mocks.graph).not.toHaveBeenCalled();
