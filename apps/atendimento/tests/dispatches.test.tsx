@@ -84,7 +84,7 @@ it.each(["driver", "client"] as const)(
     );
     expect(html).toContain("Prévia de envio");
     expect(html).toContain("Competência");
-    expect(html).toContain("Atualizar disparos");
+    expect(html).not.toContain("Atualizar disparos"); // A atualização geral agora fica no cabeçalho.
   },
 );
 it.each([
