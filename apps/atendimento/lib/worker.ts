@@ -80,7 +80,9 @@ async function driverAnswer(
       Base: conversation.base_key || "sua base",
       ...values,
     });
-  if (/LOSS|ATENDENTE|HUMANO|FALAR COM (A )?EQUIPE/.test(n)) {
+  if (/LOSS|ATENDENTE|HUMANO|FALAR COM (A )?EQUIPE/.test(n) ||
+      (state.step === "driver_continue" && n === "3") ||
+      (state.step === "driver_name" && n === "2")) {
     return { state: { step: "human" }, reply: title("M13", { ID: conversation.case_id || "em análise" }), handoff: true };
   }
   if (/^(ENCERRAR|SAIR|FINALIZAR|FIM)$/.test(n) ||
@@ -225,6 +227,18 @@ async function incoming(
     ],
   );
   const conversation = result.rows[0] as Conversation;
+  // A voluntary new consultation may restart a previously finished driver chat.
+  // Never override a human-owned conversation or auto-reopen resolved customer contacts.
+  if (channel === "driver" && conversation.status === "resolved" && !conversation.assigned_to &&
+      /^(VERIFICAR PNR|CONSULTAR PNR|OI|OLA)$/.test(normalize(text))) {
+    await transaction.query(
+      "UPDATE alc_atendimento.conversations SET status='bot',identity_verified=false,agent_state=$2,updated_at=now() WHERE id=$1 AND status='resolved' AND assigned_to IS NULL",
+      [conversation.id, { step: "driver_name" }],
+    );
+    conversation.status = "bot";
+    conversation.identity_verified = false;
+    conversation.agent_state = { step: "driver_name" };
+  }
   const type = String(value.type || "text");
   const media = ["image", "document", "audio", "video", "sticker"].includes(
     type,
@@ -308,7 +322,7 @@ async function incoming(
     ],
   );
   if (!updated.rowCount) return;
-  await queueText(conversation, answer.reply, `reply:${id}`, null, transaction);
+  if (answer.reply) await queueText(conversation, answer.reply, `reply:${id}`, null, transaction);
   if ("result" in answer.state)
     await transaction.query(
       "INSERT INTO alc_atendimento.audit(action,target,data) VALUES('treatment_recorded',$1,$2)",
