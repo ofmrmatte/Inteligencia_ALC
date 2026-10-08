@@ -4,6 +4,7 @@ import {
   classification,
   competence,
   clientReply,
+  clientOpening,
   templateParameters,
   phone,
   type CaseRecord,
@@ -44,7 +45,10 @@ describe("regras operacionais do Atendimento", () => {
       receivedAt: "08/10",
       correctProduct: true,
     });
+    expect(done.state.step).toBe("done");
+    expect(done.reply).toContain("encerre a reclamação");
     expect(done.reply).toContain("aplicativo do Mercado Livre");
+    expect(done.reply).not.toMatch(/conseguiu encerrar|responda quando encerrar|confirme o encerramento/i);
   });
   it("não considera verificar com a portaria como confirmação de recebimento ou negativa", () => {
     const reply = clientReply({ step: "receipt" }, "Não recebi");
@@ -54,7 +58,9 @@ describe("regras operacionais do Atendimento", () => {
     ).toBeUndefined();
     const denied = clientReply(reply.state, "Não localizei o produto");
     expect(denied.state.result).toBe("nao_recebido");
-    expect(denied.reply).toContain("encaminharemos");
+    expect(denied.state.step).toBe("human");
+    expect(denied.handoff).toBe(true);
+    expect(denied.reply).toContain("Prevenção de Perdas");
   });
   it("encaminha divergência e pedidos de equipe sem insistir com o robô", () => {
     expect(
@@ -77,6 +83,7 @@ describe("regras operacionais do Atendimento", () => {
       products: [{ title: "Produto de teste" }],
       deliveryAt: "2026-10-08T13:00:00Z",
       shipmentId: "TEST-SHIPMENT",
+      purchaseValue: 199.9,
     } as CaseRecord;
     expect(() => templateParameters("client", r, "Equipe Loss")).toThrow(
       "incompletos",
@@ -93,7 +100,9 @@ describe("regras operacionais do Atendimento", () => {
       "delivery_date",
       "delivery_time",
       "product_id",
+      "purchase_value",
     ]);
+    expect(result[0].parameters.find(p => p.parameter_name === "purchase_value")?.text).toBe("R$ 199,90");
     expect(templateParameters("driver", r, "Equipe Loss")).toHaveLength(2);
   });
   it("não amplia o acesso de bases com a mesma sigla", () => {
