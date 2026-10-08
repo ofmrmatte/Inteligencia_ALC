@@ -4,6 +4,20 @@ import { authConfig, inteligenciaEntryUrl } from "./lib/auth";
 import { ENTRY_COOKIE, validEntryReceipt } from "@alc/identity/transfer";
 export async function proxy(request: NextRequest) {
   const path = request.nextUrl.pathname;
+  // Preview-only branch: publicly serve synthetic visuals and block all operational routes.
+  // This mode has no credentials, database connections or WhatsApp integrations.
+  if (process.env.ALC_PREVIEW_DATA_MODE === "synthetic-only") {
+    if (!["GET", "HEAD"].includes(request.method))
+      return NextResponse.json({ error: "Demonstração somente leitura." }, { status: 405 });
+    if (path === "/preview" || path.startsWith("/preview/")) {
+      const next = NextResponse.next();
+      next.headers.set("X-Robots-Tag", "noindex, nofollow, noarchive");
+      return next;
+    }
+    if (path.startsWith("/api/") || path.startsWith("/webhooks/") || path.startsWith("/auth/"))
+      return NextResponse.json({ error: "Rota desabilitada na prévia isolada." }, { status: 404 });
+    return NextResponse.redirect(new URL("/preview", request.url));
+  }
   if (
     path.startsWith("/webhooks/") ||
     path === "/health" ||
