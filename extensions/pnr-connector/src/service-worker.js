@@ -7,7 +7,7 @@ import {
   normalizeCaseTimelineEvents,
   periodDetails,
 } from "./case-center.js";
-import { readPackageBuyerInTab } from "./package-management.js";
+import { readPackageBuyersInTab } from "./package-management.js";
 
 const panelOrigins = new Set([
   "https://inteligenciaalc-production.up.railway.app",
@@ -50,7 +50,7 @@ async function collectAtendimento({ channel = null, collectOnly = false } = {}) 
     if (!tab?.id) throw new Error("Mantenha uma aba autenticada do ALC Atendimento aberta.");
     const competence = currentAtendimentoCompetence();
     const syncId = crypto.randomUUID();
-    let page = 1, processed = 0, totalPages = 1;
+    let page = 1, processed = 0, totalPages = 1, customerRead = 0, customerPending = 0;
     do {
       const result = await handle({ type: "FETCH_PAGE", payload: { competence, page, order: "desc" } });
       if (!result.ok) throw new Error(result.error.message);
@@ -60,6 +60,9 @@ async function collectAtendimento({ channel = null, collectOnly = false } = {}) 
       if (result.data.invalidCount) throw new Error("A fonte retornou registros inválidos. Coleta interrompida sem concluir a carga inicial.");
       if (records.length) {
         const details = await handle({ type: "FETCH_TIMELINES", payload: { caseIds: records.map((r) => r.caseId), concurrency: 2 } });
+        if (!details.ok) throw new Error(details.error.message);
+        const detailFailures = details.data.results.filter((item) => !item.ok && item.error.code !== "BATCH_PAUSED");
+        if (details.data.results.every((item) => !item.ok) || detailFailures.some((item) => ["MERCADO_LIVRE_SESSION_REQUIRED", "MERCADO_LIVRE_ACCESS_DENIED", "RATE_LIMITED", "INVALID_RESPONSE", "REQUEST_TIMEOUT"].includes(item.error.code))) throw new Error(detailFailures[0]?.error.message || "Coleta de detalhes interrompida; os casos permanecem pendentes.");
         if (details.ok) for (const item of details.data.results) {
           const record = records.find((r) => r.caseId === item.caseId);
           if (record && item.ok) {
@@ -73,6 +76,17 @@ async function collectAtendimento({ channel = null, collectOnly = false } = {}) 
             });
           }
         }
+        if (channel !== "driver") {
+          const buyers = await handle({ type: "FETCH_PACKAGE_CUSTOMERS", payload: { shipmentIds: records.map((r) => r.shipmentId) } });
+          if (!buyers.ok) throw new Error(buyers.error.message);
+          const fatal = buyers.data.results.find((item) => !item.ok && ["MERCADO_LIVRE_SESSION_REQUIRED", "MERCADO_LIVRE_ACCESS_DENIED", "RATE_LIMITED", "INVALID_RESPONSE", "REQUEST_TIMEOUT"].includes(item.code));
+          if (fatal) throw new Error(fatal.message);
+          customerRead += buyers.data.results.filter((item) => item.ok).length;
+          customerPending += buyers.data.results.filter((item) => !item.ok).length;
+          for (const item of buyers.data.results) {
+            if (item.ok) for (const record of records.filter((r) => r.shipmentId === item.shipmentId)) record.packageBuyer = item.data;
+          }
+        }
       }
       await persistInAtendimento(tab.id, "import", {
         syncId, competence, channel, collectOnly,
@@ -81,8 +95,8 @@ async function collectAtendimento({ channel = null, collectOnly = false } = {}) 
       processed += records.length;
       page += 1;
     } while (page <= totalPages);
-    await chrome.storage.local.set({ atendimentoLastSync: new Date().toISOString(), atendimentoError: "" });
-    return { ok: true, data: { message: `${processed} PNRs da competência ${competence} atualizadas${channel === "client" ? " (dados de clientes)" : channel === "driver" ? " (dados de motoristas)" : ""}. ${collectOnly ? "Nenhuma mensagem foi enviada ou enfileirada por esta coleta." : "Próxima coleta automática em 30 minutos, se ativada."}` } };
+    await chrome.storage.local.set({ atendimentoLastSync: new Date().toISOString(), atendimentoError: customerPending ? `${customerPending} envios sem contato completo do comprador.` : "" });
+    return { ok: true, data: { message: `${processed} PNRs da competência ${competence} atualizadas${channel === "client" ? " (dados de clientes)" : channel === "driver" ? " (dados de motoristas)" : ""}. ${channel !== "driver" ? `${customerRead} compradores lidos; ${customerPending} contatos pendentes. ` : ""}${collectOnly ? "Nenhuma mensagem foi enviada ou enfileirada por esta coleta." : "Próxima coleta automática em 30 minutos, se ativada."}` } };
   } catch (error) {
     await chrome.storage.local.set({ atendimentoError: error.message });
     return connectorError("INVALID_RESPONSE", error.message);
@@ -303,90 +317,90 @@ async function fetchCaseCenterPageInTab({ period, dateFrom, dateTo, page, size, 
   return { ok: true, data };
 }
 
-async function fetchCaseDetailStateInTab(caseId) {
-  const response = await fetch(`/logistics/case-center/cases/${encodeURIComponent(caseId)}`, { credentials: "include" });
-  if (response.status === 401 || response.status === 403) {
-    return { ok: false, code: "MERCADO_LIVRE_SESSION_REQUIRED", message: "Sessão Mercado Livre expirada." };
-  }
-  if (!response.ok) return { ok: false, code: "HTTP_ERROR", message: `Case Center respondeu HTTP ${response.status}.` };
-  if (response.redirected && !new URL(response.url).pathname.startsWith("/logistics/case-center/cases/")) {
-    return { ok: false, code: "MERCADO_LIVRE_SESSION_REQUIRED", message: "Abra ou entre novamente na Bandeja de suporte do Mercado Livre." };
-  }
-
-  const html = await response.text();
-  const marker = "_n.ctx.r=";
-  const start = html.indexOf(marker);
-  const jsonStart = start + marker.length;
-  const end = html.indexOf(";_n.ctx.r.assets", jsonStart);
-  if (start < 0 || end < 0) return { ok: false, code: "INVALID_RESPONSE", message: "Timeline não encontrada no detalhe do caso." };
-  const state = JSON.parse(html.slice(jsonStart, end));
-  const caseState = state?.appProps?.pageProps?.preloadedStore?.CaseDetail;
-  if (!caseState || typeof caseState !== "object" || Array.isArray(caseState)) {
-    return { ok: false, code: "INVALID_RESPONSE", message: "Detalhes do caso não encontrados no estado SSR." };
-  }
-  return { ok: true, data: { caseState } };
-}
-
-async function fetchCaseDetailStatesInTab({ caseIds, concurrency }) {
-  const ids = [...new Set((Array.isArray(caseIds) ? caseIds : []).map((value) => String(value)))];
-  const workerCount = Math.max(1, Math.min(Number(concurrency) || 1, 8, ids.length || 1));
+// Self-contained: executeScript serializes this function into the ML origin.
+export async function fetchCaseDetailStatesInTab({ caseIds, concurrency }) {
+  const ids = [...new Set(caseIds.map(String))];
+  const workerCount = Math.max(1, Math.min(Number(concurrency) || 1, 2, ids.length || 1));
   const results = new Array(ids.length);
-  let cursor = 0;
-
-  const fetchOne = async (caseId) => {
-    const response = await fetch(`/logistics/case-center/cases/${encodeURIComponent(caseId)}`, { credentials: "include" });
-    if (response.status === 401 || response.status === 403) {
-      return { ok: false, code: "MERCADO_LIVRE_SESSION_REQUIRED", message: "Sessão Mercado Livre expirada." };
-    }
-    if (!response.ok) return { ok: false, code: "HTTP_ERROR", message: `Case Center respondeu HTTP ${response.status}.` };
-    if (response.redirected && !new URL(response.url).pathname.startsWith("/logistics/case-center/cases/")) {
-      return { ok: false, code: "MERCADO_LIVRE_SESSION_REQUIRED", message: "Abra ou entre novamente na Bandeja de suporte do Mercado Livre." };
-    }
-
-    const html = await response.text();
-    const marker = "_n.ctx.r=";
-    const start = html.indexOf(marker);
-    const jsonStart = start + marker.length;
-    const end = html.indexOf(";_n.ctx.r.assets", jsonStart);
-    if (start < 0 || end < 0) return { ok: false, code: "INVALID_RESPONSE", message: "Timeline não encontrada no detalhe do caso." };
-    const state = JSON.parse(html.slice(jsonStart, end));
-    const caseState = state?.appProps?.pageProps?.preloadedStore?.CaseDetail;
-    if (!caseState || typeof caseState !== "object" || Array.isArray(caseState)) {
-      return { ok: false, code: "INVALID_RESPONSE", message: "Detalhes do caso não encontrados no estado SSR." };
-    }
-    return { ok: true, data: { caseState } };
-  };
-
-  const worker = async () => {
-    while (true) {
-      const index = cursor;
-      cursor += 1;
-      if (index >= ids.length) return;
-      const caseId = ids[index];
-      try {
-        results[index] = { caseId, ...(await fetchOne(caseId)) };
-      } catch (error) {
-        results[index] = {
-          caseId,
-          ok: false,
-          code: error?.code || "INVALID_RESPONSE",
-          message: error?.message || "Falha ao consultar timeline.",
-        };
+  const deadline = Date.now() + 90_000;
+  let cursor = 1;
+  let stopped = false;
+  const failure = (code, message) => ({ ok: false, code, message });
+  const readState = (html) => {
+    const marker = /_n\.ctx\.r\s*=\s*/g;
+    let match;
+    while ((match = marker.exec(html))) {
+      const start = marker.lastIndex;
+      if (html[start] !== "{") continue;
+      let depth = 0, quoted = false, escaped = false;
+      for (let index = start; index < html.length; index += 1) {
+        const char = html[index];
+        if (quoted) {
+          if (escaped) escaped = false;
+          else if (char === "\\") escaped = true;
+          else if (char === '"') quoted = false;
+          continue;
+        }
+        if (char === '"') quoted = true;
+        else if (char === "{") depth += 1;
+        else if (char === "}" && --depth === 0) {
+          try {
+            const state = JSON.parse(html.slice(start, index + 1));
+            const store = state?.appProps?.pageProps?.preloadedStore;
+            const detail = store?.CaseDetail ?? store?.RootReducer?.CaseDetail;
+            if (detail && typeof detail === "object" && !Array.isArray(detail) && Array.isArray(detail.events)) return detail;
+          } catch { /* Only JSON is accepted; page JavaScript is never executed. */ }
+          break;
+        }
       }
     }
+    return null;
   };
-
-  await Promise.all(Array.from({ length: workerCount }, () => worker()));
+  const fetchOne = async (caseId) => {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 20_000);
+    try {
+      const path = `/logistics/case-center/cases/${encodeURIComponent(caseId)}`;
+      const response = await fetch(path, { credentials: "include", signal: controller.signal });
+      if (response.status === 401 || (response.url && (new URL(response.url).origin !== location.origin || new URL(response.url).pathname !== path))) return failure("MERCADO_LIVRE_SESSION_REQUIRED", "Entre novamente na Bandeja de suporte do Mercado Livre.");
+      if (response.status === 403) return failure("MERCADO_LIVRE_ACCESS_DENIED", "A sessão não possui permissão para consultar o detalhe do caso (HTTP 403).");
+      if (response.status === 429) return failure("RATE_LIMITED", "Mercado Livre limitou a consulta de detalhes (HTTP 429).");
+      if (!response.ok) return failure("HTTP_ERROR", `Case Center respondeu HTTP ${response.status}.`);
+      const html = await response.text();
+      const caseState = readState(html);
+      if (!caseState) return failure("INVALID_RESPONSE", "Estado de detalhes não encontrado no Case Center. Atualize o conector ou confira o acesso ao caso.");
+      if (!caseState.events.length) return failure("INCOMPLETE_TIMELINE", "A fonte não retornou a atividade do caso. O detalhe permanece pendente.");
+      return { ok: true, data: { caseState } };
+    } catch (error) {
+      return failure(error?.name === "AbortError" ? "REQUEST_TIMEOUT" : "HTTP_ERROR", error?.name === "AbortError" ? "Tempo de consulta do detalhe excedido." : "Falha de rede ao consultar o detalhe do caso.");
+    } finally { clearTimeout(timer); }
+  };
+  const systemic = (result) => !result.ok && (["MERCADO_LIVRE_SESSION_REQUIRED", "MERCADO_LIVRE_ACCESS_DENIED", "RATE_LIMITED", "INVALID_RESPONSE", "REQUEST_TIMEOUT"].includes(result.code) || (result.code === "HTTP_ERROR" && !/HTTP (404|410)\b/.test(result.message)));
+  // Probe one case before starting a batch: a broken session/parser must not
+  // turn fifty untouched cases into fifty artificial failures.
+  results[0] = { caseId: ids[0], ...(await fetchOne(ids[0])) };
+  stopped = systemic(results[0]);
+  const worker = async () => {
+    while (cursor < ids.length && !stopped && Date.now() < deadline) {
+      const index = cursor++;
+      results[index] = { caseId: ids[index], ...(await fetchOne(ids[index])) };
+      if (systemic(results[index])) stopped = true;
+    }
+  };
+  if (!stopped) await Promise.all(Array.from({ length: workerCount }, () => worker()));
+  for (let index = 0; index < ids.length; index += 1) {
+    results[index] ??= { caseId: ids[index], ...failure("BATCH_PAUSED", "Lote interrompido pela falha anterior; caso permanece pendente.") };
+  }
   return results;
 }
 
 async function handle(message) {
   if (message.type === "READ_PACKAGE_CUSTOMER") {
     const tabs = await chrome.tabs.query({ url: "https://envios.adminml.com/*" });
-    const target = tabs.filter((tab) => tab.id && new URL(tab.url).pathname.includes("package-management"));
+    const target = tabs.filter((tab) => tab.id && /^\/logistics\/package-management\/package\/\d{1,30}\/?$/.test(new URL(tab.url).pathname) && (!message.payload?.shipmentId || new URL(tab.url).pathname.split("/").filter(Boolean).at(-1) === String(message.payload.shipmentId)));
     if (target.length !== 1) return connectorError("INVALID_RESPONSE", "Mantenha exatamente uma aba de detalhes do envio aberta em package-management.");
-    const result = await execute(target[0].id, readPackageBuyerInTab);
-    return result?.ok ? result : connectorError("INVALID_RESPONSE", result?.message || "Dados do comprador não identificados.");
+    const result = await execute(target[0].id, readPackageBuyersInTab, [{ currentPageOnly: true, shipmentIds: message.payload?.shipmentId ? [String(message.payload.shipmentId)] : [] }]);
+    return result?.ok ? result : connectorError(result?.code || "INVALID_RESPONSE", result?.message || "Dados do comprador não identificados.");
   }
   if (message.type === "ATENDIMENTO_ENABLE") {
     await chrome.storage.local.set({ atendimentoEnabled: true });
@@ -464,13 +478,20 @@ async function handle(message) {
     return { ok: true, data: normalizeCaseCenterPage(result.data, page) };
   }
 
+  if (message.type === "FETCH_PACKAGE_CUSTOMERS") {
+    const shipmentIds = [...new Set((Array.isArray(message.payload?.shipmentIds) ? message.payload.shipmentIds : []).map(String))];
+    if (!shipmentIds.length || shipmentIds.length > 50 || shipmentIds.some((id) => !/^\d{1,30}$/.test(id))) return connectorError("INVALID_RESPONSE", "Lote de envios inválido.");
+    const result = await execute(authenticatedTab.id, readPackageBuyersInTab, [{ shipmentIds }]);
+    return result?.ok ? result : connectorError(result?.code || "INVALID_RESPONSE", result?.message || "Falha na consulta do comprador.");
+  }
+
   if (message.type === "FETCH_TIMELINES") {
     const rawCaseIds = Array.isArray(message.payload?.caseIds) ? message.payload.caseIds : [];
     const caseIds = [...new Set(rawCaseIds.map((value) => String(value)))];
     if (!caseIds.length || caseIds.length > 50 || caseIds.some((caseId) => !/^\d{1,30}$/.test(caseId))) {
       return connectorError("INVALID_RESPONSE", "Lote de casos PNR inválido.");
     }
-    const concurrency = Math.max(1, Math.min(Number(message.payload?.concurrency) || 1, 8));
+    const concurrency = Math.max(1, Math.min(Number(message.payload?.concurrency) || 1, 2));
     const batch = await execute(authenticatedTab.id, fetchCaseDetailStatesInTab, [{ caseIds, concurrency }]);
     if (!Array.isArray(batch)) return connectorError("INVALID_RESPONSE", "Resposta em lote do Case Center inválida.");
 
@@ -488,6 +509,8 @@ async function handle(message) {
       }
       const caseState = item.data?.caseState;
       const events = Array.isArray(caseState?.events) ? caseState.events : [];
+      const normalizedEvents = normalizeCaseTimelineEvents(events);
+      if (!events.length || normalizedEvents.length !== events.length) return { caseId, ok: false, error: { code: "INCOMPLETE_TIMELINE", message: "A fonte retornou eventos incompletos; o caso permanece pendente." } };
       return {
         caseId,
         ok: true,
@@ -505,10 +528,11 @@ async function handle(message) {
   if (message.type === "FETCH_TIMELINE") {
     const caseId = String(message.payload?.caseId || "");
     if (!/^\d{1,30}$/.test(caseId)) return connectorError("INVALID_RESPONSE", "Caso PNR inválido.");
-    const result = await execute(authenticatedTab.id, fetchCaseDetailStateInTab, [caseId]);
+    const [result] = await execute(authenticatedTab.id, fetchCaseDetailStatesInTab, [{ caseIds: [caseId], concurrency: 1 }]);
     if (!result?.ok) return connectorError(result?.code || "INVALID_RESPONSE", result?.message || "Falha ao consultar timeline.");
     const caseState = result.data?.caseState;
     const events = Array.isArray(caseState?.events) ? caseState.events : [];
+    if (!events.length || normalizeCaseTimelineEvents(events).length !== events.length) return connectorError("INCOMPLETE_TIMELINE", "A fonte retornou eventos incompletos; o caso permanece pendente.");
     return {
       ok: true,
       data: {
@@ -535,10 +559,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 });
 
 chrome.runtime.onInstalled.addListener(() => {
-  chrome.tabs.query({ url: [
-    "https://inteligenciaalc-production.up.railway.app/*",
-    "https://alc-atendimento-production.up.railway.app/*",
-  ] }).then((tabs) => Promise.all(tabs.filter((tab) => tab.id && allowedPanel(tab.url || "")).map((tab) => (
+  chrome.tabs.query({ url: chrome.runtime.getManifest().content_scripts.flatMap((entry) => entry.matches) }).then((tabs) => Promise.all(tabs.filter((tab) => tab.id && allowedPanel(tab.url || "")).map((tab) => (
     chrome.scripting.executeScript({ target: { tabId: tab.id }, files: ["panel-bridge.js"] }).catch(() => undefined)
   )))).catch(() => undefined);
 });

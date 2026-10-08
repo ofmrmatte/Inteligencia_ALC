@@ -46,7 +46,7 @@ export async function POST(request: Request) {
         caseId,
         ok: response.ok,
         status: response.status,
-        ...(response.ok ? { data: body } : { error: String(body.error || "Falha ao persistir timeline PNR.") }),
+        ...(response.ok ? { data: body } : { error: `${String(body.error || "Falha ao persistir timeline PNR.")}${Array.isArray(body.issues) ? ` Campos: ${body.issues.map((issue: { path?: unknown[] }) => issue.path?.join(".") || "payload").slice(0, 5).join(", ")}.` : ""}` }),
       });
     } catch (error) {
       results.push({

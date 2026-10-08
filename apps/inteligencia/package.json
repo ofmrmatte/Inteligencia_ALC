@@ -21,9 +21,11 @@
     "node": ">=22"
   },
   "dependencies": {
+    "@alc/identity": "*",
     "@alc/ui": "*",
     "@supabase/ssr": "^0.12.4",
     "@supabase/supabase-js": "^2.112.3",
+    "alc-pnr-connector": "*",
     "clsx": "^2.1.1",
     "date-fns": "^4.4.0",
     "fflate": "^0.8.3",
@@ -39,9 +41,7 @@
     "sonner": "^2.0.8",
     "xlsx": "https://cdn.sheetjs.com/xlsx-0.20.3/xlsx-0.20.3.tgz",
     "zod": "^4.4.3",
-    "zustand": "^5.0.15",
-    "alc-pnr-connector": "*",
-    "@alc/identity": "*"
+    "zustand": "^5.0.15"
   },
   "devDependencies": {
     "@types/node": "^26.2.0",
@@ -51,6 +51,7 @@
     "@vitest/coverage-v8": "^4.1.10",
     "eslint": "^9.39.5",
     "eslint-config-next": "^16.3.1",
+    "jsdom": "^26.1.0",
     "tsx": "^4.23.12",
     "typescript": "^6.0.3",
     "vitest": "^4.1.10"

@@ -12,6 +12,7 @@ import {
   PNR_DETAIL_SYNC_LEADER_LEASE_MS,
   PNR_DETAIL_SYNC_RATE_LIMIT_BACKOFF_MS,
   pnrDetailEmptySyncDelayMs,
+  pnrDetailBatchIssue,
   runWithPnrSyncLock,
 } from "@/lib/pnr-case-sync";
 import {
@@ -124,19 +125,6 @@ function pausedMessage(error: unknown) {
   return null;
 }
 
-function connectorErrorFromBatch(result: TimelineConnectorBatchResult) {
-  const fatal = result.results.find((item) => !item.ok && (
-    item.error.code === "EXTENSION_NOT_FOUND"
-    || item.error.code === "MERCADO_LIVRE_NOT_DETECTED"
-    || item.error.code === "MERCADO_LIVRE_SESSION_REQUIRED"
-  ));
-  if (!fatal || fatal.ok) return null;
-  return new PnrConnectorError(
-    (fatal.error.code || "INVALID_RESPONSE") as PnrConnectorErrorCode,
-    fatal.error.message || "Falha na conexão com o Mercado Livre.",
-  );
-}
-
 function toPersistPayload(item: TimelineConnectorBatchResult["results"][number]): TimelinePersistPayload {
   if (!item.ok) {
     return {
@@ -170,8 +158,10 @@ export function PnrCaseCenterBackgroundSync() {
     let disposed = false;
     let running = false;
     let authBlocked = false;
+    let failureBlocked = false;
     let timer: number | undefined;
     let emptyPolls = 0;
+    let lastRunAt = 0;
     let connectorConcurrency = PNR_DETAIL_SYNC_CONCURRENCY;
     const tabId = crypto.randomUUID();
 
@@ -207,6 +197,7 @@ export function PnrCaseCenterBackgroundSync() {
       if (
         disposed
         || authBlocked
+        || failureBlocked
         || getPnrBackgroundSyncStatus().manuallyPaused
         || document.visibilityState !== "visible"
       ) return;
@@ -215,10 +206,14 @@ export function PnrCaseCenterBackgroundSync() {
     };
 
     const run = async () => {
-      if (disposed || running) return;
+      if (disposed || running || failureBlocked) return;
       if (document.visibilityState !== "visible") return;
       if (getPnrBackgroundSyncStatus().manuallyPaused) {
         publishPnrBackgroundSyncStatus({ phase: "paused", message: "Pausada manualmente" });
+        return;
+      }
+      if (lastRunAt && Date.now() - lastRunAt < PNR_DETAIL_SYNC_ACTIVE_INTERVAL_MS) {
+        schedule(PNR_DETAIL_SYNC_ACTIVE_INTERVAL_MS - (Date.now() - lastRunAt));
         return;
       }
       if (!claimLeader()) {
@@ -229,6 +224,7 @@ export function PnrCaseCenterBackgroundSync() {
 
       let nextDelayMs = PNR_DETAIL_SYNC_ACTIVE_INTERVAL_MS;
       running = true;
+      lastRunAt = Date.now();
       try {
         const acquired = await runWithPnrSyncLock(navigator.locks, async () => {
           const queue = await readQueue();
@@ -260,7 +256,7 @@ export function PnrCaseCenterBackgroundSync() {
           emptyPolls = 0;
           const handshake = await requestPnrConnector<PnrConnectorHandshake>("PING", {}, 10_000);
           const connectorState = connectorStateFromHandshake(handshake);
-          if (connectorState === "unsupported") {
+          if (connectorState === "unsupported" || connectorState === "outdated") {
             nextDelayMs = 300_000;
             publishPnrBackgroundSyncStatus({ phase: "paused", message: "Pausada — atualize o Conector PNR" });
             return;
@@ -274,7 +270,7 @@ export function PnrCaseCenterBackgroundSync() {
               handshake.sessionMessage || "Sessão Mercado Livre indisponível.",
             );
           }
-          if (connectorState !== "connected" && connectorState !== "outdated") {
+          if (connectorState !== "connected") {
             throw new Error(handshake.sessionMessage || "Falha na conexão com o Mercado Livre.");
           }
 
@@ -289,11 +285,15 @@ export function PnrCaseCenterBackgroundSync() {
             { caseIds, concurrency: connectorConcurrency },
             120_000,
           );
-          const fatalConnectorError = connectorErrorFromBatch(batch);
-          if (fatalConnectorError) throw fatalConnectorError;
+          const issue = pnrDetailBatchIssue(batch.results);
+          if (issue) {
+            const status = getPnrBackgroundSyncStatus();
+            publishPnrBackgroundSyncStatus({ errors: status.errors + issue.failedCount });
+            throw new PnrConnectorError(issue.code as PnrConnectorErrorCode, issue.message);
+          }
 
           const sourceSuccess = new Map(batch.results.map((item) => [item.caseId, item.ok]));
-          const payloads = batch.results.map(toPersistPayload);
+          const payloads = batch.results.filter((item) => item.ok || item.error.code !== "BATCH_PAUSED").map(toPersistPayload);
           let persistedCount = 0;
           let completedCount = 0;
           let errorCount = 0;
@@ -303,13 +303,17 @@ export function PnrCaseCenterBackgroundSync() {
             const chunk = payloads.slice(index, index + PNR_DETAIL_PERSIST_BATCH_SIZE);
             const persisted = await persistTimelineBatch(chunk);
             const resultRows = Array.isArray(persisted.results) ? persisted.results : [];
+            if (!resultRows.length || resultRows.every((item) => !item.ok)) {
+              const status = getPnrBackgroundSyncStatus();
+              publishPnrBackgroundSyncStatus({ errors: status.errors + resultRows.length });
+              throw new PnrConnectorError("PERSISTENCE_ERROR", resultRows[0]?.error || "O servidor não confirmou a persistência dos detalhes. Confira o banco antes de retomar.");
+            }
             for (const result of resultRows) {
               if (!result.ok) {
                 errorCount += 1;
                 continue;
               }
-              persistedCount += 1;
-              if (sourceSuccess.get(result.caseId)) completedCount += 1;
+              if (sourceSuccess.get(result.caseId)) { completedCount += 1; persistedCount += 1; }
               else errorCount += 1;
             }
             const status = getPnrBackgroundSyncStatus();
@@ -339,7 +343,7 @@ export function PnrCaseCenterBackgroundSync() {
           }
           publishPnrBackgroundSyncStatus({
             phase: "idle",
-            message: "Lote concluído · preparando os próximos pendentes",
+            message: "Lote concluído · nova consulta em 30 minutos",
           });
         });
 
@@ -359,9 +363,10 @@ export function PnrCaseCenterBackgroundSync() {
           return;
         }
         const paused = pausedMessage(error);
+        failureBlocked = !paused && !(error instanceof PnrConnectorError && error.code === "RATE_LIMITED");
         publishPnrBackgroundSyncStatus({
-          phase: paused ? "paused" : "error",
-          message: paused || (error instanceof Error ? error.message : "Falha na sincronização automática"),
+          phase: "paused",
+          message: paused || `Sincronização interrompida — ${error instanceof Error ? error.message : "Falha na sincronização automática"}${failureBlocked ? " Use Sincronizar agora após corrigir a causa." : " Nova consulta em 30 minutos."}`,
         });
         if (!paused) nextDelayMs = Math.max(nextDelayMs, 30_000);
       } finally {
@@ -373,6 +378,8 @@ export function PnrCaseCenterBackgroundSync() {
     };
 
     const onManual = () => {
+      failureBlocked = false;
+      lastRunAt = 0;
       emptyPolls = 0;
       window.clearTimeout(timer);
       void run();
@@ -386,6 +393,8 @@ export function PnrCaseCenterBackgroundSync() {
         return;
       }
       emptyPolls = 0;
+      failureBlocked = false;
+      lastRunAt = 0;
       publishPnrBackgroundSyncStatus({ phase: "idle", message: "Retomando sincronização automática" });
       void run();
     };

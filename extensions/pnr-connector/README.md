@@ -1,6 +1,6 @@
 # ALC PNR Connector
 
-Extensão Chrome unpacked usada somente para consultar a Bandeja PNR em uma aba já autenticada do Mercado Livre e entregar JSON normalizado ao Inteligência ALC.
+Extensão Chrome unpacked para consultar o Case Center e os dados do comprador no package-management pela sessão autenticada do navegador. Entrega somente dados normalizados ao Inteligência ALC e ao ALC Atendimento.
 
 ## Gerar e instalar
 
@@ -19,5 +19,5 @@ O build local `npm run extension:build`, executado na raiz do monorepo, também 
 
 - A extensão não usa `chrome.cookies`.
 - Cookie, CSRF e sessão do Mercado Livre permanecem na origem `envios.adminml.com`.
-- Somente casos PNR normalizados e a timeline operacional mínima chegam ao painel.
-- A ponte aceita apenas os dois domínios oficiais, os previews Vercel deste projeto e `localhost`/`127.0.0.1` para desenvolvimento.
+- Somente casos PNR, timeline operacional e dados explícitos do comprador chegam às aplicações autorizadas. Documento de recebedor não é tratado como documento do comprador.
+- O pacote aceita somente os dois domínios Railway oficiais e o Mercado Livre. Consulte [a validação operacional da versão 1.2.2](../../docs/pnr-connector-1.2.2.md).
