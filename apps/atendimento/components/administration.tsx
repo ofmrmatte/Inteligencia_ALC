@@ -2,7 +2,7 @@
 import { useState, type FormEvent } from "react";
 import { api, useData, labels, when } from "./data";
 import { Collector } from "./collector";
-import { CUSTOMER_STEPS, DRIVER_STEPS, AGENT_GUARDRAILS, activeAgentEngine } from "../lib/agent-playbook";
+import { AgentPanel } from "./agent-panel";
 type Channel = {
   channel: "driver" | "client";
   number: string;
@@ -81,48 +81,6 @@ export function Administration() {
         <Audit />
       ) : null}
     </main>
-  );
-}
-function AgentPanel() {
-  return (
-    <section className="settings-section" aria-label="Instruções do agente virtual">
-      <p className="eyebrow">MOTOR DE ATENDIMENTO</p>
-      <h2>Agente virtual · instruções de tratativa</h2>
-      <p className="notice">
-        Motor atual: <strong>{activeAgentEngine("rules")}</strong>. A Meta entrega mensagens pelo WhatsApp;
-        OpenAI e Gemini não estão conectados. Nenhum provedor de IA será ativado nesta etapa.
-      </p>
-      <p className="muted">As regras abaixo orientam o fluxo atual e formam o roteiro para uma futura integração com IA, após homologação.</p>
-      <h3>Clientes · C01 a C15</h3>
-      <div className="channel-grid">
-        {CUSTOMER_STEPS.map((step) => (
-          <article key={step.code} className="card">
-            <small style={{ color: "var(--red)" }}>{step.code}</small>
-            <h3>{step.title}</h3>
-            <p>{step.goal}</p>
-            <p className="muted" style={{ whiteSpace: "pre-wrap" }}><strong>Script completo:</strong> {"\n"}{step.example}</p>
-          </article>
-        ))}
-      </div>
-      <h3>Motoristas · M01 a M15 (M12 exclusivo do cliente)</h3>
-      <div className="channel-grid">
-        {DRIVER_STEPS.map((step) => (
-          <article key={step.code} className="card">
-            <small style={{ color: "var(--red)" }}>{step.code}</small>
-            <h3>{step.title}</h3>
-            <p>{step.goal}</p>
-            <p className="muted" style={{ whiteSpace: "pre-wrap" }}><strong>Script completo:</strong> {"\n"}{step.example}</p>
-          </article>
-        ))}
-      </div>
-      <h3>Limites obrigatórios</h3>
-      <ul>
-        {AGENT_GUARDRAILS.map((rule) => <li key={rule}>{rule}</li>)}
-      </ul>
-      <p className="notice">
-        Comprovantes devem refletir apenas mensagens reais da tratativa. Não usar conteúdo sintético como prova de atendimento.
-      </p>
-    </section>
   );
 }
 function ChannelCard({
