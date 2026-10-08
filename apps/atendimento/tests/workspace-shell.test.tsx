@@ -24,8 +24,9 @@ it.each([
   ["/conversas", "CAIXA DE ATENDIMENTO", "Conversas", Conversations],
   ["/visao-geral", "MONITORAMENTO OPERACIONAL", "Visão Geral", Overview],
   ["/pnrs", "GESTÃO DE CASOS", "PNRs", Cases],
-  ["/disparos", "MENSAGENS OPERACIONAIS", "Disparos e histórico", Dispatches],
-  ["/admin", "CONTROLE DA OPERAÇÃO", "Administração", Administration],
+  ["/disparos/clientes", "MENSAGENS OPERACIONAIS", "Disparo Cliente", Dispatches],
+  ["/disparos/motoristas", "MENSAGENS OPERACIONAIS", "Disparo Motorista", Dispatches],
+  ["/admin", "CONFIGURAÇÕES", "Ajustes", Administration],
 ] as const)("usa um único título de seção no cabeçalho de %s", (path, eyebrow, title, View) => {
   mocks.path = path;
   mocks.sessionError = "";
@@ -35,6 +36,10 @@ it.each([
   expect(html.match(/<h1>/g)).toHaveLength(1);
   expect(html).not.toContain("<strong>ALC Atendimento</strong>");
   expect(html).toContain("Desenvolvedor");
+  expect(html).toContain('href="/disparos/clientes"');
+  expect(html).toContain('href="/disparos/motoristas"');
+  expect(html).not.toContain("Clientes e envios");
+  expect(html).not.toContain("ADMINISTRAÇÃO");
 });
 it.each(["unavailable", "changed-account"])("remove os dados privados do shell em %s", (condition) => {
   mocks.sessionError = condition === "unavailable" ? "Sessão encerrada" : "";

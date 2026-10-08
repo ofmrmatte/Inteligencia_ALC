@@ -56,7 +56,47 @@ export async function GET(request: Request) {
       ],
     );
     const action = new URL("/auth/transfer", destination).toString();
-    const html = `<!doctype html><html lang="pt-BR"><meta charset="utf-8"><title>Abrindo ALC Atendimento</title><body><form method="POST" action="${action}" id="transfer"><input type="hidden" name="ticket" value="${ticket}"><button>Abrir ALC Atendimento</button></form><script>document.getElementById('transfer').submit()</script></body></html>`;
+    const html = `<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Abrindo ALC Atendimento</title>
+  <style>
+    * { box-sizing: border-box; }
+    body { margin: 0; background: #fff; color: #25272b; font: 14px/1.6 Poppins, Arial, sans-serif; }
+    main { min-height: 100vh; min-height: 100dvh; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 18px; padding: 24px; text-align: center; }
+    img { width: 56px; height: 56px; object-fit: contain; }
+    p { margin: 0; }
+    .spinner { width: 24px; height: 24px; border: 2px solid #e8e9ec; border-top-color: #e30613; border-radius: 50%; animation: spin .8s linear infinite; }
+    button { min-height: 44px; padding: 10px 16px; border: 0; border-radius: 6px; background: #e30613; color: #fff; font: inherit; cursor: pointer; }
+    button:focus-visible { outline: 2px solid #25272b; outline-offset: 3px; }
+    @keyframes spin { to { transform: rotate(360deg); } }
+    @media (prefers-reduced-motion: reduce) { .spinner { animation: none; } }
+  </style>
+</head>
+<body>
+  <main id="loading" aria-busy="true">
+    <img src="/brand/alc-symbol.png" alt="ALC" width="56" height="56">
+    <div class="spinner" id="spinner" aria-hidden="true"></div>
+    <p id="status" role="status" aria-live="polite">Abrindo ALC Atendimento...</p>
+    <form method="POST" action="${action}" id="transfer">
+      <input type="hidden" name="ticket" value="${ticket}">
+      <button id="manual" type="submit" hidden>Abrir ALC Atendimento</button>
+      <noscript><style>.spinner,#status { display: none; }</style><button type="submit">Abrir ALC Atendimento</button></noscript>
+    </form>
+  </main>
+  <script>
+    try { document.getElementById('transfer').submit(); }
+    catch {
+      document.getElementById('loading').setAttribute('aria-busy', 'false');
+      document.getElementById('spinner').hidden = true;
+      document.getElementById('status').textContent = 'Não foi possível abrir automaticamente.';
+      document.getElementById('manual').hidden = false;
+    }
+  </script>
+</body>
+</html>`;
     return new Response(html, {
       headers: {
         "Content-Type": "text/html; charset=utf-8",

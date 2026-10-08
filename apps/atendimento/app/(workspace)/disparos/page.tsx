@@ -1,4 +1,4 @@
-import { Dispatches } from "@/components/dispatches";
+import { redirect } from "next/navigation";
 export default function Page() {
-  return <Dispatches />;
+  redirect("/disparos/clientes");
 }
