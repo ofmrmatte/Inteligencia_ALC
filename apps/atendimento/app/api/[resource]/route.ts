@@ -42,6 +42,10 @@ import {
   mutateConversation,
   inboxScopeSql,
 } from "@/lib/inbox";
+import {
+  agentSettingsSchema, editableInstructionSchema, policiesSchema, effectiveInstructions,
+  INSTRUCTION_KEY, validateEditedScript, loadInstructions, stepsFor,
+} from "@/lib/agent-instructions";
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 const channel = z.enum(["driver", "client"]);
@@ -276,6 +280,10 @@ export async function GET(
       });
     }
     requireAdmin(profile);
+    if (resource === "agent-instructions") {
+      const saved = await loadInstructions();
+      return Response.json({ revision: saved.revision, client: stepsFor("client", saved), driver: stepsFor("driver", saved), policies: saved.policies });
+    }
     if (resource === "collector")
       return Response.json({ collector: await setting("collector") });
     if (resource === "admin") {
@@ -544,6 +552,42 @@ export async function POST(
       return Response.json({ ok: true });
     }
     requireAdmin(profile);
+    if (resource === "agent-instructions") {
+      const parsed = z.discriminatedUnion("kind", [
+        z.object({
+          kind: z.literal("script"),
+          revision: z.number().int().nonnegative(),
+          entry: editableInstructionSchema,
+        }).strict(),
+        z.object({
+          kind: z.literal("policies"),
+          revision: z.number().int().nonnegative(),
+          policies: policiesSchema,
+        }).strict(),
+      ]).parse(body);
+      const existing = await loadInstructions();
+      if (existing.revision !== parsed.revision)
+        throw new HttpError(409, "As instruções foram alteradas por outro administrador. Atualize antes de salvar.");
+      const updated = { ...existing, revision: existing.revision + 1 };
+      if (parsed.kind === "script") {
+        const entry = validateEditedScript(parsed.entry);
+        updated.scripts = { ...existing.scripts, [`${entry.channel}:${entry.code}`]: entry };
+      } else {
+        updated.policies = parsed.policies;
+      }
+      const result = await db().query(
+        `INSERT INTO alc_atendimento.settings(key,value,updated_by) VALUES($1,$2,$3)
+         ON CONFLICT(key) DO UPDATE SET value=excluded.value,updated_by=excluded.updated_by,updated_at=now()
+         WHERE (alc_atendimento.settings.value->>'revision')::integer IS NOT DISTINCT FROM $4::integer
+         RETURNING key`,
+        [INSTRUCTION_KEY, updated, profile.id, existing.revision],
+      );
+      if (!result.rowCount) throw new HttpError(409, "Conflito de revisão. Recarregue as instruções.");
+      await audit(profile.id, "agent_instructions_updated", parsed.kind,
+        parsed.kind === "script" ? { code: parsed.entry.code, channel: parsed.entry.channel, revision: updated.revision }
+          : { policies: updated.policies?.length, revision: updated.revision });
+      return Response.json({ ok: true, revision: updated.revision });
+    }
     if (resource === "sync") {
       const stats = await syncCore(false, false);
       await audit(profile.id, "manual_source_sync", "core", stats);
