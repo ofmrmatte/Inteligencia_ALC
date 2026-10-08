@@ -89,6 +89,7 @@ async function driverAnswer(
     (state.step === "driver_name" && n === "3")) {
     return { state: { step: "done" }, reply: title("M15") };
   }
+  let justVerified = false;
   if (!conversation.identity_verified) {
     if (state.step !== "driver_base") {
       if (/^(OI|OLA|BOM DIA|BOA TARDE|BOA NOITE|MENU|INICIO|0)$/.test(n))
@@ -128,16 +129,28 @@ async function driverAnswer(
     conversation.name = record.driverName;
     conversation.base_key = record.baseKey;
     conversation.sigla = record.sigla;
+    justVerified = true;
   }
   if (/NAO RECEBEU|NAO FOI ENTREGUE|DESTINATARIO NAO|CLIENTE NAO/.test(n))
     return {
       state: { step: "human" }, reply: title("M13", { ID: conversation.case_id || "em análise" }),
       handoff: true,
     };
+  // Historical imports remain subject to the existing authenticated query constraints.
+  if (/ANTERIOR|HISTOR/.test(n)) await syncCore(true);
   const records = (await transaction.query(
     `SELECT record FROM alc_atendimento.cases WHERE driver_id=$1 AND driver_phone=$2 AND base_key=$3 AND sigla=$4 ORDER BY competence DESC,source_at DESC`,
     [conversation.driver_id, conversation.phone, conversation.base_key, conversation.sigla],
   )).rows.map(r => r.record as CaseRecord);
+  if (justVerified) return {
+    state: { step: "driver_select" },
+    reply: `${title("M03")}\\n\\n${title("M04", { Quantidade: String(records.length) })}`,
+  };
+  const exactCase = records.find(r => normalize(r.caseId) === n || normalize(r.shipmentId) === n);
+  if (exactCase) return {
+    state: { step: "driver_continue", selectedCaseId: exactCase.caseId },
+    reply: `Envio ${exactCase.shipmentId} | Caso ${exactCase.caseId} | Status: ${exactCase.classification === "aberta" ? "Em revisão" : exactCase.classification === "penalidade" ? "Com penalidade" : exactCase.classification === "aguardando_comprovante" ? "Aguardando comprovante" : "Encerrada"}.\\n\\n${title("M14")}`,
+  };
   const selected = records.find(r => r.caseId === state.selectedCaseId || r.shipmentId === state.selectedShipmentId);
   const related = selected || (records.length === 1 ? records[0] : null);
   const evidenceText = () => {
@@ -159,8 +172,6 @@ async function driverAnswer(
       reply: title("M04", { Quantidade: String(records.length) }),
     };
   }
-  const historical = /ANTERIOR|HISTOR/.test(n);
-  if (historical) await syncCore(true); // Existing guarded historical sync.
   const closed = /ENCERRAD/.test(n);
   const status = /AGUARDANDO|COMPROVANTE/.test(n) || (state.step === "driver_select" && n === "1")
     ? "aguardando_comprovante"
@@ -187,7 +198,7 @@ async function driverAnswer(
       : `PNRs localizadas: ${filtered.length}.\\n${list}`;
   return {
     state: { step: "driver_continue" },
-    reply: `${conversation.agent_state.step === "driver_base" ? title("M03") + "\\n\\n" : ""}${response}\\n\\n${title("M14")}`,
+    reply: `${response}\\n\\n${title("M14")}`,
   };
 }
 async function incoming(
