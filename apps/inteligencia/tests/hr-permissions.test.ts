@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { canAccessHr, canManageHr, canReadSensitiveHr, canManageHrDocuments, canImportSecullum } from "@/lib/hr/permissions";
-import { canAccessSection, canAccessOperationalData, modulesForProfile, roleModuleCap } from "@/lib/access-control";
+import { canAccessSection, canAccessOperationalData, modulesForProfile, roleDefaultModules, roleModuleCap } from "@/lib/access-control";
 import { NAVIGATION, SECTION_IDS, SECTION_META } from "@/lib/navigation";
 import { employeeSchema } from "@/lib/hr/validators";
 import type { UserRole } from "@/lib/auth";
@@ -13,12 +13,37 @@ describe("RH authorization and isolation", () => {
     expect(SECTION_META.rh.title).toBe("Recursos Humanos");
     expect(readFileSync("components/views/view-router.tsx", "utf8")).toContain('case "rh": return <HrView profile={profile} />');
   });
-  it.each<UserRole>(["loss_supervisor", "loss_admin", "coordinator", "supervisor", "driver"])("%s não herda RH do acesso operacional", (role) => {
+  it.each<UserRole>(["loss_supervisor", "loss_admin", "driver"])("%s não herda RH do acesso operacional", (role) => {
     const profile = { role, moduleScope: ["rh"], globalAccess: true };
     expect(canAccessHr(profile)).toBe(false);
     expect(canAccessSection(profile, "rh")).toBe(false);
     expect(modulesForProfile(profile)).not.toContain("rh");
     expect(roleModuleCap(role)).not.toContain("rh");
+  });
+
+  it.each<UserRole>(["coordinator", "supervisor"])("%s pode receber RH por módulo explícito, sem grant automático", (role) => {
+    expect(roleModuleCap(role)).toContain("rh");
+    expect(roleDefaultModules(role)).not.toContain("rh");
+
+    const withoutGrant = { role, setor: "Recursos Humanos", moduleScope: roleDefaultModules(role), globalAccess: false };
+    expect(canAccessHr(withoutGrant)).toBe(false);
+    expect(canAccessSection(withoutGrant, "rh")).toBe(false);
+
+    const withGrant = { ...withoutGrant, moduleScope: [...roleDefaultModules(role), "rh"] };
+    expect(canAccessHr(withGrant)).toBe(true);
+    expect(canAccessSection(withGrant, "rh")).toBe(true);
+    expect(modulesForProfile(withGrant)).toContain("rh");
+    expect(canManageHr(withGrant)).toBe(true);
+    expect(canReadSensitiveHr(withGrant)).toBe(false);
+    expect(canManageHrDocuments(withGrant)).toBe(false);
+    expect(canImportSecullum(withGrant)).toBe(false);
+  });
+
+  it("grant RH fora do setor Recursos Humanos é somente leitura", () => {
+    const profile = { role: "coordinator" as const, setor: "Operacional", moduleScope: ["rh"] };
+    expect(canAccessHr(profile)).toBe(true);
+    expect(canManageHr(profile)).toBe(false);
+    expect(canReadSensitiveHr(profile)).toBe(false);
   });
   it.each<UserRole>(["developer", "super_admin", "administration_supervisor", "admin"])("%s possui RH completo", (role) => {
     const profile = { role, moduleScope: [] };
