@@ -101,6 +101,27 @@ afterEach(() => {
 });
 
 describe("source import regressions", () => {
+  it("manual client/driver sync never queues outbound WhatsApp, even with automations on", async () => {
+    const initial = record();
+    expect(await upsertCases([initial], NOW.toISOString(), false, null, false)).toEqual({
+      processed: 1, new: 1,
+    });
+    expect(persisted.get(initial.caseId)?.record).toMatchObject({ caseId: initial.caseId });
+    expect(queuedKeys.size).toBe(0);
+    expect(mocks.templates).not.toHaveBeenCalled();
+    expect(mocks.query.mock.calls.some(([sql]) => sql.startsWith("INSERT INTO alc_atendimento.outbox"))).toBe(false);
+    expect(mocks.setting).not.toHaveBeenCalledWith("automation");
+  });
+
+  it("manually synchronizing the Inteligência source is data-only", async () => {
+    const initial = record();
+    mocks.coreQuery.mockResolvedValueOnce({ rows: [coreRow(initial)], rowCount: 1 });
+    expect(await syncCore(false, false)).toEqual({ processed: 1, new: 1 });
+    expect(queuedKeys.size).toBe(0);
+    expect(mocks.templates).not.toHaveBeenCalled();
+    expect(mocks.setting).not.toHaveBeenCalledWith("automation");
+  });
+
   it("baseline imports current cases without initial outreach", async () => {
     source.baselineComplete = false;
     const initial = record();
