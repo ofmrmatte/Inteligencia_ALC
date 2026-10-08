@@ -31,7 +31,12 @@ beforeAll(async () => {
       onMessage: { addListener: (listener) => { onMessage = listener; } },
       onInstalled: { addListener: () => undefined },
     },
-    tabs: { query: async () => [{ id: 7 }] },
+    storage: { local: { get: async () => ({}), set: async () => undefined, remove: async () => undefined } },
+    alarms: { create: async () => undefined, onAlarm: { addListener: () => undefined } },
+    tabs: {
+      query: async () => [{ id: 7, status: "complete", url: "https://envios.adminml.com/logistics/case-center/cases" }],
+      get: async () => ({ id: 7, status: "complete", url: "https://envios.adminml.com/logistics/case-center/cases" }),
+    },
     scripting: {
       executeScript: async ({ func, args }) => [{ result: await func(...args) }],
     },
