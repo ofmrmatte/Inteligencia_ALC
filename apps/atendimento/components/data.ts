@@ -23,6 +23,8 @@ export async function api<T>(path: string, body?: unknown): Promise<T> {
   if (!response.ok) throw new Error(data.error || "Falha ao carregar.");
   return data;
 }
+/** In-app event used by the fixed header to reload the currently mounted views. */
+export const HEADER_REFRESH_EVENT = "alc-atendimento:refresh";
 export function useData<T>(path: string, interval = 0) {
   const [snapshot, setSnapshot] = useState<{
       path: string;
@@ -56,9 +58,12 @@ export function useData<T>(path: string, interval = 0) {
           }
         });
     void load();
+    // Refreshes only the mounted screen's data; never triggers Case Center collection or WhatsApp sends.
+    window.addEventListener(HEADER_REFRESH_EVENT, load);
     const timer = interval ? setInterval(load, interval) : null;
     return () => {
       active = false;
+      window.removeEventListener(HEADER_REFRESH_EVENT, load);
       if (timer) clearInterval(timer);
     };
   }, [path, interval]);
