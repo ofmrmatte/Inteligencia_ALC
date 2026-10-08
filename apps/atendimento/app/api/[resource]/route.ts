@@ -459,7 +459,7 @@ export async function POST(
         };
       }
       await db().query(
-        `INSERT INTO alc_atendimento.settings(key,value,updated_by) VALUES('collector',$1,$2) ON CONFLICT(key) DO UPDATE SET value=excluded.value,updated_by=excluded.value,updated_at=now()`,
+        `INSERT INTO alc_atendimento.settings(key,value,updated_by) VALUES('collector',$1,$2) ON CONFLICT(key) DO UPDATE SET value=excluded.value,updated_by=excluded.updated_by,updated_at=now()`,
         [
           {
             ...state,
