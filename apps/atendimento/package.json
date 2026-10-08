@@ -16,6 +16,7 @@
     "test": "vitest run"
   },
   "dependencies": {
+    "@alc/ui": "*",
     "@supabase/ssr": "^0.12.4",
     "@supabase/supabase-js": "^2.112.3",
     "lucide-react": "^1.31.0",

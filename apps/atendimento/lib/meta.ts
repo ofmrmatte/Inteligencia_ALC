@@ -101,7 +101,7 @@ export async function graph(
   const data = await response.json();
   if (!response.ok)
     throw new Error(
-      `Meta ${response.status} (${data.error?.code || "API"}): ${String(data.error?.message || "Falha na integração").slice(0, 300)}`,
+      `Meta ${response.status} (${Number.isInteger(data.error?.code) ? data.error.code : "API"}): Falha na integração.`,
     );
   return data;
 }

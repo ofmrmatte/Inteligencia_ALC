@@ -22,7 +22,6 @@ import {
   queueTemplate,
   type Automation,
 } from "@/lib/source";
-import { queueText } from "@/lib/worker";
 import {
   competence,
   classification,
@@ -30,7 +29,19 @@ import {
   normalize,
   type CaseRecord,
 } from "@/lib/domain";
-import { canAccessAtendimento, canManageUsers, canManageRole, isUserRole } from "@alc/identity/auth";
+import {
+  canAccessAtendimento,
+  canManageUsers,
+  canManageRole,
+  isUserRole,
+} from "@alc/identity/auth";
+import {
+  listConversations,
+  conversationDetail,
+  eligibleAgents,
+  mutateConversation,
+  inboxScopeSql,
+} from "@/lib/inbox";
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 const channel = z.enum(["driver", "client"]);
@@ -86,7 +97,21 @@ function errorResponse(error: unknown) {
       { error: "Dados inválidos. Revise os campos informados." },
       { status: 400 },
     );
-  if (error instanceof Error && !("code" in error))
+  if (
+    error instanceof Error &&
+    [
+      "Telefone não validado.",
+      "Contato inicial limitado à competência vigente.",
+      "PNR encerrada.",
+      "Classificação fora da tratativa de clientes.",
+      "Modelo aprovado indisponível.",
+      "Fora da janela de 24h: é necessário modelo aprovado para esta classificação.",
+      "Cliente já possui uma tratativa ativa para outro envio. Revisão da equipe necessária.",
+      "Uma tratativa de outro envio está ativa para este cliente.",
+      "Janela de atendimento encerrada. Use um modelo aprovado.",
+      "Canal não configurado.",
+    ].includes(error.message)
+  )
     return Response.json({ error: error.message }, { status: 400 });
   return Response.json(
     { error: "Operação indisponível. Tente novamente." },
@@ -115,19 +140,24 @@ export async function GET(
       });
     }
     if (resource === "conversations")
-      return Response.json({
-        records: await allowedRows("conversations", profile),
-      });
+      return Response.json(
+        await listConversations(profile, Object.fromEntries(query)),
+      );
+    if (resource === "agents") {
+      const target = query.get("id")
+        ? await conversationAccess(id.parse(query.get("id")), profile)
+        : null;
+      const records = [];
+      for (const agent of await eligibleAgents()) {
+        if (!target || visible(await scopeFor(agent), target))
+          records.push({ id: agent.id, name: agent.fullName || agent.email });
+      }
+      return Response.json({ records });
+    }
     if (resource === "messages") {
-      const conversation = await conversationAccess(
-        id.parse(query.get("id")),
-        profile,
+      return Response.json(
+        await conversationDetail(profile, id.parse(query.get("id")), query),
       );
-      const result = await db().query(
-        "SELECT * FROM alc_atendimento.messages WHERE conversation_id=$1 ORDER BY created_at DESC LIMIT 250",
-        [conversation.id],
-      );
-      return Response.json({ conversation, messages: result.rows.reverse() });
     }
     if (resource === "media") {
       const messageId = id.parse(query.get("id"));
@@ -179,22 +209,48 @@ export async function GET(
       });
     }
     if (resource === "overview") {
-      const [cases, conversations, source] = await Promise.all([
-        allowedRows("cases", profile),
-        allowedRows("conversations", profile),
-        setting("source"),
-      ]);
-      const current = cases.filter((r) => r.competence === competence());
+      const scope = await scopeFor(profile),
+        caseValues: unknown[] = [],
+        conversationValues: unknown[] = [];
+      const caseScope = inboxScopeSql(scope, caseValues),
+        conversationScope = inboxScopeSql(scope, conversationValues);
+      caseValues.push(competence());
+      const [cases, conversations, source, collector, queue] =
+        await Promise.all([
+          db().query(
+            `SELECT count(*) FILTER(WHERE classification<>'encerrada')::int AS open,count(*) FILTER(WHERE classification='aguardando_comprovante')::int AS proof,count(*) FILTER(WHERE classification='penalidade')::int AS penalty FROM alc_atendimento.cases c WHERE ${caseScope} AND competence=$${caseValues.length}`,
+            caseValues,
+          ),
+          db().query(
+            `SELECT count(*)::int AS conversations,count(*) FILTER(WHERE status='human')::int AS human,count(*) FILTER(WHERE status='pending')::int AS pending,coalesce(sum(unread),0)::int AS unread FROM alc_atendimento.conversations c WHERE ${conversationScope}`,
+            conversationValues,
+          ),
+          setting<{ lastSync?: string }>("source"),
+          setting<{
+            enabled?: boolean;
+            lastSync?: string;
+            completed?: boolean;
+          }>("collector"),
+          db().query(
+            `SELECT id,name,phone,channel,status,unread,updated_at FROM alc_atendimento.conversations c WHERE ${conversationScope} AND status IN ('human','pending') ORDER BY unread DESC,updated_at DESC,id DESC LIMIT 10`,
+            conversationValues,
+          ),
+        ]);
       return Response.json({
-        open: current.filter((r) => r.classification !== "encerrada").length,
-        proof: current.filter(
-          (r) => r.classification === "aguardando_comprovante",
-        ).length,
-        penalty: current.filter((r) => r.classification === "penalidade")
-          .length,
-        human: conversations.filter((r) => r.status === "human").length,
-        conversations: conversations.length,
-        source,
+        ...cases.rows[0],
+        ...conversations.rows[0],
+        source: {
+          lastSync: [source?.lastSync, collector?.lastSync]
+            .filter(Boolean)
+            .sort()
+            .at(-1),
+        },
+        collector: {
+          enabled: collector?.enabled || false,
+          lastSync: collector?.lastSync || null,
+          completed: collector?.completed || false,
+        },
+        queue: queue.rows,
         competence: competence(),
       });
     }
@@ -262,7 +318,17 @@ export async function GET(
         )
           continue;
         const access = await setting<{ active: boolean }>(`access_${user.id}`);
-        records.push({ ...user, atendimentoActive: user.active !== false && isUserRole(user.role) && canAccessAtendimento({ role: user.role, moduleScope: user.module_scope ?? undefined, atendimentoAccess: access?.active }) });
+        records.push({
+          ...user,
+          atendimentoActive:
+            user.active !== false &&
+            isUserRole(user.role) &&
+            canAccessAtendimento({
+              role: user.role,
+              moduleScope: user.module_scope ?? undefined,
+              atendimentoAccess: access?.active,
+            }),
+        });
       }
       return Response.json({ records });
     }
@@ -295,122 +361,7 @@ export async function POST(
       throw new HttpError(400, "JSON inválido.");
     }
     if (resource === "conversation") {
-      const parsed = z
-        .object({
-          id,
-          action: z.enum([
-            "takeover",
-            "resume",
-            "resolve",
-            "assign",
-            "note",
-            "reply",
-            "verify_driver",
-          ]),
-          body: z.string().trim().min(1).max(4000).optional(),
-          assignedTo: id.nullable().optional(),
-          driverId: short.optional(),
-          baseKey: short.optional(),
-        })
-        .parse(body);
-      const row = await conversationAccess(parsed.id, profile);
-      if (parsed.action === "reply" || parsed.action === "note") {
-        if (!parsed.body) throw new HttpError(400, "Informe uma mensagem.");
-        if (parsed.action === "reply") {
-          await db().query(
-            "UPDATE alc_atendimento.conversations SET status='human',assigned_to=$2,agent_state=jsonb_set(agent_state,'{step}','\"staff\"') WHERE id=$1",
-            [row.id, profile.id],
-          );
-          await queueText(
-            row,
-            parsed.body,
-            `staff:${crypto.randomUUID()}`,
-            profile.id,
-          );
-        } else
-          await db().query(
-            "INSERT INTO alc_atendimento.messages(conversation_id,direction,body,actor_id) VALUES($1,'note',$2,$3)",
-            [row.id, parsed.body, profile.id],
-          );
-      } else if (parsed.action === "verify_driver") {
-        requireAdmin(profile);
-        if (row.channel !== "driver" || !parsed.driverId || !parsed.baseKey)
-          throw new HttpError(400, "Informe o ID e a base validados.");
-        const candidates = (
-          await db().query(
-            "SELECT record FROM alc_atendimento.cases WHERE driver_id=$1",
-            [parsed.driverId],
-          )
-        ).rows
-          .map((r) => r.record as CaseRecord)
-          .filter((r) => normalize(r.baseKey) === normalize(parsed.baseKey));
-        if (!candidates.length)
-          throw new HttpError(400, "Motorista/base não localizados.");
-        const record = candidates[0];
-        await db().query(
-          "UPDATE alc_atendimento.conversations SET driver_id=$2,base_key=$3,sigla=$4,name=$5,identity_verified=true,status='bot',agent_state='{\"step\":\"driver_verified\"}' WHERE id=$1",
-          [
-            row.id,
-            record.driverId,
-            record.baseKey,
-            record.sigla,
-            record.driverName,
-          ],
-        );
-        // Phone must also be bound to this driver for every query; explicit staff validation is audited.
-        const records = await db().query(
-          "SELECT case_id,record FROM alc_atendimento.cases WHERE driver_id=$1 AND base_key=$2 AND sigla=$3",
-          [record.driverId, record.baseKey, record.sigla],
-        );
-        for (const item of records.rows)
-          await db().query(
-            "UPDATE alc_atendimento.cases SET driver_phone=$2,record=jsonb_set(record,'{driverPhone}',to_jsonb($2::text)) WHERE case_id=$1",
-            [item.case_id, row.phone],
-          );
-      } else {
-        const status =
-          parsed.action === "takeover"
-            ? "human"
-            : parsed.action === "resolve"
-              ? "resolved"
-              : parsed.action === "resume"
-                ? "bot"
-                : row.status;
-        if (parsed.action === "assign" && parsed.assignedTo) {
-          // Assigning is limited to the actor; global user assignment belongs to Administration.
-          if (parsed.assignedTo !== profile.id)
-            throw new HttpError(
-              403,
-              "Assuma o atendimento com seu próprio usuário.",
-            );
-        }
-        await db().query(
-          "UPDATE alc_atendimento.conversations SET status=$2,assigned_to=$3,unread=0,updated_at=now() WHERE id=$1",
-          [row.id, status, parsed.action === "resume" ? null : profile.id],
-        );
-        if (parsed.action === "takeover")
-          await db().query(
-            "UPDATE alc_atendimento.conversations SET agent_state=jsonb_set(agent_state,'{step}','\"staff\"') WHERE id=$1",
-            [row.id],
-          );
-        if (parsed.action === "resume")
-          await db().query(
-            "UPDATE alc_atendimento.conversations SET agent_state=$2 WHERE id=$1",
-            [
-              row.id,
-              {
-                step:
-                  row.channel === "driver"
-                    ? row.identity_verified
-                      ? "driver_verified"
-                      : "driver_name"
-                    : "receipt",
-              },
-            ],
-          );
-      }
-      await audit(profile.id, parsed.action, row.id);
-      return Response.json({ ok: true });
+      return Response.json(await mutateConversation(profile, body));
     }
     if (resource === "import") {
       requireAdmin(profile);
@@ -670,8 +621,15 @@ export async function POST(
         !canManageRole(profile, data.role)
       )
         throw new HttpError(403, "Você não pode gerenciar este perfil.");
-      if (parsed.active && (data.active === false || !canAccessAtendimento({ role: data.role, atendimentoAccess: true })))
-        throw new HttpError(403, "Este perfil não pode receber acesso ao Atendimento.");
+      if (
+        parsed.active &&
+        (data.active === false ||
+          !canAccessAtendimento({ role: data.role, atendimentoAccess: true }))
+      )
+        throw new HttpError(
+          403,
+          "Este perfil não pode receber acesso ao Atendimento.",
+        );
       await db().query(
         "INSERT INTO alc_atendimento.settings(key,value,updated_by) VALUES($1,$2,$3) ON CONFLICT(key) DO UPDATE SET value=excluded.value,updated_by=excluded.updated_by,updated_at=now()",
         [`access_${parsed.id}`, { active: parsed.active }, profile.id],

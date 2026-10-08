@@ -33,6 +33,7 @@ const securityHeaders = [
 ];
 
 const nextConfig: NextConfig = {
+  transpilePackages: ["@alc/ui"],
   outputFileTracingRoot: monorepoRoot,
   turbopack: { root: monorepoRoot },
   poweredByHeader: false,

@@ -1,111 +1,147 @@
 "use client";
 import Link from "next/link";
 import {
-  ArrowUpRight,
+  Clock3,
+  FileQuestion,
   MessageSquare,
-  ClipboardList,
-  ShieldCheck,
-  Clock,
+  ShieldAlert,
+  RefreshCw,
 } from "lucide-react";
+import { KpiCard, Panel, StatusBadge } from "@alc/ui/components";
 import { useData, when } from "./data";
 type OverviewData = {
   open: number;
   proof: number;
   penalty: number;
   human: number;
-  conversations: number;
+  pending: number;
+  unread: number;
   competence: string;
-  source: { lastSync?: string; origin?: string };
+  source: { lastSync?: string };
+  collector: { enabled: boolean; lastSync: string | null; completed: boolean };
+  queue: {
+    id: string;
+    name: string;
+    phone: string;
+    channel: string;
+    status: string;
+    unread: number;
+    updated_at: string;
+  }[];
 };
 export function Overview() {
-  const { data, error } = useData<OverviewData>("overview", 30_000);
+  const { data, error, refresh } = useData<OverviewData>("overview", 15_000);
   return (
     <main className="page">
       <div className="page-title">
         <div>
-          <p className="eyebrow">ATENDIMENTO & PREVENÇÃO DE PERDAS</p>
-          <h1>Sua operação, em conversa.</h1>
-          <p className="muted">
-            Acompanhe as PNRs e os atendimentos da equipe.
-          </p>
+          <p className="eyebrow">MONITORAMENTO OPERACIONAL</p>
+          <h1>Visão Geral</h1>
         </div>
-        <Link className="primary" href="/conversas">
-          Abrir conversas
-          <ArrowUpRight size={17} />
-        </Link>
+        <button
+          className="icon-button"
+          title="Atualizar indicadores"
+          aria-label="Atualizar indicadores"
+          onClick={() => void refresh()}
+        >
+          <RefreshCw size={18} />
+        </button>
       </div>
-      {error ? (
+      {error && (
         <p role="alert" className="notice error">
           {error}
         </p>
-      ) : null}
+      )}
       <div className="stats">
-        {[
-          ["PNRs em aberto", data?.open, "Competência vigente"],
-          ["Aguardando comprovante", data?.proof, "Contato com cliente"],
-          ["Com penalidade", data?.penalty, "Tratativa e acompanhamento"],
-          ["Aguardando equipe", data?.human, "Atendimento humano"],
-        ].map(([label, value, note]) => (
-          <article className="stat" key={String(label)}>
-            <p>{label}</p>
-            <strong>{value ?? "—"}</strong>
-            <small>{note}</small>
-          </article>
-        ))}
+        <KpiCard
+          label="PNRs em aberto"
+          value={String(data?.open ?? "—")}
+          detail={data?.competence || "Competência vigente"}
+          icon={<FileQuestion size={18} />}
+          tone="red"
+        />
+        <KpiCard
+          label="Com penalidade"
+          value={String(data?.penalty ?? "—")}
+          detail={`${data?.proof ?? "—"} aguardando comprovante`}
+          icon={<ShieldAlert size={18} />}
+          tone="amber"
+        />
+        <KpiCard
+          label="Atendimento humano"
+          value={String(data?.human ?? "—")}
+          detail={`${data?.unread ?? "—"} mensagens não lidas`}
+          icon={<MessageSquare size={18} />}
+        />
+        <KpiCard
+          label="Pendentes"
+          value={String(data?.pending ?? "—")}
+          detail="Aguardando continuidade"
+          icon={<Clock3 size={18} />}
+          tone="amber"
+        />
       </div>
       <div className="overview-grid">
-        <section className="card">
-          <div className="card-heading">
-            <h2>Do caso à resolução</h2>
-            <span className="badge">Dois canais</span>
-          </div>
-          <Link className="flow-link" href="/pnrs">
-            <span className="icon-tile">
-              <ClipboardList />
-            </span>
-            <div>
-              <h3>Tratativas de clientes</h3>
-              <p>Recebimento, data, produto e encaminhamento à equipe.</p>
-            </div>
-            <ArrowUpRight />
-          </Link>
-          <Link className="flow-link" href="/conversas">
-            <span className="icon-tile">
-              <MessageSquare />
-            </span>
-            <div>
-              <h3>Consultas de motoristas</h3>
-              <p>Nome, base e telefone validados para consultar suas PNRs.</p>
-            </div>
-            <ArrowUpRight />
-          </Link>
-          <div className="inline-info">
-            <ShieldCheck size={18} />
-            Ao assumir uma conversa, a equipe pausa o robô.
-          </div>
-        </section>
-        <section className="card source-card">
-          <Clock size={24} />
-          <p className="eyebrow">ORIGEM DOS DADOS</p>
-          <h2>Uma operação atualizada.</h2>
-          <p>
-            Coleta a cada 30 minutos, enquanto o computador de teste e as abas
-            autenticadas estiverem disponíveis.
-          </p>
+        <Panel
+          title="Fila da equipe"
+          action={
+            <Link className="text-link" href="/conversas?status=all">
+              Ver caixa
+            </Link>
+          }
+        >
+          {!data && !error && <div role="status">Carregando fila…</div>}
+          {data?.queue.map((c) => (
+            <Link
+              className="queue-row"
+              href={`/conversas?id=${c.id}&status=all`}
+              key={c.id}
+            >
+              <span>
+                <strong>{c.name || `+${c.phone}`}</strong>
+                <small>
+                  {c.channel === "driver" ? "Motoristas" : "Disparo Cliente"} ·{" "}
+                  {when(c.updated_at)}
+                </small>
+              </span>
+              <StatusBadge tone={c.status === "pending" ? "amber" : "neutral"}>
+                {c.status === "pending" ? "Pendente" : "Atendente"} · {c.unread}{" "}
+                não lidas
+              </StatusBadge>
+            </Link>
+          ))}
+          {data && !data.queue.length && (
+            <div className="empty">Nenhuma pendência na fila.</div>
+          )}
+        </Panel>
+        <Panel title="Coleta Mercado Livre">
           <dl>
             <dt>Competência</dt>
             <dd>{data?.competence || "—"}</dd>
-            <dt>Última atualização da fonte</dt>
-            <dd>{when(data?.source?.lastSync)}</dd>
+            <dt>Última sincronização</dt>
+            <dd>{when(data?.source.lastSync)}</dd>
+            <dt>Coletor</dt>
+            <dd>
+              {data?.collector.enabled
+                ? "Agendado · 30 minutos"
+                : "Não agendado"}
+            </dd>
+            <dt>Carga</dt>
+            <dd>
+              {data?.collector.completed
+                ? "Última coleta concluída"
+                : "Coleta ainda não concluída"}
+            </dd>
           </dl>
-          <Link href="/admin" className="text-link">
-            Ver integrações →
-          </Link>
-        </section>
-      </div>
-      <div className="notice">
-        As competências anteriores ficam disponíveis para consultas dos
-        motoristas. Casos encerrados são preservados no histórico.
+          <div className="actions">
+            <Link className="primary" href="/conversas?channel=client">
+              Disparo Cliente
+            </Link>
+            <Link className="text-link" href="/conversas?channel=driver">
+              Atendimento motoristas
+            </Link>
+          </div>
+        </Panel>
       </div>
     </main>
   );

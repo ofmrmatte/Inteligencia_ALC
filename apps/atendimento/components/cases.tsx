@@ -1,5 +1,6 @@
 "use client";
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
+import { ArrowRight, X } from "lucide-react";
 import { api, useData, labels, when } from "./data";
 import type { CaseRecord } from "@/lib/domain";
 import { request } from "./collector";
@@ -11,6 +12,7 @@ type Row = {
   record: CaseRecord;
 };
 export function Cases() {
+  const dialog = useRef<HTMLDialogElement>(null);
   const { data, error, refresh } = useData<{
       records: Row[];
       competence: string;
@@ -29,6 +31,9 @@ export function Cases() {
     [selected, setSelected] = useState<Row | null>(null),
     [notice, setNotice] = useState(""),
     [busy, setBusy] = useState(false);
+  useEffect(() => {
+    if (selected) dialog.current?.showModal();
+  }, [selected]);
   const rows = (data?.records || []).filter(
     (r) =>
       (filter === "all" || filter === "closed"
@@ -152,7 +157,7 @@ export function Cases() {
                       setCandidate(null);
                     }}
                   >
-                    Detalhes →
+                    Detalhes <ArrowRight size={15} />
                   </button>
                 </td>
               </tr>
@@ -167,132 +172,129 @@ export function Cases() {
         ) : null}
       </div>
       {selected ? (
-        <div className="modal-backdrop">
-          <section
-            className="modal"
-            role="dialog"
-            aria-modal="true"
-            aria-label="Detalhes da PNR"
-          >
-            <div className="card-heading">
-              <h2>Envio {selected.record.shipmentId}</h2>
+        <dialog
+          ref={dialog}
+          className="modal"
+          aria-label="Detalhes da PNR"
+          onClose={() => setSelected(null)}
+        >
+          <div className="card-heading">
+            <h2>Envio {selected.record.shipmentId}</h2>
+            <button
+              className="icon-button"
+              onClick={() => dialog.current?.close()}
+              aria-label="Fechar detalhes"
+            >
+              <X size={18} />
+            </button>
+          </div>
+          <dl>
+            <dt>Motorista / base</dt>
+            <dd>
+              {selected.record.driverName} · {selected.record.baseKey}
+            </dd>
+            <dt>Classificação</dt>
+            <dd>{labels[selected.classification]}</dd>
+            <dt>Cliente</dt>
+            <dd>{selected.record.customerName || "Nome ainda não coletado"}</dd>
+            <dt>Telefone do cliente</dt>
+            <dd>
+              {selected.record.customerPhone ||
+                "Pendente de complemento e validação"}
+            </dd>
+            <dt>CPF / documento do comprador</dt>
+            <dd>
+              {selected.record.customerDocument ||
+                candidate?.document ||
+                "Não coletado"}
+            </dd>
+            <dt>Endereço do comprador</dt>
+            <dd>
+              {selected.record.customerAddress ||
+                candidate?.address ||
+                "Não coletado"}
+            </dd>
+            <dt>Produto</dt>
+            <dd>
+              {selected.record.products.map((p) => p.title).join(", ") ||
+                "Detalhes pendentes"}
+            </dd>
+            <dt>Entrega</dt>
+            <dd>{when(selected.record.deliveryAt)}</dd>
+            <dt>Atualização da fonte</dt>
+            <dd>{when(selected.source_at)}</dd>
+          </dl>
+          {profile?.admin ? (
+            <>
+              <h3>Contato validado do cliente</h3>
               <button
-                onClick={() => setSelected(null)}
-                aria-label="Fechar detalhes"
+                onClick={async () => {
+                  try {
+                    const data = await request<NonNullable<typeof candidate>>(
+                      "READ_PACKAGE_CUSTOMER",
+                    );
+                    if (data.shipmentId !== selected.record.shipmentId)
+                      throw new Error(
+                        "O envio aberto em package-management não corresponde a esta PNR.",
+                      );
+                    setCandidate(data);
+                    setNotice(
+                      "Dados lidos. Confirme o comprador antes de salvar.",
+                    );
+                  } catch (e) {
+                    setNotice((e as Error).message);
+                  }
+                }}
               >
-                ✕
+                Ler comprador em package-management
               </button>
-            </div>
-            <dl>
-              <dt>Motorista / base</dt>
-              <dd>
-                {selected.record.driverName} · {selected.record.baseKey}
-              </dd>
-              <dt>Classificação</dt>
-              <dd>{labels[selected.classification]}</dd>
-              <dt>Cliente</dt>
-              <dd>
-                {selected.record.customerName || "Nome ainda não coletado"}
-              </dd>
-              <dt>Telefone do cliente</dt>
-              <dd>
-                {selected.record.customerPhone ||
-                  "Pendente de complemento e validação"}
-              </dd>
-              <dt>CPF / documento do comprador</dt>
-              <dd>
-                {selected.record.customerDocument ||
-                  candidate?.document ||
-                  "Não coletado"}
-              </dd>
-              <dt>Endereço do comprador</dt>
-              <dd>
-                {selected.record.customerAddress ||
-                  candidate?.address ||
-                  "Não coletado"}
-              </dd>
-              <dt>Produto</dt>
-              <dd>
-                {selected.record.products.map((p) => p.title).join(", ") ||
-                  "Detalhes pendentes"}
-              </dd>
-              <dt>Entrega</dt>
-              <dd>{when(selected.record.deliveryAt)}</dd>
-              <dt>Atualização da fonte</dt>
-              <dd>{when(selected.source_at)}</dd>
-            </dl>
-            {profile?.admin ? (
-              <>
-                <h3>Contato validado do cliente</h3>
-                <button
-                  onClick={async () => {
-                    try {
-                      const data = await request<NonNullable<typeof candidate>>(
-                        "READ_PACKAGE_CUSTOMER",
-                      );
-                      if (data.shipmentId !== selected.record.shipmentId)
-                        throw new Error(
-                          "O envio aberto em package-management não corresponde a esta PNR.",
-                        );
-                      setCandidate(data);
-                      setNotice(
-                        "Dados lidos. Confirme o comprador antes de salvar.",
-                      );
-                    } catch (e) {
-                      setNotice((e as Error).message);
+              <form
+                key={candidate?.sourceUrl || selected.case_id}
+                className="stack"
+                onSubmit={contact}
+              >
+                <label>
+                  Nome do comprador
+                  <input
+                    name="name"
+                    defaultValue={
+                      candidate?.name || selected.record.customerName
                     }
-                  }}
-                >
-                  Ler comprador em package-management
+                    required
+                  />
+                </label>
+                <label>
+                  Telefone do comprador
+                  <input
+                    name="phone"
+                    defaultValue={
+                      candidate?.phone || selected.record.customerPhone
+                    }
+                    required
+                  />
+                </label>
+                <label className="check">
+                  <input type="checkbox" required />
+                  Confirmei este contato na fonte autorizada do envio.
+                </label>
+                <button>Salvar contato</button>
+              </form>
+              <div className="actions">
+                <button disabled={busy} onClick={() => dispatch("client")}>
+                  Enviar modelo ao cliente
                 </button>
-                <form
-                  key={candidate?.sourceUrl || selected.case_id}
-                  className="stack"
-                  onSubmit={contact}
-                >
-                  <label>
-                    Nome do comprador
-                    <input
-                      name="name"
-                      defaultValue={
-                        candidate?.name || selected.record.customerName
-                      }
-                      required
-                    />
-                  </label>
-                  <label>
-                    Telefone do comprador
-                    <input
-                      name="phone"
-                      defaultValue={
-                        candidate?.phone || selected.record.customerPhone
-                      }
-                      required
-                    />
-                  </label>
-                  <label className="check">
-                    <input type="checkbox" required />
-                    Confirmei este contato na fonte autorizada do envio.
-                  </label>
-                  <button>Salvar contato</button>
-                </form>
-                <div className="actions">
-                  <button disabled={busy} onClick={() => dispatch("client")}>
-                    Enviar modelo ao cliente
-                  </button>
-                  <button disabled={busy} onClick={() => dispatch("driver")}>
-                    Notificar motorista
-                  </button>
-                </div>
-              </>
-            ) : null}
-            {notice ? (
-              <p className="notice" role="status">
-                {notice}
-              </p>
-            ) : null}
-          </section>
-        </div>
+                <button disabled={busy} onClick={() => dispatch("driver")}>
+                  Notificar motorista
+                </button>
+              </div>
+            </>
+          ) : null}
+          {notice ? (
+            <p className="notice" role="status">
+              {notice}
+            </p>
+          ) : null}
+        </dialog>
       ) : null}
     </main>
   );

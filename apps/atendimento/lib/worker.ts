@@ -22,7 +22,22 @@ type Conversation = {
   case_id: string;
   base_key: string;
   sigla: string;
+  assigned_to?: string | null;
 };
+export function botReplyAllowed(conversation: {
+  status: string;
+  assigned_to?: string | null;
+  agent_state: { step: string };
+}) {
+  return (
+    conversation.status === "bot" ||
+    (!conversation.assigned_to &&
+      ((conversation.status === "human" &&
+        conversation.agent_state.step === "human") ||
+        (conversation.status === "resolved" &&
+          conversation.agent_state.step === "done")))
+  );
+}
 export async function queueText(
   conversation: Conversation,
   text: string,
@@ -46,7 +61,8 @@ export async function queueText(
     `INSERT INTO alc_atendimento.outbox(dedupe_key,conversation_id,channel,phone,payload) VALUES($1,$2,$3,$4,$5) ON CONFLICT(dedupe_key) DO NOTHING`,
     [key, conversation.id, conversation.channel, conversation.phone, payload],
   );
-  if (actor) await audit(actor, "reply_queued", conversation.id);
+  if (actor)
+    await audit(actor, "reply_queued", conversation.id, {}, transaction);
 }
 async function driverAnswer(
   conversation: Conversation,
@@ -347,70 +363,93 @@ export async function processOutbox() {
         continue;
       }
     }
-    const claimed = await db().query(
-      "UPDATE alc_atendimento.outbox SET status='sending',attempts=attempts+1,updated_at=now() WHERE id=$1 AND status='pending' RETURNING id",
-      [job.id],
-    );
-    if (!claimed.rowCount) continue;
-    // Recheck the service window and human takeover immediately before a bot reply.
-    if (job.payload.type === "text") {
-      const c = (
-        await db().query(
-          "SELECT * FROM alc_atendimento.conversations WHERE id=$1",
-          [job.conversation_id],
-        )
-      ).rows[0];
-      if (
-        !c?.last_inbound_at ||
-        Date.now() - new Date(c.last_inbound_at).getTime() > 86_400_000 ||
-        (job.dedupe_key.startsWith("reply:") &&
-          c.status === "human" &&
-          c.agent_state.step !== "human")
-      ) {
-        await db().query(
-          "UPDATE alc_atendimento.outbox SET status='cancelled',error='Janela encerrada ou atendimento assumido.' WHERE id=$1",
-          [job.id],
-        );
-        continue;
-      }
-    }
+    // Serialize takeover and sends for this conversation, including the bounded provider request.
+    const sending = job.conversation_id ? await db().connect() : null;
     try {
-      const sent = await graph(
-        config,
-        `${config.phoneId}/messages`,
-        job.payload,
+      if (sending)
+        await sending.query("SELECT pg_advisory_lock(hashtextextended($1,0))", [
+          job.conversation_id,
+        ]);
+      const connection = sending || db();
+      const claimed = await connection.query(
+        "UPDATE alc_atendimento.outbox SET status='sending',attempts=attempts+1,updated_at=now() WHERE id=$1 AND status='pending' RETURNING id",
+        [job.id],
       );
-      const provider = sent.messages?.[0]?.id;
-      if (!provider)
-        throw new Error("Meta não confirmou o identificador de envio.");
-      await db().query(
-        "UPDATE alc_atendimento.outbox SET status='sent',provider_id=$2,updated_at=now() WHERE id=$1",
-        [job.id, provider],
-      );
-      if (job.conversation_id)
-        await db().query(
-          `INSERT INTO alc_atendimento.messages(conversation_id,provider_id,direction,body,status,type) VALUES($1,$2,'out',$3,'sent',$4) ON CONFLICT(provider_id) DO NOTHING`,
+      if (!claimed.rowCount) continue;
+      // Recheck the service window and human takeover immediately before a bot reply.
+      if (job.payload.type === "text") {
+        const c = (
+          await connection.query(
+            "SELECT * FROM alc_atendimento.conversations WHERE id=$1",
+            [job.conversation_id],
+          )
+        ).rows[0];
+        if (
+          !c?.last_inbound_at ||
+          Date.now() - new Date(c.last_inbound_at).getTime() > 86_400_000 ||
+          (job.dedupe_key.startsWith("reply:") && !botReplyAllowed(c))
+        ) {
+          await connection.query(
+            "UPDATE alc_atendimento.outbox SET status='cancelled',error='Janela encerrada ou atendimento assumido.' WHERE id=$1",
+            [job.id],
+          );
+          continue;
+        }
+      }
+      try {
+        const sent = await graph(
+          config,
+          `${config.phoneId}/messages`,
+          job.payload,
+        );
+        const provider = sent.messages?.[0]?.id;
+        if (!provider)
+          throw new Error("Meta não confirmou o identificador de envio.");
+        await connection.query(
+          "UPDATE alc_atendimento.outbox SET status='sent',provider_id=$2,updated_at=now() WHERE id=$1",
+          [job.id, provider],
+        );
+        if (job.conversation_id)
+          await connection.query(
+            `INSERT INTO alc_atendimento.messages(conversation_id,provider_id,direction,body,status,type) VALUES($1,$2,'out',$3,'sent',$4) ON CONFLICT(provider_id) DO NOTHING`,
+            [
+              job.conversation_id,
+              provider,
+              job.payload.text?.body ||
+                `[Modelo: ${job.payload.template?.name}]`,
+              job.payload.type,
+            ],
+          );
+      } catch (error) {
+        const uncertain = !(
+          error instanceof Error && /^Meta 4\d\d \(/.test(error.message)
+        );
+        await connection.query(
+          "UPDATE alc_atendimento.outbox SET status=$2,error=$3,updated_at=now() WHERE id=$1",
           [
-            job.conversation_id,
-            provider,
-            job.payload.text?.body || `[Modelo: ${job.payload.template?.name}]`,
-            job.payload.type,
+            job.id,
+            uncertain ? "uncertain" : "failed",
+            uncertain
+              ? "Resposta do provedor não confirmada. Revisão manual necessária."
+              : (error as Error).message,
           ],
         );
-    } catch (error) {
-      const uncertain = !(
-        error instanceof Error && error.message.startsWith("Meta ")
-      );
-      await db().query(
-        "UPDATE alc_atendimento.outbox SET status=$2,error=$3,updated_at=now() WHERE id=$1",
-        [
-          job.id,
-          uncertain ? "uncertain" : "failed",
-          uncertain
-            ? "Resposta do provedor não confirmada. Revisão manual necessária."
-            : (error as Error).message,
-        ],
-      );
+      }
+    } finally {
+      if (sending) {
+        try {
+          await sending.query(
+            "SELECT pg_advisory_unlock(hashtextextended($1,0))",
+            [job.conversation_id],
+          );
+          sending.release();
+        } catch (error) {
+          sending.release(
+            error instanceof Error ? error : new Error("Lock release failed"),
+          );
+          throw error;
+        }
+      }
     }
   }
 }

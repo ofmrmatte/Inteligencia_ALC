@@ -38,6 +38,9 @@ jobs:
       - name: Build Inteligência and PNR connector
         run: npm run build
 
+      - name: Build Atendimento
+        run: npm run build:atendimento
+
       - name: Production dependency security audit
         run: npm audit --omit=dev --audit-level=high
 

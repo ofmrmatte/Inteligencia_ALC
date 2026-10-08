@@ -10,18 +10,32 @@ export async function api<T>(path: string, body?: unknown): Promise<T> {
   const data = await response.json();
   if (response.status === 401 || data.error === "MFA_REQUIRED")
     window.location.assign(new URL("/login", window.location.origin).href);
+  else if (
+    response.status === 403 &&
+    [
+      "Perfil sem acesso ao Atendimento.",
+      "Seu acesso ao Atendimento está desativado.",
+    ].includes(data.error)
+  )
+    window.location.assign(
+      new URL("/acesso-indisponivel", window.location.origin).href,
+    );
   if (!response.ok) throw new Error(data.error || "Falha ao carregar.");
   return data;
 }
 export function useData<T>(path: string, interval = 0) {
-  const [data, setData] = useState<T | null>(null),
+  const [snapshot, setSnapshot] = useState<{
+      path: string;
+      value: T | null;
+    } | null>(null),
     [error, setError] = useState("");
   const refresh = useCallback(async () => {
     try {
       const result = await api<T>(path);
-      setData(result);
+      setSnapshot({ path, value: result });
       setError("");
     } catch (e) {
+      setSnapshot({ path, value: null });
       setError(e instanceof Error ? e.message : "Falha ao carregar.");
     }
   }, [path]);
@@ -31,12 +45,15 @@ export function useData<T>(path: string, interval = 0) {
       api<T>(path)
         .then((result) => {
           if (active) {
-            setData(result);
+            setSnapshot({ path, value: result });
             setError("");
           }
         })
         .catch((e) => {
-          if (active) setError(e.message);
+          if (active) {
+            setSnapshot({ path, value: null });
+            setError(e.message);
+          }
         });
     void load();
     const timer = interval ? setInterval(load, interval) : null;
@@ -45,7 +62,11 @@ export function useData<T>(path: string, interval = 0) {
       if (timer) clearInterval(timer);
     };
   }, [path, interval]);
-  return { data, error, refresh };
+  return {
+    data: snapshot?.path === path ? snapshot.value : null,
+    error: snapshot?.path === path ? error : "",
+    refresh,
+  };
 }
 export const labels: Record<string, string> = {
   aguardando_comprovante: "Aguardando comprovante",
@@ -55,6 +76,10 @@ export const labels: Record<string, string> = {
   human: "Com a equipe",
   bot: "Automático",
   resolved: "Concluído",
+  received: "Recebido",
+  delivered: "Entregue",
+  read: "Lido",
+  sending: "Enviando",
   pending: "Na fila",
   sent: "Enviado",
   failed: "Falhou",

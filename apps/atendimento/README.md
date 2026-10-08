@@ -37,4 +37,6 @@ Modelos iniciais: `cliente_loss` e `pnraberta`, consultados na Meta antes de env
 
 ## Verificação
 
+Contrato da caixa, marca, persistencia, rollback e limites da homologacao: [Atendimento operacional](../../docs/atendimento-operacional.md).
+
 `npm run lint --workspace=@alc/atendimento`, `npm run typecheck`, `npm test`, `npm run build:atendimento` e `npm run build` (painel). Nenhum teste dispara WhatsApp para destinatários reais.
