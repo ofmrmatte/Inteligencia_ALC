@@ -47,7 +47,9 @@ export async function queueTemplate(
         "Cliente já possui uma tratativa ativa para outro envio. Revisão da equipe necessária.",
       );
   }
-  const name = channel === "driver" ? "pnraberta" : "cliente_loss";
+  // The legacy cliente_loss template omits the approved purchase amount.
+  // Require separately approved v2 to avoid silently sending an outdated script.
+  const name = channel === "driver" ? "pnraberta" : "cliente_loss_v2";
   const approved = (await templates(channel)).find(
     (t) => t.name === name && t.status === "APPROVED" && t.language === "pt_BR",
   );
