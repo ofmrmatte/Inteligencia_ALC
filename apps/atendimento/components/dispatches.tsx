@@ -1,7 +1,7 @@
 "use client";
 import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
-import { ChevronLeft, ChevronRight, RefreshCw, Send, X } from "lucide-react";
+import { ChevronLeft, ChevronRight, Send, X } from "lucide-react";
 import {
   normalize,
   phone,
@@ -228,14 +228,7 @@ export function Dispatches({ channel = "client" }: { channel?: Channel }) {
             ? "Notificações e acompanhamento das PNRs dos motoristas."
             : "Contato e tratativa dos clientes vinculados às PNRs."}
         </p>
-        <button
-          className="icon-button"
-          aria-label="Atualizar disparos"
-          title="Atualizar disparos"
-          onClick={() => void refresh()}
-        >
-          <RefreshCw size={17} />
-        </button>
+
       </div>
       <div className="dispatch-summary" aria-label="Resumo do recorte">
         {summary.map(([value, label]) => (
