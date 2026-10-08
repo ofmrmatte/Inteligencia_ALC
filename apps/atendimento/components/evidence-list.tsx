@@ -65,7 +65,7 @@ export function EvidenceList(){
   finally{setBusy(false);}
  }
  function toggle(caseId:string,checked:boolean){
-  setSelection(current=>checked?[...new Set([...current,caseId])]:current.filter(x=>x!==caseId));
+  setSelection(current=>checked?[...new Set([...current,caseId])].slice(0,10):current.filter(x=>x!==caseId));
  }
  return <main className="page evidence-page">
   <div className="page-tools">
@@ -80,10 +80,10 @@ export function EvidenceList(){
   {notice?<p role="status" className="notice">{notice}</p>:null}
   <section className="card">
    <div className="evidence-section-head">
-    <div><h3>Pastas de PNRs</h3><p className="muted">Selecione as pastas desejadas somente se precisar baixar um ZIP.</p></div>
+    <div><h3>Pastas de PNRs</h3><p className="muted">Selecione até 10 pastas por ZIP, somente quando precisar baixar.</p></div>
     <div className="actions">
-     <button type="button" disabled={!folders.length||busy} onClick={()=>setSelection(selection.length===folders.length?[]:folders.map(f=>f.case_id))}>
-      <CheckSquare2 size={15}/> {selection.length===folders.length&&folders.length?"Desmarcar todas":"Selecionar todas"}
+     <button type="button" disabled={!folders.length||busy} onClick={()=>setSelection(selection.length===Math.min(folders.length,10)?[]:folders.slice(0,10).map(f=>f.case_id))}>
+      <CheckSquare2 size={15}/> {selection.length===Math.min(folders.length,10)&&folders.length?"Desmarcar":"Selecionar até 10"}
      </button>
      <button type="button" className="primary" disabled={!selection.length||busy} onClick={()=>void downloadSelected()}>
       <Download size={16}/> Baixar ZIP ({selection.length})
@@ -93,7 +93,7 @@ export function EvidenceList(){
    <div className="evidence-folders">
     {folders.map(folder=><section className="evidence-folder" key={folder.case_id}>
      <div className="evidence-folder-row">
-      <input type="checkbox" aria-label={`Selecionar pasta ${folder.case_id}`} checked={selection.includes(folder.case_id)}
+      <input type="checkbox" aria-label={`Selecionar pasta ${folder.case_id}`} disabled={selection.length>=10 && !selection.includes(folder.case_id)} checked={selection.includes(folder.case_id)}
        onChange={e=>toggle(folder.case_id,e.target.checked)}/>
       <button className="evidence-folder-open" type="button" onClick={()=>void openFolder(folder.case_id)}
        aria-expanded={expanded===folder.case_id}>
