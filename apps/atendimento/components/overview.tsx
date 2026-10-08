@@ -1,6 +1,8 @@
 "use client";
 import { useState } from "react";
 import { request } from "./collector";
+import { connectorStatus, type ConnectorPing } from "../lib/connector-status";
+import connector from "alc-pnr-connector/package.json";
 import Link from "next/link";
 import {
   Clock3,
@@ -49,6 +51,14 @@ export function Overview() {
     setCollectionNotice("");
     setCollectionError(false);
     try {
+      const ping = await request<ConnectorPing>("PING", {}, 8_000);
+      const status = connectorStatus(ping, connector.version, true);
+      if (!status.ready) {
+        throw new Error(`${status.label} Acesse Ajustes > Conector & dados.`);
+      }
+      if (!ping.mlTabAvailable) {
+        throw new Error("Abra a listagem do Case Center no Mercado Livre antes de coletar.");
+      }
       const result = await request<{ message: string }>("ATENDIMENTO_COLLECT", { channel });
       setCollectionNotice(result.message || "Coleta de dados concluída, sem disparos.");
       await refresh();
@@ -186,6 +196,7 @@ export function Overview() {
           {collectionNotice ? (
             <p role="status" className={collectionError ? "notice error" : "notice"}>
               {collectionNotice}
+              {collectionError ? <> <Link href="/admin">Verificar extensão nos Ajustes</Link></> : null}
             </p>
           ) : null}
         </Panel>
