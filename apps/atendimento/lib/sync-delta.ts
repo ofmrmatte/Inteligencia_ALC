@@ -4,6 +4,27 @@ import { createEnrichmentEvent, ENRICHMENT_VERSION } from "../../../packages/pnr
 
 export const CASE_COMPARISON_VERSION = 2;
 
+export function emptySyncCounts() {
+  return { processed: 0, found: 0, new: 0, updated: 0, unchanged: 0,
+    classificationChanged: 0, verifiedPhoneAdded: 0, verifiedContactConflicts: 0,
+    scopeChanged: 0, stale: 0, errors: 0 };
+}
+export type SyncCounts = ReturnType<typeof emptySyncCounts>;
+export type SyncStats = SyncCounts & { byUnit: (SyncCounts & { base_key: string; sigla: string })[] };
+export function combineSyncStats(previous: Partial<SyncStats> | undefined, current: SyncStats): SyncStats {
+  const counts = emptySyncCounts();
+  for (const key of Object.keys(counts) as (keyof SyncCounts)[])
+    counts[key] = (previous?.[key] || 0) + current[key];
+  const units = new Map<string, SyncStats["byUnit"][number]>();
+  for (const unit of [...(previous?.byUnit || []), ...current.byUnit]) {
+    const key = JSON.stringify([unit.base_key, unit.sigla]);
+    const total = units.get(key) || { ...emptySyncCounts(), base_key: unit.base_key, sigla: unit.sigla };
+    for (const field of Object.keys(counts) as (keyof SyncCounts)[]) total[field] += unit[field];
+    units.set(key, total);
+  }
+  return { ...counts, byUnit: [...units.values()] };
+}
+
 const comparedFields = [
   "caseId",
   "shipmentId",

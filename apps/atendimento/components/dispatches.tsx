@@ -75,6 +75,7 @@ export function previewBlock(
 }
 
 export function Dispatches({ channel = "client" }: { channel?: Channel }) {
+  const synchronization = useData<{ lastSync: string | null; lastCompletedSync: string | null; syncStats: Record<string, number> }>("sync-summary", 30_000);
   const preview = useData<{
     records: DispatchCandidate[];
     competence: string;
@@ -289,6 +290,12 @@ export function Dispatches({ channel = "client" }: { channel?: Channel }) {
           <span>Último registro no recorte: <strong>{when(events[0].created_at)}</strong></span>
         ) : null}
       </div>
+      {synchronization.data && <div className="dispatch-summary" aria-label="Última sincronização no seu escopo">
+        <span>Última sincronização: <strong>{when(synchronization.data.lastSync || undefined)}</strong></span>
+        <span>Encontradas: <strong>{synchronization.data.syncStats.found ?? "—"}</strong></span>
+        <span>Novas / atualizadas: <strong>{synchronization.data.syncStats.new ?? "—"} / {synchronization.data.syncStats.updated ?? "—"}</strong></span>
+        <span>Sem alteração / erros: <strong>{synchronization.data.syncStats.unchanged ?? "—"} / {synchronization.data.syncStats.errors ?? "—"}</strong></span>
+      </div>}
       <div className="dispatch-filters">
         <div className="segmented" aria-label="Visualização dos disparos">
           <button

@@ -1,5 +1,5 @@
 "use client";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { request } from "./collector";
 import { connectorStatus, type ConnectorPing } from "../lib/connector-status";
 import connector from "alc-pnr-connector/package.json";
@@ -22,8 +22,10 @@ type OverviewData = {
   automated?: number;
   purchase_value_confirmed?: string;
   purchase_value_unknown?: number;
+  penalty_value_confirmed?: string;
+  proof_value_confirmed?: string;
   authorship?: Record<string, number>;
-  conversationsByOperator?: { assigned_to: string; conversations: number }[];
+  conversationsByOperator?: { assigned_to: string; operator_name?: string; conversations: number }[];
   recentCases?: { case_id: string; classification: string; base_key: string; sigla: string; updated_at: string }[];
   competence: string;
   source: { lastSync?: string | null; lastCompletedSync?: string | null; syncStats?: Record<string, number> };
@@ -51,8 +53,15 @@ export function Overview() {
   const [collecting, setCollecting] = useState<"client" | "driver" | null>(null);
   const [collectionNotice, setCollectionNotice] = useState("");
   const [collectionError, setCollectionError] = useState(false);
-  const confirmedValue = Number(data?.purchase_value_confirmed);
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    const timer = setInterval(() => setNow(Date.now()), 60_000);
+    return () => clearInterval(timer);
+  }, []);
   const syncStats = data?.source.syncStats || {};
+  const syncStale = data?.source.lastCompletedSync && now - Date.parse(data.source.lastCompletedSync) > 45 * 60_000;
+  const brl = (value: string | null | undefined) => value == null || !Number.isFinite(Number(value)) ? "—"
+    : Number(value).toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
   async function collect(channel: "client" | "driver") {
     setCollecting(channel);
     setCollectionNotice("");
@@ -154,6 +163,8 @@ export function Overview() {
             <dd>{when(data?.source.lastSync ?? undefined)}</dd>
             <dt>Último sync concluído</dt>
             <dd>{data?.source.lastCompletedSync ? when(data.source.lastCompletedSync) : "Sem conclusão confirmada"}</dd>
+            <dt>Atualidade</dt>
+            <dd>{syncStale ? "Sincronização desatualizada" : data?.source.lastCompletedSync ? "Sincronização recente" : "Ainda sem sincronização concluída"}</dd>
             <dt>Coletor</dt>
             <dd>
               {data?.collector.enabled
@@ -202,8 +213,12 @@ export function Overview() {
         </Panel>
         <Panel title="Resumo da sincronização">
           <dl>
-            <dt>Valor de compra confirmado</dt>
-            <dd>{data?.purchase_value_confirmed == null || !Number.isFinite(confirmedValue) ? "—" : confirmedValue.toLocaleString("pt-BR", { style: "currency", currency: "BRL" })}</dd>
+            <dt>PNRs abertas · subtotal confirmado</dt>
+            <dd>{brl(data?.purchase_value_confirmed)}</dd>
+            <dt>Com penalidade · subtotal confirmado</dt>
+            <dd>{brl(data?.penalty_value_confirmed)}</dd>
+            <dt>Aguardando comprovante · subtotal confirmado</dt>
+            <dd>{brl(data?.proof_value_confirmed)}</dd>
             <dt>PNRs sem valor confirmado</dt>
             <dd>{data?.purchase_value_unknown ?? "—"}</dd>
             <dt>Mensagens por IA</dt>
@@ -216,12 +231,16 @@ export function Overview() {
             <dd>{syncStats.unchanged ?? "—"} / {syncStats.stale ?? "—"}</dd>
             <dt>Erros na última sincronização</dt>
             <dd>{syncStats.errors ?? "—"}</dd>
+            <dt>Classificação / telefone / base alterados</dt>
+            <dd>{syncStats.classificationChanged ?? "—"} / {syncStats.verifiedPhoneAdded ?? "—"} / {syncStats.scopeChanged ?? "—"}</dd>
+            <dt>Contatos verificados em conflito</dt>
+            <dd>{syncStats.verifiedContactConflicts ?? "—"}</dd>
           </dl>
           {data?.conversationsByOperator?.length ? (
             <ul>
               {data.conversationsByOperator.map((item) => (
                 <li key={item.assigned_to}>
-                  <span>Atendente {item.assigned_to.slice(0, 8)}</span>
+                  <span>{item.operator_name || "Atendente indisponível"}</span>
                   <strong>{item.conversations}</strong>
                 </li>
               ))}

@@ -79,6 +79,8 @@ import { scopeFor } from "../lib/auth";
 import * as auth from "../lib/auth";
 import { GET as evidenceIndex } from "../app/api/evidence/route";
 import { db, core } from "../lib/db";
+import { operationalOverview } from "../lib/operational-monitoring";
+import { claimEnrichmentEvents, acknowledgeEnrichmentEvent, retryEnrichmentEvent } from "../lib/sync-enrichment";
 import { listConversations, mutateConversation } from "../lib/inbox";
 import { queueText, processOutbox, processEvents } from "../lib/worker";
 import { queueTemplate, verifyCustomerContact } from "../lib/source";
@@ -190,7 +192,7 @@ describe.skipIf(!url || !coreUrl)(
         email: "synthetic@example.test",
       }));
       await client.query(
-        "TRUNCATE alc_atendimento.agent_decisions,alc_atendimento.evidence_media,alc_atendimento.media,alc_atendimento.webhook_events,alc_atendimento.assignment_history,alc_atendimento.case_assignments,alc_atendimento.operator_bases,alc_atendimento.operators,alc_atendimento.evidence_images,alc_atendimento.evidence_folders,alc_atendimento.messages,alc_atendimento.outbox,alc_atendimento.meta_template_contracts,alc_atendimento.dispatch_batches,alc_atendimento.conversations,alc_atendimento.cases,alc_atendimento.audit RESTART IDENTITY",
+        "TRUNCATE alc_atendimento.pnr_enrichment_outbox,alc_atendimento.agent_decisions,alc_atendimento.evidence_media,alc_atendimento.media,alc_atendimento.webhook_events,alc_atendimento.assignment_history,alc_atendimento.case_assignments,alc_atendimento.operator_bases,alc_atendimento.operators,alc_atendimento.evidence_images,alc_atendimento.evidence_folders,alc_atendimento.messages,alc_atendimento.outbox,alc_atendimento.meta_template_contracts,alc_atendimento.dispatch_batches,alc_atendimento.conversations,alc_atendimento.cases,alc_atendimento.audit RESTART IDENTITY",
       );
       await client.query(
         "DELETE FROM alc_atendimento.settings WHERE key LIKE 'access_%'",
@@ -283,6 +285,32 @@ describe.skipIf(!url || !coreUrl)(
       });
       return record;
     };
+    it("aggregates confirmed open values without casting unknown values or counting closed PNRs", async () => {
+      for (const [key, value, classification] of [
+        ["known", "25.50", "penalidade"], ["unknown", "invalid", "aguardando_comprovante"],
+        ["zero", 0, "aguardando_comprovante"], ["closed", 900, "encerrada"],
+      ] as const) await client.query(
+        "INSERT INTO alc_atendimento.cases(case_id,competence,base_key,sigla,classification,record) VALUES($1,$2,'TEST BASE A','TEST-A',$3,$4)",
+        [key, competence(), classification, { purchaseValue: value }],
+      );
+      const result = await operationalOverview(manager);
+      expect(result).toMatchObject({ purchase_value_confirmed: "25.50", penalty_value_confirmed: "25.50", proof_value_confirmed: null, purchase_value_unknown: 3 });
+    });
+    it("claims enrichment exclusively and refuses acknowledgements from an expired or replaced lease", async () => {
+      await client.query("INSERT INTO alc_atendimento.pnr_enrichment_outbox(event_key,case_id,payload) VALUES('synthetic-enrichment','test-case','{}')");
+      const claims = await Promise.all([claimEnrichmentEvents(1), claimEnrichmentEvents(1)]);
+      const events = claims.flat();
+      expect(events).toHaveLength(1);
+      const first = events[0];
+      expect(await acknowledgeEnrichmentEvent(first.id, first.attempts + 1)).toBe(false);
+      await client.query("UPDATE alc_atendimento.pnr_enrichment_outbox SET lease_until=now()-interval '1 second' WHERE id=$1", [first.id]);
+      expect(await acknowledgeEnrichmentEvent(first.id, first.attempts)).toBe(false);
+      const [second] = await claimEnrichmentEvents(1);
+      expect(second.attempts).toBe(first.attempts + 1);
+      expect(await retryEnrichmentEvent(first.id, first.attempts, new Error("old worker"))).toBe(false);
+      expect(await acknowledgeEnrichmentEvent(second.id, second.attempts)).toBe(true);
+      expect(await claimEnrichmentEvents(1)).toEqual([]);
+    });
     it("applies legacy-to-versioned migration twice without enrollment", async () => {
       expect(
         (
@@ -290,7 +318,7 @@ describe.skipIf(!url || !coreUrl)(
             "SELECT name FROM alc_atendimento.schema_migrations ORDER BY name",
           )
         ).rows,
-      ).toHaveLength(7);
+      ).toHaveLength(8);
       expect(
         (await client.query("SELECT * FROM alc_atendimento.operators"))
           .rowCount,

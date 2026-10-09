@@ -1,37 +1,53 @@
 import type { AuthProfile } from "@alc/identity/auth";
-import { scopeFor } from "./auth";
+import { scopeFor, visible } from "./auth";
 import { db, setting } from "./db";
 import { competence } from "./domain";
 import { conversationScopeSql, inboxScopeSql } from "./inbox";
+import { emptySyncCounts, type SyncCounts } from "./sync-delta";
+import { enabledProfiles } from "./operator-directory";
 
 const knownPurchaseValue = `CASE
   WHEN jsonb_typeof(c.record->'purchaseValue') IN ('number','string')
-    AND trim(c.record->>'purchaseValue') ~ '^[+-]?([0-9]+(\\.[0-9]*)?|\\.[0-9]+)([eE][+-]?[0-9]+)?$'
-    AND trim(c.record->>'purchaseValue')::numeric > 0
-  THEN trim(c.record->>'purchaseValue')::numeric
+    AND trim(c.record->>'purchaseValue') ~ '^[+]?[0-9]{1,32}(\\.[0-9]{1,16})?([eE][+-]?[0-9]{1,3})?$'
+  THEN CASE WHEN trim(c.record->>'purchaseValue')::numeric > 0
+    THEN trim(c.record->>'purchaseValue')::numeric ELSE NULL END
   ELSE NULL
 END`;
-const overviewCache = new Map<
-  string,
-  { until: number; value: Awaited<ReturnType<typeof queryOperationalOverview>> }
->();
 const eventVersionCache = new Map<string, { until: number; version: string }>();
 
 export async function operationalOverview(profile: AuthProfile) {
   const scope = await scopeFor(profile),
     conversationValues: unknown[] = [],
-    conversationScope = await conversationScopeSql(profile, conversationValues),
-    key = JSON.stringify([
-      profile.id, profile.role, profile.baseScope, profile.siglaScope,
-      scope.full, [...scope.pairs].sort(), [...scope.safe].sort(), competence(),
-    ]),
-    cached = overviewCache.get(key);
-  if (cached && cached.until > Date.now()) return cached.value;
-  const value = await queryOperationalOverview(scope, conversationScope, conversationValues);
-  overviewCache.set(key, { until: Date.now() + 3_000, value });
-  for (const [cacheKey, entry] of overviewCache)
-    if (entry.until <= Date.now()) overviewCache.delete(cacheKey);
-  return value;
+    conversationScope = await conversationScopeSql(profile, conversationValues);
+  // Queue details must not survive an ownership transfer in an in-memory cache.
+  return queryOperationalOverview(scope, conversationScope, conversationValues);
+}
+
+export function scopedSyncCounts(scope: Awaited<ReturnType<typeof scopeFor>>, stored: Record<string, unknown>) {
+  const counts = emptySyncCounts();
+  if (!scope.full && !Array.isArray(stored.byUnit)) return {};
+  const units = scope.full ? [stored] : (stored.byUnit as Record<string, unknown>[])
+    .filter(unit => unit && typeof unit.base_key === "string" && typeof unit.sigla === "string" && visible(scope, unit));
+  for (const unit of units)
+    for (const key of Object.keys(counts) as (keyof SyncCounts)[])
+      if (typeof unit[key] === "number" && Number.isFinite(unit[key])) counts[key] += unit[key] as number;
+  return counts;
+}
+
+function syncSummary(scope: Awaited<ReturnType<typeof scopeFor>>, source: Record<string, unknown>, collector: Record<string, unknown>) {
+  return {
+    lastSync: [source?.lastSync, collector?.lastSync]
+      .filter((value): value is string => typeof value === "string" && value.length > 0).sort().at(-1) ?? null,
+    lastCompletedSync: [source?.lastSync, collector?.lastCompletedSync || (collector?.completed ? collector.lastSync : null)]
+      .filter((value): value is string => typeof value === "string" && value.length > 0).sort().at(-1) ?? null,
+    syncStats: scopedSyncCounts(scope, String(collector?.lastSync || "") > String(source?.lastSync || "")
+      ? (collector?.stats as Record<string, unknown>) || {} : source || {}),
+  };
+}
+export async function operationalSyncSummary(profile: AuthProfile) {
+  const [scope, source, collector] = await Promise.all([scopeFor(profile),
+    setting<Record<string, unknown>>("source"), setting<Record<string, unknown>>("collector")]);
+  return syncSummary(scope, source || {}, collector || {});
 }
 
 async function queryOperationalOverview(
@@ -41,14 +57,16 @@ async function queryOperationalOverview(
 ) {
   const caseValues: unknown[] = [competence()];
   const caseScope = inboxScopeSql(scope, caseValues);
-  const [cases, conversations, authorship, operators, recent, queue, source, collector] =
+  const [cases, conversations, authorship, operators, recent, queue, source, collector, profiles] =
     await Promise.all([
       db().query(
         `SELECT count(*) FILTER(WHERE c.classification<>'encerrada')::int AS open,
           count(*) FILTER(WHERE c.classification='aguardando_comprovante')::int AS proof,
           count(*) FILTER(WHERE c.classification='penalidade')::int AS penalty,
-          count(*) FILTER(WHERE ${knownPurchaseValue} IS NULL)::int AS purchase_value_unknown,
-          sum(${knownPurchaseValue})::text AS purchase_value_confirmed
+          count(*) FILTER(WHERE c.classification<>'encerrada' AND ${knownPurchaseValue} IS NULL)::int AS purchase_value_unknown,
+          sum(${knownPurchaseValue}) FILTER(WHERE c.classification<>'encerrada')::text AS purchase_value_confirmed,
+          sum(${knownPurchaseValue}) FILTER(WHERE c.classification='penalidade')::text AS penalty_value_confirmed,
+          sum(${knownPurchaseValue}) FILTER(WHERE c.classification='aguardando_comprovante')::text AS proof_value_confirmed
          FROM alc_atendimento.cases c WHERE ${caseScope} AND c.competence=$1`, caseValues),
       db().query(
         `SELECT count(*)::int AS conversations,
@@ -77,27 +95,18 @@ async function queryOperationalOverview(
          ORDER BY c.unread DESC,c.updated_at DESC,c.id DESC LIMIT 10`, conversationValues),
       setting<Record<string, unknown>>("source"),
       setting<Record<string, unknown>>("collector"),
+      enabledProfiles(),
     ]);
   return {
     ...cases.rows[0],
     ...conversations.rows[0],
     competence: competence(),
     authorship: Object.fromEntries(authorship.rows.map((row) => [row.sender_kind, row.messages])),
-    conversationsByOperator: operators.rows,
+    conversationsByOperator: operators.rows.map(row => ({ ...row,
+      operator_name: profiles.find(p => p.id === row.assigned_to)?.fullName || "Atendente indisponível" })),
     recentCases: recent.rows,
     queue: queue.rows,
-    source: {
-      lastSync: [source?.lastSync, collector?.lastSync]
-        .filter((value): value is string => typeof value === "string" && value.length > 0)
-        .sort()
-        .at(-1) ?? null,
-      lastCompletedSync: [source?.lastSync, collector?.completed ? collector.lastSync : null]
-        .filter((value): value is string => typeof value === "string" && value.length > 0)
-        .sort()
-        .at(-1) ?? null,
-      syncStats: Object.fromEntries(Object.entries(source || {}).filter(([key, value]) =>
-        key !== "lastSync" && typeof value === "number" && Number.isFinite(value))),
-    },
+    source: syncSummary(scope, source || {}, collector || {}),
     collector: {
       enabled: collector?.enabled === true,
       lastSync: collector?.lastSync ?? null,

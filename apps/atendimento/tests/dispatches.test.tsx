@@ -19,7 +19,9 @@ vi.mock("../components/data", async (original) => ({
     mocks.paths.push(path);
     return {
       data:
-        path === "profile"
+        path === "sync-summary"
+          ? { lastSync: null, lastCompletedSync: null, syncStats: { found: 8, new: 2, updated: 1, unchanged: 5, errors: 0 } }
+          : path === "profile"
           ? { admin: mocks.admin }
           : path.startsWith("dispatch-preview")
             ? {

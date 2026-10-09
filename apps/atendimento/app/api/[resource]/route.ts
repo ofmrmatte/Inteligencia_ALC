@@ -17,6 +17,8 @@ import {
   type Channel,
 } from "@/lib/meta";
 import { syncCore, upsertCases, verifyCustomerContact } from "@/lib/source";
+import { combineSyncStats, type SyncStats } from "@/lib/sync-delta";
+import { operationalOverview, operationalSyncSummary } from "@/lib/operational-monitoring";
 import {
   competence,
   classification,
@@ -35,7 +37,6 @@ import {
   conversationDetail,
   eligibleAgents,
   mutateConversation,
-  inboxScopeSql,
   canReadConversation,
   conversationScopeSql,
 } from "@/lib/inbox";
@@ -270,59 +271,10 @@ export async function GET(
       });
     }
     if (resource === "overview") {
-      const scope = await scopeFor(profile),
-        caseValues: unknown[] = [],
-        conversationValues: unknown[] = [];
-      const caseScope = inboxScopeSql(scope, caseValues),
-        conversationScope = await conversationScopeSql(
-          profile,
-          conversationValues,
-        );
-      caseValues.push(competence());
-      const [cases, conversations, source, collector, queue] =
-        await Promise.all([
-          db().query(
-            `SELECT count(*) FILTER(WHERE classification<>'encerrada')::int AS open,count(*) FILTER(WHERE classification='aguardando_comprovante')::int AS proof,count(*) FILTER(WHERE classification='penalidade')::int AS penalty FROM alc_atendimento.cases c WHERE ${caseScope} AND competence=$${caseValues.length}`,
-            caseValues,
-          ),
-          db().query(
-            `SELECT count(*)::int AS conversations,count(*) FILTER(WHERE status='human')::int AS human,count(*) FILTER(WHERE status='pending')::int AS pending,coalesce(sum(unread),0)::int AS unread FROM alc_atendimento.conversations c WHERE ${conversationScope}`,
-            conversationValues,
-          ),
-          setting<{ lastSync?: string }>("source"),
-          setting<{
-            enabled?: boolean;
-            lastSync?: string;
-            completed?: boolean;
-            channelSync?: Record<
-              string,
-              { lastSync: string; completed: boolean }
-            >;
-          }>("collector"),
-          db().query(
-            `SELECT id,name,phone,channel,status,unread,updated_at FROM alc_atendimento.conversations c WHERE ${conversationScope} AND status IN ('human','pending') ORDER BY unread DESC,updated_at DESC,id DESC LIMIT 10`,
-            conversationValues,
-          ),
-        ]);
-      return Response.json({
-        ...cases.rows[0],
-        ...conversations.rows[0],
-        source: {
-          lastSync: [source?.lastSync, collector?.lastSync]
-            .filter(Boolean)
-            .sort()
-            .at(-1),
-        },
-        collector: {
-          enabled: collector?.enabled || false,
-          lastSync: collector?.lastSync || null,
-          completed: collector?.completed || false,
-          channelSync: collector?.channelSync || {},
-        },
-        queue: queue.rows,
-        competence: competence(),
-      });
+      return Response.json(await operationalOverview(profile), { headers: { "Cache-Control": "private, no-store" } });
     }
+    if (resource === "sync-summary")
+      return Response.json(await operationalSyncSummary(profile), { headers: { "Cache-Control": "private, no-store" } });
     requireAdmin(profile);
     if (resource === "template-contracts") {
       await requireCentralManager(profile);
@@ -509,6 +461,8 @@ export async function POST(
         baselineComplete?: boolean;
         channelSync?: Record<string, { lastSync: string; completed: boolean }>;
         enabled?: boolean;
+        stats?: SyncStats;
+        lastCompletedSync?: string;
       }>("collector");
       const baseline =
         state?.syncId === parsed.syncId
@@ -556,6 +510,7 @@ export async function POST(
         parsed.collectOnly === false,
       );
       const collectedAt = new Date().toISOString();
+      const accumulatedStats = combineSyncStats(state?.syncId === parsed.syncId ? state.stats : undefined, stats);
       const channelSync = { ...(state?.channelSync || {}) };
       if (parsed.channel) {
         channelSync[parsed.channel] = {
@@ -573,6 +528,8 @@ export async function POST(
             baselineComplete: parsed.completed || state?.baselineComplete,
             lastSync: collectedAt,
             completed: parsed.completed,
+            stats: accumulatedStats,
+            lastCompletedSync: parsed.completed ? collectedAt : state?.lastCompletedSync,
             channelSync,
           },
           profile.id,
@@ -582,6 +539,7 @@ export async function POST(
         ...stats,
         channel: parsed.channel || "all",
         collectOnly: parsed.collectOnly !== false,
+        completed: parsed.completed,
       });
       return Response.json(stats);
     }

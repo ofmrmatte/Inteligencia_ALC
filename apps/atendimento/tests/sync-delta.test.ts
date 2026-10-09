@@ -5,6 +5,8 @@ import {
   ENRICHMENT_MAX_ATTEMPTS,
   enrichmentRetryDelayMs,
   verifiedContactEnrichment,
+  combineSyncStats,
+  emptySyncCounts,
 } from "../lib/sync-delta";
 
 const record = (overrides: Partial<CaseRecord> = {}): CaseRecord => ({
@@ -70,5 +72,13 @@ describe("sync deltas and enrichment events", () => {
     expect(enrichmentRetryDelayMs(1)).toBe(30_000);
     expect(enrichmentRetryDelayMs(ENRICHMENT_MAX_ATTEMPTS)).toBe(3_840_000);
     expect(enrichmentRetryDelayMs(99)).toBe(6 * 60 * 60 * 1000);
+  });
+  it("consolidates consecutive batches without treating unchanged records as new", () => {
+    const first = { ...emptySyncCounts(), found: 2, processed: 2, new: 2,
+      byUnit: [{ ...emptySyncCounts(), base_key: "BASE A", sigla: "SP", found: 2, processed: 2, new: 2 }] };
+    const next = { ...emptySyncCounts(), found: 3, processed: 3, unchanged: 2, updated: 1,
+      byUnit: [{ ...emptySyncCounts(), base_key: "BASE A", sigla: "SP", found: 3, processed: 3, unchanged: 2, updated: 1 }] };
+    expect(combineSyncStats(first, next)).toMatchObject({ found: 5, new: 2, updated: 1, unchanged: 2,
+      byUnit: [{ found: 5, new: 2, updated: 1, unchanged: 2 }] });
   });
 });

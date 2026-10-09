@@ -3,7 +3,9 @@ import { beforeEach, expect, it, vi } from "vitest";
 const mocks = vi.hoisted(() => ({ queries: [] as { sql: string; values: unknown[] }[], scopes: 0 }));
 vi.mock("../lib/auth", () => ({
   scopeFor: vi.fn(async () => ({ full: false, pairs: new Set(["TST|BASE"]), safe: new Set() })),
+  visible: (_scope: unknown, unit: { sigla: string; base_key: string }) => unit.sigla === "TST" && unit.base_key === "BASE",
 }));
+vi.mock("../lib/operator-directory", () => ({ enabledProfiles: async () => [{ id: "profile-id", fullName: "Synthetic operator" }] }));
 vi.mock("../lib/inbox", () => ({
   inboxScopeSql: vi.fn((scope, values: unknown[], alias = "c") => {
     mocks.scopes++;
@@ -30,7 +32,7 @@ vi.mock("../lib/db", () => ({
   setting: async (key: string) => key === "source" ? { lastSync: "2026-10-09T10:00:00.000Z", updated: 2 } : { enabled: false },
 }));
 
-import { operationalOverview } from "../lib/operational-monitoring";
+import { operationalOverview, scopedSyncCounts } from "../lib/operational-monitoring";
 
 beforeEach(() => { mocks.queries = []; mocks.scopes = 0; });
 
@@ -51,6 +53,15 @@ it("returns scoped aggregates and treats zero or malformed purchase values as un
   expect(caseQuery.sql).not.toContain("coalesce(sum");
   expect(caseQuery.sql).toContain("c.scope_key=$2");
   expect(caseQuery.values).toEqual(["202610Q1", "TST|BASE"]);
+});
+
+it("never exposes global sync counts to restricted scopes", () => {
+  const scope = { full: false, pairs: new Set(["TST|BASE"]), safe: new Set<string>() };
+  expect(scopedSyncCounts(scope, { found: 999, new: 888 })).toEqual({});
+  expect(scopedSyncCounts(scope, { found: 999, byUnit: [
+    { sigla: "TST", base_key: "BASE", found: 3, new: 2 },
+    { sigla: "OTHER", base_key: "PRIVATE", found: 996, new: 886 },
+  ] })).toMatchObject({ found: 3, new: 2 });
 });
 
 it("uses only timestamp versions for scoped event invalidation", async () => {

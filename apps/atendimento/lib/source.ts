@@ -14,7 +14,7 @@ import { createHash, randomUUID } from "node:crypto";
 import type { AuthProfile } from "@alc/identity/auth";
 import { HttpError, requireAdmin, scopeFor, visible } from "./auth";
 import { authorizeDispatch } from "./dispatch-authorization";
-import { caseFingerprint, CASE_COMPARISON_VERSION } from "./sync-delta";
+import { caseFingerprint, CASE_COMPARISON_VERSION, emptySyncCounts, type SyncCounts, type SyncStats } from "./sync-delta";
 import { enqueueVerifiedContact } from "./sync-enrichment";
 import { z } from "zod";
 export type Automation = {
@@ -340,22 +340,22 @@ export async function upsertCases(
   const client = await db().connect();
   const newlySeen: CaseRecord[] = [];
   const assignmentCandidates: CaseRecord[] = [];
-  const stats = {
-    processed: records.length,
-    found: records.length,
-    new: 0,
-    updated: 0,
-    unchanged: 0,
-    classificationChanged: 0,
-    verifiedPhoneAdded: 0,
-    verifiedContactConflicts: 0,
-    scopeChanged: 0,
-    stale: 0,
-    errors: 0,
-  };
+  const stats: SyncStats = { ...emptySyncCounts(), processed: records.length, found: records.length, byUnit: [] };
+  function countUnit(record: CaseRecord, before: SyncCounts) {
+    let unit = stats.byUnit.find(u => u.base_key === record.baseKey && u.sigla === record.sigla);
+    if (!unit) {
+      unit = { ...emptySyncCounts(), base_key: record.baseKey, sigla: record.sigla };
+      stats.byUnit.push(unit);
+    }
+    unit.processed++;
+    unit.found++;
+    for (const key of Object.keys(emptySyncCounts()) as (keyof SyncCounts)[])
+      if (key !== "processed" && key !== "found") unit[key] += stats[key] - before[key];
+  }
   try {
     await client.query("BEGIN");
     for (const record of records) {
+      const before = { ...stats };
       await client.query("SELECT pg_advisory_xact_lock(hashtext($1))", [
         `atendimento_case:${record.caseId}`,
       ]);
@@ -378,6 +378,7 @@ export async function upsertCases(
         Date.parse(String(previousRow.source_at)) > Date.parse(sourceTime)
       ) {
         stats.stale += 1;
+        countUnit(record, before);
         continue;
       }
       // A list response must not erase details or a verified complementary contact.
@@ -479,6 +480,7 @@ export async function upsertCases(
       );
       if (!persisted.rowCount) {
         stats.stale += 1;
+        countUnit(record, before);
         continue;
       }
       if (contactConflict) {
@@ -503,6 +505,7 @@ export async function upsertCases(
       )
         stats.scopeChanged += 1;
       if (merged.customerVerified) await enqueueVerifiedContact(client, merged);
+      countUnit(stored, before);
       if (stored.competence === competence()) assignmentCandidates.push(stored);
       if (
         !baseline &&
@@ -668,5 +671,6 @@ async function syncCoreSnapshot(history: boolean, allowAutomaticOutreach: boolea
         },
       ],
     );
+  await audit(null, "source_sync_completed", "core", { competence: currentCompetence, history, ...stats });
   return stats;
 }

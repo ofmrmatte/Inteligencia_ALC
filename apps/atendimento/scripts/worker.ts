@@ -2,6 +2,7 @@ import { db, audit } from "../lib/db";
 import { syncCore } from "../lib/source";
 import { processEvents, processOutbox } from "../lib/worker";
 import { archiveIncomingMedia } from "../lib/media-service";
+import { processEnrichment } from "../lib/process-enrichment";
 let stopping = false;
 process.on("SIGTERM", () => {
   stopping = true;
@@ -32,6 +33,7 @@ async function tick() {
       }
       await processEvents();
       await processOutbox();
+      await processEnrichment();
       // Private object storage/scanning must not stall text replies or start overlapping local scans.
       if (!archiving)
         archiving = archiveIncomingMedia()

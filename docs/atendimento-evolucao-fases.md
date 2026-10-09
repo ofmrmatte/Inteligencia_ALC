@@ -3,7 +3,7 @@
 ## Limites desta entrega
 
 O plano aprovado em `writing-block.md` sera executado em sete PRs dependentes.
-Esta branch entrega as fases 1 a 5, em PRs dependentes. Nao autoriza merge, deploy, migracao remota,
+Esta branch entrega as fases 1 a 6, em PRs dependentes. Nao autoriza merge, deploy, migracao remota,
 ativacao de automacoes ou mensagens reais. Core, Aux e RH continuam separados;
 o Supabase central permanece responsavel por identidade, MFA e revogacao.
 
@@ -14,7 +14,7 @@ o Supabase central permanece responsavel por identidade, MFA e revogacao.
 | 3 | Midia privada duravel, upload e visualizadores seguros | Implementada; revisao remota pendente |
 | 4 | Evidencias paginadas com midia, pasta por PNR e ZIP opcional | Implementada; revisao remota pendente |
 | 5 | IA opcional OpenAI/Gemini, fallback deterministico e modelos Meta | Implementada localmente; revisao e homologacao externas pendentes |
-| 6 | Diferenciais de sync, enriquecimento versionado e indicadores/eventos | Pendente; depende das fases 1 e 2 |
+| 6 | Diferenciais de sync, enriquecimento versionado e indicadores/eventos | Implementada localmente; revisao e homologacao externas pendentes |
 | 7 | MFA recente, titularidade de telefone, hardening e E2E controlado | Pendente; depende das anteriores |
 
 Depois da fase 7, executar a correcao de logout central solicitada em 09/10:
@@ -282,14 +282,45 @@ nao voltar ao download direto da Meta sem a verificacao de seguranca.
    arquivos serializados. Preparacao da fixture e atomica para evitar resets parciais.
 8. Entrega: branch `codex/atendimento-agent-contracts`, PR draft dependente do
    PR #80. Sem merge, deploy, migracao remota, buckets, scanner ou automacao ativada.
-   Fases 6 e 7 e a correcao final de logout ainda precisam de integracao/revisao
-   do pai; commits de subagentes nao representam essas fases concluidas.
+   Fase 6 foi integrada na etapa seguinte descrita abaixo. Fase 7 e logout
+   ainda precisam de integracao/revisao; commits de subagentes nao bastam.
 
 Validacao final desta etapa: 46 arquivos e 635 testes passaram, sem skips,
 incluindo 64 testes reais no PostgreSQL local descartavel. Build de producao
 do Atendimento, incluindo TypeScript, passou. ESLint dos arquivos alterados:
 zero erros e tres warnings existentes. `git diff --check` passou. Sem nova
 captura visual, Meta real, IA real, migracao remota ou deploy nesta rodada.
+
+## Fase 6
+
+1. Fingerprints versionados distinguem novas, atualizadas, inalteradas, antigas,
+   mudanca de classificacao, telefone verificado e base. Contadores por unidade
+   preservam o escopo das consultas; lotes consecutivos consolidam os totais da
+   coleta. Datas de origem mantem TIMESTAMPTZ e valores desconhecidos ficam null,
+   nunca zero confirmado. Conflitos de contato com a mesma captura sao auditados.
+2. Indicadores SQL respeitam competencia, base e dono, incluem subtotais BRL
+   confirmados de abertas/penalidade/comprovante, quantidade sem valor, autoria,
+   fila e distribuicao. Detalhes de fila nao sao reutilizados de cache apos
+   transferencia. SSE autenticado envia somente invalidacoes e revalida acesso;
+   polling com backoff e ultima sincronizacao concluida continuam disponiveis.
+3. Migracao Aux `008_sync_enrichment.sql` e outbox duravel, claim exclusivo,
+   ACK vinculado a tentativa/lease vigente, retries limitados e dead letter.
+   Worker processa enriquecimento apenas com configuracao explicitamente valida.
+4. Contrato HMAC v2 minimizado com hash, nonce, escopo explicito e recibo assinado.
+   Core recebe apenas contato complementar verificado, nunca conversa/documento,
+   status ou valor financeiro. A migracao Core aditiva
+   `20261009090422_pnr_verified_contact_enrichment.sql` e obrigatoria antes do
+   novo reader; nenhuma migracao remota foi aplicada. Drawer apresenta origem
+   e captura sem substituir comprador/recebedor oficial. Listagem geral omite
+   esse contato. Conflito/tempo igual diverge e bloqueia; dado antigo e superado.
+5. Configuracao permanece desligada: `PNR_ENRICHMENT_HMAC_KEY`,
+   `PNR_ENRICHMENT_CORE_URL` no Aux e `PNR_ENRICHMENT_ALLOWED_SCOPES` no Core
+   exigem revisao e aprovacao antes de qualquer ativacao. Sem chamadas reais.
+6. Prova: 697 testes Atendimento e 59 focados Core passaram, incluindo 70 testes
+   PostgreSQL local (66 Aux/identidade simulada e 4 Core). Builds dos dois apps
+   com TypeScript e lint alterado passaram. A prova Core inclui idempotencia,
+   replay concorrente, contato antigo/conflitante e acesso privado negado.
+   A fase 7 e o logout final ainda nao estao integrados nesta branch.
 
 ## Catalogo e organograma
 
