@@ -13,16 +13,11 @@ import { db, setting, audit, core } from "@/lib/db";
 import {
   channelConfig,
   templates,
-  encrypt,
-  graph,
   type Channel,
 } from "@/lib/meta";
-import {
-  syncCore,
-  upsertCases,
-  queueTemplate,
-  type Automation,
-} from "@/lib/source";
+import { syncCore, upsertCases, verifyCustomerContact } from "@/lib/source";
+import { combineSyncStats, type SyncStats } from "@/lib/sync-delta";
+import { operationalOverview, operationalSyncSummary } from "@/lib/operational-monitoring";
 import {
   competence,
   classification,
@@ -41,39 +36,72 @@ import {
   conversationDetail,
   eligibleAgents,
   mutateConversation,
-  inboxScopeSql,
+  canReadConversation,
+  conversationScopeSql,
 } from "@/lib/inbox";
 import {
-  agentSettingsSchema, editableInstructionSchema, policiesSchema, effectiveInstructions,
-  INSTRUCTION_KEY, validateEditedScript, loadInstructions, stepsFor,
+  aiDailyUsage,
+  loadAiConfig,
+  saveAiConfig,
+  saveInstructions,
+  loadInstructions,
+  stepsFor,
 } from "@/lib/agent-instructions";
+import {
+  listOperators,
+  saveOperator,
+  operationalUnits,
+} from "@/lib/operator-directory";
+import {
+  assignCase,
+  assignmentQueue,
+  saveAssignmentPolicy,
+} from "@/lib/assignment-engine";
+import { dispatchBatch, dispatchPreview } from "@/lib/dispatch-batches";
+import { mediaResponse } from "@/lib/media-response";
+import {
+  loadTemplateContractReview,
+  previewTemplateContractDraft,
+  persistTemplateContract,
+  requireCentralManager,
+} from "@/lib/template-contract-config";
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 const channel = z.enum(["driver", "client"]);
 const id = z.string().uuid();
 const short = z.string().trim().max(200);
-const listRecord = z.object({
-  caseId: z.string().regex(/^\d{1,30}$/),
-  shipmentId: z.string().min(1).max(120),
-  caseDate: z.string().max(64),
-  originStation: short,
-  driverName: short,
-  mainStatus: short,
-  subStatus: short,
-  purchaseValue: z.number().nonnegative().finite(),
-  driverId: short.optional(),
-  driverPhone: short.optional(),
-  customerName: short.optional(),
-  customerPhone: short.optional(),
-  packageBuyer: packageBuyerSchema.optional(),
-  products: z
-    .array(z.object({ title: z.string().max(600) }))
-    .max(50)
-    .optional(),
-  deliveryAt: z.string().max(64).optional(),
-}).superRefine((record, ctx) => {
-  if (record.packageBuyer && record.packageBuyer.shipmentId !== record.shipmentId) ctx.addIssue({ code: "custom", path: ["packageBuyer", "shipmentId"], message: "Comprador não corresponde ao envio." });
-});
+const listRecord = z
+  .object({
+    caseId: z.string().regex(/^\d{1,30}$/),
+    shipmentId: z.string().min(1).max(120),
+    caseDate: z.string().max(64),
+    originStation: short,
+    driverName: short,
+    mainStatus: short,
+    subStatus: short,
+    purchaseValue: z.number().nonnegative().finite(),
+    driverId: short.optional(),
+    driverPhone: short.optional(),
+    customerName: short.optional(),
+    customerPhone: short.optional(),
+    packageBuyer: packageBuyerSchema.optional(),
+    products: z
+      .array(z.object({ title: z.string().max(600) }))
+      .max(50)
+      .optional(),
+    deliveryAt: z.string().max(64).optional(),
+  })
+  .superRefine((record, ctx) => {
+    if (
+      record.packageBuyer &&
+      record.packageBuyer.shipmentId !== record.shipmentId
+    )
+      ctx.addIssue({
+        code: "custom",
+        path: ["packageBuyer", "shipmentId"],
+        message: "Comprador não corresponde ao envio.",
+      });
+  });
 async function allowedRows(
   table: "cases" | "conversations",
   profile: Awaited<ReturnType<typeof currentProfile>>,
@@ -93,7 +121,7 @@ async function conversationAccess(
     [conversationId],
   );
   const row = result.rows[0];
-  if (!row || !visible(await scopeFor(profile), row))
+  if (!row || !(await canReadConversation(profile, row)))
     throw new HttpError(404, "Atendimento não encontrado.");
   return row;
 }
@@ -148,18 +176,9 @@ export async function GET(
       });
     }
     if (resource === "dispatch-preview") {
-      // ponytail: bounded previews; move filters/paging server-side if scoped reads reach 10k cases.
-      const target = channel.parse(query.get("channel")), values: unknown[] = [];
-      const scope = inboxScopeSql(await scopeFor(profile), values);
-      values.push(target);
-      const bind = `$${values.length}`;
-      const result = await db().query(
-        `SELECT c.case_id,c.competence,c.classification,c.record,o.status AS initial_status
-         FROM alc_atendimento.cases c LEFT JOIN alc_atendimento.outbox o
-           ON o.dedupe_key=${bind}||':'||c.case_id||':'||CASE WHEN ${bind}='driver' THEN c.driver_phone ELSE c.customer_phone END||':initial'
-         WHERE ${scope} ORDER BY c.updated_at DESC,c.case_id DESC LIMIT 10000`, values,
+      return Response.json(
+        await dispatchPreview(profile, channel.parse(query.get("channel"))),
       );
-      return Response.json({ records: result.rows, competence: competence(), limit: 10000 });
     }
     if (resource === "conversations")
       return Response.json(
@@ -170,8 +189,17 @@ export async function GET(
         ? await conversationAccess(id.parse(query.get("id")), profile)
         : null;
       const records = [];
+      const requesterScope = await scopeFor(profile);
+      const units = (await operationalUnits()).filter((unit) =>
+        visible(requesterScope, unit),
+      );
       for (const agent of await eligibleAgents()) {
-        if (!target || visible(await scopeFor(agent), target))
+        const agentScope = await scopeFor(agent);
+        if (
+          target
+            ? visible(agentScope, target)
+            : units.some((unit) => visible(agentScope, unit))
+        )
           records.push({ id: agent.id, name: agent.fullName || agent.email });
       }
       return Response.json({ records });
@@ -181,6 +209,33 @@ export async function GET(
         await conversationDetail(profile, id.parse(query.get("id")), query),
       );
     }
+    if (resource === "operators")
+      return Response.json(await listOperators(profile));
+    if (resource === "assignments")
+      return Response.json(
+        await assignmentQueue(
+          profile,
+          z.coerce
+            .number()
+            .int()
+            .min(0)
+            .max(100000)
+            .parse(query.get("offset") || 0),
+          query.get("history") === "true",
+        ),
+      );
+    if (resource === "assignment-policy") {
+      requireAdmin(profile);
+      return Response.json({ policy: await setting("assignment_policy") });
+    }
+    if (resource === "operational-units") {
+      const scope = await scopeFor(profile);
+      return Response.json({
+        records: (await operationalUnits()).filter((unit) =>
+          visible(scope, unit),
+        ),
+      });
+    }
     if (resource === "media") {
       const messageId = id.parse(query.get("id"));
       const result = await db().query(
@@ -188,125 +243,62 @@ export async function GET(
         [messageId],
       );
       const row = result.rows[0];
-      if (!row?.attachment?.id)
-        throw new HttpError(404, "Anexo não encontrado.");
-      const conversation = await conversationAccess(
-          row.conversation_id,
-          profile,
-        ),
-        cfg = await channelConfig(conversation.channel);
-      const media = await graph(cfg, String(row.attachment.id)),
-        url = new URL(media.url);
-      if (
-        url.protocol !== "https:" ||
-        !["lookaside.fbsbx.com", "lookaside.facebook.com"].includes(
-          url.hostname,
-        )
-      )
-        throw new HttpError(502, "Origem de anexo inválida.");
-      if (Number(media.file_size) > 25 * 1024 * 1024)
-        throw new HttpError(413, "Anexo excede 25 MB.");
-      const response = await fetch(url, {
-        headers: { Authorization: `Bearer ${cfg.token}` },
-        redirect: "error",
-        signal: AbortSignal.timeout(30_000),
-      });
-      if (!response.ok) throw new HttpError(502, "Anexo indisponível na Meta.");
-      return new Response(response.body, {
-        headers: {
-          "Content-Type": media.mime_type || "application/octet-stream",
-          "Content-Disposition": 'attachment; filename="anexo-pnr"',
-          "Cache-Control": "private, no-store",
-          "X-Content-Type-Options": "nosniff",
-        },
-      });
+      if (!row) throw new HttpError(404, "Anexo não encontrado.");
+      await conversationAccess(row.conversation_id, profile);
+      const archived = (await db().query("SELECT id FROM alc_atendimento.media WHERE message_id=$1", [messageId])).rows[0];
+      if (!archived) throw new HttpError(409, "Anexo ainda não arquivado. Aguarde o processamento.");
+      return mediaResponse(profile, archived.id, request);
     }
     if (resource === "outbox") {
-      const target = query.has("channel") ? channel.parse(query.get("channel")) : null;
-      const values: unknown[] = [], scope = inboxScopeSql(await scopeFor(profile), values);
+      const target = query.has("channel")
+        ? channel.parse(query.get("channel"))
+        : null;
+      const values: unknown[] = [],
+        scope = await conversationScopeSql(profile, values);
       if (target) values.push(target);
       const result = await db().query(
-        `SELECT o.id,o.case_id,o.channel,o.phone,o.status,o.error,o.created_at,o.provider_id,c.base_key,c.sigla,c.name,
+        `SELECT o.id,o.case_id,o.channel,o.phone,coalesce(o.delivery_status,o.status) AS status,o.error,o.created_at,o.provider_id,
+          coalesce(o.base_key,c.base_key) AS base_key,coalesce(o.sigla,c.sigla) AS sigla,c.name,o.operator_name_snapshot,o.triggered_by,o.dispatch_batch_id,o.template_version,
            o.payload->>'type' AS message_type,o.payload#>>'{template,name}' AS template_name
          FROM alc_atendimento.outbox o LEFT JOIN alc_atendimento.conversations c ON c.id=o.conversation_id
-         WHERE ${scope}${target ? ` AND o.channel=$${values.length}` : ""} ORDER BY o.created_at DESC,o.id DESC LIMIT 1000`, values,
+         WHERE ${scope}${target ? ` AND o.channel=$${values.length}` : ""} ORDER BY o.created_at DESC,o.id DESC LIMIT 1000`,
+        values,
       );
       return Response.json({
-        records: result.rows, limit: 1000,
+        records: result.rows,
+        limit: 1000,
       });
     }
     if (resource === "overview") {
-      const scope = await scopeFor(profile),
-        caseValues: unknown[] = [],
-        conversationValues: unknown[] = [];
-      const caseScope = inboxScopeSql(scope, caseValues),
-        conversationScope = inboxScopeSql(scope, conversationValues);
-      caseValues.push(competence());
-      const [cases, conversations, source, collector, queue] =
-        await Promise.all([
-          db().query(
-            `SELECT count(*) FILTER(WHERE classification<>'encerrada')::int AS open,count(*) FILTER(WHERE classification='aguardando_comprovante')::int AS proof,count(*) FILTER(WHERE classification='penalidade')::int AS penalty FROM alc_atendimento.cases c WHERE ${caseScope} AND competence=$${caseValues.length}`,
-            caseValues,
-          ),
-          db().query(
-            `SELECT count(*)::int AS conversations,count(*) FILTER(WHERE status='human')::int AS human,count(*) FILTER(WHERE status='pending')::int AS pending,coalesce(sum(unread),0)::int AS unread FROM alc_atendimento.conversations c WHERE ${conversationScope}`,
-            conversationValues,
-          ),
-          setting<{ lastSync?: string }>("source"),
-          setting<{
-            enabled?: boolean;
-            lastSync?: string;
-            completed?: boolean;
-            channelSync?: Record<string, { lastSync: string; completed: boolean }>;
-          }>("collector"),
-          db().query(
-            `SELECT id,name,phone,channel,status,unread,updated_at FROM alc_atendimento.conversations c WHERE ${conversationScope} AND status IN ('human','pending') ORDER BY unread DESC,updated_at DESC,id DESC LIMIT 10`,
-            conversationValues,
-          ),
-        ]);
-      return Response.json({
-        ...cases.rows[0],
-        ...conversations.rows[0],
-        source: {
-          lastSync: [source?.lastSync, collector?.lastSync]
-            .filter(Boolean)
-            .sort()
-            .at(-1),
-        },
-        collector: {
-          enabled: collector?.enabled || false,
-          lastSync: collector?.lastSync || null,
-          completed: collector?.completed || false,
-          channelSync: collector?.channelSync || {},
-        },
-        queue: queue.rows,
-        competence: competence(),
+      return Response.json(await operationalOverview(profile), { headers: { "Cache-Control": "private, no-store" } });
+    }
+    if (resource === "sync-summary")
+      return Response.json(await operationalSyncSummary(profile), { headers: { "Cache-Control": "private, no-store" } });
+    requireAdmin(profile);
+    if (resource === "template-contracts") {
+      await requireCentralManager(profile);
+      return Response.json(await loadTemplateContractReview(channel.parse(query.get("channel"))), {
+        headers: { "Cache-Control": "private, no-store" },
       });
     }
-    requireAdmin(profile);
     if (resource === "agent-instructions") {
       const saved = await loadInstructions();
-      return Response.json({ revision: saved.revision, client: stepsFor("client", saved), driver: stepsFor("driver", saved), policies: saved.policies });
+      return Response.json({
+        revision: saved.revision,
+        client: stepsFor("client", saved),
+        driver: stepsFor("driver", saved),
+        policies: saved.policies,
+      });
+    }
+    if (resource === "ai-config") {
+      const config = await loadAiConfig();
+      const used = await aiDailyUsage();
+      return Response.json({ config, used, remaining: Math.max(0, config.dailyCallLimit - used),
+        credentialEnv: config.provider === "openai" ? "OPENAI_API_KEY" : "GEMINI_API_KEY / GOOGLE_API_KEY" },
+      { headers: { "Cache-Control": "private, no-store" } });
     }
     if (resource === "collector")
       return Response.json({ collector: await setting("collector") });
-    if (resource === "webhook-verify-token") {
-      // Deliberate, permission-gated secret retrieval for configuring Meta webhooks.
-      // Never return verify tokens from the normal admin summary response.
-      const target = channel.parse(query.get("channel"));
-      const cfg = await channelConfig(target);
-      if (!cfg.verifyToken)
-        throw new HttpError(404, "Token de verificação ainda não configurado neste canal.");
-      await audit(profile.id, "webhook_verify_token_revealed", target);
-      return Response.json({ verifyToken: cfg.verifyToken }, {
-        headers: {
-          "Cache-Control": "private, no-store, max-age=0",
-          "Pragma": "no-cache",
-          "X-Robots-Tag": "noindex, noarchive",
-          "X-Content-Type-Options": "nosniff",
-        },
-      });
-    }
     if (resource === "admin") {
       const [automation, source, driver, client] = await Promise.all([
         setting("automation"),
@@ -413,6 +405,15 @@ export async function POST(
     if (resource === "conversation") {
       return Response.json(await mutateConversation(profile, body));
     }
+    if (resource === "operators")
+      return Response.json(await saveOperator(profile, body));
+    if (resource === "assignments")
+      return Response.json(await assignCase(profile, body));
+    if (resource === "assignment-policy") {
+      return Response.json(await saveAssignmentPolicy(profile, body));
+    }
+    if (resource === "dispatch-batch")
+      return Response.json(await dispatchBatch(profile, body));
     if (resource === "import") {
       requireAdmin(profile);
       const parsed = z
@@ -436,6 +437,8 @@ export async function POST(
         baselineComplete?: boolean;
         channelSync?: Record<string, { lastSync: string; completed: boolean }>;
         enabled?: boolean;
+        stats?: SyncStats;
+        lastCompletedSync?: string;
       }>("collector");
       const baseline =
         state?.syncId === parsed.syncId
@@ -483,6 +486,7 @@ export async function POST(
         parsed.collectOnly === false,
       );
       const collectedAt = new Date().toISOString();
+      const accumulatedStats = combineSyncStats(state?.syncId === parsed.syncId ? state.stats : undefined, stats);
       const channelSync = { ...(state?.channelSync || {}) };
       if (parsed.channel) {
         channelSync[parsed.channel] = {
@@ -500,6 +504,8 @@ export async function POST(
             baselineComplete: parsed.completed || state?.baselineComplete,
             lastSync: collectedAt,
             completed: parsed.completed,
+            stats: accumulatedStats,
+            lastCompletedSync: parsed.completed ? collectedAt : state?.lastCompletedSync,
             channelSync,
           },
           profile.id,
@@ -509,6 +515,7 @@ export async function POST(
         ...stats,
         channel: parsed.channel || "all",
         collectOnly: parsed.collectOnly !== false,
+        completed: parsed.completed,
       });
       return Response.json(stats);
     }
@@ -528,118 +535,51 @@ export async function POST(
       return Response.json({ ok: true });
     }
     if (resource === "customer") {
-      requireAdmin(profile);
+      return Response.json(await verifyCustomerContact(profile, body));
+    }
+    if (resource === "dispatch") {
       const parsed = z
-        .object({
-          caseId: short,
-          name: short.min(1),
-          phone: short.min(1),
-          verified: z.literal(true),
-          document: z.string().max(100).optional(),
-          address: z.string().max(500).optional(),
-          sourceUrl: z.url().max(1000).optional(),
-        })
+        .object({ caseId: short.min(1), channel })
+        .strict()
         .parse(body);
-      const number = phone(parsed.phone);
-      if (!number) throw new HttpError(400, "Telefone inválido.");
-      const result = await db().query(
-        "SELECT record FROM alc_atendimento.cases WHERE case_id=$1",
-        [parsed.caseId],
-      );
-      if (!result.rows.length) throw new HttpError(404, "PNR não encontrada.");
-      if (parsed.sourceUrl) {
-        const source = new URL(parsed.sourceUrl);
-        if (
-          source.protocol !== "https:" || source.hostname !== "envios.adminml.com" || source.port || source.search || source.hash ||
-          source.pathname !== `/logistics/package-management/package/${result.rows[0].record.shipmentId}`
-        )
-          throw new HttpError(400, "Fonte do comprador inválida.");
-      }
-      const record = {
-        ...result.rows[0].record,
-        customerName: parsed.name,
-        customerPhone: number,
-        customerVerified: true,
-        customerDocument:
-          parsed.document || result.rows[0].record.customerDocument || "",
-        customerAddress:
-          parsed.address || result.rows[0].record.customerAddress || "",
-        customerSource: parsed.sourceUrl || "validado_pela_equipe",
-      };
-      await db().query(
-        "UPDATE alc_atendimento.cases SET record=$2,customer_phone=$3,updated_at=now() WHERE case_id=$1",
-        [parsed.caseId, record, number],
-      );
-      await audit(profile.id, "customer_contact_verified", parsed.caseId);
-      return Response.json({ ok: true });
+      const result = await dispatchBatch(profile, {
+        batchId: crypto.randomUUID(),
+        channel: parsed.channel,
+        mode: canManageUsers(profile) ? "global" : "individual",
+        caseIds: [parsed.caseId],
+      });
+      if (result.results[0]?.status === "blocked")
+        throw new HttpError(
+          409,
+          result.results[0].reason || "Disparo bloqueado.",
+        );
+      return Response.json({
+        queued: result.queued > 0,
+        batchId: result.batchId,
+      });
     }
     requireAdmin(profile);
+    if (["agent-instructions", "ai-config", "template-contracts"].includes(resource)) {
+      if (request.headers.get("origin") !== new URL(request.url).origin)
+        throw new HttpError(403, "Origem da alteração não autorizada.");
+    }
+    if (resource === "template-contracts") {
+      const parsed = z.object({ kind: z.enum(["preview", "save"]) }).passthrough().parse(body);
+      const { kind, ...input } = parsed;
+      return Response.json(kind === "preview"
+        ? await previewTemplateContractDraft(profile, input)
+        : await persistTemplateContract(profile, input), {
+        headers: { "Cache-Control": "private, no-store" },
+      });
+    }
+    if (resource === "ai-config") return Response.json(await saveAiConfig(profile, body));
     if (resource === "agent-instructions") {
-      const parsed = z.discriminatedUnion("kind", [
-        z.object({
-          kind: z.literal("script"),
-          revision: z.number().int().nonnegative(),
-          entry: editableInstructionSchema,
-        }).strict(),
-        z.object({
-          kind: z.literal("policies"),
-          revision: z.number().int().nonnegative(),
-          policies: policiesSchema,
-        }).strict(),
-      ]).parse(body);
-      const existing = await loadInstructions();
-      if (existing.revision !== parsed.revision)
-        throw new HttpError(409, "As instruções foram alteradas por outro administrador. Atualize antes de salvar.");
-      const updated = { ...existing, revision: existing.revision + 1 };
-      if (parsed.kind === "script") {
-        const entry = validateEditedScript(parsed.entry);
-        updated.scripts = { ...existing.scripts, [`${entry.channel}:${entry.code}`]: entry };
-      } else {
-        updated.policies = parsed.policies;
-      }
-      const result = await db().query(
-        `INSERT INTO alc_atendimento.settings(key,value,updated_by) VALUES($1,$2,$3)
-         ON CONFLICT(key) DO UPDATE SET value=excluded.value,updated_by=excluded.updated_by,updated_at=now()
-         WHERE (alc_atendimento.settings.value->>'revision')::integer IS NOT DISTINCT FROM $4::integer
-         RETURNING key`,
-        [INSTRUCTION_KEY, updated, profile.id, existing.revision],
-      );
-      if (!result.rowCount) throw new HttpError(409, "Conflito de revisão. Recarregue as instruções.");
-      await audit(profile.id, "agent_instructions_updated", parsed.kind,
-        parsed.kind === "script" ? { code: parsed.entry.code, channel: parsed.entry.channel, revision: updated.revision }
-          : { policies: updated.policies?.length, revision: updated.revision });
-      return Response.json({ ok: true, revision: updated.revision });
+      return Response.json(await saveInstructions(profile, body));
     }
     if (resource === "sync") {
       const stats = await syncCore(false, false);
       await audit(profile.id, "manual_source_sync", "core", stats);
       return Response.json(stats);
-    }
-    if (resource === "dispatch") {
-      const parsed = z.object({ caseId: short, channel }).parse(body),
-        cfg = await channelConfig(parsed.channel);
-      if (!cfg.appSecret)
-        throw new HttpError(
-          409,
-          "Configure o App Secret e o webhook antes de enviar.",
-        );
-      const result = await db().query(
-        "SELECT record,base_key,sigla FROM alc_atendimento.cases WHERE case_id=$1",
-        [parsed.caseId],
-      );
-      if (!result.rows.length || !visible(await scopeFor(profile), result.rows[0]))
-        throw new HttpError(404, "PNR não encontrada.");
-      const automation = await setting<Automation>("automation");
-      const queued = await queueTemplate(
-        parsed.channel,
-        result.rows[0].record,
-        automation.operatorName,
-      );
-      await audit(profile.id, "manual_template_dispatch", parsed.caseId, {
-        channel: parsed.channel,
-        queued,
-      });
-      return Response.json({ queued });
     }
     if (resource === "automation") {
       const parsed = z
@@ -668,43 +608,6 @@ export async function POST(
         [parsed, profile.id],
       );
       await audit(profile.id, "automation_updated");
-      return Response.json({ ok: true });
-    }
-    if (resource === "channel") {
-      const parsed = z
-        .object({
-          channel,
-          phoneId: z.string().regex(/^\d{5,30}$/),
-          wabaId: z.string().regex(/^\d{5,30}$/),
-          number: short,
-          token: z.string().max(3000).optional(),
-          appSecret: z.string().max(200).optional(),
-          verifyToken: z.string().max(200).optional(),
-        })
-        .strict()
-        .parse(body);
-      const existing =
-        (await setting<Record<string, unknown>>(`channel_${parsed.channel}`)) ||
-        {};
-      const value = {
-        ...existing,
-        phoneId: parsed.phoneId,
-        wabaId: parsed.wabaId,
-        number: phone(parsed.number),
-      };
-      Object.assign(
-        value,
-        parsed.token ? { tokenEncrypted: encrypt(parsed.token) } : {},
-        parsed.appSecret ? { secretEncrypted: encrypt(parsed.appSecret) } : {},
-        parsed.verifyToken
-          ? { verifyEncrypted: encrypt(parsed.verifyToken) }
-          : {},
-      );
-      await db().query(
-        "INSERT INTO alc_atendimento.settings(key,value,updated_by) VALUES($1,$2,$3) ON CONFLICT(key) DO UPDATE SET value=excluded.value,updated_by=excluded.updated_by,updated_at=now()",
-        [`channel_${parsed.channel}`, value, profile.id],
-      );
-      await audit(profile.id, "channel_updated", parsed.channel);
       return Response.json({ ok: true });
     }
     if (resource === "users") {

@@ -1,7 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { z } from "zod";
 import { AGENT_GUARDRAILS, CUSTOMER_STEPS } from "../lib/agent-playbook";
-import { effectiveInstructions, stepsFor, editableInstructionSchema, validateEditedScript } from "../lib/agent-instructions";
+import { effectiveInstructions, scriptSnapshotFor, stepsFor, editableInstructionSchema, validateEditedScript } from "../lib/agent-instructions";
 import { paginateEvidence, splitEvidenceMessage, validateEvidence, type EvidenceMessage } from "../lib/evidence";
 import { packZip } from "../lib/zip";
 
@@ -16,6 +15,8 @@ describe("editable instruction model",()=>{
     expect(CUSTOMER_STEPS.find(x=>x.code==="C04")?.example).not.toContain("Obrigado pelo seu tempo.");
     expect(snapshot.policies).toHaveLength(1);
     expect(effectiveInstructions(null).policies).toHaveLength(AGENT_GUARDRAILS.length);
+    expect(scriptSnapshotFor("client", "C04", snapshot)).toMatchObject({ revision: 1, code: "C04", example: revised.example });
+    expect(() => scriptSnapshotFor("client", "C99", snapshot)).toThrow(/inexistente/);
   });
   it("rejects removing or adding delivery/identity placeholders and unrecognized codes",()=>{
     const original=CUSTOMER_STEPS[0];
@@ -36,19 +37,19 @@ const row=(id:string,body:string):EvidenceMessage=>({
  created_at:"2026-10-08T12:00:00Z",
 });
 describe("WhatsApp-style proof split into safe prints",()=>{
-  it("splits long transcript into multiple bounded pages without removing message text",()=>{
+  it("splits long transcript into multiple bounded pages without removing message text",async()=>{
     const messages=[row("1","Abertura ".repeat(100)),row("2","Sim. \n".repeat(20)),row("3","Encerramento ".repeat(100))];
-    const pages=paginateEvidence(messages,400);
+    const pages=await paginateEvidence(messages,400);
     expect(pages.length).toBeGreaterThan(2);
     const all=pages.flatMap(p=>p.segments);
     for(const m of messages)expect(all.filter(s=>s.message.id===m.id).map(s=>s.text).join("")).toEqual(m.body);
     expect(all.every(s=>s.lines<=10)).toBe(true);
     expect(validateEvidence({status:"resolved",phone:"5511999990000"},messages)).toBeNull();
   });
-  it("rejects incomplete or uncertain evidence and very long histories",()=>{
+  it("rejects incomplete or uncertain evidence and very long histories",async()=>{
     expect(validateEvidence({status:"bot",phone:"5511999990000"},[row("1","a"),row("2","b"),row("3","c")])).toMatch(/Resolva/);
     expect(validateEvidence({status:"resolved",phone:"5511999990000"},Array.from({length:501},(_,i)=>row(String(i),"texto")),true)).toMatch(/integral/);
-    expect(splitEvidenceMessage(row("1","linha sem cortes"))[0].text).toBe("linha sem cortes");
+    expect((await splitEvidenceMessage(row("1","linha sem cortes")))[0].text).toBe("linha sem cortes");
   });
   it("packs a per-case folder with screenshot parts and manifest in a valid ZIP",()=>{
     const zip=packZip([

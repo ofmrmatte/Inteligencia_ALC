@@ -5,6 +5,7 @@ const mocks=vi.hoisted(()=>({
  queries:[] as {sql:string;params:unknown[]}[],
  images:[] as {caseId:string;part:number;filename:string;bytes:Buffer}[],
  folders:new Map<string,string>(),
+ changed:false,
  audit:vi.fn(),
  phone:"5511999990000",
  id:"ccddeeff-0000-4000-8000-000000000001",
@@ -20,7 +21,9 @@ function query(sql:string,params:unknown[]=[]){
    id:mocks.id,case_id:"12345",phone:mocks.phone,channel:"client",status:"resolved",base_key:"BASE",sigla:"BA",
  }],rowCount:1};
  if(sql.includes("FROM alc_atendimento.outbox"))return {rows:[],rowCount:0};
- if(sql.includes("FROM alc_atendimento.messages"))return {rows:messages,rowCount:3};
+ if(sql.includes("FROM alc_atendimento.cases"))return {rows:[{case_id:"12345",base_key:"BASE",sigla:"BA"}],rowCount:1};
+ if(sql.includes("FROM alc_atendimento.messages"))return {rows:messages.map(m=>({...m,body:mocks.changed?m.body+" changed":m.body})),rowCount:3};
+ if(sql.includes("SELECT e.*"))return {rows:[{case_id:"12345",base_key:"BASE",sigla:"BA"}],rowCount:1};
  if(sql.includes("SELECT source_hash FROM alc_atendimento.evidence_folders")){
    const hash=mocks.folders.get(String(params[0]));
    return {rows:hash?[{source_hash:hash}]:[],rowCount:hash?1:0};
@@ -54,7 +57,7 @@ import { createEvidenceFolder } from "../lib/evidence-store";
 const profile={id:"22222222-0000-4000-8000-000000000001"} as never;
 
 describe("persistent evidence folders",()=>{
- beforeEach(()=>{mocks.queries=[];mocks.images=[];mocks.folders.clear();mocks.audit.mockClear();});
+ beforeEach(()=>{mocks.changed=false;mocks.queries=[];mocks.images=[];mocks.folders.clear();mocks.audit.mockClear();});
  it("creates a stable folder with real pages and commits transaction",async()=>{
   const result=await createEvidenceFolder(profile,mocks.id);
   expect(result).toEqual({caseId:"12345",created:true});

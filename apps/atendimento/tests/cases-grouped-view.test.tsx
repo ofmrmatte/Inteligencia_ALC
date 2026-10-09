@@ -50,7 +50,7 @@ function record(index: number, driverId: string) {
       customerVerified: false,
       products: [],
       deliveryAt: "",
-      purchaseValue: 0,
+      purchaseValue: null,
     } satisfies CaseRecord,
   };
 }

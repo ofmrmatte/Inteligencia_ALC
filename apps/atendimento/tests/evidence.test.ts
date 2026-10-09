@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { evidenceFingerprint, validateEvidence, type EvidenceMessage } from "../lib/evidence";
 import { CUSTOMER_STEPS, DRIVER_STEPS, activeAgentEngine } from "../lib/agent-playbook";
+import { CLIENT_AUDIO_NOTICE_POLICY, UNSUPPORTED_AUDIO_RECORD } from "../lib/domain";
 
 const conversation = { status: "resolved", phone: "5511999990000" };
 const messages: EvidenceMessage[] = [
@@ -19,7 +20,7 @@ describe("comprovante fiel à conversa real", () => {
     expect(validateEvidence(conversation, messages.map((m) => m.id === "c" ? { ...m, status: "uncertain" } : m))).toMatch(/confirma/);
     expect(validateEvidence(conversation, [...messages, { ...messages[0], direction: "note" }])).toMatch(/notas/);
     expect(validateEvidence(conversation, messages.map((m) => m.id === "a" ? { ...m, body: "[Modelo: cliente_loss]" } : m))).toMatch(/modelo Meta/);
-    expect(validateEvidence(conversation, messages.map((m) => m.id === "a" ? { ...m, type: "image" } : m))).toMatch(/mídia/);
+    expect(validateEvidence(conversation, messages.map((m) => m.id === "a" ? { ...m, type: "image" } : m))).toMatch(/mídia/i);
     expect(validateEvidence(conversation, messages, true)).toMatch(/integral/);
   });
   it("não permite alterar silenciosamente o conteúdo sem mudar o hash", () => {
@@ -28,6 +29,16 @@ describe("comprovante fiel à conversa real", () => {
       m.id === "b" ? { ...m, body: "Não" } : m,
     ));
     expect(first).not.toBe(second);
+  });
+  it("preserva a recusa explícita de áudio, sem afirmar que o original está arquivado", () => {
+    const audio: EvidenceMessage = { ...messages[1], type: "audio", body: UNSUPPORTED_AUDIO_RECORD,
+      attachment: { id: "synthetic-audio", mime: "audio/ogg", unsupported: true, policy: CLIENT_AUDIO_NOTICE_POLICY } };
+    const history = [messages[0], audio, messages[2]];
+    expect(validateEvidence(conversation, history)).toBeNull();
+    expect(validateEvidence(conversation, [messages[0], { ...audio, attachment: null }, messages[2]])).toMatch(/mídia/i);
+    expect(validateEvidence(conversation, [messages[0], messages[1], { ...audio, id: "unsupported-out", direction: "out" }, messages[2]])).toMatch(/mídia/i);
+    expect(evidenceFingerprint(conversation.phone, "123", history)).not.toBe(evidenceFingerprint(conversation.phone, "123",
+      [messages[0], { ...audio, attachment: { ...(audio.attachment as object), id: "different-audio" } }, messages[2]]));
   });
 });
 

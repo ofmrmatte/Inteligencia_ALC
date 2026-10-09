@@ -1,8 +1,17 @@
 import { describe, it, expect } from "vitest";
-import { CUSTOMER_STEPS, DRIVER_STEPS, fillScript, scriptText } from "../lib/agent-playbook";
+import { AGENT_GUARDRAILS, CUSTOMER_STEPS, DRIVER_STEPS, fillScript, scriptText } from "../lib/agent-playbook";
+import { AGENT_DISPLAY_NAME } from "../lib/agent-brand";
 import { clientReply } from "../lib/domain";
 
 describe("roteiro integral homologável", () => {
+  it("names the virtual agent Ellie without replacing human attribution or C01 operator placeholders", () => {
+    expect(AGENT_DISPLAY_NAME).toBe("Ellie");
+    expect(AGENT_GUARDRAILS).toContain("O nome aprovado do assistente virtual é Ellie; nomes e autoria de atendentes humanos permanecem próprios.");
+    expect(AGENT_GUARDRAILS.join(" ")).not.toContain("Nome do assistente indefinido");
+    expect(scriptText("client", "C01")).toContain("[Seu Nome]");
+    expect(fillScript(scriptText("client", "C01"), { "Seu Nome": "Atendente Sintético" })).toContain("Meu nome é Atendente Sintético");
+    expect(scriptText("client", "C01")).not.toContain("Meu nome é Ellie");
+  });
   it("includes every customer C01-C15 and every driver M01-M15 except M12", () => {
     expect(CUSTOMER_STEPS.map(step => step.code)).toEqual(
       Array.from({ length: 15 }, (_, index) => "C" + String(index + 1).padStart(2, "0")),

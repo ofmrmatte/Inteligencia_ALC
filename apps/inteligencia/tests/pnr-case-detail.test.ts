@@ -6,7 +6,7 @@ import {
   uniquePnrCaseDetailSnapshots,
 } from "@/lib/pnr-case-detail";
 import { dedupeCaseTimelineEvents } from "@/lib/pnr-case-center";
-import { pnrDetailBatchIssue, pnrDetailEmptySyncDelayMs, pnrDetailQueuePriority, runWithPnrSyncLock } from "@/lib/pnr-case-sync";
+import { pnrConnectorBatchIssue, pnrDetailBatchIssue, pnrDetailEmptySyncDelayMs, pnrDetailQueuePriority, pnrPersistBatchConfirmation, runWithPnrSyncLock } from "@/lib/pnr-case-sync";
 
 describe("histórico durável de detalhes PNR", () => {
   it("mantém valores e listas antigas quando a captura nova vem vazia", () => {
@@ -95,6 +95,68 @@ describe("histórico durável de detalhes PNR", () => {
     expect(pnrDetailBatchIssue(batch)).toEqual({ code: "HTTP_ERROR", message: "HTTP 500", failedCount: 1 });
   });
 
+  it("isola timeout por caso e deixa os casos não consultados pendentes", () => {
+    const batch = [
+      { ok: false, error: { code: "REQUEST_TIMEOUT", message: "Tempo de consulta do detalhe excedido." } },
+      ...Array.from({ length: 49 }, () => ({ ok: false, error: { code: "BATCH_PAUSED" } })),
+    ];
+    expect(pnrDetailBatchIssue(batch)).toBeNull();
+  });
+
+  it("exige correspondência exata entre o lote solicitado e os IDs do conector", () => {
+    const ids = ["10001", "10002"];
+    const ok = (caseId: string, dataCaseId = caseId) => ({ caseId, ok: true, data: { caseId: dataCaseId, events: [] } });
+    expect(pnrConnectorBatchIssue(ids, ids.map((caseId) => ok(caseId)))).toBeNull();
+    expect(pnrConnectorBatchIssue(ids, [
+      { caseId: ids[1], ok: false, error: { code: "BATCH_PAUSED", message: "Caso permanece pendente." } },
+      ok(ids[0]),
+    ])).toBeNull();
+    expect(pnrConnectorBatchIssue(ids, [ok(ids[0]), ok("99999")])).toMatchObject({ code: "INVALID_RESPONSE" });
+    expect(pnrConnectorBatchIssue(ids, [ok(ids[0]), ok(ids[0])])).toMatchObject({ code: "INVALID_RESPONSE" });
+    expect(pnrConnectorBatchIssue(ids, [ok(ids[0])])).toMatchObject({ code: "INVALID_RESPONSE" });
+    expect(pnrConnectorBatchIssue(ids, [ok(ids[0]), ok(ids[1], "99999")])).toMatchObject({ code: "INVALID_RESPONSE" });
+    expect(pnrConnectorBatchIssue(ids, undefined)).toMatchObject({ code: "INVALID_RESPONSE" });
+    expect(pnrConnectorBatchIssue(ids, [ok(ids[0]), null])).toMatchObject({ code: "INVALID_RESPONSE" });
+  });
+
+  it("rejeita shapes que o componente não pode consumir antes da persistência", () => {
+    const caseId = "10001";
+    const validData = { caseId, events: [] };
+    for (const error of [undefined, null, [], { code: 500, message: "Falha" }, { code: "HTTP_ERROR", message: 500 }]) {
+      expect(pnrConnectorBatchIssue([caseId], [{ caseId, ok: false, error }])).toMatchObject({ code: "INVALID_RESPONSE" });
+    }
+    for (const data of [undefined, null, Object.assign([], validData), { caseId }, { caseId, events: [null] }]) {
+      expect(pnrConnectorBatchIssue([caseId], [{ caseId, ok: true, data }])).toMatchObject({ code: "INVALID_RESPONSE" });
+    }
+  });
+
+  it("exige uma confirmação única e bem-sucedida para cada caso enviado", () => {
+    const ids = ["10001", "10002"];
+    expect(pnrPersistBatchConfirmation(ids, ids.map((caseId) => ({ caseId, ok: true, status: 200 })))).toMatchObject({
+      confirmedCaseIds: ids,
+      issue: null,
+    });
+    expect(pnrPersistBatchConfirmation(ids, [
+      { caseId: ids[0], ok: true, status: 200 },
+      { caseId: ids[0], ok: true, status: 200 },
+    ])).toMatchObject({ confirmedCaseIds: [], issue: { failedCount: 2 } });
+    expect(pnrPersistBatchConfirmation(ids, [
+      { caseId: ids[0], ok: true, status: 200 },
+      { caseId: "99999", ok: true, status: 200 },
+    ])).toMatchObject({ confirmedCaseIds: [ids[0]], issue: { failedCount: 1 } });
+    expect(pnrPersistBatchConfirmation(ids, [{ caseId: ids[0], ok: true, status: 200 }])).toMatchObject({
+      confirmedCaseIds: [ids[0]],
+      issue: { failedCount: 1 },
+    });
+    expect(pnrPersistBatchConfirmation(ids, [
+      { caseId: ids[0], ok: true, status: 200 },
+      { caseId: ids[1], ok: false, status: 500 },
+    ])).toMatchObject({ confirmedCaseIds: [ids[0]], issue: { failedCount: 1 } });
+    expect(pnrPersistBatchConfirmation([ids[0]], [
+      { caseId: ids[0], ok: true, status: 403 },
+    ])).toMatchObject({ confirmedCaseIds: [], issue: { failedCount: 1 } });
+  });
+
   it("permite somente uma aba por vez quando Web Locks está disponível", async () => {
     let held = false;
     let release: (() => void) | undefined;
@@ -121,12 +183,24 @@ describe("histórico durável de detalhes PNR", () => {
     const drawer = readFileSync("components/views/pnr-case-detail-drawer.tsx", "utf8");
     const layout = readFileSync("app/layout.tsx", "utf8");
     const backgroundSync = readFileSync("components/pnr-case-center-background-sync.tsx", "utf8");
+    const timelineRoute = readFileSync("app/api/pnr-case-center/timeline/route.ts", "utf8");
+    const importsRoute = readFileSync("app/api/imports/route.ts", "utf8");
     expect(drawer).toContain("/api/pnr-case-center/timeline");
     expect(drawer).toContain("requestPnrConnector");
     expect(drawer).toContain('"FETCH_TIMELINE"');
     expect(drawer).toContain("Receber dados");
     expect(drawer).toContain("refreshCaseNow");
     expect(drawer).toContain("Atualizando este caso diretamente no Case Center");
+    expect(drawer).toContain("Contato complementar do Atendimento");
+    expect(drawer).toContain("VERIFICADO");
+    expect(drawer).toContain("Nome verificado");
+    expect(drawer).toContain("Comprador / reclamante");
+    expect(drawer).toContain("Status atual");
+    expect(timelineRoute).toContain("enrichmentPayloadSchema.safeParse");
+    expect(timelineRoute).toContain("getCurrentProfile");
+    expect(timelineRoute).toContain("canAccessScopedRecord");
+    expect(timelineRoute).toContain("atendimento_verified_contact");
+    expect(importsRoute).not.toContain("atendimento_verified_contact");
     expect(layout).toContain("<PnrCaseCenterBackgroundSync />");
     expect(backgroundSync).toContain('if (pathname !== "/bandeja-pnr") return;');
     expect(backgroundSync).toContain('document.visibilityState !== "visible"');

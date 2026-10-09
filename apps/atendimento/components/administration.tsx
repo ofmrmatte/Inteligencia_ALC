@@ -3,6 +3,11 @@ import { useEffect, useState, type FormEvent } from "react";
 import { api, useData, labels, when } from "./data";
 import { Collector } from "./collector";
 import { AgentPanel } from "./agent-panel";
+import { TemplateContracts } from "./template-contracts";
+import {
+  ChannelCredentialStepUp,
+  type ChannelCredentialPayload,
+} from "./channel-credential-step-up";
 import { Copy, Eye, EyeOff } from "lucide-react";
 type Channel = {
   channel: "driver" | "client";
@@ -40,6 +45,7 @@ export function Administration() {
       <nav className="tabs" aria-label="Áreas dos Ajustes">
         {[
           ["channels", "Números & Meta"],
+          ["contracts", "Contratos Meta"],
           ["automation", "Automações"],
           ["agent", "Modelo de instruções"],
           ["collector", "Conector & dados"],
@@ -66,6 +72,8 @@ export function Administration() {
             />
           ))}
         </div>
+      ) : tab === "contracts" ? (
+        <TemplateContracts />
       ) : tab === "automation" && data ? (
         <AutomationForm
           key={JSON.stringify(data.automation)}
@@ -94,8 +102,9 @@ export function ChannelCard({
   const [edit, setEdit] = useState(false),
     [notice, setNotice] = useState(""),
     [busy, setBusy] = useState(false),
-    [revealBusy, setRevealBusy] = useState(false),
     [revealedVerifyToken, setRevealedVerifyToken] = useState<string | null>(null),
+    [credentialQueue, setCredentialQueue] = useState<ChannelCredentialPayload[]>([]),
+    [credentialIndex, setCredentialIndex] = useState(0),
     [models, setModels] = useState<
       {
         name: string;
@@ -112,22 +121,43 @@ export function ChannelCard({
 
   async function save(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    setBusy(true);
     const form = new FormData(event.currentTarget);
-    try {
-      await api("channel", {
+    const values = Object.fromEntries(form.entries());
+    const actions: ChannelCredentialPayload[] = [
+      {
+        operation: "change_webhook_critical",
         channel: channel.channel,
-        ...Object.fromEntries(form.entries()),
-      });
-      setNotice("Configuração salva.");
-      setEdit(false);
-      setRevealedVerifyToken(null);
-      await refresh();
-    } catch (e) {
-      setNotice((e as Error).message);
-    } finally {
-      setBusy(false);
+        phoneId: String(values.phoneId),
+        wabaId: String(values.wabaId),
+        number: String(values.number),
+        ...(values.verifyToken ? { verifyToken: String(values.verifyToken) } : {}),
+        ...(values.token ? { token: String(values.token) } : {}),
+        ...(values.appSecret ? { appSecret: String(values.appSecret) } : {}),
+      },
+    ];
+    setNotice("");
+    setCredentialIndex(0);
+    setCredentialQueue(actions);
+  }
+
+  async function finishCredential(result: { ok: true } | { verifyToken: string }) {
+    const revealed = "verifyToken" in result;
+    if (revealed) setRevealedVerifyToken(result.verifyToken);
+    if (credentialIndex + 1 < credentialQueue.length) {
+      setCredentialIndex((index) => index + 1);
+      return;
     }
+    setCredentialQueue([]);
+    setCredentialIndex(0);
+    setNotice(revealed ? "Token de verificação revelado." : "Configuração salva.");
+    setEdit(false);
+    await refresh();
+  }
+
+  function cancelCredential() {
+    setCredentialQueue([]);
+    setCredentialIndex(0);
+    setNotice("Operação cancelada.");
   }
   return (
     <section className="card">
@@ -168,29 +198,22 @@ export function ChannelCard({
             <>
               <button
                 type="button"
-                disabled={revealBusy}
+                disabled={credentialQueue.length > 0}
                 aria-label={revealedVerifyToken ? "Ocultar token de verificação" : "Mostrar token de verificação"}
-                onClick={async () => {
+                onClick={() => {
                   if (revealedVerifyToken) {
                     setRevealedVerifyToken(null);
                     return;
                   }
-                  setRevealBusy(true);
                   setNotice("");
-                  try {
-                    const result = await api<{ verifyToken: string }>(
-                      `webhook-verify-token?channel=${channel.channel}`,
-                    );
-                    setRevealedVerifyToken(result.verifyToken);
-                  } catch (error) {
-                    setNotice(error instanceof Error ? error.message : "Falha ao consultar token.");
-                  } finally {
-                    setRevealBusy(false);
-                  }
+                  setCredentialIndex(0);
+                  setCredentialQueue([
+                    { operation: "reveal_token_verification", channel: channel.channel },
+                  ]);
                 }}
               >
                 {revealedVerifyToken ? <EyeOff size={15} /> : <Eye size={15} />}
-                {revealBusy ? "Consultando…" : revealedVerifyToken ? "Ocultar" : "Mostrar"}
+                {revealedVerifyToken ? "Ocultar" : "Mostrar"}
               </button>
               {revealedVerifyToken ? (
                 <button
@@ -219,7 +242,7 @@ export function ChannelCard({
         confirme a verificação antes de ativar os disparos.
       </p>
       <div className="actions">
-        <button onClick={() => setEdit((v) => !v)}>Configurar canal</button>
+        <button disabled={credentialQueue.length > 0} onClick={() => setEdit((v) => !v)}>Configurar canal</button>
         <button
           disabled={busy}
           onClick={async () => {
@@ -281,7 +304,7 @@ export function ChannelCard({
               placeholder="Preencha para substituir"
             />
           </label>
-          <button className="primary" disabled={busy}>
+          <button className="primary" disabled={busy || credentialQueue.length > 0}>
             Salvar canal
           </button>
         </form>
@@ -306,6 +329,14 @@ export function ChannelCard({
           )}
         </details>
       ))}
+      {credentialQueue[credentialIndex] ? (
+        <ChannelCredentialStepUp
+          key={credentialIndex}
+          payload={credentialQueue[credentialIndex]}
+          onComplete={finishCredential}
+          onCancel={cancelCredential}
+        />
+      ) : null}
     </section>
   );
 }

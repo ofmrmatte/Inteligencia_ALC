@@ -22,10 +22,19 @@ import {
   ShieldCheck,
   Send,
   X,
+  UsersRound,
+  MapPinned,
+  ListFilter,
 } from "lucide-react";
 import { Brand } from "@alc/ui/brand";
 import { canManageUsers, ROLE_LABELS, type AuthProfile } from "@alc/identity/auth";
-import { HEADER_REFRESH_EVENT, useData, when } from "./data";
+import {
+  HEADER_REFRESH_EVENT,
+  PRIVATE_CONTENT_CLEARED_EVENT,
+  clearPrivateContent,
+  useData,
+  when,
+} from "./data";
 
 const navigation = [
   { href: "/conversas", label: "Conversas", title: "Conversas", eyebrow: "CAIXA DE ATENDIMENTO", icon: MessageSquare },
@@ -35,6 +44,9 @@ const navigation = [
   { href: "/disparos/clientes", label: "Disparo Cliente", title: "Disparo Cliente", eyebrow: "MENSAGENS OPERACIONAIS", icon: Send },
   { href: "/disparos/motoristas", label: "Disparo Motorista", title: "Disparo Motorista", eyebrow: "MENSAGENS OPERACIONAIS", icon: Send },
   { href: "/admin", label: "Ajustes", title: "Ajustes", eyebrow: "CONFIGURAÇÕES", icon: Settings },
+  { href: "/gestao/atendentes", label: "Atendentes", title: "Atendentes", eyebrow: "GESTÃO OPERACIONAL", icon: UsersRound },
+  { href: "/gestao/bases", label: "Distribuição de Bases", title: "Distribuição de Bases", eyebrow: "GESTÃO OPERACIONAL", icon: MapPinned },
+  { href: "/gestao/filas", label: "Filas e Responsabilidades", title: "Filas e Responsabilidades", eyebrow: "GESTÃO OPERACIONAL", icon: ListFilter },
 ] as const;
 function subscribeViewport(change: () => void) {
   const query = window.matchMedia("(max-width:800px)");
@@ -68,6 +80,19 @@ export function WorkspaceShell({
   const { data: session, error: sessionError, refresh: checkSession } = useData<{ profile: AuthProfile }>("profile", 5_000);
   const current = session?.profile || profile;
   const accountChanged = current.id !== profile.id;
+  const [privateContentCleared, setPrivateContentCleared] = useState(false);
+  useEffect(() => {
+    const clear = () => setPrivateContentCleared(true);
+    const storage = (event: StorageEvent) => {
+      if (event.key === PRIVATE_CONTENT_CLEARED_EVENT || event.key === null) clear();
+    };
+    window.addEventListener(PRIVATE_CONTENT_CLEARED_EVENT, clear);
+    window.addEventListener("storage", storage);
+    return () => {
+      window.removeEventListener(PRIVATE_CONTENT_CLEARED_EVENT, clear);
+      window.removeEventListener("storage", storage);
+    };
+  }, []);
   useEffect(() => {
     const check = () => { if (!document.hidden) void checkSession(); };
     window.addEventListener("focus", check);
@@ -80,7 +105,10 @@ export function WorkspaceShell({
     };
   }, [checkSession]);
   useEffect(() => {
-    if (accountChanged) window.location.replace("/conversas");
+    if (accountChanged) {
+      clearPrivateContent();
+      window.location.replace("/conversas");
+    }
   }, [accountChanged]);
   useEffect(() => {
     if (!mobile || !smallScreen) return;
@@ -149,7 +177,7 @@ export function WorkspaceShell({
         </div>
         <nav aria-label="Áreas do Atendimento">
           <p className="nav-label">ATENDIMENTO</p>
-          {navigation.filter((item) => item.href !== "/admin").map(({ href, label, icon: Icon }) => (
+          {navigation.filter((item) => item.href !== "/admin" && !item.href.startsWith("/gestao/")).map(({ href, label, icon: Icon }) => (
             <Link
               key={href}
               href={href}
@@ -164,6 +192,8 @@ export function WorkspaceShell({
           ))}
           {canManageUsers(current) && (
             <>
+              <p className="nav-label">GESTÃO</p>
+              {navigation.filter(item => item.href.startsWith("/gestao/")).map(({ href, label, icon: Icon }) => <Link key={href} href={href} onClick={close} title={label} aria-label={label} aria-current={path === href ? "page" : undefined}><Icon size={19} /><span>{label}</span></Link>)}
               <p className="nav-label">CONFIGURAÇÕES</p>
               <Link
                 href="/admin"
@@ -245,7 +275,7 @@ export function WorkspaceShell({
             </button>
           </div>
         </header>
-        {sessionError ? <main className="page"><p className="notice error" role="alert">{sessionError}<button onClick={() => void checkSession()}>Tentar novamente</button></p></main> : accountChanged ? <main className="page" role="status">Atualizando sessão…</main> : children}
+        {sessionError || privateContentCleared ? <main className="page"><p className="notice error" role="alert">{sessionError || "Sessão encerrada."}<button onClick={() => void checkSession()}>Tentar novamente</button></p></main> : accountChanged ? <main className="page" role="status">Atualizando sessão…</main> : children}
       </div>
     </div>
   );

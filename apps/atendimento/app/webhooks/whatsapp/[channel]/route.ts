@@ -1,6 +1,8 @@
 import { channelConfig, validSignature, type Channel } from "@/lib/meta";
 import { db } from "@/lib/db";
 import { eventKey } from "@/lib/worker";
+import { HttpError } from "@/lib/auth";
+import { boundedBytes } from "@/lib/media-validation";
 export const runtime = "nodejs";
 export async function GET(
   request: Request,
@@ -29,25 +31,35 @@ export async function POST(
   const cfg = await channelConfig(channel as Channel);
   if (!cfg.appSecret)
     return new Response("Verificação do canal pendente", { status: 503 });
-  const raw = await request.text();
-  if (Buffer.byteLength(raw) > 1_000_000)
+  const signature = request.headers.get("x-hub-signature-256");
+  if (!signature || !/^sha256=[a-f0-9]{64}$/.test(signature))
+    return new Response("Assinatura inválida", { status: 401 });
+  const length = request.headers.get("content-length");
+  if (length !== null && (!/^\d+$/.test(length) || !Number.isSafeInteger(Number(length)) || Number(length) > 1_000_000))
     return new Response("Payload excedido", { status: 413 });
+  let bytes: Buffer;
+  try { bytes = await boundedBytes(request.body, 1_000_000); }
+  catch (error) {
+    return new Response("Payload inválido ou excedido", { status: error instanceof HttpError ? error.status : 400 });
+  }
   if (
     !validSignature(
-      raw,
-      request.headers.get("x-hub-signature-256"),
+      bytes,
+      signature,
       cfg.appSecret,
     )
   )
     return new Response("Assinatura inválida", { status: 401 });
+  let raw: string;
   let payload;
   try {
+    raw = new TextDecoder("utf-8", { fatal: true }).decode(bytes);
     payload = JSON.parse(raw);
   } catch {
     return new Response("Payload inválido", { status: 400 });
   }
   if (
-    payload.object !== "whatsapp_business_account" ||
+    !payload || typeof payload !== "object" || payload.object !== "whatsapp_business_account" ||
     !Array.isArray(payload.entry)
   )
     return new Response("Evento inválido", { status: 400 });

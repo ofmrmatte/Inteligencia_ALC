@@ -56,7 +56,7 @@ beforeEach(() => {
     }
     if (sql.startsWith("SELECT * FROM alc_atendimento.conversations"))
       return { rows: [conversation], rowCount: 1 };
-    if (sql.startsWith("UPDATE alc_atendimento.outbox")) {
+    if (sql.startsWith("UPDATE alc_atendimento.outbox") || sql.startsWith("WITH inserted")) {
       if (sql.includes("status='cancelled'")) job.status = "cancelled";
       else if (sql.includes("status='sent'")) job.status = "sent";
       else if (sql.includes("status=$2")) job.status = String(values?.[1]);
@@ -111,6 +111,7 @@ describe("queue text service window", () => {
     expect(mocks.transactionQuery).toHaveBeenCalledWith(expect.stringContaining("ON CONFLICT(dedupe_key) DO NOTHING"), [
       "staff:synthetic", ID, "client", conversation.phone,
       { messaging_product: "whatsapp", to: conversation.phone, type: "text", text: { body: "Reply" } },
+      "human", OWN, "",
     ]);
     expect(mocks.audit).toHaveBeenCalledWith(OWN, "reply_queued", ID, {}, transaction);
     expect(mocks.query).not.toHaveBeenCalled();
@@ -128,7 +129,7 @@ describe("outbox handoff safety", () => {
     if (allowed) {
       expect(mocks.graph).toHaveBeenCalledExactlyOnceWith(config, "synthetic-phone-id/messages", job.payload);
       expect(mocks.transactionQuery.mock.invocationCallOrder[2]).toBeLessThan(mocks.graph.mock.invocationCallOrder[0]);
-      expect(mocks.transactionQuery).toHaveBeenCalledWith(expect.stringContaining("status='sent',provider_id=$2"), [job.id, "synthetic-provider-id"]);
+      expect(mocks.transactionQuery).toHaveBeenCalledWith(expect.stringContaining("status='sent',provider_id=$2"), [ID, "synthetic-provider-id", "Synthetic reply", "text", "system", null, "", null, job.id]);
       expect(job.status).toBe("sent");
     } else {
       expect(mocks.graph).not.toHaveBeenCalled();
@@ -373,6 +374,7 @@ describe("incoming handoff acknowledgement", () => {
     expect(mocks.transactionQuery).toHaveBeenCalledWith(expect.stringContaining("INSERT INTO alc_atendimento.outbox"), [
       "reply:synthetic-inbound", ID, "client", conversation.phone,
       expect.objectContaining({ type: "text", text: { body: expect.stringContaining("equipe") } }),
+      "ai", null, "Ellie",
     ]);
     expect(mocks.transactionQuery.mock.calls.filter(([sql]) => sql.startsWith("INSERT INTO alc_atendimento.outbox"))).toHaveLength(1);
     expect(mocks.transactionQuery).toHaveBeenLastCalledWith("COMMIT");

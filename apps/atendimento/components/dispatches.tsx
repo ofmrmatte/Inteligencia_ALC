@@ -5,6 +5,7 @@ import { ChevronLeft, ChevronRight, Send, X } from "lucide-react";
 import {
   normalize,
   phone,
+  contactPhoneStatus,
   templateParameters,
   driverNotificationEligible,
   type CaseRecord,
@@ -18,6 +19,9 @@ export type DispatchCandidate = {
   classification: string;
   record: CaseRecord;
   initial_status: string | null;
+  assigned_to?: string;
+  operator_name?: string;
+  dispatch_block?: string;
 };
 type Job = {
   id: string;
@@ -33,6 +37,10 @@ type Job = {
   provider_id: string;
   template_name: string;
   message_type: string;
+  operator_name_snapshot?: string;
+  triggered_by?: string;
+  dispatch_batch_id?: string;
+  template_version?: string;
 };
 
 // Preflight only: the API still validates scope, Meta approval and the 24h window.
@@ -41,6 +49,7 @@ export function previewBlock(
   row: DispatchCandidate,
   current: string,
 ) {
+  if (row.dispatch_block) return row.dispatch_block;
   if (row.initial_status)
     return labels[row.initial_status] || row.initial_status;
   if (row.competence !== current) return "Competência anterior";
@@ -59,7 +68,7 @@ export function previewBlock(
   )
     return "Fora da tratativa de clientes";
   try {
-    templateParameters(channel, row.record, "Equipe");
+    templateParameters(channel, row.record, row.operator_name || "Validação");
     return "";
   } catch (error) {
     return error instanceof Error ? error.message : "Dados incompletos";
@@ -67,6 +76,7 @@ export function previewBlock(
 }
 
 export function Dispatches({ channel = "client" }: { channel?: Channel }) {
+  const synchronization = useData<{ lastSync: string | null; lastCompletedSync: string | null; syncStats: Record<string, number> }>("sync-summary", 30_000);
   const preview = useData<{
     records: DispatchCandidate[];
     competence: string;
@@ -86,6 +96,8 @@ export function Dispatches({ channel = "client" }: { channel?: Channel }) {
   const [selected, setSelected] = useState<DispatchCandidate | null>(null),
     [notice, setNotice] = useState(""),
     [busy, setBusy] = useState(false);
+  const [picked, setPicked] = useState<string[]>([]);
+  const batchRequest = useRef<string | null>(null);
   const dialog = useRef<HTMLDialogElement>(null);
   useEffect(() => {
     if (selected) dialog.current?.showModal();
@@ -174,6 +186,8 @@ export function Dispatches({ channel = "client" }: { channel?: Channel }) {
         ];
   function reset() {
     setPage(0);
+    setPicked([]);
+    batchRequest.current = null;
   }
   function changeTab(next: "preview" | "history") {
     setTab(next);
@@ -205,6 +219,40 @@ export function Dispatches({ channel = "client" }: { channel?: Channel }) {
       setBusy(false);
     }
   }
+  async function sendBatch() {
+    if (
+      busy ||
+      !picked.length ||
+      !window.confirm(
+        `Confirmar ${picked.length} contatos iniciais com os responsáveis indicados?`,
+      )
+    )
+      return;
+    setBusy(true);
+    batchRequest.current ||= crypto.randomUUID();
+    try {
+      const result = await api<{
+        queued: number;
+        results: { caseId: string; status: string; reason?: string }[];
+      }>("dispatch-batch", {
+        batchId: batchRequest.current,
+        channel,
+        mode: access?.admin ? "global" : "individual",
+        caseIds: picked,
+      });
+      const blocked = result.results.filter((r) => r.status === "blocked");
+      setNotice(
+        `${result.queued} na fila · ${result.results.filter((r) => r.status === "duplicate").length} já registrados · ${blocked.length} bloqueados${blocked[0]?.reason ? `: ${blocked[0].reason}` : ""}`,
+      );
+      setPicked([]);
+      batchRequest.current = null;
+      await refresh();
+    } catch (error) {
+      setNotice((error as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  }
   const selectedPhone = selected
     ? phone(
         channel === "driver"
@@ -213,13 +261,7 @@ export function Dispatches({ channel = "client" }: { channel?: Channel }) {
       )
     : "";
   const method =
-    selected &&
-    channel === "driver" &&
-    selected.classification !== "aguardando_comprovante"
-      ? "Texto em janela de 24h validada"
-      : channel === "driver"
-        ? "pnraberta · pt_BR"
-        : "cliente_loss · pt_BR";
+    channel === "driver" ? "pnraberta · pt_BR" : "cliente_loss_v2 · pt_BR";
   return (
     <main className="page dispatch-page">
       <div className="page-tools">
@@ -228,7 +270,16 @@ export function Dispatches({ channel = "client" }: { channel?: Channel }) {
             ? "Notificações e acompanhamento das PNRs dos motoristas."
             : "Contato e tratativa dos clientes vinculados às PNRs."}
         </p>
-
+        {tab === "preview" && (
+          <button
+            disabled={busy || !picked.length || !access}
+            onClick={() => void sendBatch()}
+          >
+            <Send size={15} />
+            {access?.admin ? "Disparo global" : "Enviar selecionadas"} (
+            {picked.length})
+          </button>
+        )}
       </div>
       <div className="dispatch-summary" aria-label="Resumo do recorte">
         {summary.map(([value, label]) => (
@@ -236,7 +287,16 @@ export function Dispatches({ channel = "client" }: { channel?: Channel }) {
             <strong>{value}</strong> {label}
           </span>
         ))}
+        {tab === "history" && events[0] ? (
+          <span>Último registro no recorte: <strong>{when(events[0].created_at)}</strong></span>
+        ) : null}
       </div>
+      {synchronization.data && <div className="dispatch-summary" aria-label="Última sincronização no seu escopo">
+        <span>Última sincronização: <strong>{when(synchronization.data.lastSync || undefined)}</strong></span>
+        <span>Encontradas: <strong>{synchronization.data.syncStats.found ?? "—"}</strong></span>
+        <span>Novas / atualizadas: <strong>{synchronization.data.syncStats.new ?? "—"} / {synchronization.data.syncStats.updated ?? "—"}</strong></span>
+        <span>Sem alteração / erros: <strong>{synchronization.data.syncStats.unchanged ?? "—"} / {synchronization.data.syncStats.errors ?? "—"}</strong></span>
+      </div>}
       <div className="dispatch-filters">
         <div className="segmented" aria-label="Visualização dos disparos">
           <button
@@ -353,9 +413,11 @@ export function Dispatches({ channel = "client" }: { channel?: Channel }) {
               <tr>
                 {(tab === "preview"
                   ? [
+                      "",
                       "Destinatário",
                       "Envio / caso",
                       "Base",
+                      "Responsável",
                       "Status PNR",
                       "Contato",
                       "Situação",
@@ -367,6 +429,7 @@ export function Dispatches({ channel = "client" }: { channel?: Channel }) {
                       "PNR",
                       "Base",
                       "Modelo",
+                      "Responsável / lote",
                       "Status",
                       "Detalhe",
                     ]
@@ -379,13 +442,32 @@ export function Dispatches({ channel = "client" }: { channel?: Channel }) {
               {tab === "preview"
                 ? rows.slice(start, start + 25).map((r) => {
                     const block = previewBlock(channel, r, current),
-                      number = phone(
-                        channel === "driver"
-                          ? r.record.driverPhone
-                          : r.record.customerPhone,
-                      );
+                      contact = contactPhoneStatus(r.record, channel, r.initial_status),
+                      number = contact.number;
                     return (
                       <tr key={r.case_id}>
+                        <td>
+                          <input
+                            type="checkbox"
+                            aria-label={`Selecionar PNR ${r.case_id}`}
+                            disabled={
+                              busy ||
+                              Boolean(block) ||
+                              !access ||
+                              (picked.length >= 100 &&
+                                !picked.includes(r.case_id))
+                            }
+                            checked={picked.includes(r.case_id)}
+                            onChange={(e) => {
+                              setPicked(
+                                e.target.checked
+                                  ? [...picked, r.case_id]
+                                  : picked.filter((id) => id !== r.case_id),
+                              );
+                              batchRequest.current = null;
+                            }}
+                          />
+                        </td>
                         <td>
                           {(channel === "driver"
                             ? r.record.driverName
@@ -402,31 +484,30 @@ export function Dispatches({ channel = "client" }: { channel?: Channel }) {
                             r.record.sigla ||
                             "Não informada"}
                         </td>
+                        <td>{r.operator_name || "Sem responsável"}</td>
                         <td>
                           <span className={`badge ${r.classification}`}>
                             {labels[r.classification] || r.classification}
                           </span>
                         </td>
-                        <td>{number ? `+${number}` : "Não localizado"}</td>
                         <td>
-                          {block ||
-                            (channel === "driver" &&
-                            r.classification !== "aguardando_comprovante"
-                              ? "Exige janela validada de 24h"
-                              : "Aguardando conferência")}
+                          {number ? `+${number}` : "Não localizado"}
+                          <small>{contact.format} · {contact.association}</small>
+                          <small>{contact.whatsapp}</small>
                         </td>
+                        <td>{block || "Contato elegível para conferência"}</td>
                         <td>
                           <button
                             disabled={
                               Boolean(block) ||
-                              !access?.admin ||
+                              !access ||
                               Boolean(preview.error) ||
                               busy
                             }
                             title={
                               block ||
-                              (!access?.admin
-                                ? "Disparo restrito a diretores e desenvolvedores"
+                              (!access
+                                ? "Verificando autorização"
                                 : "Conferir destinatário")
                             }
                             onClick={() => {
@@ -454,6 +535,11 @@ export function Dispatches({ channel = "client" }: { channel?: Channel }) {
                           (r.message_type === "text"
                             ? "Janela de 24h"
                             : "Mensagem")}
+                      </td>
+                      <td>
+                        {r.operator_name_snapshot ||
+                          "Autoria histórica não registrada"}
+                        <small>{r.dispatch_batch_id}</small>
                       </td>
                       <td>
                         <span className="badge">
@@ -519,8 +605,8 @@ export function Dispatches({ channel = "client" }: { channel?: Channel }) {
         </div>
       </section>
       <p className="dispatch-policy">
-        Um contato inicial por PNR, canal e telefone. Envios incertos exigem
-        conferência; não são reenviados automaticamente.
+        Um contato inicial por PNR e canal. Envios incertos exigem conferência;
+        não são reenviados automaticamente.
       </p>
       {selected && (
         <dialog
@@ -551,8 +637,12 @@ export function Dispatches({ channel = "client" }: { channel?: Channel }) {
                 ? selected.record.driverName
                 : selected.record.customerName}
             </dd>
-            <dt>WhatsApp</dt>
+            <dt>Telefone</dt>
             <dd>+{selectedPhone}</dd>
+            <dt>Validação</dt>
+            <dd>{contactPhoneStatus(selected.record, channel).format} · {contactPhoneStatus(selected.record, channel).association}</dd>
+            <dt>WhatsApp</dt>
+            <dd>{contactPhoneStatus(selected.record, channel).whatsapp}</dd>
             <dt>Envio / caso</dt>
             <dd>
               {selected.record.shipmentId} / {selected.case_id}
@@ -561,6 +651,8 @@ export function Dispatches({ channel = "client" }: { channel?: Channel }) {
             <dd>{selected.record.baseKey || selected.record.sigla}</dd>
             <dt>Modelo</dt>
             <dd>{method}</dd>
+            <dt>Responsável</dt>
+            <dd>{selected.operator_name || "Não identificado"}</dd>
             {channel === "client" && (
               <>
                 <dt>Produto</dt>
@@ -581,7 +673,7 @@ export function Dispatches({ channel = "client" }: { channel?: Channel }) {
             className="primary"
             disabled={
               busy ||
-              !access?.admin ||
+              !access ||
               Boolean(previewBlock(channel, selected, current))
             }
             onClick={() => void send()}

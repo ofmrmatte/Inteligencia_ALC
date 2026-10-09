@@ -3,12 +3,16 @@ import { useState } from "react";
 import { ChevronDown, ChevronUp, Pencil, Save, X } from "lucide-react";
 import { api, useData } from "./data";
 import { AGENT_GUARDRAILS } from "../lib/agent-playbook";
+import type { AgentAiConfig } from "../lib/agent-instructions";
+import { AGENT_DISPLAY_NAME } from "../lib/agent-brand";
 
 type Channel = "client" | "driver";
 type Entry = {channel:Channel;code:string;title:string;goal:string;example:string};
 type Snapshot = {revision:number;client:Entry[];driver:Entry[];policies:string[]};
 export function AgentPanel(){
   const {data,error,refresh} = useData<Snapshot>("agent-instructions");
+  const {data:ai,error:aiError,refresh:refreshAi} = useData<{config:AgentAiConfig;used:number;remaining:number;credentialEnv:string}>("ai-config");
+  const [aiDraft,setAiDraft] = useState<AgentAiConfig|null>(null);
   const [channel,setChannel] = useState<Channel>("client");
   const [expanded,setExpanded] = useState<string[]>([]);
   const [editing,setEditing] = useState<string|null>(null);
@@ -44,11 +48,36 @@ export function AgentPanel(){
     }catch(err){setNotice(err instanceof Error?err.message:"Erro ao salvar restrições.");}
     finally{setBusy(false);}
   }
+  async function saveAi() {
+    if(!aiDraft)return;
+    setBusy(true);setNotice("");
+    try{
+      await api("ai-config",aiDraft);
+      await refreshAi();setAiDraft(null);
+      setNotice("Configuração de IA salva.");
+    }catch(err){setNotice(err instanceof Error?err.message:"Erro ao salvar configuração de IA.");}
+    finally{setBusy(false);}
+  }
   return <section className="settings-section">
     <p className="eyebrow">MODELO DE INSTRUÇÕES</p>
-    <h2>Instruções do agente virtual</h2>
+    <h2>Instruções da {AGENT_DISPLAY_NAME}</h2>
     <p className="muted">Edite as respostas e regras operacionais sem alterar o código. Cada alteração fica registrada na auditoria. As regras de segurança, permissões, elegibilidade e encerramento da PNR são fixas.</p>
-    <p className="notice">Motor atual: <strong>Regras determinísticas.</strong> OpenAI/Gemini não estão habilitados. Mudanças no primeiro contato C01 também precisam de aprovação do modelo correspondente na Meta antes de qualquer disparo.</p>
+    <p className="notice" style={{overflowWrap:"anywhere"}}>Motor atual: <strong>{!ai?"Configuração não verificada":ai.config.enabled?`${ai.config.provider === "openai"?"OpenAI":"Gemini"} · ${ai.config.model}`:"Regras determinísticas"}.</strong></p>
+    {aiError?<p className="notice error" role="alert">{aiError}</p>:null}
+    {ai&&<div className="stack" style={{marginBottom:20}}>
+      <div className="agent-instruction-top">
+        <div><h3>Inteligência artificial</h3><p className="muted">Chamadas hoje (UTC): {ai.used} / {ai.config.dailyCallLimit} · Disponíveis: {ai.remaining}</p></div>
+        <button type="button" disabled={busy} onClick={()=>{setAiDraft({...ai.config});setNotice("");}}><Pencil size={15}/> Configurar IA</button>
+      </div>
+      {aiDraft&&<form className="stack" onSubmit={event=>{event.preventDefault();void saveAi();}}>
+        <label style={{display:"flex",alignItems:"center",gap:8}}><input type="checkbox" style={{width:16,height:16}} checked={aiDraft.enabled} onChange={e=>setAiDraft({...aiDraft,enabled:e.target.checked})}/> IA habilitada</label>
+        <label>Provedor<select value={aiDraft.provider} onChange={e=>setAiDraft({...aiDraft,provider:e.target.value as AgentAiConfig["provider"]})}><option value="openai">OpenAI</option><option value="gemini">Gemini</option></select></label>
+        <label>Modelo<input value={aiDraft.model} required={aiDraft.enabled} maxLength={120} onChange={e=>setAiDraft({...aiDraft,model:e.target.value})}/></label>
+        <label>Limite diário de chamadas<input type="number" min={1} max={1000} step={1} required value={aiDraft.dailyCallLimit} onChange={e=>setAiDraft({...aiDraft,dailyCallLimit:Number(e.target.value)})}/></label>
+        <label>Timeout (segundos)<input type="number" min={0.1} max={8} step={0.1} required value={aiDraft.timeoutMs/1000} onChange={e=>setAiDraft({...aiDraft,timeoutMs:Math.round(Number(e.target.value)*1000)})}/></label>
+        <div className="actions"><button type="submit" className="primary" disabled={busy}><Save size={15}/> Salvar configuração</button><button type="button" disabled={busy} onClick={()=>setAiDraft(null)}><X size={15}/> Cancelar</button></div>
+      </form>}
+    </div>}
     {error?<p className="notice error" role="alert">{error}</p>:null}
     {notice?<p className="notice" role="status">{notice}</p>:null}
     <div className="tabs" role="tablist" aria-label="Grupo de tratativas">

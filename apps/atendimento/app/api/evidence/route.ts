@@ -1,5 +1,5 @@
 import { currentProfile, scopeFor } from "@/lib/auth";
-import { inboxScopeSql } from "@/lib/inbox";
+import { inboxScopeSql, conversationScopeSql } from "@/lib/inbox";
 import { db } from "@/lib/db";
 
 export const runtime="nodejs";
@@ -10,19 +10,27 @@ export async function GET(){
  const scope=await scopeFor(profile);
  const folderParams:unknown[]=[];
  const folderScope=inboxScopeSql(scope,folderParams,"e");
+ const folderConversationScope=await conversationScopeSql(profile,folderParams,"c");
+ const folderPnrScope=await conversationScopeSql(profile,folderParams,"p");
+ const cases=`(SELECT k.case_id,k.base_key,k.sigla,a.assigned_to FROM alc_atendimento.cases k
+  LEFT JOIN alc_atendimento.case_assignments a ON a.case_id=k.case_id)`;
  const folderResult=await db().query(
    `SELECT e.case_id,e.conversation_id,e.phone,e.print_count,e.message_count,e.created_at,
     e.source_hash,e.base_key,e.sigla
     FROM alc_atendimento.evidence_folders e
-    WHERE ${folderScope}
+    LEFT JOIN alc_atendimento.conversations c ON c.id=e.conversation_id
+    JOIN ${cases} p ON p.case_id=e.case_id
+    WHERE ${folderScope} AND ${folderConversationScope} AND ${folderPnrScope}
     ORDER BY e.created_at DESC,e.case_id ASC LIMIT 200`,folderParams,
  );
  const pendingParams:unknown[]=[];
- const pendingScope=inboxScopeSql(scope,pendingParams,"c");
+ const pendingScope=await conversationScopeSql(profile,pendingParams,"c");
+ const pendingPnrScope=await conversationScopeSql(profile,pendingParams,"p");
  const pendingResult=await db().query(
    `SELECT c.id,c.case_id,c.phone,c.updated_at,c.base_key,c.sigla
     FROM alc_atendimento.conversations c
-    WHERE ${pendingScope} AND c.channel='client' AND c.status='resolved'
+    JOIN ${cases} p ON p.case_id=c.case_id
+    WHERE ${pendingScope} AND ${pendingPnrScope} AND c.channel='client' AND c.status='resolved'
       AND c.case_id IS NOT NULL
       AND NOT EXISTS(SELECT 1 FROM alc_atendimento.evidence_folders f WHERE f.case_id=c.case_id)
     ORDER BY c.updated_at DESC,c.id DESC LIMIT 100`,pendingParams,

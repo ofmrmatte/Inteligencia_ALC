@@ -4,11 +4,14 @@ import { canAccessSection } from "@/lib/access-control";
 import { canAccessScopedRecord } from "@/lib/access-scope";
 import { getUserAccessScope } from "@/lib/access-scope-server";
 import { getCurrentProfile } from "@/lib/auth-server";
+import { enrichmentPayloadSchema } from "../../../../../../packages/pnr-enrichment/protocol";
 import {
   CASE_CENTER_TIMELINE_PARSER_VERSION,
   caseCenterEventLabel,
   caseCenterTimelineNeedsRefresh,
   dedupeCaseTimelineEvents,
+  mapPnrCaseCenterVerifiedContact,
+  type PnrCaseCenterVerifiedContact,
 } from "@/lib/pnr-case-center";
 import {
   mergePnrCaseDetail,
@@ -95,6 +98,15 @@ function detailSnapshot(raw: unknown): PnrCaseDetailSnapshot | undefined {
   return value && typeof value === "object" && !Array.isArray(value) ? value as PnrCaseDetailSnapshot : undefined;
 }
 
+function verifiedContact(
+  raw: unknown,
+  binding: { caseId: string; shipmentId: string; competence: string; baseKey: string; sigla: string },
+): PnrCaseCenterVerifiedContact | undefined {
+  const parsed = enrichmentPayloadSchema.safeParse(raw);
+  if (!parsed.success) return undefined;
+  return mapPnrCaseCenterVerifiedContact(parsed.data, binding);
+}
+
 function errorStatus(message: string) {
   if (message.includes("Sessão")) return 401;
   if (message.includes("permissão") || message.includes("escopo")) return 403;
@@ -111,7 +123,7 @@ async function authorizedCase(caseId: string) {
   const admin = createAdminClient();
   const { data, error } = await admin
     .from("pnr_case_center_cases")
-    .select("case_id,base_key,sigla,main_status,detail_sync_status,detail_sync_attempts,detail_last_attempt_at,detail_last_success_at,detail_next_sync_at,detail_last_error,detail_parser_version,timeline_synced_at,claim_id,pre_invoice_number,billing_period,reviewed_status,raw_snapshot_jsonb")
+    .select("case_id,shipment_id,competence,base_key,sigla,main_status,detail_sync_status,detail_sync_attempts,detail_last_attempt_at,detail_last_success_at,detail_next_sync_at,detail_last_error,detail_parser_version,timeline_synced_at,claim_id,pre_invoice_number,billing_period,reviewed_status,raw_snapshot_jsonb,atendimento_verified_contact")
     .eq("case_id", caseId)
     .maybeSingle();
   if (error) throw new Error(`pnr_case_center_cases: ${error.message}`);
@@ -146,6 +158,13 @@ export async function GET(request: Request) {
       detailLastError: record.detail_last_error,
       timelineSyncedAt: record.timeline_synced_at,
       detail: detailSnapshot(record.raw_snapshot_jsonb),
+      verifiedContact: verifiedContact(record.atendimento_verified_contact, {
+        caseId: record.case_id,
+        shipmentId: record.shipment_id,
+        competence: record.competence,
+        baseKey: record.base_key,
+        sigla: record.sigla,
+      }),
       events: (data ?? []).map((event) => ({
         eventId: event.event_id,
         eventType: event.event_type,

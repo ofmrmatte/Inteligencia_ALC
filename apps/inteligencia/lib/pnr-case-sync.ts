@@ -2,6 +2,7 @@ import { CASE_CENTER_TIMELINE_PARSER_VERSION } from "@/lib/pnr-case-center";
 
 export const PNR_DETAIL_SYNC_LOCK = "alc-pnr-case-detail-sync";
 export const PNR_DETAIL_SYNC_BATCH_SIZE = 50;
+export const PNR_DETAIL_CONNECTOR_BATCH_SIZE = 5;
 export const PNR_DETAIL_QUEUE_CANDIDATE_LIMIT = 500;
 export const PNR_DETAIL_SYNC_CONCURRENCY = 2;
 export const PNR_DETAIL_PERSIST_BATCH_SIZE = 10;
@@ -14,16 +15,107 @@ export const PNR_DETAIL_SYNC_RATE_LIMIT_BACKOFF_MS = 5 * 60 * 1000;
 export const PNR_DETAIL_SYNC_CONNECTION_RETRY_MS = 60_000;
 export const PNR_DETAIL_SYNC_LEADER_LEASE_MS = 15_000;
 
+export function pnrConnectorBatchIssue(requestedCaseIds: string[], results: unknown) {
+  const expected = new Set(requestedCaseIds);
+  let exact = expected.size === requestedCaseIds.length
+    && Array.isArray(results)
+    && results.length === requestedCaseIds.length;
+  const returned = new Set<string>();
+
+  if (Array.isArray(results)) {
+    for (const result of results) {
+      if (!result || typeof result !== "object" || Array.isArray(result)) {
+        exact = false;
+        continue;
+      }
+      const item = result as {
+        caseId?: unknown;
+        ok?: unknown;
+        data?: { caseId?: unknown; events?: unknown };
+        error?: { code?: unknown; message?: unknown };
+      };
+      if (typeof item.caseId !== "string" || !expected.has(item.caseId) || returned.has(item.caseId)) {
+        exact = false;
+        continue;
+      }
+      returned.add(item.caseId);
+      if (item.ok === true) {
+        if (!item.data || typeof item.data !== "object" || Array.isArray(item.data)
+          || item.data.caseId !== item.caseId
+          || !Array.isArray(item.data.events)
+          || item.data.events.some((event) => !event || typeof event !== "object" || Array.isArray(event))) exact = false;
+      } else if (item.ok === false) {
+        if (!item.error || typeof item.error !== "object" || Array.isArray(item.error)
+          || typeof item.error.code !== "string" || typeof item.error.message !== "string") exact = false;
+      } else {
+        exact = false;
+      }
+    }
+  }
+
+  if (returned.size !== expected.size) exact = false;
+  if (exact) return null;
+  return {
+    code: "INVALID_RESPONSE" as const,
+    message: "O conector retornou detalhes inválidos ou IDs divergentes, duplicados ou incompletos para o lote solicitado. Nenhum caso deste lote foi persistido.",
+    failedCount: Math.max(requestedCaseIds.length, 1),
+  };
+}
+
 export function pnrDetailBatchIssue(results: Array<{ ok: boolean; error?: { code?: string; message?: string } }>) {
   const failures = results.filter((item) => !item.ok && item.error?.code !== "BATCH_PAUSED");
-  const fatal = failures.find((item) => ["MERCADO_LIVRE_SESSION_REQUIRED", "MERCADO_LIVRE_ACCESS_DENIED", "INVALID_RESPONSE", "REQUEST_TIMEOUT", "RATE_LIMITED"].includes(item.error?.code || ""));
+  const fatal = failures.find((item) => ["MERCADO_LIVRE_SESSION_REQUIRED", "MERCADO_LIVRE_ACCESS_DENIED", "INVALID_RESPONSE", "RATE_LIMITED"].includes(item.error?.code || ""));
   const interrupted = results.some((item) => !item.ok && item.error?.code === "BATCH_PAUSED");
-  const failure = fatal || (results.length && (interrupted || results.every((item) => !item.ok)) ? failures[0] : null);
-  if (results.length && !failure && !interrupted) return null;
+  const timeoutOnly = failures.length > 0 && failures.every((item) => item.error?.code === "REQUEST_TIMEOUT");
+  const resumable = timeoutOnly || (failures.length === 0 && results.some((item) => item.ok));
+  const failure = fatal || (!resumable && results.length && (interrupted || results.every((item) => !item.ok)) ? failures[0] : null);
+  if (results.length && !failure && (!interrupted || resumable)) return null;
   return {
     code: failure?.error?.code || "INVALID_RESPONSE",
     message: failure?.error?.message || "O conector não retornou nenhum detalhe. Atualize a extensão antes de retomar.",
     failedCount: failures.length,
+  };
+}
+
+export function pnrPersistBatchConfirmation(
+  caseIds: string[],
+  results: Array<{ caseId?: unknown; ok?: unknown; status?: unknown; error?: unknown }>,
+) {
+  const expected = new Set(caseIds);
+  const returned = new Map<string, Array<{ ok?: unknown; status?: unknown; error?: unknown }>>();
+  let unexpected = false;
+  for (const result of results) {
+    const caseId = typeof result?.caseId === "string" ? result.caseId : "";
+    if (!expected.has(caseId)) {
+      unexpected = true;
+      continue;
+    }
+    returned.set(caseId, [...(returned.get(caseId) ?? []), result]);
+  }
+
+  const confirmedCaseIds = [...expected].filter((caseId) => {
+    const matches = returned.get(caseId);
+    const status = matches?.[0]?.status;
+    return matches?.length === 1
+      && matches[0].ok === true
+      && typeof status === "number"
+      && Number.isInteger(status)
+      && status >= 200
+      && status < 300;
+  });
+  const exact = expected.size === caseIds.length
+    && results.length === caseIds.length
+    && !unexpected
+    && confirmedCaseIds.length === caseIds.length;
+  if (exact) return { confirmedCaseIds, issue: null };
+
+  const error = results.find((result) => result?.ok !== true && typeof result?.error === "string")?.error;
+  return {
+    confirmedCaseIds,
+    issue: {
+      failedCount: Math.max(caseIds.length - confirmedCaseIds.length, unexpected ? 1 : 0, 1),
+      message: typeof error === "string" ? error : "O servidor não confirmou a persistência de cada caso enviado. Confira antes de retomar.",
+    },
   };
 }
 

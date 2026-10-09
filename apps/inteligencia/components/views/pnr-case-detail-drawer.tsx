@@ -1,10 +1,10 @@
 "use client";
 
 import { useEffect, useMemo, useState, type ReactNode } from "react";
-import { CircleDollarSign, FileText, History, LoaderCircle, MapPinned, PackageOpen, RefreshCw, Route, UserRound, X } from "lucide-react";
+import { CircleCheckBig, CircleDollarSign, FileText, History, LoaderCircle, MapPinned, PackageOpen, RefreshCw, Route, UserRound, X } from "lucide-react";
 import { formatCurrency, StatusBadge } from "@/components/ui";
 import type { PnrRecord } from "@/lib/types";
-import type { PnrCaseTimelineEvent } from "@/lib/pnr-case-center";
+import type { PnrCaseCenterVerifiedContact, PnrCaseTimelineEvent } from "@/lib/pnr-case-center";
 import type { PnrCaseDetailSnapshot } from "@/lib/pnr-case-detail";
 import { requestPnrConnector } from "@/lib/pnr-connector-client";
 
@@ -17,6 +17,7 @@ interface TimelineResponse {
   detailLastError?: string | null;
   timelineSyncedAt?: string | null;
   detail?: PnrCaseDetailSnapshot;
+  verifiedContact?: PnrCaseCenterVerifiedContact;
   events: PnrCaseTimelineEvent[];
 }
 
@@ -70,14 +71,18 @@ function dateTime(value?: string | null) {
   return Number.isFinite(date.getTime()) ? date.toLocaleString("pt-BR") : value;
 }
 
+function verifiedContactSource(source?: string | null) {
+  return source === "validado_pela_equipe" ? "Validado pela equipe do Atendimento" : "Portal Envios Mercado Livre";
+}
+
 function DetailField({ label, value, mono = false }: { label: string; value?: string | null; mono?: boolean }) {
   return <div className="pnr-detail-field"><span>{label}</span><strong className={mono ? "mono" : undefined}>{display(value)}</strong></div>;
 }
 
-function DetailSection({ icon, title, children }: { icon: ReactNode; title: string; children: ReactNode }) {
+function DetailSection({ icon, title, badge, children }: { icon: ReactNode; title: string; badge?: ReactNode; children: ReactNode }) {
   return (
     <section className="pnr-detail-section">
-      <header>{icon}<h3>{title}</h3></header>
+      <header>{icon}<h3>{title}</h3>{badge ? <span style={{ marginLeft: "auto" }}>{badge}</span> : null}</header>
       <div className="pnr-detail-section__body">{children}</div>
     </section>
   );
@@ -298,6 +303,21 @@ export function PnrCaseDetailDrawer({ row, onClose }: { row: PnrRecord | null; o
               )) : <p>Não disponível neste histórico.</p>}
             </div>
           </DetailSection>
+
+          {remote?.verifiedContact ? (
+            <DetailSection
+              icon={<CircleCheckBig size={17} />}
+              title="Contato complementar do Atendimento"
+              badge={<StatusBadge tone="green">VERIFICADO</StatusBadge>}
+            >
+              <div className="pnr-detail-grid">
+                <DetailField label="Nome verificado" value={remote.verifiedContact.name} />
+                <DetailField label="Telefone verificado" value={remote.verifiedContact.phone} />
+                <DetailField label="Proveniência" value={verifiedContactSource(remote.verifiedContact.source)} />
+                <DetailField label="Capturado em" value={dateTime(remote.verifiedContact.capturedAt)} />
+              </div>
+            </DetailSection>
+          ) : null}
 
           <DetailSection icon={<PackageOpen size={17} />} title="Dados de quem recebeu">
             <div className="pnr-detail-grid">

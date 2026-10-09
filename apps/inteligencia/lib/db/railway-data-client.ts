@@ -96,7 +96,7 @@ function createPool(connectionString: string, applicationName: string) {
   });
 }
 
-function corePool() {
+export function corePool() {
   const connectionString = process.env.DATABASE_URL;
   if (!connectionString) throw new Error("DATABASE_URL não configurada.");
   if (!globalPool.__alcRailwayPool) {

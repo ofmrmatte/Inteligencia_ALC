@@ -28,6 +28,11 @@ vi.mock("../lib/worker", async (importOriginal) => {
   const worker = await importOriginal<typeof import("../lib/worker")>();
   return { ...worker, queueText: vi.fn(worker.queueText) };
 });
+vi.mock("../lib/operator-directory", async original => ({
+  ...await original<typeof import("../lib/operator-directory")>(),
+  requireOperator: vi.fn(async () => ({ user_id: "22222222-2222-4222-8222-222222222222", roles: ["agent"], active: true, available: true, receiving: true })), canSupervise: vi.fn(async () => true),
+  operationalUnits: vi.fn(async () => [{ unit_key: "test-unit", base_key: "BASE A", sigla: "SP" }]),
+}));
 
 import {
   inboxFilters, conversationActionSchema, inboxScopeSql, listConversations,
@@ -75,10 +80,12 @@ beforeEach(() => {
     identity_verified: true, driver_id: "synthetic-driver", case_id: "synthetic-case",
     agent_state: { step: "receipt" }, last_inbound_at: NOW.toISOString(), unread: 3,
   };
-  mocks.query.mockReset().mockResolvedValue(empty());
+  mocks.query.mockReset().mockImplementation(async sql => sql.startsWith("SELECT * FROM alc_atendimento.operators") ? { rows: [OWN, OTHER].map(user_id => ({ user_id, roles: ["agent"], active: true, receiving: true, available: true })), rowCount: 2 } : empty());
   mocks.transactionQuery.mockReset().mockImplementation(async (sql, values) => {
     if (sql.startsWith("SELECT * FROM alc_atendimento.conversations"))
       return { rows: [{ ...conversation }], rowCount: 1 };
+    if (sql.startsWith("SELECT * FROM alc_atendimento.cases WHERE case_id="))
+      return { rows: [{ case_id: conversation.case_id, base_key: conversation.base_key, sigla: conversation.sigla }], rowCount: 1 };
     if (sql.includes("SET status=$2,assigned_to=$3"))
       Object.assign(conversation, { status: values?.[1], assigned_to: values?.[2], agent_state: values?.[3] });
     return empty();
@@ -100,7 +107,7 @@ afterEach(() => {
 describe("inbox filters and scoped queries", () => {
   it("defaults filters and trims search while coercing a bounded offset", () => {
     expect(inboxFilters.parse({})).toEqual({
-      q: "", channel: "all", view: "all", status: "open", assignee: "all", label: "", offset: 0,
+      q: "", channel: "all", view: "all", status: "open", assignee: "all", label: "", offset: 0, base: "", sigla: "", classification: "all", priority: "all", waitingMinutes: 0,
     });
     expect(inboxFilters.parse({ q: " contact ", label: " urgent ", offset: "30" }))
       .toMatchObject({ q: "contact", label: "urgent", offset: 30 });
@@ -155,7 +162,7 @@ describe("inbox filters and scoped queries", () => {
       expect(sql).not.toContain(term);
     }
     expect(listSql).toContain("ORDER BY c.updated_at DESC,c.id DESC LIMIT 30 OFFSET $9");
-    expect(result).toEqual({ records: [conversation], total: 31, unread: 7, limit: 30, offset: 30 });
+    expect(result).toEqual({ records: [{ ...conversation, operational_labels: ["SP"] }], total: 31, unread: 7, limit: 30, offset: 30 });
   });
 
   it("uses explicit uninteracted and unassigned filters without searching blank input", async () => {
@@ -200,9 +207,9 @@ describe("inbox filters and scoped queries", () => {
       .mockResolvedValueOnce({ rows: cases, rowCount: 4 });
     const result = await conversationDetail(profile, ID, new URLSearchParams({ before: NOW.toISOString(), beforeId: OTHER }));
     expect(mocks.query.mock.calls[1]).toEqual([
-      expect.stringContaining("(created_at,id)<($2::timestamptz,$3::uuid)"), [ID, NOW.toISOString(), OTHER],
+      expect.stringContaining("(m.created_at,m.id)<($2::timestamptz,$3::uuid)"), [ID, NOW.toISOString(), OTHER],
     ]);
-    expect(mocks.query.mock.calls[1][0]).toContain("ORDER BY created_at DESC,id DESC LIMIT 51");
+    expect(mocks.query.mock.calls[1][0]).toContain("ORDER BY m.created_at DESC,m.id DESC LIMIT 51");
     expect(mocks.query.mock.calls[2][0]).toContain("NOT EXISTS");
     expect(mocks.query.mock.calls[3][1]).toEqual(["synthetic-case", "synthetic-driver", conversation.phone, "BASE A", "SP"]);
     expect(result).toMatchObject({ messages: messages.slice(0, 50).reverse(), queued, cases: [cases[0]], hasMore: true });
@@ -231,7 +238,7 @@ describe("conversation actions and transactions", () => {
     expect(queueText).not.toHaveBeenCalled();
   });
 
-  it.each(["reply", "note", "labels", "assign"])("rejects missing %s data and rolls back", async (action) => {
+  it.each(["reply", "note", "labels"])("rejects missing %s data and rolls back", async (action) => {
     await expect(mutateConversation(profile, { id: ID, action })).rejects.toMatchObject({ status: 400 });
     expect(mocks.transactionQuery).toHaveBeenLastCalledWith("ROLLBACK");
     expect(mocks.transactionQuery).not.toHaveBeenCalledWith("COMMIT");
@@ -243,10 +250,11 @@ describe("conversation actions and transactions", () => {
     Object.assign(conversation, { status: "pending", assigned_to: OTHER });
     expect(await mutateConversation(profile, { id: ID, action: "note", body: "  Internal only  " })).toEqual({ ok: true });
     expect(mocks.transactionQuery).toHaveBeenNthCalledWith(1, "BEGIN");
-    expect(mocks.transactionQuery).toHaveBeenNthCalledWith(2, "SELECT pg_advisory_xact_lock(hashtextextended($1,0))", [ID]);
-    expect(mocks.transactionQuery).toHaveBeenNthCalledWith(3, expect.stringContaining("FOR UPDATE"), [ID]);
+    expect(mocks.transactionQuery).toHaveBeenNthCalledWith(2, "SELECT pg_advisory_xact_lock(hashtext('atendimento_operator_directory'))");
+    expect(mocks.transactionQuery).toHaveBeenNthCalledWith(3, "SELECT pg_advisory_xact_lock(hashtextextended($1,0))", [ID]);
+    expect(mocks.transactionQuery).toHaveBeenNthCalledWith(4, expect.stringContaining("FOR UPDATE"), [ID]);
     expect(mocks.transactionQuery).toHaveBeenCalledWith(
-      expect.stringContaining("VALUES($1,'note',$2,$3)"), [ID, "Internal only", OWN],
+      expect.stringContaining("VALUES($1,'note',$2,$3,'human',$3,$4)"), [ID, "Internal only", OWN, profile.fullName],
     );
     expect(mocks.audit).toHaveBeenCalledWith(OWN, "note", ID, {}, mocks.transaction);
     expect(mocks.audit.mock.invocationCallOrder[0]).toBeLessThan(mocks.transactionQuery.mock.invocationCallOrder.at(-1)!);
@@ -309,11 +317,12 @@ describe("conversation actions and transactions", () => {
     await mutateConversation(profile, { id: ID, action: "reply", body: "  Staff reply  " });
     expect(queueText).toHaveBeenCalledWith(
       expect.objectContaining({ id: ID, status: "human", assigned_to: OWN }),
-      "Staff reply", expect.stringMatching(/^staff:/), OWN, mocks.transaction,
+      "Staff reply", expect.stringMatching(/^staff:/), OWN, mocks.transaction, profile.fullName,
     );
     expect(mocks.transactionQuery).toHaveBeenCalledWith(expect.stringContaining("INSERT INTO alc_atendimento.outbox"), [
       expect.stringMatching(/^staff:/), ID, "client", conversation.phone,
       { messaging_product: "whatsapp", to: conversation.phone, type: "text", text: { body: "Staff reply" } },
+      "human", OWN, profile.fullName,
     ]);
     expect(mocks.audit).toHaveBeenCalledWith(OWN, "reply_queued", ID, {}, mocks.transaction);
     expect(mocks.audit).toHaveBeenCalledWith(OWN, "reply", ID, {}, mocks.transaction);
@@ -349,7 +358,7 @@ describe("conversation actions and transactions", () => {
 
   it.each(["resume", "assign"])("cancels old staff and bot replies on %s without cancelling initial templates", async (action) => {
     Object.assign(conversation, { status: "human", assigned_to: OWN });
-    await mutateConversation(profile, action === "assign"
+    await mutateConversation(action === "assign" ? { ...profile, role: "director" } : profile, action === "assign"
       ? { id: ID, action, assignedTo: OTHER } : { id: ID, action });
     expect(conversation).toMatchObject(action === "resume"
       ? { status: "bot", assigned_to: null } : { status: "human", assigned_to: OTHER });
@@ -361,7 +370,7 @@ describe("conversation actions and transactions", () => {
     expect(queueText).not.toHaveBeenCalled();
   });
 
-  it.each(["takeover", "pending", "reopen", "resume", "assign"])("does not let an ordinary agent %s another owner's conversation", async (action) => {
+  it.each(["takeover", "pending", "reopen", "resume"])("does not let an ordinary agent %s another owner's conversation", async (action) => {
     Object.assign(conversation, { status: "human", assigned_to: OTHER });
     await expect(mutateConversation(profile, { id: ID, action, assignedTo: null })).rejects.toMatchObject({ status: 409 });
     expect(mocks.transactionQuery).toHaveBeenLastCalledWith("ROLLBACK");
@@ -369,7 +378,7 @@ describe("conversation actions and transactions", () => {
   });
 
   it("assigns only an active eligible agent whose base scope contains the conversation", async () => {
-    await mutateConversation(profile, { id: ID, action: "assign", assignedTo: OTHER });
+    await mutateConversation({ ...profile, role: "director" }, { id: ID, action: "assign", assignedTo: OTHER });
     expect(mocks.scopeFor).toHaveBeenCalledWith(expect.objectContaining({ id: OTHER, baseScope: ["BASE A"] }));
     expect(mocks.transactionQuery).toHaveBeenCalledWith(expect.stringContaining("SET status=$2,assigned_to=$3"), [ID, "human", OTHER, { step: "staff" }]);
     expect(mocks.audit).toHaveBeenCalledWith(OWN, "assign", ID, { assignedTo: OTHER }, mocks.transaction);
@@ -383,7 +392,7 @@ describe("conversation actions and transactions", () => {
   ])("rejects assignment to an %s agent before connecting", async (_name, overrides, access) => {
     mocks.agentLimit.mockResolvedValueOnce({ data: [agent(overrides)], error: null });
     mocks.query.mockResolvedValueOnce({ rows: access, rowCount: access.length });
-    await expect(mutateConversation(profile, { id: ID, action: "assign", assignedTo: OTHER })).rejects.toMatchObject({ status: 403 });
+    await expect(mutateConversation({ ...profile, role: "director" }, { id: ID, action: "assign", assignedTo: OTHER })).rejects.toMatchObject({ status: 403 });
     expect(mocks.connect).not.toHaveBeenCalled();
     expect(mocks.audit).not.toHaveBeenCalled();
   });
@@ -391,7 +400,7 @@ describe("conversation actions and transactions", () => {
   it("rejects an active assignee outside the conversation base and rolls back", async () => {
     mocks.scopeFor.mockImplementation(async (p: AuthProfile) => p.id === OTHER
       ? { full: false, pairs: new Set(["SP|BASE B"]), safe: new Set() } : scope);
-    await expect(mutateConversation(profile, { id: ID, action: "assign", assignedTo: OTHER })).rejects.toMatchObject({ status: 403 });
+    await expect(mutateConversation({ ...profile, role: "director" }, { id: ID, action: "assign", assignedTo: OTHER })).rejects.toMatchObject({ status: 403 });
     expect(mocks.transactionQuery).toHaveBeenLastCalledWith("ROLLBACK");
     expect(mocks.transactionQuery.mock.calls.some(([sql]) => sql.startsWith("UPDATE"))).toBe(false);
     expect(mocks.audit).not.toHaveBeenCalled();
@@ -399,7 +408,7 @@ describe("conversation actions and transactions", () => {
 
   it("explicitly removes assignment without consulting the agent directory", async () => {
     Object.assign(conversation, { status: "human", assigned_to: OWN });
-    await mutateConversation(profile, { id: ID, action: "assign", assignedTo: null });
+    await mutateConversation({ ...profile, role: "director" }, { id: ID, action: "assign", assignedTo: null });
     expect(mocks.createClient).not.toHaveBeenCalled();
     expect(mocks.transactionQuery).toHaveBeenCalledWith(expect.stringContaining("SET status=$2,assigned_to=$3"), [ID, "human", null, { step: "staff" }]);
     expect(mocks.audit).toHaveBeenCalledWith(OWN, "assign", ID, { assignedTo: null }, mocks.transaction);
@@ -480,12 +489,13 @@ describe("transactional driver verification", () => {
     Object.assign(conversation, { assigned_to: OTHER, status: "pending" });
     expect(await mutateConversation(manager, { ...input, driverId: ` ${driver.driverId} `, baseKey: " b\u00e1se   a " })).toEqual({ ok: true });
     expect(mocks.transactionQuery).toHaveBeenNthCalledWith(1, "BEGIN");
-    expect(mocks.transactionQuery).toHaveBeenNthCalledWith(2, "SELECT pg_advisory_xact_lock(hashtextextended($1,0))", [ID]);
-    expect(mocks.transactionQuery).toHaveBeenNthCalledWith(3, "SELECT * FROM alc_atendimento.conversations WHERE id=$1 FOR UPDATE", [ID]);
-    expect(mocks.transactionQuery).toHaveBeenNthCalledWith(4, "SELECT record FROM alc_atendimento.cases WHERE driver_id=$1", [driver.driverId]);
+    expect(mocks.transactionQuery).toHaveBeenNthCalledWith(2, "SELECT pg_advisory_xact_lock(hashtext('atendimento_operator_directory'))");
+    expect(mocks.transactionQuery).toHaveBeenNthCalledWith(3, "SELECT pg_advisory_xact_lock(hashtextextended($1,0))", [ID]);
+    expect(mocks.transactionQuery).toHaveBeenNthCalledWith(4, "SELECT * FROM alc_atendimento.conversations WHERE id=$1 FOR UPDATE", [ID]);
+    expect(mocks.transactionQuery).toHaveBeenNthCalledWith(5, "SELECT record FROM alc_atendimento.cases WHERE driver_id=$1", [driver.driverId]);
     expect(mocks.transactionQuery).toHaveBeenCalledWith(
       "UPDATE alc_atendimento.conversations SET driver_id=$2,base_key=$3,sigla=$4,name=$5,identity_verified=true,status='human',assigned_to=$6,agent_state=jsonb_set(agent_state,'{step}','\"staff\"'),unread=0 WHERE id=$1",
-      [ID, driver.driverId, "BASE A", "SP", driver.driverName, OWN],
+      [ID, driver.driverId, "BASE A", "SP", driver.driverName, OTHER],
     );
     const bindings = mocks.transactionQuery.mock.calls.filter(([sql]) => sql.startsWith("UPDATE alc_atendimento.cases"));
     expect(bindings).toEqual([[
