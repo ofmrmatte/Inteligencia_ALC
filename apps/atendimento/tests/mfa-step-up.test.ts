@@ -29,7 +29,11 @@ const mocks = vi.hoisted(() => ({
 vi.mock("../lib/db", () => ({
   db: () => { if (!mocks.pool) throw new Error("Isolated MFA test database is not running"); return mocks.pool; },
   setting: mocks.setting, core: vi.fn(),
+  audit: async (actor: string, action: string, target: string, data: Record<string, unknown>, client: import("pg").PoolClient) => {
+    await client.query("INSERT INTO alc_atendimento.audit(actor_id,action,target,data) VALUES($1,$2,$3,$4)", [actor, action, target, data]);
+  },
 }));
+vi.mock("server-only", () => ({}));
 vi.mock("next/headers", () => ({
   cookies: async () => ({
     getAll: () => [], set: vi.fn(),
@@ -50,6 +54,8 @@ vi.mock("@supabase/supabase-js", () => ({
 }));
 import { currentProfile, currentSessionContext } from "../lib/auth";
 import { createStepUpChallenge, listStepUpFactors, verifyStepUp, withRecentMfa } from "../lib/mfa-step-up";
+import { createChannelCredentialChallenge, executeChannelCredential, verifyChannelCredential } from "../lib/channel-credentials";
+import { channelConfig, encrypt } from "../lib/meta";
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -172,11 +178,11 @@ describe.skipIf(!pgBin)("isolated recent MFA PostgreSQL", () => {
       child.once("exit", (code) => code === 0 ? done() : reject(new Error("Isolated PostgreSQL startup failed")));
     });
     mocks.pool = new pg.Pool({ host: "127.0.0.1", port, user: "mfa_fixture", database: "postgres", max: 12, connectionTimeoutMillis: 3000 });
-    await mocks.pool.query("CREATE SCHEMA alc_atendimento; CREATE TABLE alc_atendimento.settings(key text PRIMARY KEY,value jsonb NOT NULL); CREATE TABLE alc_atendimento.test_actions(id uuid PRIMARY KEY); CREATE ROLE anon; CREATE ROLE authenticated");
+    await mocks.pool.query("CREATE SCHEMA alc_atendimento; CREATE TABLE alc_atendimento.settings(key text PRIMARY KEY,value jsonb NOT NULL,updated_by uuid,updated_at timestamptz NOT NULL DEFAULT clock_timestamp()); CREATE TABLE alc_atendimento.audit(id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,actor_id uuid,action text NOT NULL,target text,data jsonb NOT NULL); CREATE TABLE alc_atendimento.test_actions(id uuid PRIMARY KEY); CREATE ROLE anon; CREATE ROLE authenticated");
     await mocks.pool.query(await readFile(new URL("../db/009_recent_mfa.sql", import.meta.url), "utf8"));
   }, 60_000);
   beforeEach(async () => {
-    await mocks.pool!.query("TRUNCATE alc_atendimento.settings,alc_atendimento.step_up_attempts,alc_atendimento.step_up_challenges,alc_atendimento.test_actions");
+    await mocks.pool!.query("TRUNCATE alc_atendimento.settings,alc_atendimento.step_up_attempts,alc_atendimento.step_up_challenges,alc_atendimento.test_actions,alc_atendimento.audit");
     await register();
   });
   afterAll(async () => {
@@ -530,5 +536,120 @@ describe.skipIf(!pgBin)("isolated recent MFA PostgreSQL", () => {
     const input = await challenge();
     await expect(pool().query("UPDATE alc_atendimento.step_up_challenges SET operation='export_credentials' WHERE id=$1", [input.challengeId])).rejects.toMatchObject({ code: "23514" });
     await expect(pool().query("UPDATE alc_atendimento.step_up_challenges SET consumed_at=clock_timestamp() WHERE id=$1", [input.challengeId])).rejects.toMatchObject({ code: "23514" });
+  });
+
+  const accessToken = "synthetic-new-access-token", appSecret = "cd".repeat(16), verifyToken = "synthetic-new-verify-token";
+  const webhookPayload = { operation: "change_webhook_critical", channel: "client", phoneId: "123456", wabaId: "678901", number: "+55 (11) 99999-9999", verifyToken };
+  const revealPayload = { operation: "reveal_token_verification", channel: "client" };
+  async function credentialProof(payload: unknown) {
+    const challenge = await createChannelCredentialChallenge({ payload, factorId: FACTOR });
+    return verifyChannelCredential({ payload, factorId: FACTOR, challengeId: challenge.challengeId, nonce: challenge.nonce, code });
+  }
+  async function storedChannel() {
+    return (await pool().query("SELECT value,updated_by FROM alc_atendimento.settings WHERE key='channel_client'")).rows[0];
+  }
+  async function initialChannel() {
+    const stored = { phoneId: "12345", wabaId: "67890", number: "5511988888888", tokenEncrypted: encrypt("synthetic-old-access"), secretEncrypted: encrypt("ab".repeat(16)), verifyEncrypted: encrypt("synthetic-old-verify"), retainedMetadata: true };
+    await pool().query("INSERT INTO alc_atendimento.settings(key,value) VALUES('channel_client',$1)", [stored]);
+    return stored;
+  }
+  it.each([
+    { operation: "replace_access_token", payload: { operation: "replace_access_token", channel: "client", token: accessToken }, changed: "tokenEncrypted", expected: { token: accessToken } },
+    { operation: "replace_app_secret", payload: { operation: "replace_app_secret", channel: "client", appSecret }, changed: "secretEncrypted", expected: { appSecret } },
+    { operation: "change_webhook_critical", payload: webhookPayload, changed: "verifyEncrypted", expected: { phoneId: "123456", wabaId: "678901", number: "5511999999999", verifyToken } },
+  ])("atomically updates channel credentials and audit for $operation", async ({ payload, changed, expected }) => {
+    const before = await initialChannel();
+    const proof = await credentialProof(payload);
+    const input = { payload, proofId: proof.proofId };
+    expect(await executeChannelCredential(input)).toEqual({ ok: true });
+    expect(await channelConfig("client")).toMatchObject(expected);
+    const stored = await storedChannel();
+    expect(stored.updated_by).toBe(USER);
+    expect(stored.value.retainedMetadata).toBe(true);
+    for (const field of ["tokenEncrypted", "secretEncrypted", "verifyEncrypted"] as const)
+      if (field !== changed) expect(stored.value[field]).toBe(before[field]);
+    for (const secret of [accessToken, appSecret, verifyToken]) expect(JSON.stringify(stored.value)).not.toContain(secret);
+    expect((await pool().query("SELECT actor_id,action,target,data FROM alc_atendimento.audit")).rows).toEqual([
+      { actor_id: USER, action: "channel_updated", target: "client", data: { operation: payload.operation } },
+    ]);
+    expect((await row(proof.proofId)).consumed_at).not.toBeNull();
+    await expect(executeChannelCredential(input)).rejects.toMatchObject({ status: 403 });
+    expect((await pool().query("SELECT count(*)::int AS count FROM alc_atendimento.audit")).rows[0].count).toBe(1);
+  });
+  it("reveals only verification token with atomic audit and without changing channel storage", async () => {
+    const before = await initialChannel();
+    const proof = await credentialProof(revealPayload);
+    expect(await executeChannelCredential({ payload: revealPayload, proofId: proof.proofId })).toEqual({ verifyToken: "synthetic-old-verify" });
+    expect((await storedChannel()).value).toEqual(before);
+    expect((await pool().query("SELECT actor_id,action,target,data FROM alc_atendimento.audit")).rows).toEqual([
+      { actor_id: USER, action: "webhook_verify_token_revealed", target: "client", data: { operation: "reveal_token_verification" } },
+    ]);
+    expect((await row(proof.proofId)).consumed_at).not.toBeNull();
+  });
+  it("rejects altered channel payload at verification and consumption without an audit or write", async () => {
+    const before = await initialChannel();
+    const payload = { operation: "replace_access_token", channel: "client", token: accessToken };
+    const challenge = await createChannelCredentialChallenge({ payload, factorId: FACTOR });
+    await expect(verifyChannelCredential({ payload: { ...payload, token: "altered-token" }, factorId: FACTOR, challengeId: challenge.challengeId, nonce: challenge.nonce, code })).rejects.toMatchObject({ status: 401 });
+    expect(mocks.verify).not.toHaveBeenCalled();
+    const proof = await verifyChannelCredential({ payload, factorId: FACTOR, challengeId: challenge.challengeId, nonce: challenge.nonce, code });
+    for (const altered of [{ ...payload, token: "altered-token" }, { ...payload, channel: "driver" }, revealPayload, webhookPayload])
+      await expect(executeChannelCredential({ payload: altered, proofId: proof.proofId })).rejects.toMatchObject({ status: 403 });
+    expect((await storedChannel()).value).toEqual(before);
+    expect((await row(proof.proofId)).consumed_at).toBeNull();
+    expect((await pool().query("SELECT * FROM alc_atendimento.audit")).rowCount).toBe(0);
+  });
+  it("rolls back channel write, audit and proof when audit fails", async () => {
+    const before = await initialChannel();
+    const payload = { operation: "replace_access_token", channel: "client", token: accessToken };
+    const proof = await credentialProof(payload);
+    const input = { payload, proofId: proof.proofId };
+    await pool().query("ALTER TABLE alc_atendimento.audit ADD CONSTRAINT synthetic_failure CHECK(action<>'channel_updated')");
+    try {
+      await expect(executeChannelCredential(input)).rejects.toMatchObject({ status: 503, message: "Operacao de credenciais indisponivel." });
+      expect((await storedChannel()).value).toEqual(before);
+      expect((await row(proof.proofId)).consumed_at).toBeNull();
+      expect((await pool().query("SELECT * FROM alc_atendimento.audit")).rowCount).toBe(0);
+    } finally { await pool().query("ALTER TABLE alc_atendimento.audit DROP CONSTRAINT synthetic_failure"); }
+    expect(await executeChannelCredential(input)).toEqual({ ok: true });
+  });
+  it("does not return a revealed token when its SQL audit fails", async () => {
+    await initialChannel();
+    const proof = await credentialProof(revealPayload);
+    await pool().query("ALTER TABLE alc_atendimento.audit ADD CONSTRAINT synthetic_failure CHECK(action<>'webhook_verify_token_revealed')");
+    try {
+      await expect(executeChannelCredential({ payload: revealPayload, proofId: proof.proofId })).rejects.toMatchObject({ status: 503, message: "Operacao de credenciais indisponivel." });
+      expect((await row(proof.proofId)).consumed_at).toBeNull();
+      expect((await pool().query("SELECT * FROM alc_atendimento.audit")).rowCount).toBe(0);
+    } finally { await pool().query("ALTER TABLE alc_atendimento.audit DROP CONSTRAINT synthetic_failure"); }
+  });
+  it("does not create a channel or audit without a valid recent proof", async () => {
+    await expect(executeChannelCredential({ payload: webhookPayload, proofId: OTHER })).rejects.toMatchObject({ status: 403 });
+    expect(await storedChannel()).toBeUndefined();
+    expect((await pool().query("SELECT * FROM alc_atendimento.audit")).rowCount).toBe(0);
+    const proof = await credentialProof(webhookPayload);
+    expect(await executeChannelCredential({ payload: webhookPayload, proofId: proof.proofId })).toEqual({ ok: true });
+    expect(await channelConfig("client")).toMatchObject({ phoneId: "123456", verifyToken });
+  });
+  it("preserves independent credentials under concurrent channel updates", async () => {
+    await initialChannel();
+    const payloads = [{ operation: "replace_access_token", channel: "client", token: accessToken }, { operation: "replace_app_secret", channel: "client", appSecret }, webhookPayload];
+    const inputs = [];
+    for (const payload of payloads) inputs.push({ payload, proofId: (await credentialProof(payload)).proofId });
+    expect(await Promise.all(inputs.map(executeChannelCredential))).toEqual([{ ok: true }, { ok: true }, { ok: true }]);
+    expect(await channelConfig("client")).toMatchObject({ token: accessToken, appSecret, verifyToken, phoneId: "123456" });
+    expect((await storedChannel()).value.retainedMetadata).toBe(true);
+    expect((await pool().query("SELECT count(*)::int AS count FROM alc_atendimento.audit")).rows[0].count).toBe(3);
+  });
+  it("keeps credential SQL on the supplied client with a four-connection pool", async () => {
+    await initialChannel();
+    const proof = await credentialProof(webhookPayload);
+    const oldMax = pool().options.max;
+    pool().options.max = 4;
+    const occupied = await Promise.all([pool().connect(), pool().connect(), pool().connect()]);
+    try {
+      expect(await executeChannelCredential({ payload: webhookPayload, proofId: proof.proofId })).toEqual({ ok: true });
+      expect((await pool().query("SELECT count(*)::int AS count FROM alc_atendimento.audit")).rows[0].count).toBe(1);
+    } finally { occupied.forEach((client) => client.release()); pool().options.max = oldMax; }
   });
 });
