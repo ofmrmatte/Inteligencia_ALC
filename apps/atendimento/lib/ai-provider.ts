@@ -7,6 +7,7 @@ import { audit, db, setting } from "./db";
 import { decrypt } from "./meta";
 import {
   documentedAiModel,
+  candidateAiTextModel,
   validAiModelId,
   type AiProvider,
 } from "./ai-models";
@@ -267,7 +268,7 @@ export async function aiModelCatalog(
             ),
           );
         models = result.data
-          .filter((model) => documentedAiModel(provider, model.id))
+          .filter((model) => candidateAiTextModel(provider, model.id))
           .map((model) => ({ id: model.id, label: model.id }));
       } else {
         let token: string | undefined;
@@ -306,7 +307,7 @@ export async function aiModelCatalog(
                   model.supportedGenerationMethods.includes(
                     "generateContent",
                   ) &&
-                  documentedAiModel(
+                  candidateAiTextModel(
                     provider,
                     model.name.replace(/^models\//, ""),
                   ),

@@ -153,6 +153,19 @@ it("requires a current successful provider probe before claiming AI is available
   expect((await aiConfigurationStatus()).diagnostic.effective).toBe("untested");
 });
 
+it("requires a credential-bound probe for newly discovered text models", async () => {
+  expect(await aiModelVerified("openai", "gpt-6-luna", "environment-key")).toBe(false);
+  expect(await aiModelVerified("gemini", "gemini-3.8-flash", "google-fallback")).toBe(false);
+  stored.set("ai_test_openai", {
+    model: "gpt-6-luna",
+    result: "ready",
+    testedAt: "2026-10-09T12:00:00Z",
+    fingerprint: createHash("sha256").update("environment-key").digest("hex"),
+  });
+  expect(await aiModelVerified("openai", "gpt-6-luna", "environment-key")).toBe(true);
+  expect(await aiModelVerified("openai", "gpt-6-luna", "wrong-key")).toBe(false);
+});
+
 it("authenticates and caches the provider catalog without assuming all listed models are compatible", async () => {
   vi.stubEnv("OPENAI_API_KEY", "catalog-key");
   const fetcher = vi.fn().mockResolvedValue(
@@ -160,6 +173,11 @@ it("authenticates and caches the provider catalog without assuming all listed mo
       data: [
         { id: "gpt-4.1-mini" },
         { id: "gpt-4o-2024-05-13" },
+        { id: "gpt-6-luna" },
+        { id: "gpt-6.1-sol" },
+        { id: "gpt-6-astra" },
+        { id: "gpt-image-2" },
+        { id: "gpt-6-luna-tts" },
         { id: "text-embedding-3-small" },
         { id: "gpt-audio" },
         { id: "custom-model" },
@@ -169,6 +187,10 @@ it("authenticates and caches the provider catalog without assuming all listed mo
   const result = await aiModelCatalog(actor, "openai", fetcher);
   expect(result.models).toEqual([
     { id: "gpt-4.1-mini", label: "gpt-4.1-mini" },
+    { id: "gpt-4o-2024-05-13", label: "gpt-4o-2024-05-13" },
+    { id: "gpt-6-astra", label: "gpt-6-astra" },
+    { id: "gpt-6-luna", label: "gpt-6-luna" },
+    { id: "gpt-6.1-sol", label: "gpt-6.1-sol" },
   ]);
   expect(fetcher.mock.calls[0][0]).toBe("https://api.openai.com/v1/models");
   expect(fetcher.mock.calls[0][1].redirect).toBe("error");
@@ -186,6 +208,18 @@ it("paginates Gemini catalogs and requires generateContent support plus a docume
         models: [
           {
             name: "models/gemini-2.5-flash",
+            supportedGenerationMethods: ["generateContent"],
+          },
+          {
+            name: "models/gemini-3.8-flash",
+            supportedGenerationMethods: ["generateContent"],
+          },
+          {
+            name: "models/gemini-3.1-pro-preview",
+            supportedGenerationMethods: ["generateContent"],
+          },
+          {
+            name: "models/gemini-3.8-live",
             supportedGenerationMethods: ["generateContent"],
           },
           {
@@ -208,6 +242,8 @@ it("paginates Gemini catalogs and requires generateContent support plus a docume
     );
   expect((await aiModelCatalog(actor, "gemini", fetcher)).models).toEqual([
     { id: "gemini-2.5-flash", label: "models/gemini-2.5-flash" },
+    { id: "gemini-3.1-pro-preview", label: "models/gemini-3.1-pro-preview" },
+    { id: "gemini-3.8-flash", label: "models/gemini-3.8-flash" },
   ]);
   expect(String(fetcher.mock.calls[1][0])).toContain("pageToken=page2");
   expect(String(fetcher.mock.calls[0][0])).not.toContain("google-fallback");
