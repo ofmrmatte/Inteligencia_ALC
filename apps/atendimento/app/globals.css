@@ -1953,12 +1953,12 @@ html:has(.management-dialog[open]),body:has(.management-dialog[open]) { overflow
 .overview-collector-details dt { color: var(--muted); font-size: 11px; margin-bottom: 5px; }
 .overview-collector-details dd { margin: 0; font-size: 12px; font-weight: 600; overflow-wrap: anywhere; }
 .overview-collector-foot { display: flex; flex-wrap: wrap; gap: 8px 24px; margin-top: 12px; color: var(--muted); font-size: 11px; }
-.overview-collector-foot strong { color: var(--text); font-weight: 600; }
+.overview-collector-foot strong { color: var(--ink); font-weight: 600; }
 .overview-collector-foot .overview-sync-errors, .overview-collector-foot .overview-sync-errors strong { color: var(--red); }
 .overview-collector > .notice { margin: 14px 0 0; }
 .overview-activity { display: flex; flex-wrap: wrap; gap: 12px; border: 1px solid var(--line); border-radius: 8px; padding: 12px 16px; background: #fff; }
 .overview-activity span { display: flex; align-items: center; gap: 12px; font-size: 12px; color: var(--muted); }
-.overview-activity strong { color: var(--text); font-size: 16px; }
+.overview-activity strong { color: var(--ink); font-size: 16px; }
 @media (max-width: 850px) {
   .overview-collector-details { grid-template-columns: repeat(2,minmax(0,1fr)); }
 }
