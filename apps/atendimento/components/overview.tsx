@@ -13,7 +13,7 @@ import {
   ShieldAlert,
   GitCompareArrows,
 } from "lucide-react";
-import { KpiCard, Panel, StatusBadge } from "@alc/ui/components";
+import { KpiCard } from "@alc/ui/components";
 import { useData, when } from "./data";
 type OverviewData = {
   open: number;
@@ -28,18 +28,6 @@ type OverviewData = {
   penalty_value_confirmed?: string | null;
   proof_value_confirmed?: string | null;
   authorship?: Record<string, number>;
-  conversationsByOperator?: {
-    assigned_to: string;
-    operator_name?: string;
-    conversations: number;
-  }[];
-  recentCases?: {
-    case_id: string;
-    classification: string;
-    base_key: string;
-    sigla: string;
-    updated_at: string;
-  }[];
   competence: string;
   source: {
     lastSync?: string | null;
@@ -60,21 +48,10 @@ type OverviewData = {
       >
     >;
   };
-  queue: {
-    id: string;
-    name: string;
-    phone: string;
-    channel: string;
-    status: string;
-    unread: number;
-    updated_at: string;
-  }[];
 };
 export function Overview() {
   const { data, error, refresh } = useData<OverviewData>("overview", 15_000);
-  const [collecting, setCollecting] = useState<"client" | "driver" | null>(
-    null,
-  );
+  const [collecting, setCollecting] = useState(false);
   const [collectionNotice, setCollectionNotice] = useState("");
   const [collectionError, setCollectionError] = useState(false);
   const [now, setNow] = useState(() => Date.now());
@@ -93,8 +70,8 @@ export function Overview() {
           style: "currency",
           currency: "BRL",
         });
-  async function collect(channel: "client" | "driver") {
-    setCollecting(channel);
+  async function collect() {
+    setCollecting(true);
     setCollectionNotice("");
     setCollectionError(false);
     try {
@@ -108,9 +85,8 @@ export function Overview() {
           "O Case Center não pôde ser preparado em segundo plano. Confira a sessão Mercado Livre e o conector.",
         );
       }
-      const result = await request<{ message: string }>("ATENDIMENTO_COLLECT", {
-        channel,
-      });
+      // No channel means both client and driver data in one collect-only pass.
+      const result = await request<{ message: string }>("ATENDIMENTO_COLLECT");
       setCollectionNotice(
         result.message || "Coleta de dados concluída, sem disparos.",
       );
@@ -123,7 +99,7 @@ export function Overview() {
           : "Não foi possível coletar dados.",
       );
     } finally {
-      setCollecting(null);
+      setCollecting(false);
     }
   }
   return (
@@ -133,6 +109,7 @@ export function Overview() {
           {error}
         </p>
       )}
+      <div className="overview-heading"><div><h2>Painel operacional</h2><p className="muted">Panorama da competência vigente e dos atendimentos.</p></div></div>
       <div className="stats">
         <KpiCard
           label="PNRs em aberto"
@@ -162,119 +139,43 @@ export function Overview() {
           tone="amber"
         />
       </div>
-      <div className="overview-grid">
-        <Panel
-          title="Fila da equipe"
-          action={
-            <Link className="text-link" href="/conversas?status=all">
-              Ver caixa
-            </Link>
-          }
-        >
-          {!data && !error && <div role="status">Carregando fila…</div>}
-          {data?.queue.map((c) => (
-            <Link
-              className="queue-row"
-              href={`/conversas?id=${c.id}&status=all`}
-              key={c.id}
-            >
-              <span>
-                <strong>{c.name || `+${c.phone}`}</strong>
-                <small>
-                  {c.channel === "driver" ? "Motoristas" : "Disparo Cliente"} ·{" "}
-                  {when(c.updated_at)}
-                </small>
-              </span>
-              <StatusBadge tone={c.status === "pending" ? "amber" : "neutral"}>
-                {c.status === "pending" ? "Pendente" : "Atendente"} · {c.unread}{" "}
-                não lidas
-              </StatusBadge>
-            </Link>
-          ))}
-          {data && !data.queue.length && (
-            <div className="empty">Nenhuma pendência na fila.</div>
-          )}
-        </Panel>
-        <Panel title="Coleta Mercado Livre">
-          <dl>
-            <dt>Competência</dt>
-            <dd>{data?.competence || "—"}</dd>
-            <dt>Última sincronização</dt>
-            <dd>{when(data?.source.lastSync ?? undefined)}</dd>
-            <dt>Último sync concluído</dt>
-            <dd>
-              {data?.source.lastCompletedSync
-                ? when(data.source.lastCompletedSync)
-                : "Sem conclusão confirmada"}
-            </dd>
-            <dt>Atualidade</dt>
-            <dd>
-              {syncStale
-                ? "Sincronização desatualizada"
-                : data?.source.lastCompletedSync
-                  ? "Sincronização recente"
-                  : "Ainda sem sincronização concluída"}
-            </dd>
-            <dt>Coletor</dt>
-            <dd>
-              {data?.collector.enabled
-                ? "Agendado · 30 minutos"
-                : "Não agendado"}
-            </dd>
-            <dt>Carga</dt>
-            <dd>
-              {data?.collector.completed
-                ? "Última coleta concluída"
-                : "Coleta ainda não concluída"}
-            </dd>
-          </dl>
-          <p className="muted">
-            Sincronização de dados do Case Center. Estes botões não enviam
-            mensagens.
-          </p>
-          <div className="actions">
-            <button
-              className="primary"
-              type="button"
-              disabled={collecting !== null}
-              onClick={() => void collect("client")}
-            >
-              {collecting === "client"
-                ? "Coletando clientes…"
-                : "Coletar Cliente"}
-            </button>
-            <button
-              type="button"
-              disabled={collecting !== null}
-              onClick={() => void collect("driver")}
-            >
-              {collecting === "driver"
-                ? "Coletando motoristas…"
-                : "Coletar Driver"}
-            </button>
+      <section className="overview-collector" aria-labelledby="overview-collector-title">
+        <div className="overview-collector-header">
+          <div>
+            <h2 id="overview-collector-title">Coleta Mercado Livre</h2>
+            <p className="muted">Sincronização única do Case Center para clientes e motoristas, sem envio ou enfileiramento de mensagens.</p>
           </div>
-          <dl>
-            <dt>Última coleta de clientes</dt>
-            <dd>{when(data?.collector.channelSync?.client?.lastSync)}</dd>
-            <dt>Última coleta de motoristas</dt>
-            <dd>{when(data?.collector.channelSync?.driver?.lastSync)}</dd>
-          </dl>
-          {collectionNotice ? (
-            <p
-              role="status"
-              className={collectionError ? "notice error" : "notice"}
-            >
-              {collectionNotice}
-              {collectionError ? (
-                <>
-                  {" "}
-                  <Link href="/admin">Verificar extensão nos Ajustes</Link>
-                </>
-              ) : null}
-            </p>
-          ) : null}
-        </Panel>
-      </div>
+          <button
+            className="primary"
+            type="button"
+            disabled={collecting}
+            onClick={() => void collect()}
+          >
+            <RefreshCw size={16} /> {collecting ? "Coletando dados…" : "Coletar geral"}
+          </button>
+        </div>
+        <dl className="overview-collector-details">
+          <div><dt>Competência</dt><dd>{data?.competence || "—"}</dd></div>
+          <div><dt>Última sincronização</dt><dd>{when(data?.source.lastSync ?? undefined)}</dd></div>
+          <div><dt>Conclusão confirmada</dt><dd>{data?.source.lastCompletedSync ? when(data.source.lastCompletedSync) : "Ainda não confirmada"}</dd></div>
+          <div><dt>Atualidade</dt><dd>{syncStale ? "Desatualizada" : data?.source.lastCompletedSync ? "Atualizada" : "Pendente"}</dd></div>
+          <div><dt>Agendamento</dt><dd>{data?.collector.enabled ? "A cada 30 minutos" : "Não agendado"}</dd></div>
+          <div><dt>Última coleta</dt><dd>{data?.collector.completed ? "Concluída" : "Ainda não concluída"}</dd></div>
+        </dl>
+        <div className="overview-collector-foot">
+          <span>Clientes: <strong>{when(data?.collector.channelSync?.client?.lastSync)}</strong></span>
+          <span>Motoristas: <strong>{when(data?.collector.channelSync?.driver?.lastSync)}</strong></span>
+          <span className={Number(syncStats.errors ?? 0) > 0 ? "overview-sync-errors" : ""}>
+            Erros na última sincronização: <strong>{(syncStats.errors ?? 0).toLocaleString("pt-BR")}</strong>
+          </span>
+        </div>
+        {collectionNotice && (
+          <p role="status" className={collectionError ? "notice error" : "notice"}>
+            {collectionNotice}
+            {collectionError && <> <Link href="/admin">Verificar extensão nos Ajustes</Link></>}
+          </p>
+        )}
+      </section>
       <section className="sync-summary" aria-labelledby="sync-title">
         <h2 id="sync-title">Resumo da sincronização</h2>
         <SyncGroup
@@ -311,7 +212,6 @@ export function Overview() {
             ["PNRs atualizadas", syncStats.updated],
             ["PNRs inalteradas", syncStats.unchanged],
             ["PNRs obsoletas", syncStats.stale],
-            ["Erros na última sincronização", syncStats.errors],
           ]}
         />
         <SyncGroup
@@ -327,53 +227,11 @@ export function Overview() {
             ],
           ]}
         />
-        <SyncGroup
-          title="Atendimento"
-          icon={<MessageSquare size={16} />}
-          items={[
-            ["Mensagens por IA", data?.authorship?.ai],
-            ["Mensagens humanas", data?.authorship?.human],
-          ]}
-        />
+        <div className="overview-activity" aria-label="Mensagens por autoria">
+          <span>Mensagens por IA <strong>{data?.authorship?.ai?.toLocaleString("pt-BR") ?? "—"}</strong></span>
+          <span>Mensagens humanas <strong>{data?.authorship?.human?.toLocaleString("pt-BR") ?? "—"}</strong></span>
+        </div>
       </section>
-      <div className="overview-grid sync-secondary">
-        <Panel title="Conversas por atendente">
-          <ul className="sync-list">
-            {data?.conversationsByOperator?.map((item) => (
-              <li key={item.assigned_to}>
-                <span>{item.operator_name || "Atendente indisponível"}</span>
-                <strong>{item.conversations}</strong>
-              </li>
-            ))}
-          </ul>
-          {!data?.conversationsByOperator?.length && (
-            <p className="muted">
-              {data
-                ? "Nenhuma conversa atribuída."
-                : "Dados ainda indisponíveis."}
-            </p>
-          )}
-        </Panel>
-        <Panel title="PNRs recentemente atualizadas">
-          <ul className="sync-list">
-            {data?.recentCases?.map((item) => (
-              <li key={item.case_id}>
-                <strong>PNR {item.case_id}</strong>
-                <span>
-                  {item.sigla || item.base_key} · {when(item.updated_at)}
-                </span>
-              </li>
-            ))}
-          </ul>
-          {!data?.recentCases?.length && (
-            <p className="muted">
-              {data
-                ? "Sem atualizações recentes."
-                : "Dados ainda indisponíveis."}
-            </p>
-          )}
-        </Panel>
-      </div>
     </main>
   );
 }
