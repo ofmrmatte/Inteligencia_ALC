@@ -15,11 +15,6 @@ const formats: Record<
   "image/jpeg": { extensions: ["jpg", "jpeg"], type: "image", limit: 5 * MB },
   "image/png": { extensions: ["png"], type: "image", limit: 5 * MB },
   "image/webp": { extensions: ["webp"], type: "sticker", limit: 500 * 1024 },
-  "audio/aac": { extensions: ["aac"], type: "audio", limit: 16 * MB },
-  "audio/amr": { extensions: ["amr"], type: "audio", limit: 16 * MB },
-  "audio/mpeg": { extensions: ["mp3"], type: "audio", limit: 16 * MB },
-  "audio/mp4": { extensions: ["m4a"], type: "audio", limit: 16 * MB },
-  "audio/ogg": { extensions: ["ogg", "opus"], type: "audio", limit: 16 * MB },
   "video/mp4": { extensions: ["mp4"], type: "video", limit: 16 * MB },
   "video/3gpp": { extensions: ["3gp"], type: "video", limit: 16 * MB },
   "application/pdf": {
@@ -63,6 +58,11 @@ const formats: Record<
     limit: MAX_MEDIA_BYTES,
   },
 };
+export function assertSupportedMedia(typeOrMime: string) {
+  const type = typeOrMime.split(";")[0].trim().toLowerCase();
+  if (type === "audio" || type.startsWith("audio/"))
+    throw new HttpError(415, "Áudio não é suportado no Atendimento.");
+}
 export function mediaFilename(value: string) {
   const name = value.trim().normalize("NFC");
   if (
@@ -126,6 +126,8 @@ export async function validateMedia(
   const detected = await fileTypeFromBuffer(bytes);
   let mime = detected?.mime || "";
   const declared = declaredMime.split(";")[0].trim().toLowerCase();
+  assertSupportedMedia(declared);
+  assertSupportedMedia(mime);
   if (mime === "application/x-cfb") {
     try {
       const compound = readCompound(bytes, { type: "buffer", WTF: true });

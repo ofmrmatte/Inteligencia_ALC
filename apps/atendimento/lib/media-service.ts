@@ -10,6 +10,7 @@ import { canReadConversation } from "./inbox";
 import { channelConfig, graph, type Channel } from "./meta";
 import {
   boundedBytes,
+  assertSupportedMedia,
   MAX_MEDIA_BYTES,
   mediaFilename,
   receivedFilename,
@@ -142,6 +143,7 @@ export async function assertMediaReply(
 export async function reserveUpload(profile: AuthProfile, input: unknown) {
   const parsed = uploadSchema.parse(input),
     filename = mediaFilename(parsed.filename);
+  assertSupportedMedia(parsed.mime);
   const connection = await db().connect();
   try {
     await connection.query("BEGIN");
@@ -450,6 +452,7 @@ export async function queueMedia(
     row.case_id !== (conversation.case_id || null)
   )
     throw new HttpError(404, "Anexo não encontrado.");
+  assertSupportedMedia(row.type);
   if (
     row.status !== "ready" ||
     new Date(row.retention_until).getTime() <= Date.now()
@@ -532,6 +535,7 @@ export async function outboundMedia(mediaId: string, connection: PoolClient) {
     new Date(row.retention_until).getTime() <= Date.now()
   )
     throw new HttpError(409, "Anexo não está disponível para envio.");
+  assertSupportedMedia(row.type);
   return { row, bytes: await privateBytes(row) };
 }
 export async function archiveIncomingMedia() {
@@ -540,7 +544,7 @@ export async function archiveIncomingMedia() {
       .query(`SELECT m.id,m.conversation_id,m.type,m.attachment,m.case_id,c.channel FROM alc_atendimento.messages m
     JOIN alc_atendimento.conversations c ON c.id=m.conversation_id
     LEFT JOIN alc_atendimento.media a ON a.message_id=m.id
-    WHERE m.direction='in' AND m.type IN ('image','audio','video','document','sticker') AND m.attachment->>'id' IS NOT NULL
+    WHERE m.direction='in' AND m.type IN ('image','video','document','sticker') AND m.attachment->>'id' IS NOT NULL
     AND (a.id IS NULL OR (a.origin='inbound' AND a.status='failed' AND a.attempts<5 AND a.retention_until>now() AND a.updated_at<now()-interval '5 minutes')) ORDER BY m.created_at LIMIT 5`)
   ).rows;
   for (const message of messages) {
@@ -619,7 +623,7 @@ export async function archiveIncomingMedia() {
   const pending = (
     await db()
       .query(`UPDATE alc_atendimento.media SET attempts=attempts+1,updated_at=now() WHERE id IN (
-    SELECT id FROM alc_atendimento.media WHERE status IN ('pending','quarantined') AND sha256<>'' AND attempts<10
+    SELECT id FROM alc_atendimento.media WHERE status IN ('pending','quarantined') AND type<>'audio' AND sha256<>'' AND attempts<10
     AND retention_until>now() AND updated_at<now()-interval '5 minutes' ORDER BY updated_at LIMIT 5 FOR UPDATE SKIP LOCKED) RETURNING *`)
   ).rows as Media[];
   for (const row of pending) {

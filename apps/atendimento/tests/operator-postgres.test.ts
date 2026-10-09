@@ -490,6 +490,16 @@ describe.skipIf(!url || !coreUrl)(
       expect(requests.filter((r) => r.status === "fulfilled")).toHaveLength(2);
       expect(requests.filter((r) => r.status === "rejected")).toHaveLength(1);
     });
+    it("blocks requeueing legacy audio without deleting its historical archive", async () => {
+      const conversationId = await mediaConversation(), media = await uploadedMedia(conversationId);
+      await client.query("UPDATE alc_atendimento.media SET type='audio',mime='audio/ogg' WHERE id=$1", [media.id]);
+      await expect(mutateConversation(profile(A), {
+        id: conversationId, action: "attachment", mediaId: media.id,
+      })).rejects.toMatchObject({ status: 415 });
+      expect((await client.query("SELECT * FROM alc_atendimento.outbox")).rowCount).toBe(0);
+      expect((await client.query("SELECT status FROM alc_atendimento.media WHERE id=$1", [media.id])).rows[0].status).toBe("ready");
+      expect(provider.graph).not.toHaveBeenCalled();
+    });
     it("queues media once and atomically links its confirmed message", async () => {
       const conversationId = await mediaConversation(),
         media = await uploadedMedia(conversationId);
