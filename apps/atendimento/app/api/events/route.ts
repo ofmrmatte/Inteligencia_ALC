@@ -25,9 +25,10 @@ export async function GET(request: Request) {
   try {
     profile = await currentProfile();
   } catch (error) {
+    const status = statusOf(error);
     return Response.json(
-      { error: error instanceof Error ? error.message : "Acesso negado." },
-      { status: statusOf(error) },
+      { error: status === 503 ? "Serviço temporariamente indisponível." : error instanceof Error ? error.message : "Acesso negado." },
+      { status },
     );
   }
   const encoder = new TextEncoder();

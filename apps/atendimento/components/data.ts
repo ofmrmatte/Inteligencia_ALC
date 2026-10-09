@@ -26,7 +26,11 @@ export async function api<T>(path: string, body?: unknown): Promise<T> {
   });
   const data = (await response.json().catch(() => ({}))) as { error?: string };
   const authFailure =
-    response.status === 401 || response.status === 403 || data.error === "MFA_REQUIRED";
+    response.status === 401 || data.error === "MFA_REQUIRED" ||
+    (response.status === 403 && [
+      "Perfil sem acesso ao Atendimento.",
+      "Seu acesso ao Atendimento está desativado.",
+    ].includes(data.error || ""));
   if (authFailure) {
     clearPrivateContent();
     if (response.status === 401 || data.error === "MFA_REQUIRED")

@@ -29,6 +29,18 @@ it.each([401, 403, 503] as const)("mantém o status inicial do SSE distinto para
   expect(response.status).toBe(status);
 });
 
+it.each([
+  new Error("database connection failed: internal-host"),
+  new HttpError(503, "database connection failed: internal-host"),
+])("redige detalhes internos na resposta SSE 503", async (error) => {
+  vi.mocked(currentProfile).mockRejectedValueOnce(error);
+
+  const response = await GET(new Request("http://localhost/api/events"));
+
+  expect(response.status).toBe(503);
+  expect(await response.json()).toEqual({ error: "Serviço temporariamente indisponível." });
+});
+
 it("separa revogação de falha transitória no evento do stream", () => {
   expect(eventForError(new HttpError(401, "expired"))).toContain("event: close401");
   expect(eventForError(new HttpError(403, "revoked"))).toContain("event: close403");
