@@ -1,9 +1,4 @@
-import { execFile, spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { mkdir, mkdtemp, readFile } from "node:fs/promises";
-import { createServer } from "node:net";
-import { join, resolve } from "node:path";
-import { promisify } from "node:util";
 import pg from "pg";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { ENTRY_COOKIE, entryReceipt, entrySessionKey } from "@alc/identity/transfer";
@@ -56,6 +51,7 @@ import { currentProfile, currentSessionContext } from "../lib/auth";
 import { createStepUpChallenge, listStepUpFactors, verifyStepUp, withRecentMfa } from "../lib/mfa-step-up";
 import { createChannelCredentialChallenge, executeChannelCredential, verifyChannelCredential } from "../lib/channel-credentials";
 import { channelConfig, encrypt } from "../lib/meta";
+import { migrate } from "../scripts/migrations.mjs";
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -153,33 +149,19 @@ describe("verified session context", () => {
   });
 });
 
-// This suite owns its cluster, directory and port; it never accepts a database URL or imports parent fixtures.
-const pgBin = process.env.MFA_TEST_PG_BIN;
-describe.skipIf(!pgBin)("isolated recent MFA PostgreSQL", () => {
-  const run = promisify(execFile);
-  let directory: string, started = false;
-  const binary = (name: string) => join(pgBin!, process.platform === "win32" ? name + ".exe" : name);
+// Only the disposable loopback fixture is accepted; never use a production database.
+const fixtureUrl = process.env.ATENDIMENTO_TEST_DATABASE_URL;
+if (fixtureUrl) {
+  const parsed = new URL(fixtureUrl);
+  if (!["127.0.0.1", "localhost"].includes(parsed.hostname) || parsed.pathname !== "/alc_atendimento_test")
+    throw new Error("Only the isolated local Atendimento test database is permitted");
+}
+describe.skipIf(!fixtureUrl)("isolated recent MFA PostgreSQL", () => {
   beforeAll(async () => {
-    const cache = resolve(import.meta.dirname, "../../../node_modules/.cache");
-    await mkdir(cache, { recursive: true });
-    directory = await mkdtemp(join(cache, "mfa-phase7-"));
-    const server = createServer();
-    await new Promise<void>((done) => server.listen(0, "127.0.0.1", done));
-    const address = server.address();
-    if (!address || typeof address === "string") throw new Error("No isolated test port");
-    const port = address.port;
-    await new Promise<void>((done, reject) => server.close((error) => error ? reject(error) : done()));
-    await run(binary("initdb"), ["-D", directory, "-U", "mfa_fixture", "-A", "trust", "--no-locale", "--encoding=UTF8"], { windowsHide: true });
-    // pg_ctl's server can inherit execFile pipes on Windows and prevent its close callback.
-    started = true;
-    await new Promise<void>((done, reject) => {
-      const child = spawn(binary("pg_ctl"), ["-D", directory, "-l", join(directory, "server.log"), "-o", "-h 127.0.0.1 -p " + port + " -F", "-w", "-t", "20", "start"], { windowsHide: true, stdio: "ignore" });
-      child.once("error", reject);
-      child.once("exit", (code) => code === 0 ? done() : reject(new Error("Isolated PostgreSQL startup failed")));
-    });
-    mocks.pool = new pg.Pool({ host: "127.0.0.1", port, user: "mfa_fixture", database: "postgres", max: 12, connectionTimeoutMillis: 3000 });
-    await mocks.pool.query("CREATE SCHEMA alc_atendimento; CREATE TABLE alc_atendimento.settings(key text PRIMARY KEY,value jsonb NOT NULL,updated_by uuid,updated_at timestamptz NOT NULL DEFAULT clock_timestamp()); CREATE TABLE alc_atendimento.audit(id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,actor_id uuid,action text NOT NULL,target text,data jsonb NOT NULL); CREATE TABLE alc_atendimento.test_actions(id uuid PRIMARY KEY); CREATE ROLE anon; CREATE ROLE authenticated");
-    await mocks.pool.query(await readFile(new URL("../db/009_recent_mfa.sql", import.meta.url), "utf8"));
+    mocks.pool = new pg.Pool({ connectionString: fixtureUrl, max: 12, connectionTimeoutMillis: 3000 });
+    const client = await mocks.pool.connect();
+    try { await migrate(client); } finally { client.release(); }
+    await mocks.pool.query("CREATE TABLE IF NOT EXISTS alc_atendimento.test_actions(id uuid PRIMARY KEY)");
   }, 60_000);
   beforeEach(async () => {
     await mocks.pool!.query("TRUNCATE alc_atendimento.settings,alc_atendimento.step_up_attempts,alc_atendimento.step_up_challenges,alc_atendimento.test_actions,alc_atendimento.audit");
@@ -188,7 +170,6 @@ describe.skipIf(!pgBin)("isolated recent MFA PostgreSQL", () => {
   afterAll(async () => {
     await mocks.pool?.end();
     mocks.pool = null;
-    if (started) await run(binary("pg_ctl"), ["-D", directory, "-m", "fast", "-w", "-t", "20", "stop"], { windowsHide: true });
   }, 30_000);
   const pool = () => mocks.pool!;
   async function register() {
@@ -299,6 +280,23 @@ describe.skipIf(!pgBin)("isolated recent MFA PostgreSQL", () => {
     expect(results.filter((result) => result.status === "fulfilled")).toHaveLength(1);
     expect(mocks.verify).toHaveBeenCalledTimes(1);
     expect(await attemptCount()).toBe(1);
+  });
+  it("limits challenge creation durably before provider calls under concurrency", async () => {
+    const results = await Promise.allSettled(Array.from({ length: 25 }, () => challenge()));
+    expect(results.filter((result) => result.status === "fulfilled")).toHaveLength(20);
+    expect(results.filter((result) => result.status === "rejected" && result.reason.status === 429)).toHaveLength(5);
+    expect(mocks.challenge).toHaveBeenCalledTimes(20);
+  });
+  it("does not refund challenge admission when the provider fails", async () => {
+    mocks.challenge.mockRejectedValue(new Error("synthetic failure"));
+    for (let i = 0; i < 20; i++) await expect(challenge()).rejects.toMatchObject({ status: 503 });
+    mocks.claims.session_id = OTHER;
+    await register();
+    await expect(challenge()).rejects.toMatchObject({ status: 429 });
+    expect(mocks.challenge).toHaveBeenCalledTimes(20);
+    await pool().query("UPDATE alc_atendimento.settings SET value=jsonb_set(value,'{until}','0') WHERE key=$1", [`mfa_challenge_limit_${USER}`]);
+    await expect(challenge()).rejects.toMatchObject({ status: 503 });
+    expect(mocks.challenge).toHaveBeenCalledTimes(21);
   });
   it("durably admits only five attempts in fifteen minutes under concurrency", async () => {
     const requests = await Promise.all(Array.from({ length: 8 }, () => challenge()));

@@ -170,6 +170,19 @@ export async function createStepUpChallenge(input: unknown) {
   key();
   await verifiedTotp(current.client, bound.factorId);
   await windowAttempts(db(), current.claims.sub);
+  // Reserve before provider calls so failed challenges cannot bypass the durable limit.
+  const admission = await db().query(
+    `INSERT INTO alc_atendimento.settings(key,value)
+     VALUES($1,jsonb_build_object('count',1,'until',extract(epoch FROM clock_timestamp())+900))
+     ON CONFLICT(key) DO UPDATE SET value=CASE
+       WHEN (alc_atendimento.settings.value->>'until')::numeric<=extract(epoch FROM clock_timestamp())
+       THEN excluded.value
+       ELSE jsonb_set(alc_atendimento.settings.value,'{count}',to_jsonb((alc_atendimento.settings.value->>'count')::int+1)) END
+     WHERE (alc_atendimento.settings.value->>'until')::numeric<=extract(epoch FROM clock_timestamp())
+        OR (alc_atendimento.settings.value->>'count')::int<20 RETURNING key`,
+    [`mfa_challenge_limit_${current.claims.sub}`],
+  );
+  if (!admission.rowCount) throw new HttpError(429, "Limite de desafios MFA atingido.");
   const { data, error } = await provider(() => current.client.auth.mfa.challenge({ factorId: bound.factorId }));
   if (error || !data || data.type !== "totp" || !z.uuid().safeParse(data.id).success || !Number.isFinite(data.expires_at))
     throw new HttpError(503, "Nao foi possivel iniciar o desafio MFA.");

@@ -1,5 +1,7 @@
 import { CUSTOMER_STEPS, fillScript } from "./agent-playbook";
 import { AGENT_DISPLAY_NAME } from "./agent-brand";
+import { phone } from "@alc/identity/phone";
+export { phone } from "@alc/identity/phone";
 function message(id: string) {
   return CUSTOMER_STEPS.find((step) => step.id === id)?.example || "";
 }
@@ -13,12 +15,6 @@ export function normalize(value: unknown) {
     .replace(/\s+/g, " ")
     .trim()
     .toUpperCase();
-}
-export function phone(value: unknown) {
-  const n = String(value ?? "").replace(/\D/g, "");
-  if (/^55\d{10,11}$/.test(n)) return n;
-  if (/^\d{10,11}$/.test(n)) return "55" + n;
-  return "";
 }
 export function knownPurchaseValue(value: unknown): number | null {
   if (typeof value !== "number" &&
@@ -77,6 +73,17 @@ export type CaseRecord = {
   deliveryAt: string;
   purchaseValue: number | null;
 };
+export function contactPhoneStatus(record: CaseRecord, channel: "driver" | "client", delivery?: string | null) {
+  const number = phone(channel === "driver" ? record.driverPhone : record.customerPhone);
+  const associated = Boolean(channel === "driver" ? record.driverId : record.customerName && record.shipmentId);
+  return {
+    number,
+    format: number ? "Formato válido" : "Formato inválido",
+    association: number && associated ? channel === "client" && record.customerVerified
+      ? "Associação verificada" : "Associado ao cadastro" : "Associação não verificada",
+    whatsapp: delivery === "delivered" || delivery === "read" ? "WhatsApp confirmado" : "WhatsApp não confirmado",
+  };
+}
 export type AgentState = {
   step: string;
   optOut?: boolean;

@@ -131,20 +131,10 @@ export function ChannelCard({
         wabaId: String(values.wabaId),
         number: String(values.number),
         ...(values.verifyToken ? { verifyToken: String(values.verifyToken) } : {}),
+        ...(values.token ? { token: String(values.token) } : {}),
+        ...(values.appSecret ? { appSecret: String(values.appSecret) } : {}),
       },
     ];
-    if (values.token)
-      actions.push({
-        operation: "replace_access_token",
-        channel: channel.channel,
-        token: String(values.token),
-      });
-    if (values.appSecret)
-      actions.push({
-        operation: "replace_app_secret",
-        channel: channel.channel,
-        appSecret: String(values.appSecret),
-      });
     setNotice("");
     setCredentialIndex(0);
     setCredentialQueue(actions);

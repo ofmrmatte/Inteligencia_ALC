@@ -5,6 +5,7 @@ import { ChevronLeft, ChevronRight, Send, X } from "lucide-react";
 import {
   normalize,
   phone,
+  contactPhoneStatus,
   templateParameters,
   driverNotificationEligible,
   type CaseRecord,
@@ -441,11 +442,8 @@ export function Dispatches({ channel = "client" }: { channel?: Channel }) {
               {tab === "preview"
                 ? rows.slice(start, start + 25).map((r) => {
                     const block = previewBlock(channel, r, current),
-                      number = phone(
-                        channel === "driver"
-                          ? r.record.driverPhone
-                          : r.record.customerPhone,
-                      );
+                      contact = contactPhoneStatus(r.record, channel, r.initial_status),
+                      number = contact.number;
                     return (
                       <tr key={r.case_id}>
                         <td>
@@ -492,8 +490,12 @@ export function Dispatches({ channel = "client" }: { channel?: Channel }) {
                             {labels[r.classification] || r.classification}
                           </span>
                         </td>
-                        <td>{number ? `+${number}` : "Não localizado"}</td>
-                        <td>{block || "Aguardando conferência"}</td>
+                        <td>
+                          {number ? `+${number}` : "Não localizado"}
+                          <small>{contact.format} · {contact.association}</small>
+                          <small>{contact.whatsapp}</small>
+                        </td>
+                        <td>{block || "Contato elegível para conferência"}</td>
                         <td>
                           <button
                             disabled={
@@ -635,8 +637,12 @@ export function Dispatches({ channel = "client" }: { channel?: Channel }) {
                 ? selected.record.driverName
                 : selected.record.customerName}
             </dd>
-            <dt>WhatsApp</dt>
+            <dt>Telefone</dt>
             <dd>+{selectedPhone}</dd>
+            <dt>Validação</dt>
+            <dd>{contactPhoneStatus(selected.record, channel).format} · {contactPhoneStatus(selected.record, channel).association}</dd>
+            <dt>WhatsApp</dt>
+            <dd>{contactPhoneStatus(selected.record, channel).whatsapp}</dd>
             <dt>Envio / caso</dt>
             <dd>
               {selected.record.shipmentId} / {selected.case_id}

@@ -5,23 +5,43 @@ import {
   executeChannelCredential,
   verifyChannelCredential,
 } from "@/lib/channel-credentials";
+import { boundedBytes } from "@/lib/media-validation";
 import { listStepUpFactors } from "@/lib/mfa-step-up";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
+const MAX_JSON_BYTES = 8 * 1024;
+const MAX_PLAINTEXT_TOKEN_BYTES = 3 * 1024;
+const PRIVATE_HEADERS = {
+  "Cache-Control": "private, no-store, max-age=0",
+  Pragma: "no-cache",
+  "X-Content-Type-Options": "nosniff",
+  "X-Robots-Tag": "noindex, noarchive",
+};
+
+const boundedPayload = z.unknown().superRefine((value, context) => {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return;
+  const token = (value as Record<string, unknown>).token;
+  if (
+    typeof token === "string" &&
+    new TextEncoder().encode(token).byteLength > MAX_PLAINTEXT_TOKEN_BYTES
+  )
+    context.addIssue({ code: "custom", message: "Token muito grande." });
+});
+
 const actionSchema = z.discriminatedUnion("action", [
   z
     .object({
       action: z.literal("challenge"),
-      payload: z.unknown(),
+      payload: boundedPayload,
       factorId: z.uuid(),
     })
     .strict(),
   z
     .object({
       action: z.literal("verify"),
-      payload: z.unknown(),
+      payload: boundedPayload,
       factorId: z.uuid(),
       challengeId: z.uuid(),
       nonce: z.string(),
@@ -31,7 +51,7 @@ const actionSchema = z.discriminatedUnion("action", [
   z
     .object({
       action: z.literal("execute"),
-      payload: z.unknown(),
+      payload: boundedPayload,
       proofId: z.uuid(),
     })
     .strict(),
@@ -44,15 +64,15 @@ function sameOrigin(request: Request) {
 
 function errorResponse(error: unknown) {
   if (error instanceof HttpError)
-    return Response.json({ error: error.message }, { status: error.status });
+    return Response.json({ error: error.message }, { status: error.status, headers: PRIVATE_HEADERS });
   if (error instanceof z.ZodError)
     return Response.json(
       { error: "Dados invalidos. Revise os campos informados." },
-      { status: 400 },
+      { status: 400, headers: PRIVATE_HEADERS },
     );
   return Response.json(
     { error: "Operacao de credenciais indisponivel." },
-    { status: 503 },
+    { status: 503, headers: PRIVATE_HEADERS },
   );
 }
 
@@ -69,7 +89,7 @@ export async function GET() {
   try {
     return Response.json(
       { factors: await listStepUpFactors() },
-      { headers: { "Cache-Control": "private, no-store, max-age=0" } },
+      { headers: PRIVATE_HEADERS },
     );
   } catch (error) {
     return errorResponse(error);
@@ -79,8 +99,18 @@ export async function GET() {
 export async function POST(request: Request) {
   try {
     sameOrigin(request);
-    const raw = await request.text();
-    if (raw.length > 100_000) throw new HttpError(413, "Lote muito grande.");
+    const length = request.headers.get("content-length");
+    if (length && (!/^\d+$/.test(length) || Number(length) > MAX_JSON_BYTES))
+      throw new HttpError(413, "Lote muito grande.");
+    let raw: string;
+    try {
+      raw = new TextDecoder("utf-8", { fatal: true }).decode(
+        await boundedBytes(request.body, MAX_JSON_BYTES),
+      );
+    } catch (error) {
+      if (error instanceof HttpError) throw error;
+      throw new HttpError(400, "JSON invalido.");
+    }
     let input: unknown;
     try {
       input = JSON.parse(raw);
@@ -94,6 +124,7 @@ export async function POST(request: Request) {
           payload: body.payload,
           factorId: body.factorId,
         }),
+        { headers: PRIVATE_HEADERS },
       );
     if (body.action === "verify") {
       try {
@@ -105,10 +136,11 @@ export async function POST(request: Request) {
             nonce: body.nonce,
             code: body.code,
           }),
+          { headers: PRIVATE_HEADERS },
         );
       } catch (error) {
         if (credentialVerificationError(error))
-          return Response.json({ error: error.message }, { status: 422 });
+          return Response.json({ error: error.message }, { status: 422, headers: PRIVATE_HEADERS });
         throw error;
       }
     }
@@ -118,16 +150,7 @@ export async function POST(request: Request) {
     });
     return Response.json(
       result,
-      "verifyToken" in result
-        ? {
-            headers: {
-              "Cache-Control": "private, no-store, max-age=0",
-              Pragma: "no-cache",
-              "X-Robots-Tag": "noindex, noarchive",
-              "X-Content-Type-Options": "nosniff",
-            },
-          }
-        : undefined,
+      { headers: PRIVATE_HEADERS },
     );
   } catch (error) {
     return errorResponse(error);

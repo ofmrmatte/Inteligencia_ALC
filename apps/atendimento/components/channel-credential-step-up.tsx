@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, type FormEvent } from "react";
+import { useEffect, useRef, useState, type FormEvent, type SyntheticEvent } from "react";
 import { api } from "./data";
 
 type Channel = "driver" | "client";
@@ -15,6 +15,8 @@ export type ChannelCredentialPayload =
       wabaId: string;
       number: string;
       verifyToken?: string;
+      token?: string;
+      appSecret?: string;
     };
 type CredentialResult = { ok: true } | { verifyToken: string };
 type Factor = { id: string; friendlyName: string };
@@ -38,12 +40,32 @@ export function ChannelCredentialStepUp({
   onComplete: (result: CredentialResult) => void | Promise<void>;
   onCancel: () => void;
 }) {
+  const dialog = useRef<HTMLDialogElement>(null);
+  const codeInput = useRef<HTMLInputElement>(null);
+  const previousFocus = useRef<HTMLElement | null>(null);
   const [factors, setFactors] = useState<Factor[]>([]);
   const [factorId, setFactorId] = useState("");
   const [code, setCode] = useState("");
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
+
+  useEffect(() => {
+    const element = dialog.current;
+    previousFocus.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    if (element && !element.open) {
+      if (typeof element.showModal === "function") element.showModal();
+      else element.setAttribute("open", "");
+    }
+    return () => {
+      if (element?.open) element.close();
+      previousFocus.current?.focus();
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!loading && factors.length) codeInput.current?.focus();
+  }, [loading, factors.length]);
 
   useEffect(() => {
     let active = true;
@@ -105,12 +127,24 @@ export function ChannelCredentialStepUp({
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : "MFA indisponível.");
     } finally {
+      setCode("");
       setBusy(false);
     }
   }
 
+  function cancel(event: SyntheticEvent) {
+    event.preventDefault();
+    if (!busy) onCancel();
+  }
+
   return (
-    <dialog className="label-dialog" open aria-modal="true" aria-labelledby="channel-step-up-title">
+    <dialog
+      ref={dialog}
+      className="label-dialog"
+      aria-modal="true"
+      aria-labelledby="channel-step-up-title"
+      onCancel={cancel}
+    >
       <h2 id="channel-step-up-title">Confirmação MFA necessária</h2>
       <p className="muted">
         Confirme o TOTP para {operationLabel(payload.operation)} em {payload.channel === "driver" ? "Motoristas" : "Clientes"}.
@@ -136,6 +170,7 @@ export function ChannelCredentialStepUp({
           <label>
             Código TOTP
             <input
+              ref={codeInput}
               value={code}
               onChange={(event) => setCode(event.target.value)}
               inputMode="numeric"
@@ -148,7 +183,7 @@ export function ChannelCredentialStepUp({
             />
           </label>
           <div className="actions">
-            <button type="button" onClick={onCancel} disabled={busy}>Cancelar</button>
+            <button type="button" onClick={cancel} disabled={busy}>Cancelar</button>
             <button className="primary" disabled={busy}>
               {busy ? "Confirmando…" : "Confirmar e continuar"}
             </button>
@@ -156,9 +191,9 @@ export function ChannelCredentialStepUp({
         </form>
       ) : null}
       {error ? <p className="notice error" role="alert">{error}</p> : null}
-      {!loading && !factors.length ? (
+      {loading || !factors.length ? (
         <div className="actions">
-          <button type="button" onClick={onCancel}>Fechar</button>
+          <button type="button" onClick={cancel} disabled={busy}>{loading ? "Cancelar" : "Fechar"}</button>
         </div>
       ) : null}
     </dialog>

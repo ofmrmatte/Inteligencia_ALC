@@ -322,6 +322,27 @@ captura visual, Meta real, IA real, migracao remota ou deploy nesta rodada.
    replay concorrente, contato antigo/conflitante e acesso privado negado.
    A fase 7 e o logout final ainda nao estao integrados nesta branch.
 
+## Fase 7
+
+1. Credenciais Meta passam somente pela API dedicada, com origem exata,
+   corpo limitado durante a leitura e respostas privadas/no-store. O endpoint
+   administrativo generico nao pode revelar ou alterar essas credenciais.
+2. TOTP verificado e atual e exigido para a operacao exata, canal, usuario,
+   sessao e payload. Desafios expiram, tentativas sao duraveis e limitadas;
+   prova de uso unico, escrita e auditoria sao consumidas na mesma transacao.
+   Substituicao conjunta de credenciais/webhook e atomica, sem salvamento parcial.
+3. Tokens de acesso e App Secrets nunca sao revelados. Apenas o token de
+   verificacao pode ser mostrado apos step-up; valores nao entram na auditoria.
+4. Telefones usam a validacao compartilhada com o contrato de enriquecimento.
+   Formato, associacao ao cadastro e confirmacao WhatsApp sao sinais distintos;
+   numero formatado nao prova identidade nem autoriza disparo.
+5. Prova local: 831 testes Atendimento passaram, incluindo PostgreSQL descartavel,
+   typecheck, build Atendimento/conector e lint alterado (zero erros, um warning
+   legado). Dialogo nativo revisado em 320/1280 com screenshots, sem overflow,
+   foco TOTP e isolamento modal. APIs visuais eram sinteticas, sem segredo real.
+6. Logout central e publicacao sao a etapa seguinte, nao prova automatica desta
+   fase. MFA/Supabase e Meta reais ainda exigem homologacao com conta autorizada.
+
 ## Catalogo e organograma
 
 SVC e XPT identificam tipos, nunca siglas de unidades. O atendimento nao cria

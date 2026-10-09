@@ -38,7 +38,8 @@ describe("server-derived channel credential intent", () => {
     { payload: { operation: "reveal_token_verification", channel: "client" }, fields: [] },
     { payload: { operation: "replace_access_token", channel: "client", token }, fields: [token] },
     { payload: { operation: "replace_app_secret", channel: "client", appSecret }, fields: [appSecret] },
-    { payload: { ...webhook, verifyToken: "synthetic-verify-token" }, fields: ["12345", "67890", "5511999999999", "synthetic-verify-token"] },
+    { payload: { ...webhook, verifyToken: "synthetic-verify-token" }, fields: ["12345", "67890", "5511999999999", "synthetic-verify-token", null, null] },
+    { payload: { ...webhook, token, appSecret }, fields: ["12345", "67890", "5511999999999", null, token, appSecret] },
   ])("derives the exact validated intent for $payload.operation at all three boundaries", async ({ payload, fields }) => {
     const intentHash = createHash("sha256").update(JSON.stringify(["alc_atendimento.channel_credentials.v1", payload.operation, payload.channel, ...fields])).digest("hex");
     await createChannelCredentialChallenge({ payload, factorId: FACTOR });
@@ -86,7 +87,7 @@ describe("server-derived channel credential intent", () => {
     ["control verify token", { ...webhook, verifyToken: "token\r" }],
     ["oversized verify token", { ...webhook, verifyToken: "a".repeat(201) }],
     ["raw secret in reveal", { operation: "reveal_token_verification", channel: "client", token }],
-    ["multiple credential operations", { ...webhook, token, appSecret }],
+    ["invalid combined secret", { ...webhook, token, appSecret: "not-hex" }],
     ["client-supplied hash", { ...webhook, intentHash: "a".repeat(64) }],
     ["unknown operation", { operation: "export_credentials", channel: "client" }],
     ["unknown channel", { ...webhook, channel: "other" }],
@@ -110,6 +111,18 @@ describe("server-derived channel credential intent", () => {
 });
 
 describe("credential SQL callback", () => {
+  it("saves all critical channel fields atomically under one bound proof without plaintext SQL or audit", async () => {
+    await executeChannelCredential({ payload: { ...webhook, token, appSecret, verifyToken: "synthetic-verify-token" }, proofId: ID });
+    const writes = mocks.query.mock.calls.filter(([sql]) => sql.startsWith("INSERT INTO"));
+    expect(writes).toHaveLength(1);
+    expect(writes[0][1][1]).toMatchObject({ phoneId: "12345", wabaId: "67890", number: "5511999999999" });
+    for (const field of ["tokenEncrypted", "secretEncrypted", "verifyEncrypted"])
+      expect(writes[0][1][1][field]).toMatch(/^[a-f0-9]{24}:[a-f0-9]+:[a-f0-9]{32}$/);
+    for (const secret of [token, appSecret, "synthetic-verify-token"])
+      expect(JSON.stringify([writes, mocks.audit.mock.calls])).not.toContain(secret);
+    expect(mocks.consume).toHaveBeenCalledTimes(1);
+    expect(mocks.audit).toHaveBeenCalledTimes(1);
+  });
   it.each([
     { payload: { operation: "replace_access_token", channel: "client", token }, field: "tokenEncrypted", secret: token },
     { payload: { operation: "replace_app_secret", channel: "client", appSecret }, field: "secretEncrypted", secret: appSecret },

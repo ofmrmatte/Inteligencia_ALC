@@ -7,6 +7,7 @@ import {
   clientOpening,
   templateParameters,
   phone,
+  contactPhoneStatus,
   type CaseRecord,
 } from "../lib/domain";
 import { validSignature } from "../lib/meta";
@@ -73,6 +74,19 @@ describe("regras operacionais do Atendimento", () => {
   it("rejeita telefone inválido e mantém número brasileiro canônico", () => {
     expect(phone("(11) 99999-0000")).toBe("5511999990000");
     expect(phone("123")).toBe("");
+    for (const invalid of ["+44 11999990000", "11999990000 ramal 1", "(00) 99999-0000", "(11) 89999-0000", "(11) 9999-0000", "00000000000"])
+      expect(phone(invalid)).toBe("");
+    expect(phone("(11) 3333-0000")).toBe("551133330000");
+    expect(phone("+55 (11) 99999-0000")).toBe("5511999990000");
+  });
+  it("separates format, association and confirmed WhatsApp delivery without inventing ownership", () => {
+    const record = { customerPhone: "5511999990000", customerName: "Cliente sintético", shipmentId: "SYNTH", customerVerified: false, driverId: "SYNTH-DRIVER", driverPhone: "551133330000" } as CaseRecord;
+    expect(contactPhoneStatus(record, "client")).toMatchObject({ format: "Formato válido", association: "Associado ao cadastro", whatsapp: "WhatsApp não confirmado" });
+    expect(contactPhoneStatus({ ...record, customerVerified: true }, "client", "sent").association).toBe("Associação verificada");
+    expect(contactPhoneStatus(record, "driver").association).toBe("Associado ao cadastro");
+    expect(contactPhoneStatus(record, "client", "delivered").whatsapp).toBe("WhatsApp confirmado");
+    expect(contactPhoneStatus(record, "client", "failed").whatsapp).toBe("WhatsApp não confirmado");
+    expect(contactPhoneStatus({ ...record, customerPhone: "invalid", customerVerified: true }, "client")).toMatchObject({ format: "Formato inválido", association: "Associação não verificada" });
   });
   it("não envia modelo de cliente usando contato parcial ou detalhes incompletos", () => {
     const r = {

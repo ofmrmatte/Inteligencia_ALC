@@ -195,7 +195,7 @@ describe.skipIf(!url || !coreUrl)(
         "TRUNCATE alc_atendimento.pnr_enrichment_outbox,alc_atendimento.agent_decisions,alc_atendimento.evidence_media,alc_atendimento.media,alc_atendimento.webhook_events,alc_atendimento.assignment_history,alc_atendimento.case_assignments,alc_atendimento.operator_bases,alc_atendimento.operators,alc_atendimento.evidence_images,alc_atendimento.evidence_folders,alc_atendimento.messages,alc_atendimento.outbox,alc_atendimento.meta_template_contracts,alc_atendimento.dispatch_batches,alc_atendimento.conversations,alc_atendimento.cases,alc_atendimento.audit RESTART IDENTITY",
       );
       await client.query(
-        "DELETE FROM alc_atendimento.settings WHERE key LIKE 'access_%'",
+        "TRUNCATE alc_atendimento.settings",
       );
       for (const contract of [clientContract, driverContract]) {
         await client.query(
@@ -204,7 +204,7 @@ describe.skipIf(!url || !coreUrl)(
         );
       }
       await client.query(
-        "UPDATE alc_atendimento.settings SET value='{\"mode\":\"manual\"}' WHERE key='assignment_policy'",
+        "INSERT INTO alc_atendimento.settings(key,value) VALUES('assignment_policy','{\"mode\":\"manual\"}'),('automation','{\"driverNotifications\":false,\"clientOutreach\":false,\"bot\":true,\"operatorName\":\"Equipe Loss\",\"intervalMinutes\":30}'),('source','{\"baselineComplete\":false,\"lastSync\":null}')",
       );
       await client.query(
         "INSERT INTO alc_atendimento.cases(case_id,competence,base_key,sigla,classification,record) VALUES('test-case','202610Q1','TEST BASE A','TEST-A','aguardando_comprovante','{}')",
@@ -318,7 +318,7 @@ describe.skipIf(!url || !coreUrl)(
             "SELECT name FROM alc_atendimento.schema_migrations ORDER BY name",
           )
         ).rows,
-      ).toHaveLength(8);
+      ).toHaveLength(9);
       expect(
         (await client.query("SELECT * FROM alc_atendimento.operators"))
           .rowCount,

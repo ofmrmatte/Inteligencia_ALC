@@ -19,6 +19,8 @@ const payloadSchema = z.discriminatedUnion("operation", [
   z.object({
     operation: z.literal("change_webhook_critical"), channel, phoneId, wabaId: phoneId, number,
     verifyToken: opaque(200).optional(),
+    token: opaque(3000).optional(),
+    appSecret: z.string().regex(/^[a-fA-F0-9]{32}$/).optional(),
   }).strict(),
 ]);
 export type ChannelCredentialPayload = z.infer<typeof payloadSchema>;
@@ -38,7 +40,7 @@ function intent(payload: ChannelCredentialPayload) {
   // A fixed tuple binds the exact effective payload, independent of JSON property order.
   const fields = payload.operation === "replace_access_token" ? [payload.token]
     : payload.operation === "replace_app_secret" ? [payload.appSecret]
-    : payload.operation === "change_webhook_critical" ? [payload.phoneId, payload.wabaId, payload.number, payload.verifyToken ?? null]
+    : payload.operation === "change_webhook_critical" ? [payload.phoneId, payload.wabaId, payload.number, payload.verifyToken ?? null, payload.token ?? null, payload.appSecret ?? null]
     : [];
   return {
     operation: payload.operation, channel: payload.channel,
@@ -103,6 +105,8 @@ export async function executeChannelCredential(input: unknown): Promise<{ ok: tr
       : {
         phoneId: payload.phoneId, wabaId: payload.wabaId, number: payload.number,
         ...(payload.verifyToken === undefined ? {} : { verifyEncrypted: encrypt(payload.verifyToken) }),
+        ...(payload.token === undefined ? {} : { tokenEncrypted: encrypt(payload.token) }),
+        ...(payload.appSecret === undefined ? {} : { secretEncrypted: encrypt(payload.appSecret) }),
       };
     await transaction.query(
       `INSERT INTO alc_atendimento.settings(key,value,updated_by) VALUES($1,$2,$3)

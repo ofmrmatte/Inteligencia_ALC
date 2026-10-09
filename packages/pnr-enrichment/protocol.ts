@@ -1,5 +1,6 @@
 import { createHash, createHmac, randomUUID, timingSafeEqual } from "node:crypto";
 import { z } from "zod";
+import { phone } from "../identity/phone";
 
 export const ENRICHMENT_PATH = "/api/internal/pnr-enrichment";
 export const ENRICHMENT_VERSION = 2;
@@ -16,7 +17,7 @@ const fieldsSchema = z.object({
   sigla: limited(200),
   origin: z.literal("atendimento_verified_contact"),
   name: limited(200),
-  phone: z.string().regex(/^55\d{10,11}$/),
+  phone: z.string().refine(value => phone(value) === value, "Invalid canonical Brazilian phone"),
   verified: z.literal(true),
   source: limited(1000),
   capturedAt: z.iso.datetime({ offset: true }).transform((value) => new Date(value).toISOString()),
