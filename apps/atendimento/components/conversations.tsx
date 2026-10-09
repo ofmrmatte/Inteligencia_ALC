@@ -3,6 +3,7 @@ import {
   Fragment,
   useDeferredValue,
   useEffect,
+  useLayoutEffect,
   useRef,
   useState,
   type FormEvent,
@@ -18,9 +19,11 @@ import {
   Inbox,
   Info,
   MessageSquare,
+  MoreVertical,
   RefreshCw,
   RotateCcw,
   Send,
+  StickyNote,
   Tag,
   UserRoundCheck,
   X,
@@ -30,6 +33,7 @@ import { api, useData, labels, when } from "./data";
 import type { CaseRecord } from "@/lib/domain";
 import { MediaViewer, type ChatAttachment } from "./media-viewer";
 import { MediaComposer } from "./media-composer";
+import { AGENT_DISPLAY_NAME } from "@/lib/agent-brand";
 
 type Conversation = {
   id: string;
@@ -92,9 +96,13 @@ type Profile = { profile: { id: string }; admin: boolean };
 function author(
   message: Pick<Message, "sender_kind" | "sender_display_name_snapshot">,
 ) {
+  const snapshot = message.sender_display_name_snapshot,
+    name = snapshot || "ALC · autoria não registrada";
   return message.sender_kind === "ai"
-    ? "Agente virtual"
-    : message.sender_display_name_snapshot || "ALC · autoria não registrada";
+    ? `${!snapshot?.trim() || snapshot.trim() === "Agente virtual" ? AGENT_DISPLAY_NAME : snapshot} · Agente virtual`
+    : message.sender_kind === "system"
+      ? `${name} · Sistema`
+      : name;
 }
 function status(value: string) {
   return value === "pending"
@@ -102,7 +110,7 @@ function status(value: string) {
     : value === "resolved"
       ? "Resolvida"
       : value === "bot"
-        ? "Aberta · Robô"
+        ? `Aberta · ${AGENT_DISPLAY_NAME}`
         : "Aberta · Atendente";
 }
 function Badge({ value }: { value: string }) {
@@ -214,8 +222,30 @@ export function Conversations({
     setOffset(0);
     setSelected("");
   }
+  const page = useRef<HTMLElement>(null);
+  useEffect(() => {
+    const element = page.current;
+    if (!element) return;
+    const fit = () => {
+      element.style.height = `${Math.max(
+        0,
+        (window.visualViewport?.height || window.innerHeight) -
+          element.getBoundingClientRect().top,
+      )}px`;
+    };
+    fit();
+    const observer = new ResizeObserver(fit);
+    if (element.parentElement) observer.observe(element.parentElement);
+    window.addEventListener("resize", fit);
+    window.visualViewport?.addEventListener("resize", fit);
+    return () => {
+      observer.disconnect();
+      window.removeEventListener("resize", fit);
+      window.visualViewport?.removeEventListener("resize", fit);
+    };
+  }, []);
   return (
-    <main className="page inbox-page">
+    <main ref={page} className="page inbox-page">
       <div className="inbox-filters">
         <div className="segmented" aria-label="Visão da caixa">
           {[
@@ -502,7 +532,16 @@ function Thread({
     [historyMore, setHistoryMore] = useState(true),
     [historyBusy, setHistoryBusy] = useState(false);
   const dialog = useRef<HTMLDialogElement>(null),
-    messagesEnd = useRef<HTMLDivElement>(null);
+    messagePane = useRef<HTMLDivElement>(null),
+    messageStack = useRef<HTMLDivElement>(null),
+    reply = useRef<HTMLTextAreaElement>(null),
+    detailsTrigger = useRef<HTMLButtonElement>(null),
+    contactDetails = useRef<HTMLElement>(null),
+    previousDetails = useRef(false),
+    focusReply = useRef(false),
+    followLatest = useRef(true),
+    programmaticTop = useRef(0),
+    historyPosition = useRef<{ height: number; top: number } | null>(null);
   const c = data?.conversation;
   const messages = [
     ...new Map(
@@ -512,10 +551,63 @@ function Thread({
     (a, b) =>
       a.created_at.localeCompare(b.created_at) || a.id.localeCompare(b.id),
   );
-  const latestId = data?.messages.at(-1)?.id;
+  const timeline: (Message & { queued?: Detail["queued"][number] })[] = [
+    ...messages,
+    ...(data?.queued || []).map((queued) => ({
+      ...queued,
+      direction: "out",
+      body: queued.media_id
+        ? queued.payload.caption || "Anexo"
+        : queued.payload.text?.body ||
+          `Modelo: ${queued.payload.template?.name || "WhatsApp"}`,
+      queued,
+    })),
+  ].sort(
+    (a, b) =>
+      a.created_at.localeCompare(b.created_at) || a.id.localeCompare(b.id),
+  );
+  const latestId = timeline.at(-1)?.id,
+    firstId = timeline[0]?.id;
+  useLayoutEffect(() => {
+    const pane = messagePane.current;
+    if (!pane) return;
+    if (historyPosition.current) {
+      pane.scrollTop =
+        historyPosition.current.top +
+        pane.scrollHeight -
+        historyPosition.current.height;
+      historyPosition.current = null;
+    } else if (followLatest.current) pane.scrollTop = pane.scrollHeight;
+    programmaticTop.current = pane.scrollTop;
+  }, [latestId, firstId, older.length]);
   useEffect(() => {
-    messagesEnd.current?.scrollIntoView({ block: "nearest" });
-  }, [latestId]);
+    const pane = messagePane.current,
+      stack = messageStack.current;
+    if (!pane || !stack) return;
+    const observer = new ResizeObserver(() => {
+      if (followLatest.current) {
+        pane.scrollTop = pane.scrollHeight;
+        programmaticTop.current = pane.scrollTop;
+      }
+    });
+    observer.observe(pane);
+    observer.observe(stack);
+    return () => observer.disconnect();
+  }, [c?.id]);
+  useLayoutEffect(() => {
+    if (!reply.current) return;
+    reply.current.style.height = "0px";
+    reply.current.style.height = `${Math.min(reply.current.scrollHeight, 160)}px`;
+    if (focusReply.current) {
+      reply.current.focus();
+      focusReply.current = false;
+    }
+  }, [body, note]);
+  useLayoutEffect(() => {
+    if (previousDetails.current === details) return;
+    previousDetails.current = details;
+    (details ? contactDetails.current : detailsTrigger.current)?.focus();
+  }, [details]);
   useEffect(() => {
     let active = true;
     void api("conversation", { id, action: "read" })
@@ -544,7 +636,7 @@ function Thread({
   }
   async function send(event: FormEvent) {
     event.preventDefault();
-    if (!body.trim()) return;
+    if (!body.trim() || busy || (!note && (!owns || !windowOpen))) return;
     setBusy(true);
     setNotice("");
     try {
@@ -569,6 +661,13 @@ function Thread({
       const page = await api<Detail>(
         `messages?id=${id}&before=${encodeURIComponent(first.created_at)}&beforeId=${first.id}`,
       );
+      if (messagePane.current && page.messages.length) {
+        followLatest.current = false;
+        historyPosition.current = {
+          height: messagePane.current.scrollHeight,
+          top: messagePane.current.scrollTop,
+        };
+      }
       setOlder((v) => [...page.messages, ...v]);
       setHistoryMore(page.hasMore);
     } catch (e) {
@@ -617,8 +716,11 @@ function Thread({
             >
               <ArrowLeft size={19} />
             </button>
+            <span className="avatar" aria-hidden="true">
+              {(c.name || c.phone).slice(0, 1)}
+            </span>
             <div>
-              <h2>{c.name || `+${c.phone}`}</h2>
+              <h2 title={c.name || `+${c.phone}`}>{c.name || `+${c.phone}`}</h2>
               <small>
                 {c.channel === "driver"
                   ? "Atendimento motoristas"
@@ -626,132 +728,200 @@ function Thread({
                 · {status(c.status)}
               </small>
             </div>
-            <button
-              className="details-toggle icon-button"
-              aria-label="Abrir detalhes do contato"
-              title="Detalhes do contato"
-              onClick={() => setDetails(true)}
-            >
-              <Info size={19} />
-            </button>
           </div>
           <div className="thread-actions">
             {!owns && c.status !== "resolved" && (
               <button
                 className="primary"
+                aria-label="Assumir atendimento"
+                title="Assumir atendimento"
                 disabled={busy}
                 onClick={() => void action("takeover")}
               >
                 <UserRoundCheck size={16} />
-                Assumir
               </button>
             )}
             {c.status !== "resolved" && (
-              <>
-                <button disabled={busy} onClick={() => void action("pending")}>
-                  <Clock3 size={16} />
-                  Pendente
-                </button>
-                <button disabled={busy} onClick={() => void action("resolve")}>
-                  <CheckCheck size={16} />
-                  Resolver
-                </button>
-                <button disabled={busy} onClick={() => void action("resume")}>
-                  <Bot size={16} />
-                  Retomar robô
-                </button>
-              </>
+              <button
+                aria-label="Resolver atendimento"
+                title="Resolver atendimento"
+                disabled={busy}
+                onClick={() => void action("resolve")}
+              >
+                <CheckCheck size={16} />
+              </button>
             )}
             {c.status === "resolved" && (
-              <button disabled={busy} onClick={() => void action("reopen")}>
+              <button
+                aria-label="Reabrir atendimento"
+                title="Reabrir atendimento"
+                disabled={busy}
+                onClick={() => void action("reopen")}
+              >
                 <RotateCcw size={16} />
-                Reabrir
               </button>
             )}
-            {c.unread > 0 && (
-              <button disabled={busy} onClick={() => void action("read")}>
-                <CheckCheck size={16} />
-                Marcar lida
-              </button>
-            )}
+            <button
+              ref={detailsTrigger}
+              className="icon-button"
+              aria-label="Abrir detalhes do contato"
+              title="Detalhes e transferência"
+              onClick={() => setDetails(true)}
+            >
+              <Info size={19} />
+            </button>
+            <details
+              className="thread-menu"
+              onKeyDown={(event) => {
+                if (event.key === "Escape") {
+                  event.currentTarget.open = false;
+                  event.currentTarget.querySelector("summary")?.focus();
+                }
+              }}
+            >
+              <summary
+                aria-label="Mais ações do atendimento"
+                title="Mais ações do atendimento"
+              >
+                <MoreVertical size={20} />
+              </summary>
+              <div className="thread-menu-actions">
+                {c.status !== "resolved" && (
+                  <>
+                    <button
+                      disabled={busy}
+                      onClick={() => void action("pending")}
+                    >
+                      <Clock3 size={16} />
+                      Pendente
+                    </button>
+                    <button
+                      disabled={busy}
+                      onClick={() => void action("resume")}
+                    >
+                      <Bot size={16} />
+                      Retomar {AGENT_DISPLAY_NAME}
+                    </button>
+                  </>
+                )}
+                <button
+                  onClick={(event) => {
+                    event.currentTarget
+                      .closest("details")
+                      ?.removeAttribute("open");
+                    setDetails(true);
+                  }}
+                >
+                  <Info size={16} />
+                  Detalhes e transferência
+                </button>
+                <button onClick={() => dialog.current?.showModal()}>
+                  <Tag size={16} />
+                  Editar etiquetas
+                </button>
+                {c.unread > 0 && (
+                  <button disabled={busy} onClick={() => void action("read")}>
+                    <CheckCheck size={16} />
+                    Marcar lida
+                  </button>
+                )}
+              </div>
+            </details>
           </div>
         </header>
-        <div className="messages" aria-label="Mensagens">
-          {(older.length ? historyMore : data?.hasMore) && (
-            <button
-              className="history-button"
-              disabled={historyBusy}
-              onClick={() => void history()}
-            >
-              {historyBusy ? "Carregando…" : "Mensagens anteriores"}
-            </button>
-          )}
-          {messages.map((m, index) => (
-            <Fragment key={m.id}>
-              {(index === 0 ||
-                messageDate(m.created_at) !==
-                  messageDate(messages[index - 1].created_at)) && (
-                <time className="message-day">{messageDate(m.created_at)}</time>
-              )}
-              <article className={`message ${m.direction}`}>
-                <small className="message-author">
-                  {m.direction === "note"
-                    ? `Nota interna · ${author(m)}`
-                    : m.direction === "out"
-                      ? author(m)
-                      : c.name || "Contato"}
-                </small>
-                {m.body && <p>{m.body}</p>}
-                {m.attachment && (
-                  <MediaViewer attachment={m.attachment} messageId={m.id} />
-                )}
-                <footer>
-                  <time dateTime={m.created_at} title={when(m.created_at)}>
-                    {messageDate(m.created_at, true)}
-                  </time>
-                  <DeliveryStatus message={m} />
-                </footer>
-              </article>
-            </Fragment>
-          ))}
-          {data?.queued.map((m) => (
-            <article key={m.id} className="message out">
-              <small className="message-author">{author(m)} · envio</small>
-              <p>
-                {m.media_id
-                  ? m.payload.caption || "Anexo"
-                  : m.payload.text?.body ||
-                    `Modelo: ${m.payload.template?.name || "WhatsApp"}`}
-              </p>
-              <footer>
-                <time>{when(m.created_at)}</time>
-                <span className="message-status">
-                  <Badge value={m.status} />
-                </span>
-              </footer>
-              {m.error && <p className="message-error">{m.error}</p>}
-              {m.media_id && m.status === "failed" && owns && windowOpen && (
-                <button
-                  type="button"
-                  disabled={busy}
-                  onClick={() =>
-                    void action("attachment", {
-                      mediaId: m.media_id,
-                      ...(m.payload.caption ? { body: m.payload.caption } : {}),
-                      retry: true,
-                    })
-                  }
-                >
-                  <RefreshCw size={15} />
-                  Tentar envio novamente
-                </button>
-              )}
-            </article>
-          ))}
-          {!messages.length && !data?.queued.length && (
-            <div className="empty">Nenhuma mensagem registrada.</div>
-          )}
-          <div ref={messagesEnd} />
+        <div
+          ref={messagePane}
+          className="messages"
+          aria-label="Mensagens"
+          tabIndex={0}
+          onScroll={(event) => {
+            const pane = event.currentTarget;
+            // Media loads can delay the scroll event from our own positioning.
+            if (
+              pane.scrollTop ===
+              Math.min(
+                programmaticTop.current,
+                pane.scrollHeight - pane.clientHeight,
+              )
+            )
+              return;
+            followLatest.current =
+              pane.scrollHeight - pane.scrollTop - pane.clientHeight < 48;
+          }}
+        >
+          <div ref={messageStack} className="message-stack">
+            {(data?.hasMore || older.length > 0) && historyMore && (
+              <button
+                className="history-button"
+                disabled={historyBusy}
+                onClick={() => void history()}
+              >
+                {historyBusy ? "Carregando…" : "Mensagens anteriores"}
+              </button>
+            )}
+            {timeline.map((m, index) => {
+              const queued = m.queued;
+              return (
+                <Fragment key={m.id}>
+                  {(index === 0 ||
+                    messageDate(m.created_at) !==
+                      messageDate(timeline[index - 1].created_at)) && (
+                    <time className="message-day" dateTime={m.created_at}>
+                      {messageDate(m.created_at)}
+                    </time>
+                  )}
+                  <article className={`message ${m.direction}`}>
+                    <small className="message-author">
+                      {m.direction === "note"
+                        ? `Nota interna · ${author(m)}`
+                        : m.direction === "out"
+                          ? `${author(m)}${m.queued ? " · envio" : ""}`
+                          : c.name || "Contato"}
+                    </small>
+                    {m.attachment && (
+                      <MediaViewer attachment={m.attachment} messageId={m.id} />
+                    )}
+                    {m.body && <p>{m.body}</p>}
+                    <footer>
+                      <time dateTime={m.created_at} title={when(m.created_at)}>
+                        {messageDate(m.created_at, true)}
+                      </time>
+                      {m.direction === "out" && <DeliveryStatus message={m} />}
+                    </footer>
+                    {queued?.error && (
+                      <p className="message-error" role="alert">
+                        {queued.error}
+                      </p>
+                    )}
+                    {queued?.media_id &&
+                      m.status === "failed" &&
+                      owns &&
+                      windowOpen && (
+                        <button
+                          type="button"
+                          disabled={busy}
+                          onClick={() =>
+                            void action("attachment", {
+                              mediaId: queued.media_id,
+                              ...(queued.payload.caption
+                                ? { body: queued.payload.caption }
+                                : {}),
+                              retry: true,
+                            })
+                          }
+                        >
+                          <RefreshCw size={15} />
+                          Tentar envio novamente
+                        </button>
+                      )}
+                  </article>
+                </Fragment>
+              );
+            })}
+            {!messages.length && !data?.queued.length && (
+              <div className="empty">Nenhuma mensagem registrada.</div>
+            )}
+          </div>
         </div>
         {notice && (
           <p className="notice" role="status">
@@ -762,73 +932,97 @@ function Thread({
           className={`composer${note ? " composer-note" : ""}`}
           onSubmit={send}
         >
-          <div className="segmented" aria-label="Tipo de mensagem">
-            <button
-              type="button"
-              aria-pressed={!note}
-              onClick={() => setNote(false)}
-            >
-              Resposta
-            </button>
-            <button
-              type="button"
-              aria-pressed={note}
-              onClick={() => setNote(true)}
-            >
-              Nota interna
-            </button>
-          </div>
-          <label className="sr-only" htmlFor="reply">
-            {note ? "Nota interna" : "Mensagem"}
-          </label>
-          <textarea
-            id="reply"
-            value={body}
-            onChange={(e) => setBody(e.target.value)}
-            placeholder={
-              note
-                ? "Nota para a equipe"
-                : owns
-                  ? "Responder ao contato"
-                  : "Assuma o atendimento para responder"
-            }
-            disabled={busy || (!note && (!owns || !windowOpen))}
-            maxLength={4000}
-            required
-          />
-          <div className="composer-bottom">
-            <small>
+          {(note || !owns || !windowOpen) && (
+            <small id="composer-status" className="composer-status">
               {note
-                ? "Visível apenas para a equipe."
+                ? "Nota interna · Visível apenas para a equipe."
                 : !owns
                   ? "Resposta restrita ao responsável."
-                  : !windowOpen
-                    ? "Janela de 24h encerrada. Utilize um modelo aprovado."
-                    : "Janela de atendimento aberta."}
+                  : "Janela de 24h encerrada. Utilize um modelo aprovado."}
             </small>
+          )}
+          <div className="composer-line">
+            {!note && (
+              <MediaComposer
+                conversationId={id}
+                disabled={busy || !owns || !windowOpen}
+                onQueued={async () => {
+                  await refresh();
+                  await onUpdate();
+                }}
+              />
+            )}
             <button
-              className="primary"
+              className="icon-button composer-note-toggle"
+              type="button"
+              aria-pressed={note}
+              aria-label={note ? "Escrever resposta" : "Escrever nota interna"}
+              title={note ? "Escrever resposta" : "Escrever nota interna"}
+              onClick={() => {
+                focusReply.current = true;
+                setNote(!note);
+              }}
+            >
+              <StickyNote size={20} />
+            </button>
+            <label className="sr-only" htmlFor="reply">
+              {note ? "Nota interna" : "Mensagem"}
+            </label>
+            <textarea
+              ref={reply}
+              id="reply"
+              rows={1}
+              value={body}
+              onChange={(e) => setBody(e.target.value)}
+              onKeyDown={(event) => {
+                if (
+                  event.key === "Enter" &&
+                  !event.shiftKey &&
+                  !event.nativeEvent.isComposing
+                ) {
+                  event.preventDefault();
+                  event.currentTarget.form?.requestSubmit();
+                }
+              }}
+              aria-describedby={
+                note || !owns || !windowOpen ? "composer-status" : undefined
+              }
+              placeholder={
+                note
+                  ? "Nota para a equipe"
+                  : owns
+                    ? "Digite uma mensagem"
+                    : "Assuma o atendimento para responder"
+              }
+              disabled={busy || (!note && (!owns || !windowOpen))}
+              maxLength={4000}
+              required
+            />
+            <button
+              className="composer-send icon-button"
+              aria-label={note ? "Salvar nota" : "Enviar mensagem"}
+              title={note ? "Salvar nota" : "Enviar mensagem"}
               disabled={
                 busy || !body.trim() || (!note && (!owns || !windowOpen))
               }
             >
-              <Send size={16} />
-              {note ? "Salvar nota" : "Enviar"}
+              <Send size={19} />
             </button>
           </div>
-          {!note && (
-            <MediaComposer
-              conversationId={id}
-              disabled={busy || !owns || !windowOpen}
-              onQueued={async () => {
-                await refresh();
-                await onUpdate();
-              }}
-            />
-          )}
         </form>
       </section>
-      <aside className="contact-details" aria-label="Detalhes do contato">
+      <aside
+        ref={contactDetails}
+        className="contact-details"
+        aria-label="Detalhes do contato"
+        tabIndex={-1}
+        onKeyDown={(event) => {
+          if (details && event.key === "Escape") {
+            event.preventDefault();
+            setDetails(false);
+          }
+        }}
+      >
         <div className="details-heading">
           <button
             className="details-toggle icon-button"

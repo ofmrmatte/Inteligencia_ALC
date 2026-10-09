@@ -20,8 +20,13 @@ export function MediaViewer({
   messageId: string;
 }) {
   const [error, setError] = useState(false),
-    audio = useRef<HTMLAudioElement>(null),
     dialog = useRef<HTMLDialogElement>(null);
+  if (attachment.type === "audio" || attachment.mime?.startsWith("audio/"))
+    return (
+      <p className="media-state" role="status">
+        Áudio não suportado
+      </p>
+    );
   const src = attachment.internalId
     ? `/api/media/${attachment.internalId}`
     : `/api/media?id=${messageId}`;
@@ -57,41 +62,15 @@ export function MediaViewer({
               attachment.type === "sticker"
                 ? "Figurinha recebida"
                 : `Imagem${
-                    attachment.filename ? `: ${attachment.filename}` : " anexada"
+                    attachment.filename
+                      ? `: ${attachment.filename}`
+                      : " anexada"
                   }`
             }
             loading="lazy"
             onError={() => setError(true)}
           />
         </button>
-      )}
-      {attachment.type === "audio" && (
-        <div className="media-audio">
-          <small>{attachment.voice ? "Mensagem de voz" : "Áudio"}</small>
-          <audio
-            ref={audio}
-            controls
-            preload="metadata"
-            src={src}
-            onError={() => setError(true)}
-            aria-label="Reproduzir áudio"
-          />
-          <label className="audio-speed">
-            <span>Velocidade</span>
-            <select
-              aria-label="Velocidade do áudio"
-              defaultValue="1"
-              onChange={(e) => {
-                if (audio.current)
-                  audio.current.playbackRate = Number(e.target.value);
-              }}
-            >
-              <option value="1">1x</option>
-              <option value="1.5">1,5x</option>
-              <option value="2">2x</option>
-            </select>
-          </label>
-        </div>
       )}
       {attachment.type === "video" && (
         <video
@@ -126,21 +105,25 @@ export function MediaViewer({
           um aplicativo compatível.
         </p>
       )}
-      <small>
-        {attachment.mime} ·{" "}
-        {((attachment.size || 0) / 1024).toLocaleString("pt-BR", {
-          maximumFractionDigits: 1,
-        })}{" "}
-        KB
-      </small>
-      <a
-        className="attachment"
-        href={`${src}?download=true`}
-        download
-      >
-        <Download size={15} />
-        {attachment.filename || "Baixar anexo"}
-      </a>
+      <div className="media-file-details">
+        <small>
+          {attachment.mime} ·{" "}
+          {((attachment.size || 0) / 1024).toLocaleString("pt-BR", {
+            maximumFractionDigits: 1,
+          })}{" "}
+          KB
+        </small>
+        <a
+          className="attachment"
+          href={`${src}?download=true`}
+          download
+          aria-label={`Baixar ${attachment.filename || "anexo"}`}
+          title={`Baixar ${attachment.filename || "anexo"}`}
+        >
+          <Download size={15} />
+          Baixar
+        </a>
+      </div>
       {(image || pdf) && (
         <dialog
           ref={dialog}

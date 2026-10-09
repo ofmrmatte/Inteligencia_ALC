@@ -1,11 +1,11 @@
 "use client";
 /* eslint-disable @next/next/no-img-element -- Blob previews must not pass through the public image optimizer. */
 import { useEffect, useRef, useState } from "react";
-import { Paperclip, RefreshCw, Send, X } from "lucide-react";
+import { Plus, RefreshCw, Send, X } from "lucide-react";
 import { api } from "./data";
 type Uploaded = { id: string; status: string; type: string };
 const accept =
-  ".jpg,.jpeg,.png,.webp,.aac,.amr,.mp3,.m4a,.ogg,.opus,.mp4,.3gp,.pdf,.txt,.doc,.xls,.ppt,.docx,.xlsx,.pptx";
+  ".jpg,.jpeg,.png,.webp,.mp4,.3gp,.pdf,.txt,.doc,.xls,.ppt,.docx,.xlsx,.pptx";
 export function MediaComposer({
   conversationId,
   disabled,
@@ -129,6 +129,10 @@ export function MediaComposer({
     try {
       const media = uploaded || (await upload());
       setUploaded(media);
+      if (media.type === "audio") {
+        setNotice("Áudio não suportado");
+        return;
+      }
       if (media.status !== "ready") {
         setNotice("Anexo em quarentena. Aguarde a verificação de segurança.");
         return;
@@ -148,8 +152,7 @@ export function MediaComposer({
       setBusy(false);
     }
   }
-  const noCaption =
-    file && (file.type.startsWith("audio/") || file.type === "image/webp");
+  const noCaption = file?.type === "image/webp";
   return (
     <div className="media-composer">
       <input
@@ -162,6 +165,16 @@ export function MediaComposer({
         onChange={(e) => {
           const selected = e.target.files?.[0];
           if (!selected) return;
+          if (
+            selected.type.startsWith("audio/") ||
+            /\.(aac|amr|mp3|m4a|ogg|opus|wav|weba|flac|aiff|aif)$/i.test(
+              selected.name,
+            )
+          ) {
+            clear();
+            setNotice("Áudio não suportado");
+            return;
+          }
           if (selected.size <= 0 || selected.size > 25 * 1024 * 1024) {
             setNotice("Selecione um arquivo de até 25 MB.");
             e.target.value = "";
@@ -186,7 +199,7 @@ export function MediaComposer({
         title="Anexar arquivo"
         onClick={() => input.current?.click()}
       >
-        <Paperclip size={18} />
+        <Plus size={22} />
       </button>
       {file && (
         <div className="media-selection">
@@ -224,9 +237,6 @@ export function MediaComposer({
               preload="metadata"
             />
           )}
-          {preview && file.type.startsWith("audio/") && (
-            <audio src={preview} controls preload="metadata" />
-          )}
           {!noCaption && (
             <label>
               Legenda
@@ -256,6 +266,7 @@ export function MediaComposer({
               disabled={
                 disabled ||
                 busy ||
+                uploaded?.type === "audio" ||
                 Boolean(uploaded && uploaded.status !== "ready")
               }
               onClick={() => void send()}

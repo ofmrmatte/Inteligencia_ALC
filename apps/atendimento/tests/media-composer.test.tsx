@@ -54,13 +54,11 @@ afterEach(async () => {
   container.remove();
   vi.unstubAllGlobals();
 });
-async function select(size = 1) {
+async function select(size = 1, name = "synthetic.png", type = "image/png") {
   const input = container.querySelector("input[type=file]")!;
   Object.defineProperty(input, "files", {
     configurable: true,
-    value: [
-      new File([new Uint8Array(size)], "synthetic.png", { type: "image/png" }),
-    ],
+    value: [new File([new Uint8Array(size)], name, { type })],
   });
   await act(async () =>
     input.dispatchEvent(new Event("change", { bubbles: true })),
@@ -145,4 +143,54 @@ it("rejects oversized files before attempting upload", async () => {
   expect(container.textContent).toContain("até 25 MB");
   expect(uploads).toHaveLength(0);
   expect(api).not.toHaveBeenCalled();
+});
+it.each([
+  ["synthetic.bin", "audio/ogg"],
+  ["synthetic.MP3", ""],
+  ["synthetic.wav", "image/png"],
+])("blocks audio selection by MIME or extension: %s", async (name, type) => {
+  await act(async () =>
+    root.render(
+      <MediaComposer
+        conversationId="synthetic-conversation"
+        disabled={false}
+        onQueued={async () => {}}
+      />,
+    ),
+  );
+  expect(container.querySelector("input")?.accept).not.toMatch(
+    /aac|amr|mp3|m4a|ogg|opus|wav/,
+  );
+  await select();
+  await select(1, name, type);
+  expect(container.textContent).toContain("Áudio não suportado");
+  expect(container.querySelector("img,audio,.media-selection")).toBeNull();
+  expect(uploads).toHaveLength(0);
+  expect(api).not.toHaveBeenCalled();
+});
+it("does not queue bytes the upload identifies as audio", async () => {
+  await act(async () =>
+    root.render(
+      <MediaComposer
+        conversationId="synthetic-conversation"
+        disabled={false}
+        onQueued={async () => {}}
+      />,
+    ),
+  );
+  await select();
+  await click("Enviar anexo");
+  uploads[0].responseText = JSON.stringify({
+    id: "synthetic-media",
+    type: "audio",
+    status: "ready",
+  });
+  await act(async () => uploads[0].onload?.());
+  expect(container.textContent).toContain("Áudio não suportado");
+  expect(api).not.toHaveBeenCalled();
+  expect(
+    [...container.querySelectorAll("button")].find((button) =>
+      button.textContent?.includes("Enviar anexo"),
+    )?.disabled,
+  ).toBe(true);
 });
