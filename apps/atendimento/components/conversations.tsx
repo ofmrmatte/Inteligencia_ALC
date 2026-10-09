@@ -648,26 +648,28 @@ function Thread({
           )}
           {messages.map((m) => (
             <article key={m.id} className={`message ${m.direction}`}>
-              <small>
+              <small className="message-author">
                 {m.direction === "note"
                   ? `Nota interna · ${author(m)}`
                   : m.direction === "out"
                     ? author(m)
                     : c.name || "Contato"}
               </small>
-              <p>{m.body}</p>
+              {m.body && <p>{m.body}</p>}
               {m.attachment && (
                 <MediaViewer attachment={m.attachment} messageId={m.id} />
               )}
               <footer>
                 <time>{when(m.created_at)}</time>
-                <Badge value={m.status} />
+                <span className="message-status">
+                  <Badge value={m.status} />
+                </span>
               </footer>
             </article>
           ))}
           {data?.queued.map((m) => (
             <article key={m.id} className="message out">
-              <small>{author(m)} · envio</small>
+              <small className="message-author">{author(m)} · envio</small>
               <p>
                 {m.media_id
                   ? m.payload.caption || "Anexo"
@@ -676,7 +678,9 @@ function Thread({
               </p>
               <footer>
                 <time>{when(m.created_at)}</time>
-                <Badge value={m.status} />
+                <span className="message-status">
+                  <Badge value={m.status} />
+                </span>
               </footer>
               {m.error && <p className="message-error">{m.error}</p>}
               {m.media_id && m.status === "failed" && owns && windowOpen && (

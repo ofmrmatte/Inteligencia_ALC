@@ -1160,46 +1160,69 @@ dd {
   flex: 1;
   display: flex;
   flex-direction: column;
-  gap: 12px;
+  gap: 8px;
   overflow-y: auto;
   min-height: 130px;
-  padding: 18px;
-  background: #fafafa;
+  padding: 16px clamp(10px, 3vw, 28px);
+  background: #efeae2;
 }
 .message {
-  max-width: 92%;
+  width: fit-content;
+  max-width: min(78%, 560px);
   align-self: flex-start;
-  padding: 12px;
+  padding: 8px 10px 6px;
   background: white;
-  border: 1px solid var(--line);
-  border-radius: 7px;
+  border: 0;
+  border-radius: 8px;
+  box-shadow: 0 1px 1px #00000014;
   overflow-wrap: anywhere;
 }
 .message.out {
   align-self: flex-end;
-  background: #fff6f7;
+  background: #d9fdd3;
 }
 .message.note {
   align-self: center;
-  background: #fff8e9;
-  border-color: #e8d9ae;
+  max-width: min(90%, 560px);
+  background: #fff3cd;
+  box-shadow: none;
+}
+.message-author {
+  display: block;
+  margin-bottom: 3px;
+  font-size: 10px;
+  font-weight: 600;
 }
 .message p {
   white-space: pre-wrap;
-  font-size: 11px;
-  margin: 7px 0;
-}
-.message small {
-  font-size: 9px;
+  font-size: 12px;
+  line-height: 1.45;
+  margin: 2px 0 4px;
 }
 .message footer {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
   justify-content: flex-end;
-  gap: 7px;
-  font-size: 8px;
-  color: var(--muted);
+  gap: 4px 7px;
+  margin-top: 3px;
+  color: #667781;
+  font-size: 10px;
+}
+.message footer time {
+  white-space: nowrap;
+}
+.message-status {
+  display: flex;
+  align-items: center;
+}
+.message-status .status-badge {
+  padding: 2px 5px;
+  font-size: 9px;
+}
+.message-error {
+  color: var(--red-dark);
+  font-size: 11px;
 }
 .attachment {
   display: inline-flex;
@@ -1208,15 +1231,22 @@ dd {
   color: var(--red-dark);
   font-size: 10px;
 }
-.chat-media { display: grid; gap: 8px; max-width: 360px; min-width: 0; }
+.chat-media { display: grid; gap: 6px; width: min(100%, 360px); min-width: 0; }
 .chat-media img, .chat-media video, .media-preview { display: block; width: 100%; max-height: 280px; object-fit: contain; border-radius: 6px; }
-.chat-media audio, .media-selection audio { width: 100%; max-width: 100%; }
-.media-image-button { display: block; padding: 0; overflow: hidden; }
+.message:has(.chat-media) { max-width: min(82%, 420px); }
+.media-image-button { display: block; width: 100%; min-height: 0; padding: 0; overflow: hidden; border: 0; background: transparent; }
+.media-image-button:hover { background: transparent; }
+.media-image-button img { max-height: 320px; object-fit: cover; }
+.media-image-button.media-sticker { width: min(220px, 100%); background: transparent; box-shadow: none; }
+.media-image-button.media-sticker img { object-fit: contain; }
+.media-audio { display: grid; gap: 5px; min-width: min(300px, 100%); }
+.media-audio audio { width: 100%; max-width: 100%; }
 .media-document, .media-selection-title, .media-selection-actions { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.media-document { padding: 9px; border-radius: 6px; background: #f4f6f7; }
 .media-document span, .media-selection-title strong { flex: 1; min-width: 0; overflow-wrap: anywhere; }
 .media-document .icon-button, .media-selection-title .icon-button { flex-shrink: 0; }
-.audio-speed { display: flex; align-items: center; gap: 8px; font-size: 12px; }
-.audio-speed select { width: auto; min-height: 32px; }
+.audio-speed { display: flex; align-items: center; gap: 6px; font-size: 10px; }
+.audio-speed select { width: auto; min-height: 28px; padding: 3px 6px; }
 .media-dialog { width: min(900px, calc(100vw - 32px)); max-height: calc(100dvh - 32px); }
 .media-dialog header { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
 .media-dialog strong { overflow-wrap: anywhere; }
@@ -1240,7 +1270,7 @@ dd {
   margin: 0;
 }
 .composer {
-  padding: 13px 15px;
+  padding: 10px 14px;
   border-top: 1px solid var(--line);
   background: white;
 }
@@ -1263,6 +1293,17 @@ dd {
 }
 .composer-bottom button {
   flex-shrink: 0;
+}
+@media (max-width: 540px) {
+  .message,
+  .message:has(.chat-media) { max-width: 90%; }
+  .message.note { max-width: 96%; }
+  .chat-media { width: min(100%, 300px); }
+  .media-audio { min-width: 0; }
+  .media-composer { align-items: stretch; }
+  .media-selection { flex-basis: 100%; }
+  .composer { padding: 9px 10px; }
+  .composer-bottom { align-items: flex-end; }
 }
 .contact-details {
   border-left: 1px solid var(--line);

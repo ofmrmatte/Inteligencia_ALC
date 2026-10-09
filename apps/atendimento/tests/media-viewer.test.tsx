@@ -44,3 +44,18 @@ it.each(["pending", "quarantined", "rejected", "failed", "deleted"])(
     expect(html).toContain('role="status"');
   },
 );
+
+it("keeps the authenticated media ID on the image-dialog download", () => {
+  const html = renderToStaticMarkup(
+    <MediaViewer
+      messageId="synthetic-message"
+      attachment={{
+        internalId: "synthetic-attachment",
+        type: "image",
+        mime: "image/png",
+        status: "ready",
+      }}
+    />,
+  );
+  expect(html).toContain('href="/api/media/synthetic-attachment?download=true"');
+});

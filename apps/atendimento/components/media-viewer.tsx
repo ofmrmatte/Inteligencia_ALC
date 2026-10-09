@@ -44,7 +44,9 @@ export function MediaViewer({
       {image && !error && (
         <button
           type="button"
-          className="media-image-button"
+          className={`media-image-button${
+            attachment.type === "sticker" ? " media-sticker" : ""
+          }`}
           aria-label="Ampliar imagem"
           title="Ampliar imagem"
           onClick={() => dialog.current?.showModal()}
@@ -54,7 +56,9 @@ export function MediaViewer({
             alt={
               attachment.type === "sticker"
                 ? "Figurinha recebida"
-                : attachment.filename || "Imagem anexada"
+                : `Imagem${
+                    attachment.filename ? `: ${attachment.filename}` : " anexada"
+                  }`
             }
             loading="lazy"
             onError={() => setError(true)}
@@ -62,7 +66,7 @@ export function MediaViewer({
         </button>
       )}
       {attachment.type === "audio" && (
-        <>
+        <div className="media-audio">
           <small>{attachment.voice ? "Mensagem de voz" : "Áudio"}</small>
           <audio
             ref={audio}
@@ -73,7 +77,7 @@ export function MediaViewer({
             aria-label="Reproduzir áudio"
           />
           <label className="audio-speed">
-            Velocidade
+            <span>Velocidade</span>
             <select
               aria-label="Velocidade do áudio"
               defaultValue="1"
@@ -87,7 +91,7 @@ export function MediaViewer({
               <option value="2">2x</option>
             </select>
           </label>
-        </>
+        </div>
       )}
       {attachment.type === "video" && (
         <video
@@ -131,7 +135,7 @@ export function MediaViewer({
       </small>
       <a
         className="attachment"
-        href={`${src}${src.includes("?") ? "&" : "?"}download=true`}
+        href={`${src}?download=true`}
         download
       >
         <Download size={15} />
