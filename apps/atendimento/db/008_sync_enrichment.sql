@@ -1,5 +1,5 @@
 ALTER TABLE alc_atendimento.cases
-  ADD COLUMN IF NOT EXISTS comparison_version smallint NOT NULL DEFAULT 1,
+  ADD COLUMN IF NOT EXISTS comparison_version smallint NOT NULL DEFAULT 2,
   ADD COLUMN IF NOT EXISTS fingerprint text NOT NULL DEFAULT '';
 
 CREATE TABLE IF NOT EXISTS alc_atendimento.pnr_enrichment_outbox (

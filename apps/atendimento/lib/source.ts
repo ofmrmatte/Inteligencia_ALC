@@ -13,7 +13,7 @@ import { createHash, randomUUID } from "node:crypto";
 import type { AuthProfile } from "@alc/identity/auth";
 import { HttpError, requireAdmin, scopeFor, visible } from "./auth";
 import { authorizeDispatch } from "./dispatch-authorization";
-import { caseFingerprint } from "./sync-delta";
+import { caseFingerprint, CASE_COMPARISON_VERSION } from "./sync-delta";
 import { enqueueVerifiedContact } from "./sync-enrichment";
 import { z } from "zod";
 export type Automation = {
@@ -82,8 +82,8 @@ export async function verifyCustomerContact(
       customerCapturedAt: new Date().toISOString(),
     };
     await transaction.query(
-      "UPDATE alc_atendimento.cases SET record=$2,customer_phone=$3,updated_at=now() WHERE case_id=$1",
-      [parsed.caseId, record, number],
+      `UPDATE alc_atendimento.cases SET record=$2,customer_phone=$3,comparison_version=${CASE_COMPARISON_VERSION},fingerprint=$4,updated_at=now() WHERE case_id=$1`,
+      [parsed.caseId, record, number, caseFingerprint(record)],
     );
     await enqueueVerifiedContact(transaction, record);
     await audit(
@@ -334,9 +334,11 @@ export async function upsertCases(
   baseline: boolean,
   actor: string | null = null,
   allowAutomaticOutreach = true,
+  authoritativeCoreSnapshot = false,
 ) {
   const client = await db().connect();
   const newlySeen: CaseRecord[] = [];
+  const assignmentCandidates: CaseRecord[] = [];
   const stats = {
     processed: records.length,
     found: records.length,
@@ -361,11 +363,14 @@ export async function upsertCases(
       );
       const previousRow = previous.rows[0];
       const old = previousRow?.record as CaseRecord | undefined;
+      if (old && old.shipmentId !== record.shipmentId)
+        throw new Error("Vinculo PNR/envio divergente.");
       const sourceTime =
         (record as CaseRecord & { sourceAt?: string }).sourceAt || sourceAt;
       if (!Number.isFinite(Date.parse(sourceTime)))
         throw new Error("Data de origem da PNR inválida.");
       if (
+        !authoritativeCoreSnapshot &&
         old &&
         previousRow?.source_at &&
         Date.parse(String(previousRow.source_at)) > Date.parse(sourceTime)
@@ -432,13 +437,14 @@ export async function upsertCases(
       const fingerprint = caseFingerprint(merged);
       const unchanged = Boolean(
         old &&
-          previousRow?.comparison_version === 1 &&
-          previousRow?.fingerprint === fingerprint,
+          (previousRow?.comparison_version === CASE_COMPARISON_VERSION && previousRow?.fingerprint
+            ? previousRow.fingerprint
+            : caseFingerprint(old)) === fingerprint,
       );
       const stored = unchanged ? old! : merged;
       const persisted = await client.query(
         `INSERT INTO alc_atendimento.cases(case_id,competence,base_key,sigla,driver_id,driver_phone,customer_phone,classification,record,source_at,comparison_version,fingerprint)
-        VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,1,$11) ON CONFLICT(case_id) DO UPDATE SET competence=excluded.competence,base_key=excluded.base_key,sigla=excluded.sigla,driver_id=excluded.driver_id,driver_phone=excluded.driver_phone,customer_phone=excluded.customer_phone,classification=excluded.classification,record=excluded.record,source_at=excluded.source_at,comparison_version=1,fingerprint=excluded.fingerprint,updated_at=CASE WHEN alc_atendimento.cases.fingerprint IS DISTINCT FROM excluded.fingerprint OR alc_atendimento.cases.comparison_version<>1 THEN now() ELSE alc_atendimento.cases.updated_at END WHERE alc_atendimento.cases.source_at<=excluded.source_at RETURNING case_id`,
+        VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,${CASE_COMPARISON_VERSION},$11) ON CONFLICT(case_id) DO UPDATE SET competence=excluded.competence,base_key=excluded.base_key,sigla=excluded.sigla,driver_id=excluded.driver_id,driver_phone=excluded.driver_phone,customer_phone=excluded.customer_phone,classification=excluded.classification,record=excluded.record,source_at=greatest(alc_atendimento.cases.source_at,excluded.source_at),comparison_version=excluded.comparison_version,fingerprint=excluded.fingerprint,updated_at=CASE WHEN alc_atendimento.cases.fingerprint IS DISTINCT FROM excluded.fingerprint OR alc_atendimento.cases.comparison_version<>excluded.comparison_version THEN now() ELSE alc_atendimento.cases.updated_at END WHERE alc_atendimento.cases.source_at<=excluded.source_at OR $12::boolean RETURNING case_id`,
         [
           stored.caseId,
           stored.competence,
@@ -451,6 +457,7 @@ export async function upsertCases(
           stored,
           sourceTime,
           fingerprint,
+          authoritativeCoreSnapshot,
         ],
       );
       if (!persisted.rowCount) {
@@ -474,6 +481,7 @@ export async function upsertCases(
       )
         stats.scopeChanged += 1;
       if (merged.customerVerified) await enqueueVerifiedContact(client, merged);
+      if (stored.competence === competence()) assignmentCandidates.push(stored);
       if (
         !baseline &&
         (!old ||
@@ -493,7 +501,7 @@ export async function upsertCases(
     (await setting<{ mode: string }>("assignment_policy"))?.mode ===
     "primary_then_least_loaded"
   ) {
-    for (const record of records) {
+    for (const record of assignmentCandidates) {
       try {
         await assignCase(
           null,
@@ -566,47 +574,73 @@ export function fromCore(row: Record<string, unknown>): CaseRecord {
     deliveryAt: String(detail.deliveryAt || ""),
     purchaseValue: Number(row.purchase_value || 0),
     ...{
-      sourceAt: String(
-        row.source_last_seen_at || row.updated_at || new Date().toISOString(),
-      ),
+      sourceAt: new Date(Math.max(
+        ...[row.source_last_seen_at, row.updated_at]
+          .filter((value) => value != null)
+          .map((value) => value instanceof Date ? value.getTime() : Date.parse(String(value)))
+          .filter(Number.isFinite),
+      )).toISOString(),
     },
   };
 }
 export async function syncCore(history = false, allowAutomaticOutreach = true) {
+  const lease = await db().connect();
+  let locked = false;
+  let acquisitionComplete = false;
+  try {
+    locked = Boolean((await lease.query(
+      "SELECT pg_try_advisory_lock(hashtext('atendimento_core_sync')) AS locked",
+    )).rows[0]?.locked);
+    acquisitionComplete = true;
+    if (!locked) throw new HttpError(409, "Coleta Core em andamento.");
+    return await syncCoreSnapshot(history, allowAutomaticOutreach);
+  } finally {
+    let releaseError = acquisitionComplete ? undefined : new Error("Core sync lock acquisition failed");
+    if (locked) {
+      try {
+        const released = await lease.query(
+          "SELECT pg_advisory_unlock(hashtext('atendimento_core_sync')) AS unlocked",
+        );
+        if (!released.rows[0]?.unlocked) releaseError = new Error("Core sync lock lost");
+      } catch {
+        releaseError = new Error("Core sync unlock failed");
+      }
+    }
+    lease.release(releaseError);
+  }
+}
+
+async function syncCoreSnapshot(history: boolean, allowAutomaticOutreach: boolean) {
   const source = await setting<{
     baselineComplete: boolean;
     lastSync?: string;
+    competence?: string;
   }>("source");
-  const cursor =
-    !history &&
-    source.baselineComplete &&
-    source.lastSync &&
-    Number.isFinite(Date.parse(source.lastSync))
-      ? new Date(source.lastSync).toISOString()
-      : null;
-  const syncStartedAt = new Date().toISOString();
+  const currentCompetence = competence();
   // Historical data is imported only by an explicit driver inquiry or staff action.
   const result = await core().query(
     `SELECT * FROM public.pnr_case_center_cases
      WHERE ($1::boolean OR competence=$2)
-       AND ($1::boolean OR $3::timestamptz IS NULL OR source_last_seen_at >= $3::timestamptz - interval '5 minutes')
      ORDER BY case_date DESC,case_id DESC`,
-    [history, competence(), cursor],
+    [history, currentCompetence],
   );
   const stats = await upsertCases(
     result.rows.map(fromCore),
     new Date().toISOString(),
-    history || !source.baselineComplete,
+    history || !source.baselineComplete || source.competence !== currentCompetence,
     null,
     allowAutomaticOutreach,
+    // Projection timestamps are not a commit-order watermark.
+    true,
   );
   if (!history)
     await db().query(
       `UPDATE alc_atendimento.settings SET value=$1,updated_at=now() WHERE key='source'`,
       [
         {
-          baselineComplete: source.baselineComplete || result.rows.length > 0,
-          lastSync: syncStartedAt,
+          baselineComplete: (source.competence === currentCompetence && source.baselineComplete) || result.rows.length > 0,
+          competence: currentCompetence,
+          lastSync: new Date().toISOString(),
           origin: "Inteligência",
           ...stats,
         },

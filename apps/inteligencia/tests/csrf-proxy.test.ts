@@ -64,4 +64,11 @@ describe("CSRF proxy atrás da Railway", () => {
     expect(response.status).toBe(200);
     expect(updateSession).toHaveBeenCalledTimes(1);
   });
+
+  it("routes only the exact enrichment POST to its HMAC authentication", async () => {
+    expect((await proxy(new NextRequest("https://core.example.test/api/internal/pnr-enrichment", { method: "POST" }))).status).toBe(200);
+    expect(updateSession).not.toHaveBeenCalled();
+    await proxy(new NextRequest("https://core.example.test/api/internal/pnr-enrichment/other", { method: "POST" }));
+    expect(updateSession).toHaveBeenCalledOnce();
+  });
 });

@@ -26,6 +26,9 @@ function isSameHostOrigin(request: NextRequest, origin: string | null) {
 }
 
 export async function proxy(request: NextRequest) {
+  // This exact service route authenticates signed requests before accessing Core.
+  if (request.method === "POST" && request.nextUrl.pathname === "/api/internal/pnr-enrichment")
+    return NextResponse.next({ request });
   if (request.nextUrl.pathname.startsWith("/api/") && !SAFE_METHODS.has(request.method.toUpperCase())) {
     const origin = request.headers.get("origin");
     const fetchSite = request.headers.get("sec-fetch-site");

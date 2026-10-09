@@ -41,11 +41,13 @@ describe("sync deltas and enrichment events", () => {
 
   it("emits only minimal verified contact fields with a versioned idempotency key", () => {
     const event = verifiedContactEnrichment(record());
-    expect(event?.payload).toEqual({
-      schemaVersion: 1,
+    expect(event?.payload).toMatchObject({
+      schemaVersion: 2,
       caseId: "case-1",
       shipmentId: "123456",
       competence: "202610Q1",
+      baseKey: "BASE A",
+      sigla: "SP",
       origin: "atendimento_verified_contact",
       name: "Buyer One",
       phone: "5511988880000",
@@ -53,7 +55,8 @@ describe("sync deltas and enrichment events", () => {
       source: "https://envios.adminml.com/logistics/package-management/package/123456",
       capturedAt: "2026-10-08T15:00:00.000Z",
     });
-    expect(event?.eventKey).toMatch(/^verified-contact:case-1:[a-f0-9]{64}$/);
+    expect(event?.eventKey).toMatch(/^verified-contact:v2:case-1:[a-f0-9]{64}$/);
+    expect(event?.payload.sourceHash).toMatch(/^[a-f0-9]{64}$/);
     expect(JSON.stringify(event)).not.toMatch(/conversation|message|document|address|status/i);
   });
 
@@ -62,6 +65,7 @@ describe("sync deltas and enrichment events", () => {
     expect(verifiedContactEnrichment(record({ customerSource: "" }))).toBeNull();
     expect(verifiedContactEnrichment(record({ customerSource: "https://example.com" }))).toBeNull();
     expect(verifiedContactEnrichment(record({ shipmentId: "different-shipment" }))).toBeNull();
+    expect(verifiedContactEnrichment(record({ baseKey: "" }))).toBeNull();
     expect(verifiedContactEnrichment(record({ customerCapturedAt: "invalid" }))).toBeNull();
     expect(enrichmentRetryDelayMs(1)).toBe(30_000);
     expect(enrichmentRetryDelayMs(ENRICHMENT_MAX_ATTEMPTS)).toBe(3_840_000);

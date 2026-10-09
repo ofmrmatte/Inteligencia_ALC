@@ -6,6 +6,13 @@ import {
 import type { CaseRecord } from "./domain";
 
 const LEASE_SECONDS = 120;
+export type EnrichmentClaim = {
+  id: string;
+  event_key: string;
+  case_id: string;
+  payload: unknown;
+  attempts: number;
+};
 
 export async function enqueueVerifiedContact(
   queryable: { query(sql: string, values?: unknown[]): Promise<unknown> },
@@ -22,7 +29,7 @@ export async function enqueueVerifiedContact(
 }
 
 export async function claimEnrichmentEvents(limit = 25) {
-  const batchSize = Math.max(1, Math.min(100, Math.floor(limit)));
+  const batchSize = Number.isFinite(limit) ? Math.max(1, Math.min(100, Math.floor(limit))) : 25;
   await db().query(
     `UPDATE alc_atendimento.pnr_enrichment_outbox
      SET status='dead_letter', lease_until=NULL,
@@ -30,7 +37,7 @@ export async function claimEnrichmentEvents(limit = 25) {
      WHERE status='processing' AND lease_until < now() AND attempts >= $1`,
     [ENRICHMENT_MAX_ATTEMPTS],
   );
-  const result = await db().query(
+  const result = await db().query<EnrichmentClaim>(
     `WITH candidates AS (
        SELECT id FROM alc_atendimento.pnr_enrichment_outbox
        WHERE attempts < $2 AND next_attempt_at <= now()
@@ -48,17 +55,17 @@ export async function claimEnrichmentEvents(limit = 25) {
   return result.rows;
 }
 
-export async function acknowledgeEnrichmentEvent(id: string) {
+export async function acknowledgeEnrichmentEvent(id: string, attempt: number) {
   const result = await db().query(
     `UPDATE alc_atendimento.pnr_enrichment_outbox
      SET status='delivered', delivered_at=now(), lease_until=NULL, last_error=NULL, updated_at=now()
-     WHERE id=$1 AND status='processing' AND lease_until > now() RETURNING id`,
-    [id],
+     WHERE id=$1 AND attempts=$2 AND status='processing' AND lease_until > now() RETURNING id`,
+    [id, attempt],
   );
   return Boolean(result.rowCount);
 }
 
-export async function retryEnrichmentEvent(id: string, error: unknown) {
+export async function retryEnrichmentEvent(id: string, attempt: number, error: unknown) {
   const message = (error instanceof Error ? error.message : String(error))
     .replace(/Bearer\s+\S+/gi, "Bearer [redacted]")
     .replace(
@@ -69,11 +76,11 @@ export async function retryEnrichmentEvent(id: string, error: unknown) {
   const boundedMessage = message.slice(0, 1000);
   const result = await db().query(
     `UPDATE alc_atendimento.pnr_enrichment_outbox
-     SET status=CASE WHEN attempts >= $2 THEN 'dead_letter' ELSE 'pending' END,
+     SET status=CASE WHEN attempts >= $3 THEN 'dead_letter' ELSE 'pending' END,
          next_attempt_at=now() + (least(30000 * power(2, attempts - 1), 21600000)::bigint * interval '1 millisecond'),
-         lease_until=NULL, last_error=$3, updated_at=now()
-     WHERE id=$1 AND status='processing' AND lease_until > now() RETURNING id`,
-    [id, ENRICHMENT_MAX_ATTEMPTS, boundedMessage],
+         lease_until=NULL, last_error=$4, updated_at=now()
+     WHERE id=$1 AND attempts=$2 AND status='processing' AND lease_until > now() RETURNING id`,
+    [id, attempt, ENRICHMENT_MAX_ATTEMPTS, boundedMessage],
   );
   return Boolean(result.rowCount);
 }
