@@ -1,7 +1,13 @@
 import { createServerClient } from "@supabase/ssr";
 import { NextResponse, type NextRequest } from "next/server";
+import { setting } from "./lib/db";
 import { authConfig, inteligenciaEntryUrl } from "./lib/auth";
-import { ENTRY_COOKIE, validEntryReceipt } from "@alc/identity/transfer";
+import {
+  ENTRY_COOKIE,
+  entrySessionKey,
+  validEntryGrant,
+  validEntryReceipt,
+} from "@alc/identity/transfer";
 
 function clearSessionCookies(response: NextResponse, request: NextRequest) {
   const names = new Set(
@@ -70,9 +76,23 @@ export async function proxy(request: NextRequest) {
     },
   });
   const { data, error } = await client.auth.getClaims();
+  let grantValid = false;
+  try {
+    grantValid =
+      !error &&
+      typeof data?.claims?.sub === "string" &&
+      typeof data.claims.session_id === "string" &&
+      validEntryGrant(
+        await setting(entrySessionKey(data.claims.session_id)),
+        data.claims.sub,
+      );
+  } catch {
+    // Revocation storage errors deny access rather than preserving a stale JWT.
+  }
   if (
     error ||
     !data?.claims?.sub ||
+    !grantValid ||
     !validEntryReceipt(
       request.cookies.get(ENTRY_COOKIE)?.value,
       process.env.ATENDIMENTO_ENCRYPTION_KEY || "",
