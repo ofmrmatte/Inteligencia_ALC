@@ -33,7 +33,7 @@ it("shows Ellie, off by default and daily usage without exposing stored credenti
   await click("Configurar IA");
   expect(container.querySelector<HTMLInputElement>("input[type=checkbox]")?.checked).toBe(false);
   expect(container.querySelector("input[type=password]")).toBeNull();
-  const model = [...container.querySelectorAll("label")].find(label => label.textContent === "Modelo")!.querySelector("input")!;
+  const model = [...container.querySelectorAll("label")].find(label => label.textContent?.includes("Modelos de texto disponíveis para teste"))!.querySelector("select")!;
   expect(model.required).toBe(false);
   await act(async () => container.querySelector<HTMLInputElement>("input[type=checkbox]")!.click());
   expect(model.required).toBe(true);

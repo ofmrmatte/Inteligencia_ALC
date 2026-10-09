@@ -329,7 +329,7 @@ export async function aiModelCatalog(
       const data = {
         models: [
           ...new Map(models.map((model) => [model.id, model])).values(),
-        ].sort((a, b) => a.id.localeCompare(b.id)),
+        ].sort((a, b) => b.id.localeCompare(a.id, undefined, { numeric: true })),
         fetchedAt: new Date().toISOString(),
       };
       for (const [cacheKey, value] of catalogCache)

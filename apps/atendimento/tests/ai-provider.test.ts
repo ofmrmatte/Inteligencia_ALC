@@ -186,11 +186,11 @@ it("authenticates and caches the provider catalog without assuming all listed mo
   );
   const result = await aiModelCatalog(actor, "openai", fetcher);
   expect(result.models).toEqual([
-    { id: "gpt-4.1-mini", label: "gpt-4.1-mini" },
-    { id: "gpt-4o-2024-05-13", label: "gpt-4o-2024-05-13" },
-    { id: "gpt-6-astra", label: "gpt-6-astra" },
-    { id: "gpt-6-luna", label: "gpt-6-luna" },
     { id: "gpt-6.1-sol", label: "gpt-6.1-sol" },
+    { id: "gpt-6-luna", label: "gpt-6-luna" },
+    { id: "gpt-6-astra", label: "gpt-6-astra" },
+    { id: "gpt-4o-2024-05-13", label: "gpt-4o-2024-05-13" },
+    { id: "gpt-4.1-mini", label: "gpt-4.1-mini" },
   ]);
   expect(fetcher.mock.calls[0][0]).toBe("https://api.openai.com/v1/models");
   expect(fetcher.mock.calls[0][1].redirect).toBe("error");
@@ -241,9 +241,9 @@ it("paginates Gemini catalogs and requires generateContent support plus a docume
       }),
     );
   expect((await aiModelCatalog(actor, "gemini", fetcher)).models).toEqual([
-    { id: "gemini-2.5-flash", label: "models/gemini-2.5-flash" },
-    { id: "gemini-3.1-pro-preview", label: "models/gemini-3.1-pro-preview" },
     { id: "gemini-3.8-flash", label: "models/gemini-3.8-flash" },
+    { id: "gemini-3.1-pro-preview", label: "models/gemini-3.1-pro-preview" },
+    { id: "gemini-2.5-flash", label: "models/gemini-2.5-flash" },
   ]);
   expect(String(fetcher.mock.calls[1][0])).toContain("pageToken=page2");
   expect(String(fetcher.mock.calls[0][0])).not.toContain("google-fallback");
