@@ -137,10 +137,10 @@ it("reutiliza validação dos parâmetros e não libera cliente sem confirmaçã
     ),
   ).toBe("Fora da tratativa de clientes");
 });
-it("mantém conferência somente para gestores e bloqueia envios incertos", () => {
+it("permite conferência individual e bloqueia envios incertos", () => {
   mocks.admin = false;
   expect(renderToStaticMarkup(<Dispatches channel="driver" />)).toMatch(
-    /button disabled="" title="Disparo restrito/,
+    /button title="Conferir destinatário"/,
   );
   mocks.admin = true;
   mocks.block = "uncertain";

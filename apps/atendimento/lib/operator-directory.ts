@@ -103,7 +103,7 @@ export function receivingOperator(operator: Operator | undefined) {
       operator.roles.includes("agent"),
   );
 }
-export async function enabledProfiles(): Promise<AuthProfile[]> {
+export async function enabledProfiles(transaction?: PoolClient): Promise<AuthProfile[]> {
   const key = process.env.SUPABASE_SERVICE_ROLE_KEY;
   if (!key)
     throw new HttpError(503, "Cadastro de responsáveis não configurado.");
@@ -122,7 +122,7 @@ export async function enabledProfiles(): Promise<AuthProfile[]> {
       "Cadastro de identidades indisponível ou acima do limite de consulta.",
     );
   const access = (
-    await db().query(
+    await (transaction || db()).query(
       "SELECT key,value FROM alc_atendimento.settings WHERE key=ANY($1::text[])",
       [(data || []).map((r) => `access_${r.id}`)],
     )

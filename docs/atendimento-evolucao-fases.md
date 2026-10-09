@@ -3,23 +3,22 @@
 ## Limites desta entrega
 
 O plano aprovado em `writing-block.md` sera executado em sete PRs dependentes.
-Esta branch entrega apenas a fase 1. Nao autoriza merge, deploy, migracao remota,
+Esta branch entrega as fases 1 e 2, em PRs dependentes. Nao autoriza merge, deploy, migracao remota,
 ativacao de automacoes ou mensagens reais. Core, Aux e RH continuam separados;
 o Supabase central permanece responsavel por identidade, MFA e revogacao.
 
 | Fase | Escopo | Estado |
 | --- | --- | --- |
 | 1 | Atendentes, bases, atribuicoes, permissao e autoria | Implementada; revisao remota pendente |
-| 2 | Disparos individual/global, nome do dono da PNR, lotes e dedupe | Pendente; depende da fase 1 |
+| 2 | Disparos individual/global, nome do dono da PNR, lotes e dedupe | Implementada; revisao remota pendente |
 | 3 | Midia privada duravel, upload e visualizadores seguros | Pendente; depende da fase 2 |
 | 4 | Evidencias paginadas com midia, pasta por PNR e ZIP opcional | Pendente; depende da fase 3 |
 | 5 | IA opcional OpenAI/Gemini, fallback deterministico e modelos Meta | Pendente; depende da fase 2 |
 | 6 | Diferenciais de sync, enriquecimento versionado e indicadores/eventos | Pendente; depende das fases 1 e 2 |
 | 7 | MFA recente, titularidade de telefone, hardening e E2E controlado | Pendente; depende das anteriores |
 
-Nao interpretar esta fase como autorizacao para usar os disparos antigos com a
-nova distribuicao. A fase 2 deve vincular todo disparo ao dono valido da PNR,
-revalidar acesso antes do envio e registrar lote, modelo e nome historico.
+Templates legados sem responsabilidade auditavel nao sao enviados pelo novo
+worker. Historico permanece acessivel; registros pendentes exigem revisao.
 
 ## Fase 1
 
@@ -62,6 +61,57 @@ revalidar acesso antes do envio e registrar lote, modelo e nome historico.
    apresentam erros de `set-state-in-effect` na base desta branch.
 10. Proxima fase: disparos com autorizacao individual/global e autoria do dono,
     sem reutilizar o nome generico configurado em `automation.operatorName`.
+
+## Fase 2
+
+1. Funcionalidades: disparo individual pelo dono autorizado; lote global por
+   gestor com nome do dono de cada PNR, nunca do gestor. Selecao limitada a 100
+   casos, resultado parcial explicito, nonce vinculado ao pedido e dedupe por
+   PNR/canal, inclusive telefone alterado e chaves historicas. Nome e modelo
+   ficam imutaveis no historico. Revogacao/transferencia/classificacao/contato
+   sao relidos antes da chamada ao provedor. Entrega nao regride com webhooks.
+2. Arquivos desta fase:
+   `apps/atendimento/db/003_dispatch_ownership.sql`,
+   `apps/atendimento/lib/dispatch-authorization.ts`,
+   `apps/atendimento/lib/dispatch-batches.ts`,
+   `apps/atendimento/lib/operator-directory.ts`,
+   `apps/atendimento/lib/source.ts`, `apps/atendimento/lib/worker.ts`,
+   `apps/atendimento/app/api/[resource]/route.ts`,
+   `apps/atendimento/components/dispatches.tsx`,
+   `apps/atendimento/tests/dispatch-api.test.ts`,
+   `apps/atendimento/tests/dispatches.test.tsx`,
+   `apps/atendimento/tests/source-regression.test.ts`,
+   `apps/atendimento/tests/operator-postgres.test.ts` e este documento.
+3. Banco: migracao aditiva 003, lotes e snapshots em outbox, indices por
+   lote/caso/canal. Nenhum backfill de nome ou responsavel inventado. Mesma
+   rotina de aplicacao explicitamente autorizada e rollback nao destrutivo.
+4. APIs: POST `dispatch-batch`, schema estrito (batchId, channel, mode, caseIds).
+   POST `dispatch` preservado como adaptador individual. GET `dispatch-preview`
+   aplica escopo e dono antes de limitar. GET `outbox` inclui lote/autoria.
+   POST `customer` exige gestor, schema estrito, escopo e transacao auditada
+   sob o mesmo lock de caso usado no envio/importacao.
+5. Testes: 316 Atendimento e 375 Inteligencia, total 691, incluindo 32 casos
+   PostgreSQL local. Typecheck e build Atendimento/conector passaram. Lint
+   dos arquivos alterados: zero erros, duas advertencias de imports legados.
+   Lint global continua com os cinco erros legados descritos na fase 1.
+   Navegador usa APIs sinteticas: selecao de lote e layouts estabilizados
+   verificados em 320/391/768/1280 pixels CSS; tabela rola internamente.
+6. Seguranca: sem nomes/IDs de autor aceitos do cliente. Bloqueios na ordem
+   diretorio, caso, conversa; falha de identidade deixa a fila sem envio.
+   Envios incertos nunca sao repetidos automaticamente. Troca de telefone
+   nao cria outra chave inicial. Mensagem template e automatizada, nao uma
+   fala pessoal do responsavel cujo nome preenche o contrato comercial.
+7. GitHub: branch `codex/atendimento-dispatch-ownership`, base explicita
+   `codex/atendimento-operational-management` (PR #77). PR draft dependente;
+   nao fazer merge desta branch antes da dependencia aprovada.
+8. Dependencias: nenhuma variavel nova. Credenciais/canais/templates reais
+   e migracao remota nao utilizados. As chamadas Meta foram simuladas.
+9. Pendencias: fases 3-7. A validacao textual completa do template pertence
+   a fase 5; vinculo de autorizacao recente a sessao pertence a fase 7.
+   A revalidacao atual verifica identidade/permissao, nao prova logout real.
+   Sem homologacao de WhatsApp, catalogo remoto, SSO ou screenshot.
+10. Proxima fase: anexos privados duraveis, validacao binaria, upload humano
+    autorizado e players seguros, sem depender do disco efemero Railway.
 
 ## Catalogo e organograma
 

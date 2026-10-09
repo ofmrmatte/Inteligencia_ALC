@@ -9,6 +9,11 @@ import {
 } from "./domain";
 import { templates, type Channel } from "./meta";
 import { assignCase } from "./assignment-engine";
+import { createHash, randomUUID } from "node:crypto";
+import type { AuthProfile } from "@alc/identity/auth";
+import { HttpError, requireAdmin, scopeFor, visible } from "./auth";
+import { authorizeDispatch } from "./dispatch-authorization";
+import { z } from "zod";
 export type Automation = {
   driverNotifications: boolean;
   clientOutreach: boolean;
@@ -16,12 +21,84 @@ export type Automation = {
   operatorName: string;
   intervalMinutes: 30;
 };
-export async function queueTemplate(
-  channel: Channel,
-  record: CaseRecord,
-  operator: string,
-  automatic = false,
+export async function verifyCustomerContact(
+  profile: AuthProfile,
+  input: unknown,
 ) {
+  requireAdmin(profile);
+  const parsed = z
+    .object({
+      caseId: z.string().trim().min(1).max(200),
+      name: z.string().trim().min(1).max(200),
+      phone: z.string().trim().min(1).max(200),
+      verified: z.literal(true),
+      document: z.string().max(100).optional(),
+      address: z.string().max(500).optional(),
+      sourceUrl: z.url().max(1000).optional(),
+    })
+    .strict()
+    .parse(input);
+  const number = phone(parsed.phone);
+  if (!number) throw new HttpError(400, "Telefone inválido.");
+  const transaction = await db().connect();
+  try {
+    await transaction.query("BEGIN");
+    await transaction.query("SELECT pg_advisory_xact_lock(hashtext($1))", [
+      `atendimento_case:${parsed.caseId}`,
+    ]);
+    const row = (
+      await transaction.query(
+        "SELECT * FROM alc_atendimento.cases WHERE case_id=$1 FOR UPDATE",
+        [parsed.caseId],
+      )
+    ).rows[0];
+    if (!row || !visible(await scopeFor(profile, transaction), row))
+      throw new HttpError(404, "PNR não encontrada.");
+    if (parsed.sourceUrl) {
+      const source = new URL(parsed.sourceUrl);
+      if (
+        source.protocol !== "https:" ||
+        source.hostname !== "envios.adminml.com" ||
+        source.port ||
+        source.username ||
+        source.password ||
+        source.search ||
+        source.hash ||
+        source.pathname !==
+          `/logistics/package-management/package/${row.record.shipmentId}`
+      )
+        throw new HttpError(400, "Fonte do comprador inválida.");
+    }
+    const record = {
+      ...row.record,
+      customerName: parsed.name,
+      customerPhone: number,
+      customerVerified: true,
+      customerDocument: parsed.document || row.record.customerDocument || "",
+      customerAddress: parsed.address || row.record.customerAddress || "",
+      customerSource: parsed.sourceUrl || "validado_pela_equipe",
+    };
+    await transaction.query(
+      "UPDATE alc_atendimento.cases SET record=$2,customer_phone=$3,updated_at=now() WHERE case_id=$1",
+      [parsed.caseId, record, number],
+    );
+    await audit(
+      profile.id,
+      "customer_contact_verified",
+      parsed.caseId,
+      {},
+      transaction,
+    );
+    await transaction.query("COMMIT");
+    return { ok: true };
+  } catch (error) {
+    await transaction.query("ROLLBACK");
+    throw error;
+  } finally {
+    transaction.release();
+  }
+}
+export function validateInitialContact(channel: Channel, record: CaseRecord) {
   const to = channel === "driver" ? record.driverPhone : record.customerPhone;
   if (!phone(to)) throw new Error("Telefone não validado.");
   if (record.competence !== competence())
@@ -32,22 +109,22 @@ export async function queueTemplate(
     !["aguardando_comprovante", "penalidade"].includes(record.classification)
   )
     throw new Error("Classificação fora da tratativa de clientes.");
-  if (channel === "driver" && !driverNotificationEligible(record.classification))
+  if (
+    channel === "driver" &&
+    !driverNotificationEligible(record.classification)
+  )
     throw new Error("Classificação fora das notificações de motoristas.");
-  if (channel === "client") {
-    const active = await db().query(
-      "SELECT case_id,status FROM alc_atendimento.conversations WHERE channel='client' AND phone=$1",
-      [to],
-    );
-    if (
-      active.rows[0] &&
-      active.rows[0].case_id !== record.caseId &&
-      active.rows[0].status !== "resolved"
-    )
-      throw new Error(
-        "Cliente já possui uma tratativa ativa para outro envio. Revisão da equipe necessária.",
-      );
-  }
+  templateParameters(channel, record, "Validação");
+  return to;
+}
+export async function queueTemplate(
+  channel: Channel,
+  input: CaseRecord,
+  trigger: AuthProfile | null,
+  automatic = false,
+  options: { batchId?: string; global?: boolean } = {},
+) {
+  validateInitialContact(channel, input);
   // The legacy cliente_loss template omits the approved purchase amount.
   // Require separately approved v2 to avoid silently sending an outdated script.
   const name = channel === "driver" ? "pnraberta" : "cliente_loss_v2";
@@ -55,61 +132,182 @@ export async function queueTemplate(
     (t) => t.name === name && t.status === "APPROVED" && t.language === "pt_BR",
   );
   if (!approved) throw new Error("Modelo aprovado indisponível.");
-  const payload = {
-    messaging_product: "whatsapp",
-    to,
-    type: "template",
-    template: {
-      name,
-      language: { code: "pt_BR" },
-      components: templateParameters(channel, record, operator),
-    },
-  };
-  const conversation = await db().query(
-    `INSERT INTO alc_atendimento.conversations(channel,phone,name,base_key,sigla,case_id,driver_id,identity_verified,agent_state)
-    VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9) ON CONFLICT(channel,phone) DO UPDATE SET
-      name=CASE WHEN alc_atendimento.conversations.channel='client' AND alc_atendimento.conversations.status='resolved' AND alc_atendimento.conversations.case_id IS DISTINCT FROM excluded.case_id THEN excluded.name ELSE alc_atendimento.conversations.name END,
-      base_key=CASE WHEN alc_atendimento.conversations.channel='client' AND alc_atendimento.conversations.status='resolved' AND alc_atendimento.conversations.case_id IS DISTINCT FROM excluded.case_id THEN excluded.base_key ELSE alc_atendimento.conversations.base_key END,
-      sigla=CASE WHEN alc_atendimento.conversations.channel='client' AND alc_atendimento.conversations.status='resolved' AND alc_atendimento.conversations.case_id IS DISTINCT FROM excluded.case_id THEN excluded.sigla ELSE alc_atendimento.conversations.sigla END,
-      driver_id=CASE WHEN alc_atendimento.conversations.channel='client' AND alc_atendimento.conversations.status='resolved' AND alc_atendimento.conversations.case_id IS DISTINCT FROM excluded.case_id THEN excluded.driver_id ELSE alc_atendimento.conversations.driver_id END,
-      case_id=CASE WHEN alc_atendimento.conversations.channel='client' AND alc_atendimento.conversations.status='resolved' THEN excluded.case_id ELSE alc_atendimento.conversations.case_id END,
-      agent_state=CASE WHEN alc_atendimento.conversations.channel='client' AND alc_atendimento.conversations.status='resolved' AND alc_atendimento.conversations.case_id IS DISTINCT FROM excluded.case_id THEN excluded.agent_state ELSE alc_atendimento.conversations.agent_state END,
-      status=CASE WHEN alc_atendimento.conversations.channel='client' AND alc_atendimento.conversations.status='resolved' AND alc_atendimento.conversations.case_id IS DISTINCT FROM excluded.case_id THEN 'bot' ELSE alc_atendimento.conversations.status END,
-      updated_at=now() RETURNING id,case_id`,
-    [
-      channel,
-      to,
-      channel === "driver" ? record.driverName : record.customerName,
-      record.baseKey,
-      record.sigla,
-      record.caseId,
-      record.driverId,
-      channel === "client",
-      JSON.stringify({ step: channel === "client" ? "receipt" : "start" }),
-    ],
-  );
-  if (channel === "client" && conversation.rows[0].case_id !== record.caseId)
-    throw new Error(
-      "Uma tratativa de outro envio está ativa para este cliente.",
+  const transaction = await db().connect();
+  try {
+    await transaction.query("BEGIN");
+    await transaction.query(
+      "SELECT pg_advisory_xact_lock(hashtext('atendimento_operator_directory'))",
     );
-  const result = await db().query(
-    `INSERT INTO alc_atendimento.outbox(dedupe_key,conversation_id,case_id,channel,phone,payload) VALUES($1,$2,$3,$4,$5,$6) ON CONFLICT(dedupe_key) DO NOTHING RETURNING id`,
-    [
-      `${channel}:${record.caseId}:${to}:initial`,
-      conversation.rows[0].id,
-      record.caseId,
-      channel,
+    await transaction.query("SELECT pg_advisory_xact_lock(hashtext($1))", [
+      `atendimento_case:${input.caseId}`,
+    ]);
+    const row = (
+      await transaction.query(
+        "SELECT * FROM alc_atendimento.cases WHERE case_id=$1 FOR UPDATE",
+        [input.caseId],
+      )
+    ).rows[0];
+    if (!row) throw new HttpError(404, "PNR não encontrada.");
+    const record = row.record as CaseRecord,
+      to = validateInitialContact(channel, record);
+    const { owner, assignment, unit } = await authorizeDispatch(
+      trigger,
+      record,
+      transaction,
+      options.global,
+    );
+    if (!trigger && !automatic)
+      throw new HttpError(403, "Disparo sem autorização.");
+    if (automatic) {
+      const automation = (
+        await transaction.query(
+          "SELECT value FROM alc_atendimento.settings WHERE key='automation'",
+        )
+      ).rows[0]?.value;
+      if (
+        !(channel === "driver"
+          ? automation?.driverNotifications
+          : automation?.clientOutreach)
+      )
+        throw new HttpError(409, "Automação pausada.");
+    }
+    const duplicate = await transaction.query(
+      "SELECT id FROM alc_atendimento.outbox WHERE case_id=$1 AND channel=$2 AND dedupe_key LIKE '%:initial' LIMIT 1",
+      [record.caseId, channel],
+    );
+    if (duplicate.rowCount) {
+      await audit(
+        trigger?.id || null,
+        "template_duplicate",
+        record.caseId,
+        { channel, automatic },
+        transaction,
+      );
+      await transaction.query("COMMIT");
+      return false;
+    }
+    const previous = (
+      await transaction.query(
+        "SELECT * FROM alc_atendimento.conversations WHERE channel=$1 AND phone=$2",
+        [channel, to],
+      )
+    ).rows[0];
+    if (previous) {
+      await transaction.query(
+        "SELECT pg_advisory_xact_lock(hashtextextended($1,0))",
+        [previous.id],
+      );
+      const current = (
+        await transaction.query(
+          "SELECT * FROM alc_atendimento.conversations WHERE id=$1 FOR UPDATE",
+          [previous.id],
+        )
+      ).rows[0];
+      if (
+        current &&
+        ((current.assigned_to && current.assigned_to !== owner.id) ||
+          (channel === "client" &&
+            current.case_id !== record.caseId &&
+            current.status !== "resolved") ||
+          (channel === "driver" &&
+            ((current.driver_id && current.driver_id !== record.driverId) ||
+              (current.base_key && current.base_key !== unit.base_key) ||
+              (current.sigla && current.sigla !== unit.sigla))))
+      )
+        throw new HttpError(
+          409,
+          "Contato possui uma tratativa incompatível. Revisão necessária.",
+        );
+    }
+    const conversation = await transaction.query(
+      `INSERT INTO alc_atendimento.conversations(channel,phone,name,base_key,sigla,case_id,driver_id,identity_verified,agent_state,assigned_to)
+       VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) ON CONFLICT(channel,phone) DO UPDATE SET
+       name=excluded.name,base_key=excluded.base_key,sigla=excluded.sigla,driver_id=excluded.driver_id,assigned_to=excluded.assigned_to,
+       identity_verified=CASE WHEN alc_atendimento.conversations.channel='client' THEN excluded.identity_verified ELSE alc_atendimento.conversations.identity_verified END,
+       case_id=CASE WHEN alc_atendimento.conversations.channel='client' THEN excluded.case_id ELSE coalesce(alc_atendimento.conversations.case_id,excluded.case_id) END,
+       agent_state=CASE WHEN alc_atendimento.conversations.status='resolved' THEN excluded.agent_state ELSE alc_atendimento.conversations.agent_state END,
+       status=CASE WHEN alc_atendimento.conversations.status='resolved' THEN 'bot' ELSE alc_atendimento.conversations.status END,
+       updated_at=now() RETURNING id`,
+      [
+        channel,
+        to,
+        channel === "driver" ? record.driverName : record.customerName,
+        unit.base_key,
+        unit.sigla,
+        record.caseId,
+        record.driverId,
+        channel === "client",
+        { step: channel === "client" ? "receipt" : "start" },
+        owner.id,
+      ],
+    );
+    const batchId = options.batchId || randomUUID();
+    if (!options.batchId)
+      await transaction.query(
+        "INSERT INTO alc_atendimento.dispatch_batches(id,triggered_by,mode,channel,request_hash) VALUES($1,$2,$3,$4,$5)",
+        [
+          batchId,
+          trigger?.id || null,
+          automatic ? "automatic" : options.global ? "global" : "individual",
+          channel,
+          createHash("sha256").update(record.caseId).digest("hex"),
+        ],
+      );
+    const payload = {
+      messaging_product: "whatsapp",
       to,
-      payload,
-    ],
-  );
-  await audit(
-    null,
-    result.rowCount ? "template_queued" : "template_duplicate",
-    record.caseId,
-    { channel, automatic },
-  );
-  return Boolean(result.rowCount);
+      type: "template",
+      template: {
+        name,
+        language: { code: "pt_BR" },
+        components: templateParameters(channel, record, owner.fullName!),
+      },
+    };
+    const version = createHash("sha256")
+      .update(JSON.stringify(approved))
+      .digest("hex");
+    const result = await transaction.query(
+      `INSERT INTO alc_atendimento.outbox(dedupe_key,conversation_id,case_id,channel,phone,payload,triggered_by,assigned_to,assignment_version,operator_name_snapshot,base_key,sigla,dispatch_batch_id,template_name,template_version,sender_kind,sender_display_name_snapshot)
+       VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,'system','Mensagem automática') ON CONFLICT(dedupe_key) DO NOTHING RETURNING id`,
+      [
+        `${channel}:${record.caseId}:initial`,
+        conversation.rows[0].id,
+        record.caseId,
+        channel,
+        to,
+        payload,
+        trigger?.id || null,
+        owner.id,
+        assignment.version,
+        owner.fullName,
+        unit.base_key,
+        unit.sigla,
+        batchId,
+        name,
+        version,
+      ],
+    );
+    await audit(
+      trigger?.id || null,
+      result.rowCount ? "template_queued" : "template_duplicate",
+      record.caseId,
+      {
+        channel,
+        automatic,
+        assignedTo: owner.id,
+        batchId,
+        templateVersion: version,
+      },
+      transaction,
+    );
+    await transaction.query("COMMIT");
+    return Boolean(result.rowCount);
+  } catch (error) {
+    await transaction.query("ROLLBACK");
+    throw error;
+  } finally {
+    transaction.release();
+  }
 }
 export async function upsertCases(
   records: CaseRecord[],
@@ -180,14 +378,35 @@ export async function upsertCases(
   } finally {
     client.release();
   }
-  if ((await setting<{ mode: string }>("assignment_policy"))?.mode === "primary_then_least_loaded") {
+  if (
+    (await setting<{ mode: string }>("assignment_policy"))?.mode ===
+    "primary_then_least_loaded"
+  ) {
     for (const record of records) {
-      try { await assignCase(null, { caseId: record.caseId, assignedTo: null, version: 0, reason: "Distribuição automática por base" }, true); }
-      catch (error) { await audit(actor, "assignment_blocked", record.caseId, { reason: error instanceof Error ? error.message : "Distribuição indisponível" }); }
+      try {
+        await assignCase(
+          null,
+          {
+            caseId: record.caseId,
+            assignedTo: null,
+            version: 0,
+            reason: "Distribuição automática por base",
+          },
+          true,
+        );
+      } catch (error) {
+        await audit(actor, "assignment_blocked", record.caseId, {
+          reason:
+            error instanceof Error
+              ? error.message
+              : "Distribuição indisponível",
+        });
+      }
     }
   }
   // A manual collection is data-only, even if automatic outreach is enabled.
-  if (!allowAutomaticOutreach) return { processed: records.length, new: newlySeen.length };
+  if (!allowAutomaticOutreach)
+    return { processed: records.length, new: newlySeen.length };
   const automation = await setting<Automation>("automation");
   for (const record of newlySeen.filter((r) => r.competence === competence())) {
     for (const channel of ["driver", "client"] as const) {
@@ -198,7 +417,7 @@ export async function upsertCases(
       )
         continue;
       try {
-        await queueTemplate(channel, record, automation.operatorName, true);
+        await queueTemplate(channel, record, null, true);
       } catch (error) {
         await audit(actor, "outreach_blocked", record.caseId, {
           channel,
@@ -212,8 +431,7 @@ export async function upsertCases(
 }
 export function fromCore(row: Record<string, unknown>): CaseRecord {
   const raw = row.raw_snapshot_jsonb as
-    | { detailSnapshot?: Record<string, unknown> }
-    | undefined;
+    { detailSnapshot?: Record<string, unknown> } | undefined;
   const detail = raw?.detailSnapshot || {};
   return {
     caseId: String(row.case_id),
