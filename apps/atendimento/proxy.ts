@@ -2,6 +2,24 @@ import { createServerClient } from "@supabase/ssr";
 import { NextResponse, type NextRequest } from "next/server";
 import { authConfig, inteligenciaEntryUrl } from "./lib/auth";
 import { ENTRY_COOKIE, validEntryReceipt } from "@alc/identity/transfer";
+
+function clearSessionCookies(response: NextResponse, request: NextRequest) {
+  const names = new Set(
+    request.cookies
+      .getAll()
+      .map(({ name }) => name)
+      .filter((name) => name === ENTRY_COOKIE || name.startsWith("sb-")),
+  );
+  for (const name of names)
+    response.cookies.set(name, "", {
+      httpOnly: true,
+      secure: process.env.NODE_ENV === "production",
+      sameSite: "lax",
+      path: "/",
+      maxAge: 0,
+    });
+}
+
 export async function proxy(request: NextRequest) {
   const path = request.nextUrl.pathname;
   if (
@@ -25,7 +43,11 @@ export async function proxy(request: NextRequest) {
         { status: 403 },
       );
   }
-  if (path === "/login") return NextResponse.redirect(inteligenciaEntryUrl());
+  if (path === "/login") {
+    const next = NextResponse.redirect(inteligenciaEntryUrl());
+    clearSessionCookies(next, request);
+    return next;
+  }
   let response = NextResponse.next({ request });
   let config;
   try {
@@ -61,6 +83,7 @@ export async function proxy(request: NextRequest) {
       ? NextResponse.json({ error: "Sessão expirada." }, { status: 401 })
       : NextResponse.redirect(inteligenciaEntryUrl());
     response.cookies.getAll().forEach((c) => next.cookies.set(c));
+    clearSessionCookies(next, request);
     return next;
   }
   response.headers.set("Cache-Control", "private, no-store");

@@ -1,5 +1,25 @@
 "use client";
 import { useEffect, useState, useCallback } from "react";
+
+export const PRIVATE_CONTENT_CLEARED_EVENT = "alc-atendimento:private-content-cleared";
+const PRIVATE_CONTENT_SIGNAL = "alc-atendimento:private-content-cleared";
+
+export function clearPrivateContent() {
+  if (typeof window === "undefined") return;
+  try {
+    window.localStorage.setItem(PRIVATE_CONTENT_SIGNAL, String(Date.now()));
+    window.localStorage.clear();
+  } catch {
+    // Storage can be unavailable; the in-memory event still clears mounted content.
+  }
+  try {
+    window.sessionStorage.clear();
+  } catch {
+    // Storage can be unavailable; the in-memory event still clears mounted content.
+  }
+  window.dispatchEvent(new Event(PRIVATE_CONTENT_CLEARED_EVENT));
+}
+
 export async function api<T>(path: string, body?: unknown): Promise<T> {
   const response = await fetch(`/api/${path}`, {
     method: body ? "POST" : "GET",
@@ -8,18 +28,21 @@ export async function api<T>(path: string, body?: unknown): Promise<T> {
     cache: "no-store",
   });
   const data = await response.json();
-  if (response.status === 401 || data.error === "MFA_REQUIRED")
+  if (response.status === 401 || data.error === "MFA_REQUIRED") {
+    clearPrivateContent();
     window.location.replace(new URL("/login", window.location.origin).href);
-  else if (
+  } else if (
     response.status === 403 &&
     [
       "Perfil sem acesso ao Atendimento.",
       "Seu acesso ao Atendimento está desativado.",
     ].includes(data.error)
-  )
+  ) {
+    clearPrivateContent();
     window.location.replace(
       new URL("/acesso-indisponivel", window.location.origin).href,
     );
+  }
   if (!response.ok) throw new Error(data.error || "Falha ao carregar.");
   return data;
 }

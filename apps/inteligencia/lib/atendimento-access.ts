@@ -59,7 +59,6 @@ export async function registerAtendimentoSession(profileId: string, sessionId: s
 }
 
 export async function revokeAtendimentoSessions(profileId: string, sessionId?: string) {
-  if (!process.env.PNR_DATABASE_URL) return;
   const client = await accessDb().connect();
   try {
     await client.query("BEGIN");

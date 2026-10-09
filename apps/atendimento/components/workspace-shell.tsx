@@ -28,7 +28,13 @@ import {
 } from "lucide-react";
 import { Brand } from "@alc/ui/brand";
 import { canManageUsers, ROLE_LABELS, type AuthProfile } from "@alc/identity/auth";
-import { HEADER_REFRESH_EVENT, useData, when } from "./data";
+import {
+  HEADER_REFRESH_EVENT,
+  PRIVATE_CONTENT_CLEARED_EVENT,
+  clearPrivateContent,
+  useData,
+  when,
+} from "./data";
 
 const navigation = [
   { href: "/conversas", label: "Conversas", title: "Conversas", eyebrow: "CAIXA DE ATENDIMENTO", icon: MessageSquare },
@@ -74,6 +80,19 @@ export function WorkspaceShell({
   const { data: session, error: sessionError, refresh: checkSession } = useData<{ profile: AuthProfile }>("profile", 5_000);
   const current = session?.profile || profile;
   const accountChanged = current.id !== profile.id;
+  const [privateContentCleared, setPrivateContentCleared] = useState(false);
+  useEffect(() => {
+    const clear = () => setPrivateContentCleared(true);
+    const storage = (event: StorageEvent) => {
+      if (event.key === PRIVATE_CONTENT_CLEARED_EVENT || event.key === null) clear();
+    };
+    window.addEventListener(PRIVATE_CONTENT_CLEARED_EVENT, clear);
+    window.addEventListener("storage", storage);
+    return () => {
+      window.removeEventListener(PRIVATE_CONTENT_CLEARED_EVENT, clear);
+      window.removeEventListener("storage", storage);
+    };
+  }, []);
   useEffect(() => {
     const check = () => { if (!document.hidden) void checkSession(); };
     window.addEventListener("focus", check);
@@ -86,7 +105,10 @@ export function WorkspaceShell({
     };
   }, [checkSession]);
   useEffect(() => {
-    if (accountChanged) window.location.replace("/conversas");
+    if (accountChanged) {
+      clearPrivateContent();
+      window.location.replace("/conversas");
+    }
   }, [accountChanged]);
   useEffect(() => {
     if (!mobile || !smallScreen) return;
@@ -253,7 +275,7 @@ export function WorkspaceShell({
             </button>
           </div>
         </header>
-        {sessionError ? <main className="page"><p className="notice error" role="alert">{sessionError}<button onClick={() => void checkSession()}>Tentar novamente</button></p></main> : accountChanged ? <main className="page" role="status">Atualizando sessão…</main> : children}
+        {sessionError || privateContentCleared ? <main className="page"><p className="notice error" role="alert">{sessionError || "Sessão encerrada."}<button onClick={() => void checkSession()}>Tentar novamente</button></p></main> : accountChanged ? <main className="page" role="status">Atualizando sessão…</main> : children}
       </div>
     </div>
   );

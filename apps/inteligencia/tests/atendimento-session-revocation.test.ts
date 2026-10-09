@@ -42,3 +42,10 @@ it("faz rollback e não esconde falha de revogação", async () => {
   expect(mocks.query).not.toHaveBeenCalledWith("COMMIT");
   expect(mocks.release).toHaveBeenCalledOnce();
 });
+
+it("falha fechado quando o banco de revogação não está configurado", async () => {
+  vi.stubEnv("PNR_DATABASE_URL", "");
+  await expect(revokeAtendimentoSessions("synthetic-user", "synthetic-session"))
+    .rejects.toThrow("ATENDIMENTO_DATABASE_UNAVAILABLE");
+  expect(mocks.connect).not.toHaveBeenCalled();
+});

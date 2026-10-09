@@ -124,6 +124,16 @@ describe("login administrativo", () => {
     expect(revokeAtendimentoSessions.mock.invocationCallOrder[0]).toBeLessThan(signInWithPassword.mock.invocationCallOrder[0]);
   });
 
+  it("não troca de conta se não conseguir revogar o Atendimento anterior", async () => {
+    getClaims.mockResolvedValue({ data: { claims: { sub: "previous-user", session_id: "previous-session" } }, error: null });
+    revokeAtendimentoSessions.mockRejectedValue(new Error("database unavailable"));
+
+    await expect(signInAction({}, credentials())).resolves.toMatchObject({
+      error: expect.stringContaining("encerrar a sessão anterior"),
+    });
+    expect(signInWithPassword).not.toHaveBeenCalled();
+  });
+
   it("não troca de conta se não conseguir verificar a sessão anterior", async () => {
     getClaims.mockResolvedValue({ data: null, error: { message: "verification unavailable" } });
     await expect(signInAction({}, credentials())).resolves.toMatchObject({ error: expect.stringContaining("verificar a sessão anterior") });
