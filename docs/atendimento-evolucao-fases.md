@@ -234,6 +234,15 @@ nao voltar ao download direto da Meta sem a verificacao de seguranca.
 8. Homologacao pendente: Supabase Storage/AV reais, codecs PDF/video/audio,
    SSO/MFA e politicas externas. Proxima fase: propostas IA estruturadas,
    instrucoes versionadas e contrato textual aprovado da Meta.
+9. Correcao adicional pedida nesta fase: baloes estilo WhatsApp com autoria
+   preservada, datas por dia, hora curta e icones acessiveis apenas para envio
+   confirmado. Notas internas e envio incerto continuam explicitos. Mídia nao
+   e recortada; audio tem largura estavel. Chat sintetico revisado em
+   320/391/768/1280 sem elementos fora do balao; imagem/audio reais da fixture
+   carregaram. Barra de scroll do menu lateral oculta, overflow auto e acesso
+   por teclado aos ultimos itens verificados. Outras barras nao foram ocultadas.
+   Suite final Atendimento: 394 testes passaram; typecheck, lint do chat e
+   build Atendimento/conector passaram depois dos ajustes visuais.
 
 ## Catalogo e organograma
 

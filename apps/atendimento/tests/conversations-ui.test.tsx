@@ -100,3 +100,13 @@ it("renders synthetic WhatsApp bubbles without flattening authorship or uncertai
   expect(html).toContain("Confirme o status antes de tentar novamente.");
   expect(html).toContain("2026-10-09T12:04:00.000Z");
 });
+
+it.each(["sent", "delivered", "read"])("only shows confirmed delivery icons for %s", status => {
+  fixtures.detail.messages[1].status = status;
+  const html = renderToStaticMarkup(<Conversations initialSelected="synthetic-conversation" />);
+  expect(html).toContain(`aria-label="${status === "sent" ? "Enviado" : status}"`);
+  expect(html).toContain('class="message-day"');
+  expect(html).toMatch(/datetime="2026-10-09T12:02:00.000Z"/i);
+  expect(html).toContain("Conferir envio");
+  expect(html.includes('message-status is-read')).toBe(status === "read");
+});

@@ -1,5 +1,6 @@
 "use client";
 import {
+  Fragment,
   useDeferredValue,
   useEffect,
   useRef,
@@ -9,6 +10,7 @@ import {
 import {
   ArrowLeft,
   Bot,
+  Check,
   CheckCheck,
   ChevronLeft,
   ChevronRight,
@@ -118,6 +120,44 @@ function Badge({ value }: { value: string }) {
     >
       {labels[value] || value}
     </StatusBadge>
+  );
+}
+function messageDate(value: string, timeOnly = false) {
+  const date = new Date(value);
+  if (!Number.isFinite(date.getTime())) return when(value);
+  return date.toLocaleString(
+    "pt-BR",
+    timeOnly
+      ? { hour: "2-digit", minute: "2-digit", timeZone: "America/Sao_Paulo" }
+      : {
+          day: "2-digit",
+          month: "long",
+          year: "numeric",
+          timeZone: "America/Sao_Paulo",
+        },
+  );
+}
+function DeliveryStatus({ message }: { message: Message }) {
+  const confirmed =
+    message.direction === "out" &&
+    ["sent", "delivered", "read"].includes(message.status);
+  return (
+    <span
+      className={`message-status${message.status === "read" ? " is-read" : ""}`}
+      title={labels[message.status] || message.status}
+    >
+      {confirmed ? (
+        <span role="img" aria-label={labels[message.status] || message.status}>
+          {message.status === "sent" ? (
+            <Check size={14} />
+          ) : (
+            <CheckCheck size={16} />
+          )}
+        </span>
+      ) : (
+        <Badge value={message.status} />
+      )}
+    </span>
   );
 }
 
@@ -646,26 +686,33 @@ function Thread({
               {historyBusy ? "Carregando…" : "Mensagens anteriores"}
             </button>
           )}
-          {messages.map((m) => (
-            <article key={m.id} className={`message ${m.direction}`}>
-              <small className="message-author">
-                {m.direction === "note"
-                  ? `Nota interna · ${author(m)}`
-                  : m.direction === "out"
-                    ? author(m)
-                    : c.name || "Contato"}
-              </small>
-              {m.body && <p>{m.body}</p>}
-              {m.attachment && (
-                <MediaViewer attachment={m.attachment} messageId={m.id} />
+          {messages.map((m, index) => (
+            <Fragment key={m.id}>
+              {(index === 0 ||
+                messageDate(m.created_at) !==
+                  messageDate(messages[index - 1].created_at)) && (
+                <time className="message-day">{messageDate(m.created_at)}</time>
               )}
-              <footer>
-                <time>{when(m.created_at)}</time>
-                <span className="message-status">
-                  <Badge value={m.status} />
-                </span>
-              </footer>
-            </article>
+              <article className={`message ${m.direction}`}>
+                <small className="message-author">
+                  {m.direction === "note"
+                    ? `Nota interna · ${author(m)}`
+                    : m.direction === "out"
+                      ? author(m)
+                      : c.name || "Contato"}
+                </small>
+                {m.body && <p>{m.body}</p>}
+                {m.attachment && (
+                  <MediaViewer attachment={m.attachment} messageId={m.id} />
+                )}
+                <footer>
+                  <time dateTime={m.created_at} title={when(m.created_at)}>
+                    {messageDate(m.created_at, true)}
+                  </time>
+                  <DeliveryStatus message={m} />
+                </footer>
+              </article>
+            </Fragment>
           ))}
           {data?.queued.map((m) => (
             <article key={m.id} className="message out">
