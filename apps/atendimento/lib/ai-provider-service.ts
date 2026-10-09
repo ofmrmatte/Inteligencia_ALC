@@ -57,12 +57,13 @@ export async function aiConfigurationStatus() {
       model: config.model,
       effective: !config.enabled
         ? "rules"
-        : active.configured &&
-            verified &&
-            remaining > 0 &&
-            (!currentTest || probe?.result === "ready")
-          ? "available"
-          : "unavailable",
+        : !active.configured || !verified || remaining <= 0
+          ? "unavailable"
+          : !currentTest
+            ? "untested"
+            : probe?.result === "ready"
+              ? "available"
+              : "unavailable",
       lastTest: probe
         ? {
             model: probe.model,

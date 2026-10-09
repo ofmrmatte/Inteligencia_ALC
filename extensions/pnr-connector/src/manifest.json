@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "ALC PNR Connector",
-  "version": "1.2.4",
+  "version": "1.2.3",
   "description": "Conecta o Case Center ao Inteligência ALC e ao ALC Atendimento, com coleta a cada 30 minutos.",
   "permissions": [
     "tabs",

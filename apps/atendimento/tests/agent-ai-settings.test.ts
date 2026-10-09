@@ -107,7 +107,7 @@ it("returns only managed configuration, environment names and daily budget count
   const response = await GET(new Request("https://example.test/api/ai-config"), context("ai-config"));
   expect(response.status).toBe(200);
   const body = await response.json();
-  expect(body).toMatchObject({ config, used: 3, remaining: 7, credentialEnv: "OPENAI_API_KEY", credentials: { openai: { configured: true, source: "environment" } }, diagnostic: { effective: "available" } });
+  expect(body).toMatchObject({ config, used: 3, remaining: 7, credentialEnv: "OPENAI_API_KEY", credentials: { openai: { configured: true, source: "environment" } }, diagnostic: { effective: "untested" } });
   expect(JSON.stringify(body)).not.toContain("synthetic-openai-key");
   expect(response.headers.get("Cache-Control")).toContain("no-store");
 });

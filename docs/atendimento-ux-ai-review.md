@@ -1,9 +1,10 @@
-# Atendimento: operational UX, AI credentials and connector review
+# Atendimento: operational UX and AI credentials review
 
 Review branch: `codex/atendimento-ux-operational`, based on `main` at
 `4e527cb4c1465eed3ac75845f6a1e46d95f94f08`. No production operation is part of
 this delivery. No merge, live migration, deployment, WhatsApp send, Meta change
 or production AI activation was performed. RH and attachment blocking are unchanged.
+The connector 1.2.4 patch was separated into PR #87; this PR retains the current connector.
 
 ## Operational ownership
 
@@ -110,22 +111,6 @@ and compatible expanded constraints; do not drop records, revoke existing access
 or erase history to roll back UI code. Rotate/re-encrypt back only under a
 coordinated maintenance procedure, not a blind environment rollback.
 
-## Case Center connector 1.2.4
-
-Reproduced 1.2.3 behavior: a login redirect makes the handshake fail and delete
-the extension-created tab; the next handshake recreates it. Timeout followed the
-same deletion path. This caused the visible open/close cycle.
-
-1.2.4 retains/reuses failed contexts, preserves login tabs during idle cleanup and
-relinquishes ownership when the user activates the tab. Successful inactive
-extension-owned tabs retain the existing idle cleanup. Authentication/access
-errors still block collection. No automatic login, cookies API or sends were added.
-
-Regression tests cover repeated redirects, timeout/recovery, user activation,
-concurrent opening, user-owned list/detail tabs and successful idle cleanup.
-Both builds generate the versioned 1.2.4 ZIP. The extension already installed in
-Chrome is not modified by this PR; it must be updated after an approved release.
-
 ## Verification and evidence
 
 Executed locally on Windows, Node 25.9.0 / installed Next 16.4.0:
@@ -137,8 +122,8 @@ Executed locally on Windows, Node 25.9.0 / installed Next 16.4.0:
 | `npm run typecheck` | Passed for both applications |
 | `npm test` | Atendimento 776 passed / 135 skipped; Inteligencia 438 passed / 15 skipped |
 | Local PostgreSQL suites | 150 passed across operator, MFA and AI suites |
-| `npm run build:atendimento` | Passed, including connector 1.2.4 |
-| `npm run build:inteligencia` | Passed, including connector 1.2.4 |
+| `npm run build:atendimento` | Passed, with the connector unchanged |
+| `npm run build:inteligencia` | Passed, with the connector unchanged |
 | `npm audit --omit=dev --audit-level=high` | Passed, 0 production dependency findings |
 | `npm run audit:perf` | Passed; static findings retained for separate review |
 | Browser responsive/interaction matrix | 50 layouts, 320/390/768/1024/1440 px |

@@ -136,6 +136,23 @@ it("returns safe diagnostics and rejects unverified manual model compatibility",
   expect(JSON.stringify(status)).not.toContain("environment-key");
   expect(JSON.stringify(status)).not.toContain("fingerprint");
 });
+it("requires a current successful provider probe before claiming AI is available", async () => {
+  stored.set("agent_ai_config_v1", { ...defaultAiConfig, enabled: true, model: "gpt-4.1-mini" });
+  expect((await aiConfigurationStatus()).diagnostic.effective).toBe("untested");
+  const probe = {
+    model: "gpt-4.1-mini",
+    result: "ready",
+    testedAt: "2026-10-09T12:00:00Z",
+    fingerprint: createHash("sha256").update("environment-key").digest("hex"),
+  };
+  stored.set("ai_test_openai", probe);
+  expect((await aiConfigurationStatus()).diagnostic.effective).toBe("available");
+  stored.set("ai_test_openai", { ...probe, result: "authentication_failed" });
+  expect((await aiConfigurationStatus()).diagnostic.effective).toBe("unavailable");
+  stored.set("ai_test_openai", { ...probe, fingerprint: "stale" });
+  expect((await aiConfigurationStatus()).diagnostic.effective).toBe("untested");
+});
+
 it("authenticates and caches the provider catalog without assuming all listed models are compatible", async () => {
   vi.stubEnv("OPENAI_API_KEY", "catalog-key");
   const fetcher = vi.fn().mockResolvedValue(

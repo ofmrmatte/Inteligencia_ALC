@@ -150,7 +150,7 @@ export function AgentManagement({
     await refresh();
     setNotice("Configuração de atendimento salva.");
   }
-  const operators = data?.records.filter((o) => matches(o.name, search)) || [];
+  const operators = data?.records.filter((o) => o.roles.includes("agent") && matches(o.name, search)) || [];
   const units =
     data?.units.filter(
       (u) =>
@@ -511,8 +511,20 @@ function OperatorEditor({
               <select
                 required
                 value={edit.userId}
-                onChange={(e) =>
-                  setEdit({ ...edit, userId: e.target.value, bases: [] })
+                onChange={(e) => {
+                  const userId = e.target.value;
+                  const existing = directory.records.find((o) => o.user_id === userId);
+                  setEdit(existing ? {
+                    userId,
+                    roles: [...new Set([...existing.roles, "agent"])],
+                    active: existing.active,
+                    available: existing.available,
+                    receiving: existing.receiving,
+                    bases: existing.bases.map((b) => ({
+                      unitKey: b.unit_key,
+                      responsibility: b.responsibility,
+                    })),
+                  } : { ...empty, userId });
                 }
               >
                 <option value="">Selecionar</option>

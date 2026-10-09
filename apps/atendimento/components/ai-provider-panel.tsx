@@ -137,8 +137,10 @@ export function AiProviderPanel() {
             : data.diagnostic.effective === "rules"
               ? "Regras determinísticas"
               : data.diagnostic.effective === "available"
-                ? "IA disponível"
-                : "IA indisponível · fallback determinístico"}
+                ? "IA disponível · conexão verificada"
+                : data.diagnostic.effective === "untested"
+                  ? "IA configurada · conexão ainda não verificada"
+                  : "IA indisponível · fallback determinístico"}
         </strong>
         . A identidade da Ellie não substitui o atendente humano nos templates.
       </p>

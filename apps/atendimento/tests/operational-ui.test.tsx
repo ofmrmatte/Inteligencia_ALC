@@ -181,6 +181,28 @@ it("opens, edits and saves only authorized attendance bases, then restores focus
   expect(container.querySelector("dialog")).toBeNull();
   expect(document.activeElement).toBe(button);
 });
+it("lists only explicit attendants while preserving management roles when enrolling an existing operator", async () => {
+  const managementOnly = {
+    ...operator,
+    user_id: B,
+    name: "Management-only identity",
+    roles: ["supervisor"],
+    bases: [{ unit_key: "test-B", responsibility: "substitute" }],
+  };
+  mocks.useData.mockReturnValue({ data: { ...directory, records: [operator, managementOnly] }, refresh: mocks.refresh });
+  await render(<AgentManagement />);
+  expect(container.textContent).toContain("Explicit agent");
+  expect(container.textContent).not.toContain("Management-only identity");
+  await click("Adicionar atendente");
+  await input(container.querySelector<HTMLSelectElement>("dialog select")!, B);
+  await submit();
+  expect(mocks.api).toHaveBeenCalledWith("operators", expect.objectContaining({
+    userId: B,
+    roles: ["supervisor", "agent"],
+    bases: [{ unitKey: "test-B", responsibility: "substitute" }],
+  }));
+});
+
 it("retains an editor draft after a denied save and allows cancellation", async () => {
   await render(<AgentManagement />);
   await click("Adicionar atendente");
