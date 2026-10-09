@@ -50,6 +50,47 @@ export interface PnrCaseTimelineEvent {
   actorUserId?: string;
 }
 
+export interface PnrCaseCenterVerifiedContactBinding {
+  caseId: string;
+  shipmentId: string;
+  competence: string;
+  baseKey: string;
+  sigla: string;
+}
+
+export interface PnrCaseCenterVerifiedContactPayload extends PnrCaseCenterVerifiedContactBinding {
+  origin: "atendimento_verified_contact";
+  name: string;
+  phone: string;
+  verified: true;
+  source: string;
+  capturedAt: string;
+}
+
+export interface PnrCaseCenterVerifiedContact {
+  name: string;
+  phone: string;
+  source: string;
+  capturedAt: string;
+}
+
+export function mapPnrCaseCenterVerifiedContact(
+  payload: PnrCaseCenterVerifiedContactPayload | null | undefined,
+  binding: PnrCaseCenterVerifiedContactBinding,
+  now = Date.now(),
+): PnrCaseCenterVerifiedContact | undefined {
+  if (!payload || payload.origin !== "atendimento_verified_contact" || payload.verified !== true) return undefined;
+  if (Object.entries(binding).some(([key, value]) => payload[key as keyof PnrCaseCenterVerifiedContactBinding] !== value)) return undefined;
+  const capturedAt = Date.parse(payload.capturedAt);
+  if (!Number.isFinite(capturedAt) || capturedAt > now + 30_000) return undefined;
+  return {
+    name: payload.name,
+    phone: payload.phone,
+    source: payload.source,
+    capturedAt: new Date(capturedAt).toISOString(),
+  };
+}
+
 export function parseCaseCenterCompetence(value: string): CaseCenterCompetence | null {
   const match = /^(20\d{2})(0[1-9]|1[0-2])Q([12])$/.exec(value);
   if (!match) return null;

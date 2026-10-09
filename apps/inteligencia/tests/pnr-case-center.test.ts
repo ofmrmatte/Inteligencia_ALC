@@ -7,6 +7,7 @@ import {
   chunkCaseCenterRecords,
   dedupeCaseCenterCases,
   dedupeCaseTimelineEvents,
+  mapPnrCaseCenterVerifiedContact,
   parseCaseCenterCompetence,
   runCaseCenterPagination,
   type CaseCenterPage,
@@ -42,6 +43,43 @@ function page(pageNumber: number, totalPages: number, records = [record]): CaseC
 }
 
 describe("Case Center PNR", () => {
+  const verifiedBinding = {
+    caseId: "169432521",
+    shipmentId: "200000001",
+    competence: "202608Q1",
+    baseKey: "SP01",
+    sigla: "SP01",
+  };
+
+  const verifiedPayload = {
+    ...verifiedBinding,
+    origin: "atendimento_verified_contact" as const,
+    name: "Comprador validado",
+    phone: "5511999990000",
+    verified: true as const,
+    source: "validado_pela_equipe",
+    capturedAt: "2026-10-09T12:00:00.000Z",
+  };
+
+  it("expõe somente contato verificado com binding completo e captura válida", () => {
+    expect(mapPnrCaseCenterVerifiedContact(verifiedPayload, verifiedBinding, Date.parse("2026-10-09T12:00:00.000Z"))).toEqual({
+      name: "Comprador validado",
+      phone: "5511999990000",
+      source: "validado_pela_equipe",
+      capturedAt: "2026-10-09T12:00:00.000Z",
+    });
+  });
+
+  it.each(["caseId", "shipmentId", "competence", "baseKey", "sigla"])("omite contato com binding %s conflitante", (field) => {
+    const conflicting = { ...verifiedPayload, [field]: `different-${field}` };
+    expect(mapPnrCaseCenterVerifiedContact(conflicting, verifiedBinding, Date.parse("2026-10-09T12:00:00.000Z"))).toBeUndefined();
+  });
+
+  it("omite captura inválida ou futura sem afetar o caso oficial", () => {
+    expect(mapPnrCaseCenterVerifiedContact({ ...verifiedPayload, capturedAt: "not-a-date" }, verifiedBinding)).toBeUndefined();
+    expect(mapPnrCaseCenterVerifiedContact({ ...verifiedPayload, capturedAt: "2026-10-09T12:00:31.000Z" }, verifiedBinding, Date.parse("2026-10-09T12:00:00.000Z"))).toBeUndefined();
+  });
+
   it("converte Q1 e Q2 para os limites exatos da competência", () => {
     expect(parseCaseCenterCompetence("202608Q1")).toMatchObject({
       fortnight: "01Q082026",
