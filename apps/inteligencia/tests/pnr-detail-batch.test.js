@@ -2,6 +2,7 @@ import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 let fetchCaseDetailStatesInTab;
 beforeAll(async () => {
   vi.stubGlobal("chrome", {
+    tabs: { onActivated: { addListener() {} } },
     runtime: {
       onMessage: { addListener() {} },
       onInstalled: { addListener() {} },

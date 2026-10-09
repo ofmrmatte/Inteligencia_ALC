@@ -13,6 +13,8 @@ Extensão Chrome unpacked para consultar o Case Center e os dados do comprador n
 
 Ao atualizar, desative a versão anterior em `chrome://extensions` antes de carregar a nova pasta.
 
+Na versão 1.2.4, falhas de carregamento ou redirecionamentos para login não fecham a aba auxiliar. As próximas tentativas reutilizam a mesma aba, evitando o ciclo de abrir/fechar. Autentique-se nessa aba ou abra uma listagem autenticada; erros continuam bloqueando a coleta. Abas de login não são removidas pela limpeza ociosa. Selecionar a aba transfere sua posse ao usuário, impedindo que a extensão a feche posteriormente.
+
 O build local `npm run extension:build`, executado na raiz do monorepo, também gera `extensions/pnr-connector/dist` para instalação de desenvolvimento e o ZIP em `apps/inteligencia/public/downloads`. O build do painel gera o pacote automaticamente. O handshake prepara o contexto local do Case Center quando necessário e retorna a versão e disponibilidade, nunca cookies, tokens ou CSRF. A autenticação e as permissões de acesso são confirmadas durante as consultas reais.
 
 ## Limites de segurança

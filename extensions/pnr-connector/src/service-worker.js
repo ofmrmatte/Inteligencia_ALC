@@ -178,9 +178,13 @@ async function cleanManagedTab() {
   const tab = await chrome.tabs.get(state.id).catch(() => null);
   if (!tab) return forgetManagedTab();
   // Never touch a tab that the user has actively selected or navigated.
-  if (tab.active || !tab.url?.startsWith("https://envios.adminml.com/logistics/case-center/")) {
+  if (tab.active) {
     return forgetManagedTab();
   }
+  // Keep failed/login contexts: forgetting them recreates a tab on every retry.
+  if (!tab.url?.startsWith("https://envios.adminml.com/logistics/case-center/")) return;
+  const latest = await managedTabState();
+  if (latest?.id !== state.id || latest.lastUsed !== state.lastUsed) return;
   if (Date.now() - (state.lastUsed || 0) < managedTabIdleMs) return;
   await chrome.tabs.remove(state.id).catch(() => undefined);
   await forgetManagedTab();
@@ -198,7 +202,7 @@ async function ensureCaseCenterTab() {
     const state = await managedTabState();
     if (state?.id) {
       const current = await chrome.tabs.get(state.id).catch(() => null);
-      if (current?.id && isCaseCenterListTab(current)) {
+      if (current?.id) {
         await updateManagedTab(current.id);
         return current;
       }
@@ -219,24 +223,14 @@ async function ensureCaseCenterTab() {
 }
 async function usableCaseCenterTab() {
   const tab = await ensureCaseCenterTab();
-  try {
-    await waitForTabReady(tab.id);
-    await updateManagedTab(tab.id);
-    return tab;
-  } catch (error) {
-    // A failed background navigation can redirect to login. Do not leave
-    // an extension-created tab behind or accidentally close a user's tab.
-    const state = await managedTabState();
-    if (state?.id === tab.id) {
-      const latest = await chrome.tabs.get(tab.id).catch(() => null);
-      if (latest?.id && !latest.active) {
-        await chrome.tabs.remove(tab.id).catch(() => undefined);
-        await forgetManagedTab();
-      }
-    }
-    throw error;
-  }
+  await waitForTabReady(tab.id);
+  await updateManagedTab(tab.id);
+  return tab;
 }
+
+chrome.tabs.onActivated?.addListener(async ({ tabId }) => {
+  if ((await managedTabState())?.id === tabId) await forgetManagedTab();
+});
 
 async function execute(tabId, func, args = []) {
   const [result] = await chrome.scripting.executeScript({ target: { tabId }, world: "MAIN", func, args });
