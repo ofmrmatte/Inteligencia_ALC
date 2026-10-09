@@ -1,5 +1,6 @@
 import pg from "pg";
-import { readFile } from "node:fs/promises";
+import { migrate } from "./migrations.mjs";
+if (!process.argv.includes("--apply")) throw new Error("Aplique somente após aprovação: npm run migrate --workspace=@alc/atendimento -- --apply");
 if (!process.env.ATENDIMENTO_DATABASE_URL)
   throw new Error("ATENDIMENTO_DATABASE_URL ausente.");
 const client = new pg.Client({
@@ -7,12 +8,7 @@ const client = new pg.Client({
 });
 await client.connect();
 try {
-  await client.query(
-    await readFile(
-      new URL("../db/001_atendimento.sql", import.meta.url),
-      "utf8",
-    ),
-  );
+  await migrate(client);
   console.log("Schema alc_atendimento pronto.");
 } finally {
   await client.end();

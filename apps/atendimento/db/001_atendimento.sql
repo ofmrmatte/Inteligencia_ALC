@@ -1,4 +1,3 @@
-BEGIN;
 SELECT pg_advisory_xact_lock(hashtext('alc_atendimento_schema_v1'));
 CREATE SCHEMA IF NOT EXISTS alc_atendimento;
 REVOKE ALL ON SCHEMA alc_atendimento FROM PUBLIC;
@@ -74,4 +73,3 @@ CREATE TABLE IF NOT EXISTS alc_atendimento.evidence_images (
   PRIMARY KEY(case_id,page_number),
   UNIQUE(case_id,filename)
 );
-COMMIT;

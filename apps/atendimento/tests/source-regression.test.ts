@@ -246,6 +246,7 @@ describe("source import regressions", () => {
     expect(mocks.transactionQuery).toHaveBeenCalledWith(expect.stringContaining("INSERT INTO alc_atendimento.outbox"), [
       "reply:synthetic-inbound", ID, "driver", historical.driverPhone,
       expect.objectContaining({ type: "text", text: { body: expect.stringContaining("202609Q2") } }),
+      "ai", null, "Agente virtual",
     ]);
     expect(mocks.templates).not.toHaveBeenCalled();
     expect(mocks.graph).not.toHaveBeenCalled();

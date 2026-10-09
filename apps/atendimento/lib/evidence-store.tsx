@@ -1,7 +1,8 @@
 import { createHash } from "node:crypto";
 import { ImageResponse } from "next/og";
 import { db, audit } from "./db";
-import { scopeFor, visible, HttpError } from "./auth";
+import { scopeFor, HttpError } from "./auth";
+import { canReadConversation } from "./inbox";
 import { evidenceFingerprint, paginateEvidence, validateEvidence, type EvidenceMessage } from "./evidence";
 import { RenderPage } from "./evidence-render";
 import type { AuthProfile } from "@alc/identity/auth";
@@ -17,22 +18,22 @@ const fingerprint=(bytes:Buffer)=>createHash("sha256").update(bytes).digest("hex
 export async function authorizedFolder(profile:AuthProfile,caseId:string):Promise<EvidenceFolder> {
  if(!evidenceCaseId.test(caseId))throw new HttpError(400,"ID de PNR inválido.");
  const result=await db().query(
-   "SELECT case_id,conversation_id,phone,base_key,sigla,source_hash,print_count,message_count,manifest,created_at,created_by FROM alc_atendimento.evidence_folders WHERE case_id=$1",
+   "SELECT e.*,c.assigned_to FROM alc_atendimento.evidence_folders e LEFT JOIN alc_atendimento.conversations c ON c.id=e.conversation_id WHERE e.case_id=$1",
    [caseId],
  );
  const folder=result.rows[0] as EvidenceFolder|undefined;
- if(!folder || !visible(await scopeFor(profile),folder))
+ if(!folder || !await canReadConversation(profile,folder))
    throw new HttpError(404,"Pasta de comprovantes não encontrada.");
  return folder;
 }
 
 export async function createEvidenceFolder(profile:AuthProfile,conversationId:string) {
  const result=await db().query(
-   "SELECT id,phone,channel,status,case_id,base_key,sigla FROM alc_atendimento.conversations WHERE id=$1",
+   "SELECT id,phone,channel,status,case_id,base_key,sigla,assigned_to FROM alc_atendimento.conversations WHERE id=$1",
    [conversationId],
  );
  const conversation=result.rows[0];
- if(!conversation || !visible(await scopeFor(profile),conversation))
+ if(!conversation || !await canReadConversation(profile,conversation))
    throw new HttpError(404,"Conversa não encontrada.");
  if(conversation.channel!=="client")
    throw new HttpError(422,"Somente tratativas de clientes podem gerar comprovantes.");
@@ -89,6 +90,11 @@ export async function createEvidenceFolder(profile:AuthProfile,conversationId:st
  const client=await db().connect();
  try{
    await client.query("BEGIN");
+   await client.query("SELECT pg_advisory_xact_lock(hashtext('atendimento_operator_directory'))");
+   await client.query("SELECT pg_advisory_xact_lock(hashtextextended($1,0))",[conversationId]);
+   const current=(await client.query("SELECT * FROM alc_atendimento.conversations WHERE id=$1",[conversationId])).rows[0];
+   if(!current || !await canReadConversation(profile,current,await scopeFor(profile,client),client))
+     throw new HttpError(404,"Conversa não encontrada.");
    await client.query("SELECT pg_advisory_xact_lock(hashtext($1))",["alc_evidence:"+caseId]);
    const previous=await client.query(
      "SELECT source_hash FROM alc_atendimento.evidence_folders WHERE case_id=$1 FOR UPDATE",

@@ -122,7 +122,7 @@ export function requireAdmin(profile: AuthProfile) {
     throw new HttpError(403, "Administração restrita a gestores autorizados.");
 }
 export type Scope = { full: boolean; pairs: Set<string>; safe: Set<string> };
-export async function scopeFor(profile: AuthProfile): Promise<Scope> {
+export async function identityScopeFor(profile: AuthProfile): Promise<Scope> {
   if (hasFullOperationalScope(profile))
     return { full: true, pairs: new Set(), safe: new Set() };
   const { rows } = await core().query(
@@ -153,6 +153,10 @@ export async function scopeFor(profile: AuthProfile): Promise<Scope> {
         .map((r) => normalize(r.sigla)),
     ),
   };
+}
+export async function scopeFor(profile: AuthProfile, transaction?: import("pg").PoolClient): Promise<Scope> {
+  const central = await identityScopeFor(profile);
+  return (await import("./operator-directory")).operatorScope(profile, central, transaction);
 }
 export function visible(
   scope: Scope,

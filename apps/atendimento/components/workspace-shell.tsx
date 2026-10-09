@@ -22,6 +22,9 @@ import {
   ShieldCheck,
   Send,
   X,
+  UsersRound,
+  MapPinned,
+  ListFilter,
 } from "lucide-react";
 import { Brand } from "@alc/ui/brand";
 import { canManageUsers, ROLE_LABELS, type AuthProfile } from "@alc/identity/auth";
@@ -35,6 +38,9 @@ const navigation = [
   { href: "/disparos/clientes", label: "Disparo Cliente", title: "Disparo Cliente", eyebrow: "MENSAGENS OPERACIONAIS", icon: Send },
   { href: "/disparos/motoristas", label: "Disparo Motorista", title: "Disparo Motorista", eyebrow: "MENSAGENS OPERACIONAIS", icon: Send },
   { href: "/admin", label: "Ajustes", title: "Ajustes", eyebrow: "CONFIGURAÇÕES", icon: Settings },
+  { href: "/gestao/atendentes", label: "Atendentes", title: "Atendentes", eyebrow: "GESTÃO OPERACIONAL", icon: UsersRound },
+  { href: "/gestao/bases", label: "Distribuição de Bases", title: "Distribuição de Bases", eyebrow: "GESTÃO OPERACIONAL", icon: MapPinned },
+  { href: "/gestao/filas", label: "Filas e Responsabilidades", title: "Filas e Responsabilidades", eyebrow: "GESTÃO OPERACIONAL", icon: ListFilter },
 ] as const;
 function subscribeViewport(change: () => void) {
   const query = window.matchMedia("(max-width:800px)");
@@ -149,7 +155,7 @@ export function WorkspaceShell({
         </div>
         <nav aria-label="Áreas do Atendimento">
           <p className="nav-label">ATENDIMENTO</p>
-          {navigation.filter((item) => item.href !== "/admin").map(({ href, label, icon: Icon }) => (
+          {navigation.filter((item) => item.href !== "/admin" && !item.href.startsWith("/gestao/")).map(({ href, label, icon: Icon }) => (
             <Link
               key={href}
               href={href}
@@ -164,6 +170,8 @@ export function WorkspaceShell({
           ))}
           {canManageUsers(current) && (
             <>
+              <p className="nav-label">GESTÃO</p>
+              {navigation.filter(item => item.href.startsWith("/gestao/")).map(({ href, label, icon: Icon }) => <Link key={href} href={href} onClick={close} title={label} aria-label={label} aria-current={path === href ? "page" : undefined}><Icon size={19} /><span>{label}</span></Link>)}
               <p className="nav-label">CONFIGURAÇÕES</p>
               <Link
                 href="/admin"

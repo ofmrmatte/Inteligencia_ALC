@@ -48,6 +48,7 @@ export async function queueText(
   key: string,
   actor: string | null = null,
   transaction?: PoolClient,
+  displayName = "",
 ) {
   if (
     !conversation.last_inbound_at ||
@@ -62,8 +63,8 @@ export async function queueText(
     text: { body: text },
   };
   await (transaction || db()).query(
-    `INSERT INTO alc_atendimento.outbox(dedupe_key,conversation_id,channel,phone,payload) VALUES($1,$2,$3,$4,$5) ON CONFLICT(dedupe_key) DO NOTHING`,
-    [key, conversation.id, conversation.channel, conversation.phone, payload],
+    `INSERT INTO alc_atendimento.outbox(dedupe_key,conversation_id,channel,phone,payload,sender_kind,sender_user_id,sender_display_name_snapshot) VALUES($1,$2,$3,$4,$5,$6,$7,$8) ON CONFLICT(dedupe_key) DO NOTHING`,
+    [key, conversation.id, conversation.channel, conversation.phone, payload, actor ? "human" : "ai", actor, actor ? displayName : "Agente virtual"],
   );
   if (actor)
     await audit(actor, "reply_queued", conversation.id, {}, transaction);
@@ -261,7 +262,7 @@ async function incoming(
       }
     : null;
   const inserted = await transaction.query(
-    `INSERT INTO alc_atendimento.messages(conversation_id,provider_id,direction,body,type,attachment) VALUES($1,$2,'in',$3,$4,$5) ON CONFLICT(provider_id) DO NOTHING RETURNING id`,
+    `INSERT INTO alc_atendimento.messages(conversation_id,provider_id,direction,body,type,attachment,sender_kind) VALUES($1,$2,'in',$3,$4,$5,'contact') ON CONFLICT(provider_id) DO NOTHING RETURNING id`,
     [
       conversation.id,
       id,
@@ -468,13 +469,14 @@ export async function processOutbox() {
         );
         if (job.conversation_id)
           await connection.query(
-            `INSERT INTO alc_atendimento.messages(conversation_id,provider_id,direction,body,status,type) VALUES($1,$2,'out',$3,'sent',$4) ON CONFLICT(provider_id) DO NOTHING`,
+            `INSERT INTO alc_atendimento.messages(conversation_id,provider_id,direction,body,status,type,sender_kind,sender_user_id,sender_display_name_snapshot,actor_id) VALUES($1,$2,'out',$3,'sent',$4,$5,$6,$7,$6) ON CONFLICT(provider_id) DO NOTHING`,
             [
               job.conversation_id,
               provider,
               job.payload.text?.body ||
                 `[Modelo: ${job.payload.template?.name}]`,
               job.payload.type,
+              job.sender_kind || "system", job.sender_user_id || null, job.sender_display_name_snapshot || "",
             ],
           );
       } catch (error) {

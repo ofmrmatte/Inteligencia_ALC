@@ -11,6 +11,21 @@ permissions:
 jobs:
   quality:
     runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: alc_atendimento_test
+        ports: [5432:5432]
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      ATENDIMENTO_TEST_DATABASE_URL: postgresql://postgres:postgres@127.0.0.1:5432/alc_atendimento_test
+      ATENDIMENTO_TEST_CORE_URL: postgresql://postgres:postgres@127.0.0.1:5432/alc_core_test
 
     steps:
       - name: Checkout
@@ -31,6 +46,9 @@ jobs:
 
       - name: Typecheck
         run: npm run typecheck
+
+      - name: Isolated Core test database
+        run: docker exec ${{ job.services.postgres.id }} psql -U postgres -c 'CREATE DATABASE alc_core_test'
 
       - name: Tests
         run: npm test

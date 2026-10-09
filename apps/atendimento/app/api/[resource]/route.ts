@@ -42,11 +42,15 @@ import {
   eligibleAgents,
   mutateConversation,
   inboxScopeSql,
+  canReadConversation,
+  conversationScopeSql,
 } from "@/lib/inbox";
 import {
   agentSettingsSchema, editableInstructionSchema, policiesSchema, effectiveInstructions,
   INSTRUCTION_KEY, validateEditedScript, loadInstructions, stepsFor,
 } from "@/lib/agent-instructions";
+import { listOperators, saveOperator, operationalUnits } from "@/lib/operator-directory";
+import { assignCase, assignmentQueue, saveAssignmentPolicy } from "@/lib/assignment-engine";
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 const channel = z.enum(["driver", "client"]);
@@ -93,7 +97,7 @@ async function conversationAccess(
     [conversationId],
   );
   const row = result.rows[0];
-  if (!row || !visible(await scopeFor(profile), row))
+  if (!row || !await canReadConversation(profile, row))
     throw new HttpError(404, "Atendimento não encontrado.");
   return row;
 }
@@ -170,8 +174,11 @@ export async function GET(
         ? await conversationAccess(id.parse(query.get("id")), profile)
         : null;
       const records = [];
+      const requesterScope = await scopeFor(profile);
+      const units = (await operationalUnits()).filter(unit => visible(requesterScope, unit));
       for (const agent of await eligibleAgents()) {
-        if (!target || visible(await scopeFor(agent), target))
+        const agentScope = await scopeFor(agent);
+        if (target ? visible(agentScope, target) : units.some(unit => visible(agentScope, unit)))
           records.push({ id: agent.id, name: agent.fullName || agent.email });
       }
       return Response.json({ records });
@@ -180,6 +187,13 @@ export async function GET(
       return Response.json(
         await conversationDetail(profile, id.parse(query.get("id")), query),
       );
+    }
+    if (resource === "operators") return Response.json(await listOperators(profile));
+    if (resource === "assignments") return Response.json(await assignmentQueue(profile, z.coerce.number().int().min(0).max(100000).parse(query.get("offset") || 0), query.get("history") === "true"));
+    if (resource === "assignment-policy") { requireAdmin(profile); return Response.json({ policy: await setting("assignment_policy") }); }
+    if (resource === "operational-units") {
+      const scope = await scopeFor(profile);
+      return Response.json({ records: (await operationalUnits()).filter(unit => visible(scope, unit)) });
     }
     if (resource === "media") {
       const messageId = id.parse(query.get("id"));
@@ -223,7 +237,7 @@ export async function GET(
     }
     if (resource === "outbox") {
       const target = query.has("channel") ? channel.parse(query.get("channel")) : null;
-      const values: unknown[] = [], scope = inboxScopeSql(await scopeFor(profile), values);
+      const values: unknown[] = [], scope = await conversationScopeSql(profile, values);
       if (target) values.push(target);
       const result = await db().query(
         `SELECT o.id,o.case_id,o.channel,o.phone,o.status,o.error,o.created_at,o.provider_id,c.base_key,c.sigla,c.name,
@@ -240,7 +254,7 @@ export async function GET(
         caseValues: unknown[] = [],
         conversationValues: unknown[] = [];
       const caseScope = inboxScopeSql(scope, caseValues),
-        conversationScope = inboxScopeSql(scope, conversationValues);
+        conversationScope = await conversationScopeSql(profile, conversationValues);
       caseValues.push(competence());
       const [cases, conversations, source, collector, queue] =
         await Promise.all([
@@ -412,6 +426,11 @@ export async function POST(
     }
     if (resource === "conversation") {
       return Response.json(await mutateConversation(profile, body));
+    }
+    if (resource === "operators") return Response.json(await saveOperator(profile, body));
+    if (resource === "assignments") return Response.json(await assignCase(profile, body));
+    if (resource === "assignment-policy") {
+      return Response.json(await saveAssignmentPolicy(profile, body));
     }
     if (resource === "import") {
       requireAdmin(profile);

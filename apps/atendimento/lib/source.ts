@@ -8,6 +8,7 @@ import {
   type CaseRecord,
 } from "./domain";
 import { templates, type Channel } from "./meta";
+import { assignCase } from "./assignment-engine";
 export type Automation = {
   driverNotifications: boolean;
   clientOutreach: boolean;
@@ -178,6 +179,12 @@ export async function upsertCases(
     throw error;
   } finally {
     client.release();
+  }
+  if ((await setting<{ mode: string }>("assignment_policy"))?.mode === "primary_then_least_loaded") {
+    for (const record of records) {
+      try { await assignCase(null, { caseId: record.caseId, assignedTo: null, version: 0, reason: "Distribuição automática por base" }, true); }
+      catch (error) { await audit(actor, "assignment_blocked", record.caseId, { reason: error instanceof Error ? error.message : "Distribuição indisponível" }); }
+    }
   }
   // A manual collection is data-only, even if automatic outreach is enabled.
   if (!allowAutomaticOutreach) return { processed: records.length, new: newlySeen.length };

@@ -4,11 +4,12 @@ Aplicação própria de atendimento operacional, separada do Inteligência ALC. 
 
 ## Executar
 
-Na raiz: `npm ci`, `npm run dev:atendimento`, `npm run build:atendimento` e `npm run start:atendimento`. Aplique o schema dedicado com `npm run migrate --workspace=@alc/atendimento` antes de iniciar. O serviço executa web e processamento de eventos/fila no mesmo container; não exige outro worker pago.
+Na raiz: `npm ci`, `npm run dev:atendimento`, `npm run build:atendimento` e `npm run start:atendimento`. Depois de confirmar o destino e aprovar a migração, aplique o schema dedicado com `npm run migrate --workspace=@alc/atendimento -- --apply` antes de iniciar. O runner executa os arquivos numerados de `db/` em transações, registra seus checksums e recusa alterações em migrações já registradas. O serviço executa web e processamento de eventos/fila no mesmo container; não exige outro worker pago.
 
 ## Funcionalidades
 
 - Visão geral de PNRs na competência vigente e atendimentos humanos.
+- Gestão operacional separada do acesso central: funções explícitas, bases principais/substitutas, disponibilidade, recebimento, atribuição única por PNR e histórico de redistribuições. Consulte [a entrega por fases](../../docs/atendimento-evolucao-fases.md) antes de ativar esta evolução.
 - Caixa por canal, busca, histórico, anexos recebidos, notas internas, assumir, concluir e retomar robô.
 - PNRs com filtros, comprador, produtos, entrega, contato validado e histórico preservado.
 - Consulta do motorista exige nome, base e vínculo de telefone/ID; ambiguidades vão para a equipe. Consultas anteriores são explícitas, incluindo casos encerrados.

@@ -38,6 +38,8 @@ type Conversation = {
   updated_at: string;
   assigned_to: string | null;
   labels: string[];
+  operational_labels?: string[];
+  priority?: string;
   last_message?: string;
   identity_verified: boolean;
   driver_id: string;
@@ -54,6 +56,8 @@ type Message = {
   status: string;
   created_at: string;
   attachment?: { id: string; filename?: string } | null;
+  sender_kind?: "ai" | "human" | "system" | "contact";
+  sender_display_name_snapshot?: string;
 };
 type Detail = {
   conversation: Conversation;
@@ -64,6 +68,8 @@ type Detail = {
     status: string;
     error?: string;
     created_at: string;
+    sender_kind?: Message["sender_kind"];
+    sender_display_name_snapshot?: string;
   }[];
   cases: {
     case_id: string;
@@ -75,6 +81,11 @@ type Detail = {
 };
 type Agent = { id: string; name: string };
 type Profile = { profile: { id: string }; admin: boolean };
+function author(message: Pick<Message, "sender_kind" | "sender_display_name_snapshot">) {
+  return message.sender_kind === "ai"
+    ? "Agente virtual"
+    : message.sender_display_name_snapshot || "ALC · autoria não registrada";
+}
 function status(value: string) {
   return value === "pending"
     ? "Pendente"
@@ -121,6 +132,7 @@ export function Conversations({
     [assignee, setAssignee] = useState("all"),
     [label, setLabel] = useState(""),
     [offset, setOffset] = useState(0);
+  const [base, setBase] = useState(""), [sigla, setSigla] = useState(""), [classification, setClassification] = useState("all"), [priority, setPriority] = useState("all"), [waitingMinutes, setWaitingMinutes] = useState("0");
   const term = useDeferredValue(search),
     tag = useDeferredValue(label);
   const query = new URLSearchParams({
@@ -131,6 +143,7 @@ export function Conversations({
     assignee,
     label: tag,
     offset: String(offset),
+    base, sigla, classification, priority, waitingMinutes,
   });
   const { data, error, refresh } = useData<{
     records: Conversation[];
@@ -223,6 +236,13 @@ export function Conversations({
           </button>
         </div>
       </div>
+      <details className="inbox-extra-filters"><summary>Filtros operacionais</summary><div className="inbox-filters">
+        <label>Base<input value={base} onChange={e => changed(setBase,e.target.value)} maxLength={250} /></label>
+        <label>Sigla operacional<input value={sigla} onChange={e => changed(setSigla,e.target.value)} maxLength={100} /></label>
+        <label>Classificação<select value={classification} onChange={e => changed(setClassification,e.target.value)}><option value="all">Todas</option>{["aberta", "aguardando_comprovante", "penalidade", "encerrada"].map(id => <option key={id} value={id}>{labels[id] || id}</option>)}</select></label>
+        <label>Prioridade<select value={priority} onChange={e => changed(setPriority,e.target.value)}><option value="all">Todas</option><option value="normal">Normal</option><option value="high">Alta</option><option value="urgent">Urgente</option></select></label>
+        <label>Sem resposta há<select value={waitingMinutes} onChange={e => changed(setWaitingMinutes,e.target.value)}><option value="0">Qualquer tempo</option><option value="30">30 minutos</option><option value="60">1 hora</option><option value="240">4 horas</option></select></label>
+      </div></details>
       {error && (
         <p className="notice error" role="alert">
           {error}
@@ -275,7 +295,7 @@ export function Conversations({
                   </small>
                   <small>{when(c.updated_at)}</small>
                   <span className="row-labels">
-                    {c.labels?.map((l) => (
+                    {[...(c.operational_labels || []), ...(c.labels || [])].map((l) => (
                       <span key={l}>{l}</span>
                     ))}
                   </span>
@@ -555,9 +575,9 @@ function Thread({
             <article key={m.id} className={`message ${m.direction}`}>
               <small>
                 {m.direction === "note"
-                  ? "Nota interna"
+                  ? `Nota interna · ${author(m)}`
                   : m.direction === "out"
-                    ? "ALC"
+                    ? author(m)
                     : c.name || "Contato"}
               </small>
               <p>{m.body}</p>
@@ -579,7 +599,7 @@ function Thread({
           ))}
           {data?.queued.map((m) => (
             <article key={m.id} className="message out">
-              <small>ALC · envio</small>
+              <small>{author(m)} · envio</small>
               <p>
                 {m.payload.text?.body ||
                   `Modelo: ${m.payload.template?.name || "WhatsApp"}`}
@@ -694,7 +714,7 @@ function Thread({
           <select
             aria-label="Atribuir responsável"
             value={c.assigned_to || ""}
-            disabled={busy}
+            disabled={busy || !profile?.admin}
             onChange={(e) =>
               void action("assign", { assignedTo: e.target.value || null })
             }
@@ -711,10 +731,11 @@ function Thread({
             ))}
           </select>
         </label>
+        <label>Prioridade<select aria-label="Prioridade do atendimento" value={c.priority || "normal"} disabled={busy} onChange={e => void action("priority", { priority: e.target.value })}><option value="normal">Normal</option><option value="high">Alta</option><option value="urgent">Urgente</option></select></label>
         <div className="details-labels">
           <h3>Etiquetas</h3>
           <div className="row-labels">
-            {c.labels?.map((l) => (
+            {[...(c.operational_labels || []), ...(c.labels || [])].map((l) => (
               <span key={l}>{l}</span>
             ))}
           </div>
