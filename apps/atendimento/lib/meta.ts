@@ -76,7 +76,7 @@ export async function channelConfig(channel: Channel): Promise<ChannelConfig> {
   return config;
 }
 export function validSignature(
-  raw: string,
+  raw: string | Buffer,
   signature: string | null,
   secret: string,
 ) {

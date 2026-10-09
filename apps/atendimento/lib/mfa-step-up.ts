@@ -105,7 +105,7 @@ function open(challenge: Challenge, nonce: string) {
     if (stored.length !== received.length || !timingSafeEqual(stored, received)) throw new Error();
     return value.providerId;
   } catch {
-    throw new HttpError(401, "Desafio invalido ou expirado.");
+    throw new HttpError(403, "Desafio invalido ou expirado.");
   }
 }
 
@@ -212,7 +212,7 @@ async function claimChallenge(current: Context, bound: z.infer<typeof verifySche
          AND factor_id=$7 AND claimed_at IS NULL AND expires_at>clock_timestamp() FOR UPDATE`,
       [bound.challengeId, current.claims.sub, current.claims.session_id, bound.operation, bound.channel, bound.intentHash, bound.factorId],
     );
-    if (!rows.length) throw new HttpError(401, "Desafio invalido ou expirado.");
+    if (!rows.length) throw new HttpError(403, "Desafio invalido ou expirado.");
     const providerId = open(rows[0], bound.nonce);
     // Commit admission before the provider call: failures/crashes cannot refund attempts or reuse this nonce.
     await client.query("INSERT INTO alc_atendimento.step_up_attempts(user_id) VALUES($1)", [current.claims.sub]);
@@ -220,7 +220,7 @@ async function claimChallenge(current: Context, bound: z.infer<typeof verifySche
       "UPDATE alc_atendimento.step_up_challenges SET claimed_at=clock_timestamp() WHERE id=$1 AND claimed_at IS NULL AND expires_at>clock_timestamp() RETURNING id",
       [bound.challengeId],
     );
-    if (!claimed.rowCount) throw new HttpError(401, "Desafio invalido ou expirado.");
+    if (!claimed.rowCount) throw new HttpError(403, "Desafio invalido ou expirado.");
     await client.query("COMMIT");
     return providerId;
   } catch (error) {
@@ -233,12 +233,12 @@ export async function verifyStepUp(input: unknown) {
   const bound = parse(verifySchema, input), current = await context();
   const providerId = await claimChallenge(current, bound);
   await verifiedTotp(current.client, bound.factorId);
-  const { data, error } = await provider(() => current.client.auth.mfa.verify({ factorId: bound.factorId, challengeId: providerId, code: bound.code }), 401);
+  const { data, error } = await provider(() => current.client.auth.mfa.verify({ factorId: bound.factorId, challengeId: providerId, code: bound.code }), 403);
   if (error || data?.user?.id !== current.claims.sub || !data.access_token)
-    throw new HttpError(401, "Codigo MFA invalido ou expirado.");
-  const verified = await provider(() => current.client.auth.getClaims(data.access_token), 401);
+    throw new HttpError(403, "Codigo MFA invalido ou expirado.");
+  const verified = await provider(() => current.client.auth.getClaims(data.access_token), 403);
   if (verified.error || verified.data?.claims.sub !== current.claims.sub || verified.data.claims.session_id !== current.claims.session_id || verified.data.claims.aal !== "aal2")
-    throw new HttpError(401, "Sessao MFA invalida.");
+    throw new HttpError(403, "Sessao MFA invalida.");
   const fresh = await context();
   sameSession(current, fresh);
   await verifiedTotp(fresh.client, bound.factorId);
@@ -254,7 +254,7 @@ export async function verifyStepUp(input: unknown) {
        RETURNING id,verified_at,proof_expires_at`,
       [bound.challengeId, fresh.claims.sub, fresh.claims.session_id],
     );
-    if (!rows.length) throw new HttpError(401, "Desafio invalido ou expirado.");
+    if (!rows.length) throw new HttpError(403, "Desafio invalido ou expirado.");
     await client.query("COMMIT");
     return { proofId: rows[0].id, verifiedAt: rows[0].verified_at.toISOString(), expiresAt: rows[0].proof_expires_at.toISOString() };
   } catch (error) {

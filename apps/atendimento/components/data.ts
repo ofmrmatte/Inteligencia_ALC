@@ -30,6 +30,7 @@ export async function api<T>(path: string, body?: unknown): Promise<T> {
     (response.status === 403 && [
       "Perfil sem acesso ao Atendimento.",
       "Seu acesso ao Atendimento está desativado.",
+      "Acesso ao Atendimento desativado.",
     ].includes(data.error || ""));
   if (authFailure) {
     clearPrivateContent();

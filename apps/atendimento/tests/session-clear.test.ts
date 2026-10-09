@@ -51,6 +51,8 @@ it("rejeita uma resposta privada que chega depois da revogação", async () => {
 
 it.each([
   "MFA inválido.",
+  "Codigo MFA invalido ou expirado.",
+  "Desafio invalido ou expirado.",
   "Conversa fora do seu escopo.",
   "Administração restrita a gestores autorizados.",
 ])("preserva dados e sessão no 403 operacional: %s", async (error) => {
@@ -78,6 +80,7 @@ it.each([
   { status: 401, error: "Sessão expirada.", destination: "/login" },
   { status: 403, error: "Perfil sem acesso ao Atendimento.", destination: "/acesso-indisponivel" },
   { status: 403, error: "Seu acesso ao Atendimento está desativado.", destination: "/acesso-indisponivel" },
+  { status: 403, error: "Acesso ao Atendimento desativado.", destination: "/acesso-indisponivel" },
   { status: 403, error: "MFA_REQUIRED", destination: "/login" },
 ])("limpa conteúdo e redireciona no acesso central: $error", async ({ status, error, destination }) => {
   const cleared = vi.fn();

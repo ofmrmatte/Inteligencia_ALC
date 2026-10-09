@@ -237,7 +237,7 @@ describe.skipIf(!fixtureUrl)("isolated recent MFA PostgreSQL", () => {
       if (kind === "intentHash") input.intentHash = "b".repeat(64);
       if (kind === "factor") input.factorId = OTHER;
       if (kind === "nonce") input.nonce = "Z".repeat(43);
-      await expect(verifyStepUp(input)).rejects.toMatchObject({ status: 401 });
+      await expect(verifyStepUp(input)).rejects.toMatchObject({ status: 403 });
       expect(mocks.verify).not.toHaveBeenCalled();
       expect(await attemptCount()).toBe(0);
       expect((await row(input.challengeId)).claimed_at).toBeNull();
@@ -265,13 +265,13 @@ describe.skipIf(!fixtureUrl)("isolated recent MFA PostgreSQL", () => {
     await expect(challenge()).rejects.toMatchObject({ status: 503 });
     const input = await challenge();
     await pool().query("UPDATE alc_atendimento.step_up_challenges SET created_at=now()-interval '4 minutes',expires_at=now()-interval '1 minute' WHERE id=$1", [input.challengeId]);
-    await expect(verifyStepUp(input)).rejects.toMatchObject({ status: 401 });
+    await expect(verifyStepUp(input)).rejects.toMatchObject({ status: 403 });
     expect(mocks.verify).not.toHaveBeenCalled();
   });
   it("rejects swapped sealed nonce ciphertext", async () => {
     const a = await challenge(), b = await challenge({ channel: "driver" });
     await pool().query("UPDATE alc_atendimento.step_up_challenges SET nonce_sealed=$1 WHERE id=$2", [(await row(a.challengeId)).nonce_sealed, b.challengeId]);
-    await expect(verifyStepUp({ ...b, nonce: a.nonce })).rejects.toMatchObject({ status: 401 });
+    await expect(verifyStepUp({ ...b, nonce: a.nonce })).rejects.toMatchObject({ status: 403 });
     expect(mocks.verify).not.toHaveBeenCalled();
   });
   it("admits a nonce once under concurrent verification", async () => {
@@ -303,7 +303,7 @@ describe.skipIf(!fixtureUrl)("isolated recent MFA PostgreSQL", () => {
     mocks.verify.mockResolvedValue({ data: null, error: { message: "raw provider log " + code } });
     const results = await Promise.allSettled(requests.map(verifyStepUp));
     expect(results.filter((result) => result.status === "rejected" && result.reason.status === 429)).toHaveLength(3);
-    expect(results.filter((result) => result.status === "rejected" && result.reason.status === 401)).toHaveLength(5);
+    expect(results.filter((result) => result.status === "rejected" && result.reason.status === 403)).toHaveLength(5);
     expect(mocks.verify).toHaveBeenCalledTimes(5);
     expect(await attemptCount()).toBe(5);
     expect((await pool().query("SELECT count(*) AS count FROM alc_atendimento.step_up_challenges WHERE verified_at IS NOT NULL")).rows[0].count).toBe("0");
@@ -311,19 +311,19 @@ describe.skipIf(!fixtureUrl)("isolated recent MFA PostgreSQL", () => {
   });
   it("keeps attempts across sessions and releases the rolling window", async () => {
     mocks.verify.mockResolvedValue({ data: null, error: { message: "synthetic rejection" } });
-    for (let i = 0; i < 5; i++) await expect(verifyStepUp(await challenge())).rejects.toMatchObject({ status: 401 });
+    for (let i = 0; i < 5; i++) await expect(verifyStepUp(await challenge())).rejects.toMatchObject({ status: 403 });
     mocks.claims.session_id = OTHER;
     await register();
     await expect(challenge()).rejects.toMatchObject({ status: 429 });
     await pool().query("UPDATE alc_atendimento.step_up_attempts SET attempted_at=clock_timestamp()-interval '15 minutes'");
-    await expect(verifyStepUp(await challenge())).rejects.toMatchObject({ status: 401 });
+    await expect(verifyStepUp(await challenge())).rejects.toMatchObject({ status: 403 });
     expect(await attemptCount()).toBe(1);
   });
   it("does not refund an attempt or nonce on thrown provider failure", async () => {
     const input = await challenge();
     mocks.verify.mockRejectedValue(new Error("provider dump " + code + " synthetic-access"));
-    await expect(verifyStepUp(input)).rejects.toMatchObject({ status: 401, message: "Nao foi possivel verificar o MFA." });
-    await expect(verifyStepUp(input)).rejects.toMatchObject({ status: 401 });
+    await expect(verifyStepUp(input)).rejects.toMatchObject({ status: 403, message: "Nao foi possivel verificar o MFA." });
+    await expect(verifyStepUp(input)).rejects.toMatchObject({ status: 403 });
     expect(mocks.verify).toHaveBeenCalledTimes(1);
     expect(await attemptCount()).toBe(1);
   });
@@ -335,7 +335,7 @@ describe.skipIf(!fixtureUrl)("isolated recent MFA PostgreSQL", () => {
       if (kind === "aal") mocks.verifiedClaims.aal = "aal1";
       if (kind === "claimsError") mocks.getClaims.mockImplementation(async (jwt?: string) => ({ data: { claims: mocks.claims }, error: jwt ? { message: "raw" } : null }));
       if (kind === "noToken") mocks.verify.mockResolvedValue({ data: { user: { id: USER } }, error: null });
-      await expect(verifyStepUp(input)).rejects.toMatchObject({ status: 401 });
+      await expect(verifyStepUp(input)).rejects.toMatchObject({ status: 403 });
       expect((await row(input.challengeId)).verified_at).toBeNull();
       expect(await attemptCount()).toBe(1);
     });
@@ -588,7 +588,7 @@ describe.skipIf(!fixtureUrl)("isolated recent MFA PostgreSQL", () => {
     const before = await initialChannel();
     const payload = { operation: "replace_access_token", channel: "client", token: accessToken };
     const challenge = await createChannelCredentialChallenge({ payload, factorId: FACTOR });
-    await expect(verifyChannelCredential({ payload: { ...payload, token: "altered-token" }, factorId: FACTOR, challengeId: challenge.challengeId, nonce: challenge.nonce, code })).rejects.toMatchObject({ status: 401 });
+    await expect(verifyChannelCredential({ payload: { ...payload, token: "altered-token" }, factorId: FACTOR, challengeId: challenge.challengeId, nonce: challenge.nonce, code })).rejects.toMatchObject({ status: 403 });
     expect(mocks.verify).not.toHaveBeenCalled();
     const proof = await verifyChannelCredential({ payload, factorId: FACTOR, challengeId: challenge.challengeId, nonce: challenge.nonce, code });
     for (const altered of [{ ...payload, token: "altered-token" }, { ...payload, channel: "driver" }, revealPayload, webhookPayload])

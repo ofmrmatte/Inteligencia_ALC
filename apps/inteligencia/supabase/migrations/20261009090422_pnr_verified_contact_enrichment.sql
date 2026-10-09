@@ -25,6 +25,15 @@ alter table app_private.pnr_enrichment_nonces enable row level security;
 alter table app_private.pnr_enrichment_receipts enable row level security;
 create index if not exists pnr_enrichment_receipts_case
   on app_private.pnr_enrichment_receipts(case_id);
-revoke all on app_private.pnr_enrichment_nonces, app_private.pnr_enrichment_receipts from public, anon, authenticated;
-grant usage on schema app_private to service_role;
-grant select, insert on app_private.pnr_enrichment_nonces, app_private.pnr_enrichment_receipts to service_role;
+revoke all on app_private.pnr_enrichment_nonces, app_private.pnr_enrichment_receipts from public;
+
+-- Railway uses the existing database owner; only Supabase deployments have these roles.
+do $$ declare restricted_role text; begin
+  for restricted_role in select rolname from pg_roles where rolname in ('anon','authenticated') loop
+    execute format('revoke all on app_private.pnr_enrichment_nonces, app_private.pnr_enrichment_receipts from %I', restricted_role);
+  end loop;
+  if exists(select 1 from pg_roles where rolname='service_role') then
+    grant usage on schema app_private to service_role;
+    grant select, insert on app_private.pnr_enrichment_nonces, app_private.pnr_enrichment_receipts to service_role;
+  end if;
+end $$;

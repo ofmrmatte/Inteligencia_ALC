@@ -343,6 +343,40 @@ captura visual, Meta real, IA real, migracao remota ou deploy nesta rodada.
 6. Logout central e publicacao sao a etapa seguinte, nao prova automatica desta
    fase. MFA/Supabase e Meta reais ainda exigem homologacao com conta autorizada.
 
+## Integracao final e publicacao
+
+As sete fases, o logout central e os tres commits de correcao do timeout PNR
+foram consolidados em `codex/atendimento-production-release` para uma unica
+publicacao por servico. A revogacao central e verificada no servidor e por
+SSE/polling; erros operacionais de MFA nao encerram uma sessao central valida.
+O webhook autentica os bytes originais e limita a leitura antes de persistir.
+
+Prova da integracao: 864 testes Atendimento e 451 testes Core passaram com
+PostgreSQL local; os dois builds, typecheck e lint dos arquivos alterados
+passaram. Os testes incluem revogacao, sincronizacao e o runner especifico
+de enriquecimento. O runner exige `--apply`, conexoes Core/Aux distintas,
+checksum, transacao e schema compativel. Nao cria roles Supabase no Railway;
+RLS permanece ativa e PUBLIC/roles de clientes existentes nao recebem acesso.
+Os testes de PostgreSQL Core sao seriais e aceitam o loopback local e do CI.
+
+Comandos pre-deploy aprovados, para executar antes da troca de versao web:
+
+```sh
+node apps/inteligencia/scripts/migrate-pnr-enrichment-core.mjs --apply
+npm run migrate --workspace=@alc/atendimento -- --apply
+```
+
+Em 09/10/2026, o usuario autorizou migracoes, merge e publicacao, mas pediu
+explicitamente para pular novos backups e NAO publicar o antivirus de anexos.
+Nenhum scanner, bucket ou volume de midia foi provisionado. Sem scanner,
+arquivos novos continuam bloqueados/quarentenados; arquivos historicos nao
+sao apagados. O RH permanece fora da operacao. Novos disparos, contratos Meta
+e enriquecimento HMAC nao sao ativados pela publicacao.
+
+SSO/MFA com conta real e envio/recebimento Meta ainda precisam de homologacao
+operacional. Testes locais nao constituem essa prova. A publicacao depende dos
+checks do PR e do resultado dos dois deployments; nao antecipar sucesso.
+
 ## Catalogo e organograma
 
 SVC e XPT identificam tipos, nunca siglas de unidades. O atendimento nao cria
