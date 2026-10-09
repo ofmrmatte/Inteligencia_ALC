@@ -827,6 +827,20 @@ describe("source import regressions", () => {
 });
 
 describe("initial template regressions", () => {
+  it.each(["driver", "client"] as const)("enqueues %s only to its channel phone, matching payload and persisted outbox", async (channel) => {
+    const initial = record({ driverPhone: "5511999990000", customerPhone: "5511988880000" });
+    expect(await queueTemplate(channel, initial, OPERATOR)).toBe(true);
+    const outbox = mocks.query.mock.calls.find(([sql]) => String(sql).startsWith("INSERT INTO alc_atendimento.outbox"));
+    expect(outbox).toBeDefined();
+    const params = outbox![1] as unknown[];
+    const expected = channel === "driver" ? initial.driverPhone : initial.customerPhone;
+    const wrong = channel === "driver" ? initial.customerPhone : initial.driverPhone;
+    expect(params[3]).toBe(channel);
+    expect(params[4]).toBe(expected);
+    expect((params[5] as { to: string }).to).toBe(expected);
+    expect(params[4]).not.toBe(wrong);
+    expect((params[5] as { to: string }).to).not.toBe(wrong);
+  });
   it.each(["driver", "client"] as const)(
     "deduplicates repeated %s initial templates and audits the duplicate",
     async (channel) => {
