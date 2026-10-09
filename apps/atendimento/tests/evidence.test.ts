@@ -19,7 +19,7 @@ describe("comprovante fiel à conversa real", () => {
     expect(validateEvidence(conversation, messages.map((m) => m.id === "c" ? { ...m, status: "uncertain" } : m))).toMatch(/confirma/);
     expect(validateEvidence(conversation, [...messages, { ...messages[0], direction: "note" }])).toMatch(/notas/);
     expect(validateEvidence(conversation, messages.map((m) => m.id === "a" ? { ...m, body: "[Modelo: cliente_loss]" } : m))).toMatch(/modelo Meta/);
-    expect(validateEvidence(conversation, messages.map((m) => m.id === "a" ? { ...m, type: "image" } : m))).toMatch(/mídia/);
+    expect(validateEvidence(conversation, messages.map((m) => m.id === "a" ? { ...m, type: "image" } : m))).toMatch(/mídia/i);
     expect(validateEvidence(conversation, messages, true)).toMatch(/integral/);
   });
   it("não permite alterar silenciosamente o conteúdo sem mudar o hash", () => {

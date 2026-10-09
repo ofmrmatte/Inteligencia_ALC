@@ -21,6 +21,7 @@ const provider = vi.hoisted(() => ({
   scan: vi.fn(),
   publicBucket: false,
   objects: new Map<string, Buffer>(),
+  beforeDownload: null as null | (() => Promise<void>),
 }));
 vi.mock("../lib/media-validation", async (original) => ({
   ...(await original()),
@@ -54,12 +55,10 @@ vi.mock("@supabase/supabase-js", () => ({
           provider.objects.set(key, Buffer.from(bytes));
           return { error: null };
         },
-        download: async (key: string) => ({
-          data: provider.objects.has(key)
-            ? new Blob([new Uint8Array(provider.objects.get(key)!)])
-            : null,
-          error: null,
-        }),
+        download: async (key: string) => {
+          await provider.beforeDownload?.();
+          return { data: provider.objects.has(key) ? new Blob([new Uint8Array(provider.objects.get(key)!)]) : null, error: null };
+        },
         remove: async (keys: string[]) => {
           keys.forEach((key) => provider.objects.delete(key));
           return { error: null };
@@ -77,6 +76,8 @@ import { migrate } from "../scripts/migrations.mjs";
 import { assignCase, saveAssignmentPolicy } from "../lib/assignment-engine";
 import { saveOperator } from "../lib/operator-directory";
 import { scopeFor } from "../lib/auth";
+import * as auth from "../lib/auth";
+import { GET as evidenceIndex } from "../app/api/evidence/route";
 import { db, core } from "../lib/db";
 import { listConversations, mutateConversation } from "../lib/inbox";
 import { queueText, processOutbox, processEvents } from "../lib/worker";
@@ -87,7 +88,7 @@ import {
   dispatchBatchSchema,
 } from "../lib/dispatch-batches";
 import { competence, type CaseRecord } from "../lib/domain";
-import { authorizedFolder, createEvidenceFolder } from "../lib/evidence-store";
+import { authorizedFolder, createEvidenceFolder, evidencePrint } from "../lib/evidence-store";
 import {
   reserveUpload,
   finishUpload,
@@ -171,6 +172,7 @@ describe.skipIf(!url || !coreUrl)(
     }, 30000);
     beforeEach(async () => {
       provider.publicBucket = false;
+      provider.beforeDownload = null;
       provider.objects.clear();
       provider.scan.mockReset().mockResolvedValue("clean");
       provider.graph
@@ -200,7 +202,7 @@ describe.skipIf(!url || !coreUrl)(
         email: "synthetic@example.test",
       }));
       await client.query(
-        "TRUNCATE alc_atendimento.media,alc_atendimento.webhook_events,alc_atendimento.assignment_history,alc_atendimento.case_assignments,alc_atendimento.operator_bases,alc_atendimento.operators,alc_atendimento.evidence_images,alc_atendimento.evidence_folders,alc_atendimento.messages,alc_atendimento.outbox,alc_atendimento.dispatch_batches,alc_atendimento.conversations,alc_atendimento.cases,alc_atendimento.audit RESTART IDENTITY",
+        "TRUNCATE alc_atendimento.evidence_media,alc_atendimento.media,alc_atendimento.webhook_events,alc_atendimento.assignment_history,alc_atendimento.case_assignments,alc_atendimento.operator_bases,alc_atendimento.operators,alc_atendimento.evidence_images,alc_atendimento.evidence_folders,alc_atendimento.messages,alc_atendimento.outbox,alc_atendimento.dispatch_batches,alc_atendimento.conversations,alc_atendimento.cases,alc_atendimento.audit RESTART IDENTITY",
       );
       await client.query(
         "DELETE FROM alc_atendimento.settings WHERE key LIKE 'access_%'",
@@ -289,7 +291,7 @@ describe.skipIf(!url || !coreUrl)(
             "SELECT name FROM alc_atendimento.schema_migrations ORDER BY name",
           )
         ).rows,
-      ).toHaveLength(4);
+      ).toHaveLength(5);
       expect(
         (await client.query("SELECT * FROM alc_atendimento.operators"))
           .rowCount,
@@ -326,6 +328,71 @@ describe.skipIf(!url || !coreUrl)(
       });
       return finishUpload(reservation, png, "image/png");
     };
+    const evidenceConversation = async () => {
+      const conversationId = await mediaConversation();
+      const media = await uploadedMedia(conversationId);
+      const ids = [randomUUID(), randomUUID(), randomUUID()];
+      for (const [index, id] of ids.entries()) await client.query(
+        `INSERT INTO alc_atendimento.messages(id,conversation_id,case_id,provider_id,direction,body,type,status,attachment,created_at)
+        VALUES($1,$2,'test-case',$3,$4,$5,$6,$7,$8,$9)`,
+        [id, conversationId, `synthetic-evidence:${index}`, index === 1 ? "in" : "out",
+          ["Recebeu?", "Foto recebida.", "Obrigado, tratativa concluída."][index], index === 1 ? "image" : "text",
+          index === 1 ? "received" : "read", index === 1 ? { id: "synthetic-provider-media" } : null,
+          new Date(Date.UTC(2026, 9, 8, 10, index))]);
+      await client.query("UPDATE alc_atendimento.media SET message_id=$2 WHERE id=$1", [media.id, ids[1]]);
+      await client.query("UPDATE alc_atendimento.conversations SET status='resolved' WHERE id=$1", [conversationId]);
+      return { conversationId, mediaId: media.id, ids };
+    };
+    it("archives real media prints with original holds, manifest and immutable hashes", async () => {
+      const fixture = await evidenceConversation();
+      expect(await createEvidenceFolder(profile(A), fixture.conversationId)).toEqual({ caseId: "test-case", created: true });
+      const folder = (await client.query("SELECT * FROM alc_atendimento.evidence_folders")).rows[0];
+      expect(folder.manifest.messages).toHaveLength(3);
+      expect(folder.manifest.messages[1].media.sha256).toBe(createHash("sha256").update(png).digest("hex"));
+      const print = await evidencePrint(profile(A), "test-case", 1);
+      expect(await sharp(print.bytes).metadata()).toMatchObject({ width: 900, height: 840 });
+      expect((await client.query("SELECT legal_hold FROM alc_atendimento.media WHERE id=$1", [fixture.mediaId])).rows[0].legal_hold).toBe(true);
+      expect((await client.query("SELECT * FROM alc_atendimento.evidence_media")).rowCount).toBe(1);
+      expect(await createEvidenceFolder(profile(A), fixture.conversationId)).toEqual({ caseId: "test-case", created: false });
+      await client.query("UPDATE alc_atendimento.media SET legal_hold=false,retention_until=now()-interval '1 day'");
+      expect((await purgeExpiredMedia(true)).deleted).toBe(0);
+      await client.query("UPDATE alc_atendimento.evidence_images SET image_png='changed'::bytea");
+      await expect(evidencePrint(profile(A), "test-case", 1)).rejects.toMatchObject({ status: 409 });
+    }, 15000);
+    it("rolls back evidence if the transcript changes while private bytes are loaded", async () => {
+      const fixture = await evidenceConversation();
+      provider.beforeDownload = async () => { await client.query("UPDATE alc_atendimento.messages SET body='Changed after source snapshot' WHERE id=$1", [fixture.ids[2]]); };
+      await expect(createEvidenceFolder(profile(A), fixture.conversationId)).rejects.toMatchObject({ status: 409 });
+      expect((await client.query("SELECT * FROM alc_atendimento.evidence_folders")).rowCount).toBe(0);
+      expect((await client.query("SELECT legal_hold FROM alc_atendimento.media")).rows[0].legal_hold).toBe(false);
+    }, 15000);
+    it.each(["quarantined", "rejected", "deleted"])("rejects incomplete evidence media status %s", async (status) => {
+      const fixture = await evidenceConversation();
+      await client.query("UPDATE alc_atendimento.media SET status=$2 WHERE id=$1", [fixture.mediaId, status]);
+      await expect(createEvidenceFolder(profile(A), fixture.conversationId)).rejects.toMatchObject({ status: 422 });
+      expect((await client.query("SELECT * FROM alc_atendimento.evidence_folders")).rowCount).toBe(0);
+    });
+    it("refuses mixed PNR histories and attachment-to-case misbinding", async () => {
+      const fixture = await evidenceConversation();
+      await client.query("INSERT INTO alc_atendimento.cases(case_id,competence,base_key,sigla,classification,record) VALUES('other-case','202610Q1','TEST BASE A','TEST-A','aberta','{}')");
+      await client.query("UPDATE alc_atendimento.media SET case_id='other-case' WHERE id=$1", [fixture.mediaId]);
+      await expect(createEvidenceFolder(profile(A), fixture.conversationId)).rejects.toMatchObject({ status: 422 });
+      await client.query("UPDATE alc_atendimento.media SET case_id='test-case' WHERE id=$1", [fixture.mediaId]);
+      await client.query("UPDATE alc_atendimento.messages SET case_id='other-case' WHERE id=$1", [fixture.ids[0]]);
+      await expect(createEvidenceFolder(profile(A), fixture.conversationId)).rejects.toMatchObject({ status: 422 });
+    });
+    it("filters evidence before pagination against current PNR scope, not only stale folder labels", async () => {
+      const fixture=await evidenceConversation();
+      await createEvidenceFolder(profile(A),fixture.conversationId);
+      await client.query("UPDATE alc_atendimento.cases SET base_key='TEST BASE B',sigla='TEST-B' WHERE case_id='test-case'");
+      const identity=vi.spyOn(auth,"currentProfile").mockResolvedValue(profile(A));
+      try {
+        const result=await (await evidenceIndex()).json();
+        expect(result.folders).toHaveLength(0);
+        expect(result.pending).toHaveLength(0);
+        await expect(authorizedFolder(profile(A),"test-case")).rejects.toMatchObject({status:404});
+      } finally {identity.mockRestore();}
+    },15000);
     it("archives private media with its hash and hides object references", async () => {
       const conversationId = await mediaConversation(),
         media = await uploadedMedia(conversationId);

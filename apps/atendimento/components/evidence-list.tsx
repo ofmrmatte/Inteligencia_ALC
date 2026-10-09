@@ -1,5 +1,5 @@
 "use client";
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { CheckSquare2, ChevronDown, ChevronRight, Download, Folder, FolderOpen, Image as ImageIcon, ShieldCheck } from "lucide-react";
 import { api, useData, when } from "./data";
 
@@ -10,7 +10,7 @@ type Folder = {
 type Pending = {id:string;case_id:string;phone:string;updated_at:string};
 type Index={folders:Folder[];pending:Pending[];folderLimit:number;pendingLimit:number};
 type Page={page_number:number;filename:string;sha256:string;size:number};
-type Detail={folder:Folder;prints:Page[]};
+type Detail={folder:Folder;prints:Page[];attachments?:{id:string;filename:string;mime:string;size:number;sha256:string}[]};
 function triggerDownload(blob:Blob,name:string){
  const url=URL.createObjectURL(blob);
  const a=document.createElement("a");
@@ -20,18 +20,21 @@ function triggerDownload(blob:Blob,name:string){
 export function EvidenceList(){
  const {data,error,refresh}=useData<Index>("evidence");
  const [expanded,setExpanded]=useState<string|null>(null);
+ const openRequest=useRef(0);
  const [detail,setDetail]=useState<Detail|null>(null);
  const [selection,setSelection]=useState<string[]>([]);
  const [busy,setBusy]=useState(false);
  const [notice,setNotice]=useState("");
  const folders=data?.folders||[];
  async function openFolder(caseId:string){
+  const request=++openRequest.current;
   if(expanded===caseId){setExpanded(null);setDetail(null);return;}
   setExpanded(caseId);setDetail(null);setNotice("");
   try{
    const response=await api<Detail>(`evidence/folders/${encodeURIComponent(caseId)}`);
+   if(request!==openRequest.current)return;
    setDetail(response);
-  }catch(e){setExpanded(null);setNotice(e instanceof Error?e.message:"Não foi possível abrir a pasta.");}
+  }catch(e){if(request===openRequest.current){setExpanded(null);setNotice(e instanceof Error?e.message:"Não foi possível abrir a pasta.");}}
  }
  async function createFolder(row:Pending){
   setBusy(true);setNotice("");
@@ -69,18 +72,14 @@ export function EvidenceList(){
  }
  return <main className="page evidence-page">
   <div className="page-tools">
-   <div>
-    <h2>Arquivo de comprovantes</h2>
-    <p className="muted">Uma pasta permanente por ID de PNR. Abra para visualizar cada print separadamente.</p>
-   </div>
    <span className="badge"><Folder size={14}/> {folders.length} pasta(s)</span>
   </div>
-  <p className="notice">Os arquivos ficam salvos no banco do Atendimento e permanecem nesta aba. Cada print utiliza o visual de conversa do WhatsApp Web, mas é identificado como reconstrução do histórico real. O ZIP é opcional, apenas para pastas que você selecionar.</p>
+  <p className="notice">Registro reconstruído de mensagens verificadas, não captura nativa do WhatsApp. Horários de registro no ALC.</p>
   {error?<p role="alert" className="notice error">{error}</p>:null}
   {notice?<p role="status" className="notice">{notice}</p>:null}
   <section className="card">
    <div className="evidence-section-head">
-    <div><h3>Pastas de PNRs</h3><p className="muted">Selecione até 10 pastas por ZIP, somente quando precisar baixar.</p></div>
+    <h3>Pastas de PNRs</h3>
     <div className="actions">
      <button type="button" disabled={!folders.length||busy} onClick={()=>setSelection(selection.length===Math.min(folders.length,10)?[]:folders.slice(0,10).map(f=>f.case_id))}>
       <CheckSquare2 size={15}/> {selection.length===Math.min(folders.length,10)&&folders.length?"Desmarcar":"Selecionar até 10"}
@@ -106,7 +105,7 @@ export function EvidenceList(){
      </div>
      {expanded===folder.case_id&&<div className="evidence-folder-content">
        {!detail?<p className="muted">Abrindo pasta...</p>:
-        <div className="evidence-print-grid">
+        <><div className="evidence-print-grid">
          {detail.prints.map(print=>{
           const src=`/api/evidence/folders/${encodeURIComponent(folder.case_id)}/parts/${print.page_number}`;
           return <article className="evidence-print" key={print.page_number}>
@@ -119,17 +118,22 @@ export function EvidenceList(){
             <a href={src} download={print.filename}>Baixar PNG</a></div>
           </article>;
          })}
-        </div>}
+        </div>
+        {detail.attachments?.length ? <ul className="evidence-attachments" aria-label="Anexos originais do comprovante">
+         {detail.attachments.map(file=><li key={file.id}>
+          <a href={`/api/media/${encodeURIComponent(file.id)}`} target="_blank" rel="noreferrer"><Download size={15}/>{file.filename}</a>
+          <small>{file.mime} · {file.size.toLocaleString("pt-BR")} bytes</small>
+         </li>)}
+        </ul>:null}</>}
       </div>}
     </section>)}
-    {!folders.length?<div className="empty"><Folder size={26}/><h3>Nenhuma pasta arquivada</h3>
-     <p>Quando uma tratativa elegível for concluída, use “Criar pasta” abaixo. Ela ficará disponível aqui depois de gerada.</p></div>:null}
+    {!folders.length?<div className="empty"><Folder size={26}/><h3>Nenhuma pasta arquivada</h3></div>:null}
    </div>
    {data&&data.folders.length>=data.folderLimit?<p className="notice">Exibindo as 200 pastas mais recentes.</p>:null}
   </section>
   <section className="card" style={{marginTop:18}}>
    <h3>Tratativas prontas para arquivamento</h3>
-   <p className="muted">Uma nova pasta só é criada após validar o histórico completo. Conversas com mídia, template não preservado ou entrega não confirmada são bloqueadas, sem fabricar evidências.</p>
+   <p className="muted">Mídia em quarentena, histórico incompleto ou origem não confirmada impedem o arquivamento.</p>
    <div className="table-wrap"><table>
     <thead><tr><th>PNR</th><th>Telefone</th><th>Concluído</th><th>Ação</th></tr></thead>
     <tbody>{(data?.pending||[]).map(p=><tr key={p.id}>

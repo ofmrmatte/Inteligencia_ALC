@@ -389,6 +389,7 @@ export async function purgeExpiredMedia(apply: boolean) {
     await connection.query("BEGIN");
     const expired = (
       await connection.query(`SELECT * FROM alc_atendimento.media a WHERE NOT a.legal_hold AND a.retention_until<now() AND a.status<>'deleted'
+      AND NOT EXISTS(SELECT 1 FROM alc_atendimento.evidence_media e WHERE e.media_id=a.id)
       AND NOT EXISTS(SELECT 1 FROM alc_atendimento.outbox o WHERE o.media_id=a.id AND o.status IN ('pending','sending','uncertain'))
       ORDER BY a.retention_until LIMIT 100 FOR UPDATE OF a SKIP LOCKED`)
     ).rows as Media[];

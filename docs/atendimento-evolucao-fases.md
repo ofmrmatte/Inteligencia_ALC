@@ -3,7 +3,7 @@
 ## Limites desta entrega
 
 O plano aprovado em `writing-block.md` sera executado em sete PRs dependentes.
-Esta branch entrega as fases 1 a 3, em PRs dependentes. Nao autoriza merge, deploy, migracao remota,
+Esta branch entrega as fases 1 a 4, em PRs dependentes. Nao autoriza merge, deploy, migracao remota,
 ativacao de automacoes ou mensagens reais. Core, Aux e RH continuam separados;
 o Supabase central permanece responsavel por identidade, MFA e revogacao.
 
@@ -12,10 +12,17 @@ o Supabase central permanece responsavel por identidade, MFA e revogacao.
 | 1 | Atendentes, bases, atribuicoes, permissao e autoria | Implementada; revisao remota pendente |
 | 2 | Disparos individual/global, nome do dono da PNR, lotes e dedupe | Implementada; revisao remota pendente |
 | 3 | Midia privada duravel, upload e visualizadores seguros | Implementada; revisao remota pendente |
-| 4 | Evidencias paginadas com midia, pasta por PNR e ZIP opcional | Pendente; depende da fase 3 |
+| 4 | Evidencias paginadas com midia, pasta por PNR e ZIP opcional | Implementada; revisao remota pendente |
 | 5 | IA opcional OpenAI/Gemini, fallback deterministico e modelos Meta | Pendente; depende da fase 2 |
 | 6 | Diferenciais de sync, enriquecimento versionado e indicadores/eventos | Pendente; depende das fases 1 e 2 |
 | 7 | MFA recente, titularidade de telefone, hardening e E2E controlado | Pendente; depende das anteriores |
+
+Depois da fase 7, executar a correcao de logout central solicitada em 09/10:
+Inteligencia desconectado nao pode manter acesso no Atendimento. Diagnosticar
+cookies/vinculos/tickets, expiracao e troca de conta; provar revogacao nas APIs,
+limpeza de conteudo da aba/PWA e reentrada exclusivamente pelo Inteligencia.
+As capturas mostram a divergencia visual, nao comprovam isoladamente a
+autorizacao do backend. Nao considerar o incidente corrigido sem essa prova.
 
 Templates legados sem responsabilidade auditavel nao sao enviados pelo novo
 worker. Historico permanece acessivel; registros pendentes exigem revisao.
@@ -194,6 +201,39 @@ O primeiro comando simula, o segundo remove ate 100 objetos expirados por
 execucao. Nao ha exclusao automatica e nenhum comando de retencao foi usado
 em dados reais. Rollback mantem metadados, arquivos privados e auditoria;
 nao voltar ao download direto da Meta sem a verificacao de seguranca.
+
+## Fase 4
+
+1. Funcionalidades: prints reais de 900 x 840, paginacao por altura medida,
+   texto integral e Unicode preservados, autoria, horario do registro ALC e
+   miniatura de imagem/figurinha. Audio, video e documento ficam referenciados
+   com nome, MIME, tamanho e hash; nao ha transcricao ou thumbnail inventada.
+   Pasta por PNR, originais privados, downloads individuais e ZIP opcional.
+2. Arquivos: `evidence.ts`, `evidence-render.tsx`, `evidence-store.tsx`, APIs
+   `evidence/*`, lista de comprovantes, CSS de anexos, tracing da fonte local,
+   retencao de midia e testes de integridade, corrida, render e PostgreSQL.
+3. Banco: `005_evidence_media.sql` associa originais a pastas com hash. A captura
+   protege esses originais de expurgo. Sem backfill, migracao remota ou acao
+   destrutiva de liberacao; a politica de retencao depende de aprovacao.
+4. Seguranca: fontes revalidadas depois de ler Storage e renderizar, sob locks
+   de diretorio/caso/conversa/mensagem/midia. Historico alterado, PNR misturada,
+   original ausente, hash divergente e quarentena bloqueiam sem gravacao parcial.
+   Listagem, bytes e ZIP cruzam escopo historico, PNR atual e dono atual.
+5. Limites explicitos: 500 mensagens, 160 mil caracteres, 80 prints e 25 MB
+   de originais/prints por captura. Exceder bloqueia, nunca corta o relato.
+   Miniatura usa o primeiro frame; o original permanece intacto. Os prints sao
+   derivados dos registros ALC, nao uma captura nativa do WhatsApp.
+6. Prova local: 389 testes Atendimento e 375 Inteligencia passaram, incluindo
+   51 cenarios PostgreSQL. Typecheck e builds dos dois apps/conector passaram.
+   Lint global permanece nos cinco erros legados; nenhum foi ocultado. PNGs reais com
+   dimensoes/hash/pixels e ausencia de chamadas externas foram verificados.
+   Navegador com API sintetica: 320/391/768/1280 pixels CSS, imagens carregadas,
+   sem overflow; capturas visuais em 320/1280. ZIP e concorrencia testados localmente.
+7. Entrega: PR draft dependente da fase 3 (#79). Nao autoriza main, merge,
+   deploy, bucket/scanner novo ou coleta de conversa real.
+8. Homologacao pendente: Supabase Storage/AV reais, codecs PDF/video/audio,
+   SSO/MFA e politicas externas. Proxima fase: propostas IA estruturadas,
+   instrucoes versionadas e contrato textual aprovado da Meta.
 
 ## Catalogo e organograma
 

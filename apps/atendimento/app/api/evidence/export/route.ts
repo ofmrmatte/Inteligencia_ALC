@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { createHash } from "node:crypto";
 import { currentProfile, HttpError } from "@/lib/auth";
 import { authorizedFolder } from "@/lib/evidence-store";
 import { db, audit } from "@/lib/db";
@@ -28,15 +29,19 @@ export async function POST(request:Request){
     throw new HttpError(409,`Arquivos incompletos na pasta ${id}.`);
    for(const image of images.rows){
     const bytes=image.image_png as Buffer;
+    if(createHash("sha256").update(bytes).digest("hex")!==image.sha256)
+     throw new HttpError(409,`Integridade não confirmada na pasta ${id}.`);
     bytesCount+=bytes.byteLength;
     if(bytesCount>30*1024*1024 || entries.length>90)
      throw new HttpError(422,"Selecione menos pastas: limite de 30 MB ou 90 imagens por pacote.");
     entries.push({path:`${id}/${image.filename}`,data:bytes});
    }
    entries.push({path:`${id}/manifesto.json`,data:Buffer.from(JSON.stringify(folder.manifest,null,2),"utf8")});
+   await authorizedFolder(profile,id);
   }
   if(entries.length>100)throw new HttpError(422,"Muitas imagens para um único ZIP.");
   const zip=packZip(entries);
+  for(const id of caseIds)await authorizedFolder(profile,id);
   await audit(profile.id,"evidence_folders_exported",caseIds.join(","),{
    caseIds,folders:caseIds.length,files:entries.length,bytes:zip.byteLength,
   });

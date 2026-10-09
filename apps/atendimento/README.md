@@ -12,6 +12,7 @@ Na raiz: `npm ci`, `npm run dev:atendimento`, `npm run build:atendimento` e `npm
 - Gestão operacional separada do acesso central: funções explícitas, bases principais/substitutas, disponibilidade, recebimento, atribuição única por PNR e histórico de redistribuições. Consulte [a entrega por fases](../../docs/atendimento-evolucao-fases.md) antes de ativar esta evolução.
 - Caixa por canal, busca, histórico, anexos recebidos, notas internas, assumir, concluir e retomar robô.
 - Anexos privados duráveis, upload humano com progresso, players e quarentena antimalware. Hash e permissões são conferidos antes do download/envio. Consulte a fase 3 antes de configurar bucket e scanner; sem configuração não há liberação de arquivos.
+- Comprovantes paginados em prints 900 x 840, com texto integral, miniaturas e referencias verificadas aos originais privados. Pasta por PNR e ZIP opcional; captura bloqueada se historico, escopo ou hash mudar. Consulte a fase 4 para limites e retencao dos originais associados.
 - PNRs com filtros, comprador, produtos, entrega, contato validado e histórico preservado.
 - Consulta do motorista exige nome, base e vínculo de telefone/ID; ambiguidades vão para a equipe. Consultas anteriores são explícitas, incluindo casos encerrados.
 - Tratativa determinística do cliente: recebimento, data, produto, confirmação no aplicativo; negativa, portaria/vizinhos e encaminhamento. O sistema registra o relato, sem afirmar que alterou o Mercado Livre.
