@@ -160,7 +160,13 @@ describe.skipIf(!fixtureUrl)("isolated recent MFA PostgreSQL", () => {
   beforeAll(async () => {
     mocks.pool = new pg.Pool({ connectionString: fixtureUrl, max: 12, connectionTimeoutMillis: 3000 });
     const client = await mocks.pool.connect();
-    try { await migrate(client); } finally { client.release(); }
+    try {
+      await client.query(`DO $$ BEGIN
+        IF NOT EXISTS(SELECT 1 FROM pg_roles WHERE rolname='anon') THEN CREATE ROLE anon NOLOGIN; END IF;
+        IF NOT EXISTS(SELECT 1 FROM pg_roles WHERE rolname='authenticated') THEN CREATE ROLE authenticated NOLOGIN; END IF;
+      END $$`);
+      await migrate(client);
+    } finally { client.release(); }
     await mocks.pool.query("CREATE TABLE IF NOT EXISTS alc_atendimento.test_actions(id uuid PRIMARY KEY)");
   }, 60_000);
   beforeEach(async () => {
