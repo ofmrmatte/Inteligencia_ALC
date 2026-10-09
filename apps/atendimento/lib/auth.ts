@@ -143,12 +143,12 @@ export function requireAdmin(profile: AuthProfile) {
     throw new HttpError(403, "Administração restrita a gestores autorizados.");
 }
 export type Scope = { full: boolean; pairs: Set<string>; safe: Set<string> };
-export async function identityScopeFor(profile: AuthProfile): Promise<Scope> {
+export async function identityScopeFor(profile: AuthProfile, units?: { unit_key: string; base_key: string; sigla: string }[]): Promise<Scope> {
   if (hasFullOperationalScope(profile))
     return { full: true, pairs: new Set(), safe: new Set() };
-  const { rows } = await core().query(
+  const rows = units ?? (await core().query(
     "SELECT unit_key,base_key,sigla FROM public.operational_units WHERE active=true",
-  );
+  )).rows;
   const assigned = new Set(profile.baseScope.map(normalize)),
     siglas = new Set(profile.siglaScope.map(normalize));
   const counts = new Map<string, number>();

@@ -98,12 +98,14 @@ export function canonicalUnit(
 export function receivingOperator(operator: Operator | undefined) {
   return Boolean(
     operator?.active &&
-      operator.available &&
-      operator.receiving &&
-      operator.roles.includes("agent"),
+    operator.available &&
+    operator.receiving &&
+    operator.roles.includes("agent"),
   );
 }
-export async function enabledProfiles(transaction?: PoolClient): Promise<AuthProfile[]> {
+export async function enabledProfiles(
+  transaction?: PoolClient,
+): Promise<AuthProfile[]> {
   const key = process.env.SUPABASE_SERVICE_ROLE_KEY;
   if (!key)
     throw new HttpError(503, "Cadastro de responsáveis não configurado.");
@@ -227,7 +229,18 @@ export async function listOperators(profile: AuthProfile) {
     ),
   ]);
   return {
-    profiles: profiles.map((p) => ({ id: p.id, name: p.fullName || p.email })),
+    profiles: await Promise.all(
+      profiles.map(async (p) => {
+        const scope = await identityScopeFor(p, units);
+        return {
+          id: p.id,
+          name: p.fullName || p.email,
+          unitKeys: units
+            .filter((unit) => visible(scope, unit))
+            .map((unit) => unit.unit_key),
+        };
+      }),
+    ),
     units,
     records: operators.rows.map((o) => ({
       ...o,
@@ -244,38 +257,42 @@ export async function listOperators(profile: AuthProfile) {
 }
 export async function saveOperator(profile: AuthProfile, input: unknown) {
   requireAdmin(profile);
-  const parsed = operatorSchema.parse(input),
-    target = (await enabledProfiles()).find((p) => p.id === parsed.userId);
-  if (!target && parsed.active)
-    throw new HttpError(
-      403,
-      "Identidade desabilitada ou sem acesso ao Atendimento.",
-    );
-  const units = await operationalUnits(),
-    scope = target
-      ? await identityScopeFor(target)
-      : { full: false, pairs: new Set<string>(), safe: new Set<string>() };
+  const parsed = operatorSchema.parse(input);
   if (new Set(parsed.bases.map((b) => b.unitKey)).size !== parsed.bases.length)
     throw new HttpError(400, "Base repetida.");
-  const bases = parsed.bases.map((base) => {
-    const unit = units.find((u) => u.unit_key === base.unitKey);
-    if (
-      !unit ||
-      ["SVC", "XPT"].includes(normalize(unit.sigla)) ||
-      (parsed.active && !visible(scope, unit))
-    )
-      throw new HttpError(
-        403,
-        "Base inválida ou fora do escopo central do responsável.",
-      );
-    return { ...base, unit };
-  });
   const transaction = await db().connect();
   try {
     await transaction.query("BEGIN");
     await transaction.query(
       "SELECT pg_advisory_xact_lock(hashtext('atendimento_operator_directory'))",
     );
+    const profiles = await enabledProfiles(transaction),
+      actor = profiles.find((p) => p.id === profile.id);
+    if (!actor) throw new HttpError(403, "Permissão administrativa revogada.");
+    requireAdmin(actor);
+    const target = profiles.find((p) => p.id === parsed.userId);
+    if (!target && parsed.active)
+      throw new HttpError(
+        403,
+        "Identidade desabilitada ou sem acesso ao Atendimento.",
+      );
+    const units = await operationalUnits(),
+      scope = target
+        ? await identityScopeFor(target, units)
+        : { full: false, pairs: new Set<string>(), safe: new Set<string>() };
+    const bases = parsed.bases.map((base) => {
+      const unit = units.find((u) => u.unit_key === base.unitKey);
+      if (
+        !unit ||
+        ["SVC", "XPT"].includes(normalize(unit.sigla)) ||
+        (parsed.active && !visible(scope, unit))
+      )
+        throw new HttpError(
+          403,
+          "Base inválida ou fora do escopo central do responsável.",
+        );
+      return { ...base, unit };
+    });
     await transaction.query(
       `INSERT INTO alc_atendimento.operators(user_id,roles,active,available,receiving,updated_by) VALUES($1,$2,$3,$4,$5,$6) ON CONFLICT(user_id) DO UPDATE SET roles=excluded.roles,active=excluded.active,available=excluded.available,receiving=excluded.receiving,updated_by=excluded.updated_by,updated_at=now()`,
       [
@@ -313,6 +330,123 @@ export async function saveOperator(profile: AuthProfile, input: unknown) {
         receiving: parsed.receiving,
         bases: bases.map((b) => b.unit.unit_key),
       },
+      transaction,
+    );
+    await transaction.query("COMMIT");
+    return { ok: true };
+  } catch (error) {
+    await transaction.query("ROLLBACK");
+    throw error;
+  } finally {
+    transaction.release();
+  }
+}
+
+const coverageMember = z
+  .object({
+    userId: z.uuid(),
+    responsibility: z.enum(["primary", "substitute"]),
+  })
+  .strict();
+export const coverageSchema = z
+  .object({
+    unitKey: z.string().min(1).max(250),
+    expected: z.array(coverageMember).max(500),
+    assignments: z.array(coverageMember).max(500),
+  })
+  .strict();
+
+// Coverage changes only one unit; concurrent operator edits must not be overwritten.
+export async function saveCoverage(profile: AuthProfile, input: unknown) {
+  requireAdmin(profile);
+  const parsed = coverageSchema.parse(input);
+  const units = await operationalUnits(),
+    unit = units.find((u) => u.unit_key === parsed.unitKey);
+  if (!unit || !visible(await identityScopeFor(profile, units), unit))
+    throw new HttpError(403, "Base fora do escopo autorizado.");
+  if (
+    new Set(parsed.assignments.map((a) => a.userId)).size !==
+    parsed.assignments.length
+  )
+    throw new HttpError(400, "Atendente repetido.");
+  const transaction = await db().connect();
+  try {
+    await transaction.query("BEGIN");
+    await transaction.query(
+      "SELECT pg_advisory_xact_lock(hashtext('atendimento_operator_directory'))",
+    );
+    const profiles = await enabledProfiles(transaction);
+    const actor = profiles.find((p) => p.id === profile.id);
+    if (
+      !actor ||
+      !canManageUsers(actor) ||
+      !visible(await identityScopeFor(actor, units), unit)
+    )
+      throw new HttpError(403, "Permissão administrativa revogada.");
+    const current = (
+      await transaction.query(
+        "SELECT user_id,responsibility FROM alc_atendimento.operator_bases WHERE unit_key=$1 ORDER BY user_id",
+        [unit.unit_key],
+      )
+    ).rows;
+    const canonical = (rows: { userId: string; responsibility: string }[]) =>
+      JSON.stringify(
+        rows
+          .map((r) => [r.userId, r.responsibility])
+          .sort((a, b) => a[0].localeCompare(b[0])),
+      );
+    if (
+      canonical(
+        current.map((r) => ({
+          userId: r.user_id,
+          responsibility: r.responsibility,
+        })),
+      ) !== canonical(parsed.expected)
+    )
+      throw new HttpError(
+        409,
+        "Cobertura alterada por outra pessoa. Atualize a página.",
+      );
+    const operators = (
+      await transaction.query(
+        "SELECT * FROM alc_atendimento.operators WHERE user_id=ANY($1::uuid[])",
+        [parsed.assignments.map((a) => a.userId)],
+      )
+    ).rows as Operator[];
+    for (const assignment of parsed.assignments) {
+      const target = profiles.find((p) => p.id === assignment.userId),
+        operator = operators.find((o) => o.user_id === assignment.userId);
+      if (
+        !target ||
+        !operator?.active ||
+        !operator.roles.includes("agent") ||
+        !visible(await identityScopeFor(target, units), unit)
+      )
+        throw new HttpError(
+          403,
+          "Atendente não habilitado ou sem acesso central à base.",
+        );
+    }
+    await transaction.query(
+      "DELETE FROM alc_atendimento.operator_bases WHERE unit_key=$1",
+      [unit.unit_key],
+    );
+    for (const assignment of parsed.assignments)
+      await transaction.query(
+        "INSERT INTO alc_atendimento.operator_bases(user_id,unit_key,base_key,sigla,responsibility) VALUES($1,$2,$3,$4,$5)",
+        [
+          assignment.userId,
+          unit.unit_key,
+          unit.base_key,
+          unit.sigla,
+          assignment.responsibility,
+        ],
+      );
+    await audit(
+      actor.id,
+      "coverage_updated",
+      unit.unit_key,
+      { assignments: parsed.assignments },
       transaction,
     );
     await transaction.query("COMMIT");

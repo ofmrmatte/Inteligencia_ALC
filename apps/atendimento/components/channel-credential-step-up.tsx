@@ -18,10 +18,14 @@ export type ChannelCredentialPayload =
       token?: string;
       appSecret?: string;
     };
+export type AiCredentialPayload = { operation: "replace_ai_credential"; channel: "openai" | "gemini"; apiKey: string } | { operation: "remove_ai_credential"; channel: "openai" | "gemini" };
+type CredentialPayload = ChannelCredentialPayload | AiCredentialPayload;
 type CredentialResult = { ok: true } | { verifyToken: string };
 type Factor = { id: string; friendlyName: string };
 
-function operationLabel(operation: ChannelCredentialPayload["operation"]) {
+function operationLabel(operation: CredentialPayload["operation"]) {
+  if (operation === "replace_ai_credential") return "salvar ou substituir a credencial de IA";
+  if (operation === "remove_ai_credential") return "remover a credencial de IA";
   return operation === "reveal_token_verification"
     ? "revelar o token de verificação"
     : operation === "replace_access_token"
@@ -36,7 +40,7 @@ export function ChannelCredentialStepUp({
   onComplete,
   onCancel,
 }: {
-  payload: ChannelCredentialPayload;
+  payload: CredentialPayload;
   onComplete: (result: CredentialResult) => void | Promise<void>;
   onCancel: () => void;
 }) {
@@ -49,6 +53,7 @@ export function ChannelCredentialStepUp({
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
+  const resource = payload.channel === "openai" || payload.channel === "gemini" ? "ai-credentials" : "channel-credentials";
 
   useEffect(() => {
     const element = dialog.current;
@@ -69,7 +74,7 @@ export function ChannelCredentialStepUp({
 
   useEffect(() => {
     let active = true;
-    void api<{ factors: Factor[] }>("channel-credentials")
+    void api<{ factors: Factor[] }>(resource)
       .then(({ factors: available }) => {
         if (!active) return;
         setFactors(available);
@@ -85,7 +90,7 @@ export function ChannelCredentialStepUp({
     return () => {
       active = false;
     };
-  }, [payload]);
+  }, [payload, resource]);
 
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -105,12 +110,12 @@ export function ChannelCredentialStepUp({
         challengeId: string;
         factorId: string;
         nonce: string;
-      }>("channel-credentials", {
+      }>(resource, {
         action: "challenge",
         payload,
         factorId,
       });
-      const verified = await api<{ proofId: string }>("channel-credentials", {
+      const verified = await api<{ proofId: string }>(resource, {
         action: "verify",
         payload,
         factorId: challenge.factorId,
@@ -118,7 +123,7 @@ export function ChannelCredentialStepUp({
         nonce: challenge.nonce,
         code: normalizedCode,
       });
-      const result = await api<CredentialResult>("channel-credentials", {
+      const result = await api<CredentialResult>(resource, {
         action: "execute",
         payload,
         proofId: verified.proofId,
@@ -147,7 +152,7 @@ export function ChannelCredentialStepUp({
     >
       <h2 id="channel-step-up-title">Confirmação MFA necessária</h2>
       <p className="muted">
-        Confirme o TOTP para {operationLabel(payload.operation)} em {payload.channel === "driver" ? "Motoristas" : "Clientes"}.
+        Confirme o TOTP para {operationLabel(payload.operation)} em {payload.channel === "driver" ? "Motoristas" : payload.channel === "client" ? "Clientes" : payload.channel === "openai" ? "OpenAI" : "Google Gemini"}.
       </p>
       {loading ? <p role="status">Consultando autenticadores verificados…</p> : null}
       {!loading && !factors.length ? (

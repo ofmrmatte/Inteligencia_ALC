@@ -340,14 +340,14 @@ export function ChannelCard({
     </section>
   );
 }
-function AutomationForm({
+export function AutomationForm({
   initial,
   refresh,
 }: {
   initial: Automation;
   refresh: () => Promise<void>;
 }) {
-  const [value, setValue] = useState(initial),
+  const [value, setValue] = useState({ driverNotifications: initial.driverNotifications, clientOutreach: initial.clientOutreach, bot: initial.bot, intervalMinutes: 30 as const }),
     [notice, setNotice] = useState(""),
     [busy, setBusy] = useState(false);
   return (
@@ -373,40 +373,27 @@ function AutomationForm({
           }
         }}
       >
-        {[
-          ["driverNotifications", "Notificar motorista sobre nova PNR"],
-          [
-            "clientOutreach",
-            "Contatar clientes em Aguardando comprovante e Com penalidade",
-          ],
-          ["bot", "Responder automaticamente dentro da janela de atendimento"],
-        ].map(([key, label]) => (
-          <label className="check" key={key}>
+        <div className="automation-grid">{[
+          ["driverNotifications", "Notificações aos motoristas", "Permite iniciar notificações relacionadas às PNRs classificadas como Aguardando comprovante ou Com penalidade. Casos em revisão permanecem consultáveis, mas não geram disparos proativos."],
+          ["clientOutreach", "Contato automático com clientes", "Permite iniciar contatos com compradores elegíveis, mediante telefone verificado, template Meta aprovado e atendente atribuído."],
+          ["bot", "Respostas automáticas", "Permite que o sistema responda mensagens recebidas dentro das condições autorizadas. O motor pode operar por regras determinísticas ou usar IA quando ela estiver configurada e habilitada."],
+        ].map(([key, label, description]) => (
+          <label className="automation-option" key={key}>
+            <span><strong>{label}</strong><small>{description}</small></span>
             <input
               type="checkbox"
-              checked={Boolean(value[key as keyof Automation])}
+              role="switch"
+              aria-label={label}
+              disabled={busy}
+              checked={Boolean(value[key as keyof typeof value])}
               onChange={(e) =>
                 setValue((v) => ({ ...v, [key]: e.target.checked }))
               }
             />
-            {label}
           </label>
-        ))}
-        <label>
-          Responsável apresentado ao cliente
-          <input
-            value={value.operatorName}
-            onChange={(e) =>
-              setValue((v) => ({ ...v, operatorName: e.target.value }))
-            }
-            required
-            maxLength={200}
-          />
-        </label>
-        <label>
-          Intervalo da coleta
-          <input readOnly value="30 minutos" />
-        </label>
+        ))}</div>
+        <section className="automation-information"><h3>Identificação nos disparos</h3><p>O nome apresentado nos templates corresponde ao atendente responsável pela PNR. Em disparos globais, cada mensagem utiliza o nome do respectivo atendente atribuído. O usuário que inicia o lote não substitui a identidade do responsável.</p></section>
+        <section className="automation-information"><h3>Coleta automática: 30 minutos</h3><p>Intervalo exclusivo da coleta do ALC Atendimento. Não corresponde ao Sync PNR do Inteligência ALC.</p></section>
         <button className="primary" disabled={busy}>
           Salvar automações
         </button>

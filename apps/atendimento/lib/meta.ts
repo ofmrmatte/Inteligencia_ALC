@@ -37,7 +37,7 @@ export function encrypt(value: string) {
     cipher.getAuthTag().toString("hex"),
   ].join(":");
 }
-function decrypt(value: string) {
+export function decrypt(value: string) {
   const [iv, data, tag] = value.split(":"),
     key = Buffer.from(process.env.ATENDIMENTO_ENCRYPTION_KEY || "", "hex");
   const decipher = createDecipheriv("aes-256-gcm", key, Buffer.from(iv, "hex"));

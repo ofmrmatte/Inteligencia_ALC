@@ -1834,3 +1834,107 @@ dd {
   padding:10px;font-size:12px;user-select:text;
 }
 .webhook-verify-row button { display:inline-flex;align-items:center;gap:6px; }
+
+/* Operational management keeps reference data separate from editable coverage. */
+.management-toolbar { display:flex;flex-wrap:wrap;gap:12px;align-items:center;margin-bottom:16px; }
+.management-toolbar > p { flex:1 1 280px;margin:0;color:var(--muted); }
+.management-toolbar > input { width:260px;max-width:100%; }
+.management-toolbar > select { width:200px;max-width:100%; }
+.management-toolbar > label { flex:1 1 170px;min-width:0; }
+.management-toolbar select,.management-toolbar input { min-width:0; }
+.management-indicators { display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px;margin:0 0 18px; }
+.management-indicators > div { padding:12px 14px;border-left:2px solid var(--red);background:white;min-width:0; }
+.management-indicators dt { font-size:11px;color:var(--muted); }
+.management-indicators dd { margin:6px 0 0;font-size:22px;font-weight:600; }
+.management-reference { border-left:2px solid var(--line);padding:10px 14px;margin:0 0 16px;font-size:12px;color:var(--muted);line-height:1.6; }
+.management-table { background:white;border:1px solid var(--line);border-radius:6px; }
+.management-table table { width:100%; }
+.management-table th,.management-table td { padding:10px 12px;white-space:normal;vertical-align:middle; }
+.management-table td small { display:block;color:var(--muted);font-size:11px; }
+.management-table td select { max-width:220px;min-width:145px; }
+.management-tags { display:flex;flex-wrap:wrap;gap:4px; }
+.management-tags .badge { display:inline-flex;align-items:center;gap:6px;white-space:normal; }
+.management-tags .badge button { padding:0;min-height:18px;width:18px;border:0;background:none; }
+.management-empty { display:flex;gap:16px;align-items:center;flex-wrap:wrap;padding:12px 0; }
+.management-empty p { margin:0; }
+.management-pagination { display:flex;align-items:center;justify-content:flex-end;gap:8px;margin:12px 0;font-size:11px;color:var(--muted); }
+.management-pagination span { margin-right:8px; }
+.management-dialog { width:min(700px,calc(100% - 24px));max-height:calc(100dvh - 32px);padding:0;border:1px solid var(--line);border-radius:8px;color:var(--ink);background:white; }
+.management-dialog::backdrop { background:#0007; }
+html:has(.management-dialog[open]),body:has(.management-dialog[open]) { overflow:hidden; }
+.management-dialog > header,.management-dialog footer { display:flex;gap:12px;align-items:center;padding:14px 20px;background:white; }
+.management-dialog > header { border-bottom:1px solid var(--line);justify-content:space-between; }
+.management-dialog h2 { font-size:17px;margin:0;overflow-wrap:anywhere; }
+.management-dialog h3 { font-size:13px;margin:0 0 10px; }
+.management-dialog > form { display:flex;flex-direction:column;max-height:calc(100dvh - 100px); }
+.management-dialog-body { padding:18px 20px;overflow:auto;min-height:0; }
+.management-dialog footer { border-top:1px solid var(--line);justify-content:flex-end;flex-wrap:wrap; }
+.management-form { border:0;padding:0;margin:0;display:grid;gap:14px;min-width:0; }
+.management-form-grid { display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px; }
+.management-role-list { display:flex;flex-wrap:wrap;gap:10px;margin:12px 0; }
+.management-unit-picker { border-top:1px solid var(--line);padding-top:14px;min-width:0; }
+.management-unit-picker h3 { display:flex;flex-wrap:wrap;justify-content:space-between;gap:8px; }
+.management-unit-picker small,.management-form > small { color:var(--muted);font-size:11px; }
+.management-unit-options { max-height:245px;overflow:auto;margin:10px 0;border-block:1px solid var(--line); }
+.management-unit-options > div { display:flex;gap:10px;align-items:center;padding:8px 0;border-bottom:1px solid var(--line); }
+.management-unit-options .check { flex:1;min-width:0; }
+.management-unit-options .check span { overflow-wrap:anywhere; }
+.management-unit-options small { display:block; }
+.management-unit-options select { width:130px;flex-shrink:0; }
+.management-bulk { display:flex;gap:8px;flex-wrap:wrap;margin-top:8px; }
+.management-bulk button { font-size:11px; }
+.sync-summary { margin-top:24px; }
+.sync-summary h2 { font-size:17px;margin:0 0 18px; }
+.sync-group { margin-bottom:18px; }
+.sync-group h3 { font-size:13px;margin:0 0 10px; }
+.sync-metrics { display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px; }
+.sync-metrics .kpi-card { padding:12px 14px;min-width:0; }
+.sync-metrics .kpi-card > strong { font-size:20px;overflow-wrap:anywhere; }
+.sync-metrics .kpi-card__head { min-height:32px; }
+.sync-secondary { margin-top:18px; }
+.overview-grid { align-items:start; }
+.overview-grid .empty { min-height:96px; }
+.sync-list { list-style:none;padding:0;margin:0; }
+.sync-list li { display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;padding:8px 0;border-bottom:1px solid var(--line);font-size:12px; }
+.sync-list li span { color:var(--muted); }
+.automation-fields { display:flex;flex-direction:column;gap:16px; }
+.automation-grid { display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px; }
+.automation-option { display:flex;align-items:flex-start;gap:14px;padding:16px;background:white;border:1px solid var(--line);border-radius:6px;min-width:0; }
+.automation-option > span { flex:1;min-width:0; }
+.automation-option strong { display:block;font-size:13px; }
+.automation-option small { display:block;margin-top:8px;color:var(--muted);line-height:1.7;font-size:12px; }
+.automation-option input { flex-shrink:0;width:32px;height:20px;appearance:none;border:0;border-radius:12px;background:#b9bbc1;cursor:pointer;position:relative;margin:0; }
+.automation-option input::after { content:"";position:absolute;width:14px;height:14px;top:3px;left:3px;border-radius:50%;background:white;transition:transform 140ms; }
+.automation-option input:checked { background:var(--red); }
+.automation-option input:checked::after { transform:translateX(12px); }
+.automation-information h3 { font-size:13px;margin:0 0 6px; }
+.automation-information p { font-size:12px;color:var(--muted);line-height:1.7;margin:0; }
+@media(max-width:1100px) { .management-indicators,.sync-metrics { grid-template-columns:repeat(2,minmax(0,1fr)); }.automation-grid { grid-template-columns:1fr; } }
+@media(max-width:540px) {
+  .management-toolbar > input,.management-toolbar > select { width:100%; }
+  .management-toolbar > label { flex-basis:calc(50% - 6px); }
+  .management-form-grid { grid-template-columns:1fr; }
+  .management-dialog > header,.management-dialog footer,.management-dialog-body { padding:12px; }
+  .management-unit-options > div { align-items:flex-start;flex-wrap:wrap; }
+  .management-unit-options .check { flex-basis:100%; }
+  .management-unit-options select { margin-left:24px; }
+  .sync-metrics .kpi-card > strong { font-size:18px; }
+}
+@media(max-width:360px) { .sync-metrics,.management-indicators { grid-template-columns:1fr; } }
+.ai-provider-section { padding:16px 0;margin-bottom:20px;border-block:1px solid var(--line); }
+.ai-provider-section h3 { font-size:14px;margin:0 0 8px; }
+.ai-diagnostic { display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px;margin:16px 0; }
+.ai-diagnostic > div { min-width:0; }
+.ai-diagnostic dt { font-size:11px;color:var(--muted); }
+.ai-diagnostic dd { font-size:12px;margin:4px 0 0;overflow-wrap:anywhere; }
+.ai-config-form { max-width:1000px; }
+.ai-credential { padding:14px 0;border-block:1px solid var(--line); }
+.ai-credential small,.ai-model-picker > small { color:var(--muted);font-size:11px;line-height:1.6; }
+.ai-credential-heading { display:flex;flex-wrap:wrap;gap:12px;align-items:center;justify-content:space-between;margin-bottom:10px; }
+.ai-credential-heading .actions { margin:0; }
+.ai-secret-entry { display:grid;gap:10px;margin-bottom:12px; }
+.ai-catalog-status { display:flex;align-items:center;justify-content:space-between;gap:12px;margin-top:6px;color:var(--muted); }
+.ai-catalog-status small { font-size:11px; }
+.ai-config-form fieldset { min-width:0; }
+@media(max-width:1100px) { .ai-diagnostic { grid-template-columns:repeat(2,minmax(0,1fr)); } }
+@media(max-width:540px) { .ai-diagnostic { grid-template-columns:1fr; }.ai-credential-heading .actions button { flex:1; }.ai-credential-heading .actions { width:100%; } }

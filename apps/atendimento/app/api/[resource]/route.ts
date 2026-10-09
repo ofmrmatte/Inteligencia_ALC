@@ -40,16 +40,17 @@ import {
   conversationScopeSql,
 } from "@/lib/inbox";
 import {
-  aiDailyUsage,
-  loadAiConfig,
   saveAiConfig,
   saveInstructions,
   loadInstructions,
   stepsFor,
 } from "@/lib/agent-instructions";
+import { aiModelCatalog } from "@/lib/ai-provider";
+import { aiConfigurationStatus, testAiConnection } from "@/lib/ai-provider-service";
 import {
   listOperators,
   saveOperator,
+  saveCoverage,
   operationalUnits,
 } from "@/lib/operator-directory";
 import {
@@ -222,6 +223,7 @@ export async function GET(
             .max(100000)
             .parse(query.get("offset") || 0),
           query.get("history") === "true",
+          { base: query.get("base") || "", sigla: query.get("sigla") || "", owner: query.get("owner") || "", search: query.get("search") || "" },
         ),
       );
     if (resource === "assignment-policy") {
@@ -291,12 +293,10 @@ export async function GET(
       });
     }
     if (resource === "ai-config") {
-      const config = await loadAiConfig();
-      const used = await aiDailyUsage();
-      return Response.json({ config, used, remaining: Math.max(0, config.dailyCallLimit - used),
-        credentialEnv: config.provider === "openai" ? "OPENAI_API_KEY" : "GEMINI_API_KEY / GOOGLE_API_KEY" },
+      return Response.json(await aiConfigurationStatus(),
       { headers: { "Cache-Control": "private, no-store" } });
     }
+    if (resource === "ai-models") return Response.json(await aiModelCatalog(profile, new URL(request.url).searchParams.get("provider")), { headers: { "Cache-Control": "private, no-store" } });
     if (resource === "collector")
       return Response.json({ collector: await setting("collector") });
     if (resource === "admin") {
@@ -407,6 +407,8 @@ export async function POST(
     }
     if (resource === "operators")
       return Response.json(await saveOperator(profile, body));
+    if (resource === "coverage")
+      return Response.json(await saveCoverage(profile, body));
     if (resource === "assignments")
       return Response.json(await assignCase(profile, body));
     if (resource === "assignment-policy") {
@@ -559,7 +561,7 @@ export async function POST(
       });
     }
     requireAdmin(profile);
-    if (["agent-instructions", "ai-config", "template-contracts"].includes(resource)) {
+    if (["agent-instructions", "ai-config", "ai-test", "template-contracts"].includes(resource)) {
       if (request.headers.get("origin") !== new URL(request.url).origin)
         throw new HttpError(403, "Origem da alteração não autorizada.");
     }
@@ -573,6 +575,7 @@ export async function POST(
       });
     }
     if (resource === "ai-config") return Response.json(await saveAiConfig(profile, body));
+    if (resource === "ai-test") return Response.json(await testAiConnection(profile, body), { headers: { "Cache-Control": "private, no-store" } });
     if (resource === "agent-instructions") {
       return Response.json(await saveInstructions(profile, body));
     }
@@ -587,7 +590,7 @@ export async function POST(
           driverNotifications: z.boolean(),
           clientOutreach: z.boolean(),
           bot: z.boolean(),
-          operatorName: short.min(1),
+          operatorName: short.optional(),
           intervalMinutes: z.literal(30),
         })
         .strict()
@@ -604,8 +607,8 @@ export async function POST(
             );
         }
       await db().query(
-        "UPDATE alc_atendimento.settings SET value=$1,updated_by=$2,updated_at=now() WHERE key='automation'",
-        [parsed, profile.id],
+        "UPDATE alc_atendimento.settings SET value=value || $1::jsonb,updated_by=$2,updated_at=now() WHERE key='automation'",
+        [{ driverNotifications: parsed.driverNotifications, clientOutreach: parsed.clientOutreach, bot: parsed.bot, intervalMinutes: 30 }, profile.id],
       );
       await audit(profile.id, "automation_updated");
       return Response.json({ ok: true });

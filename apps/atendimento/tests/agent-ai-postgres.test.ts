@@ -6,6 +6,7 @@ const identities = vi.hoisted(() => ({ enabled: vi.fn() }));
 vi.mock("../lib/operator-directory", async original => ({ ...(await original()), enabledProfiles: identities.enabled }));
 import { db } from "../lib/db";
 import { reserveAiCall } from "../lib/agent-ai";
+import { reserveAiProviderAttempt } from "../lib/ai-provider";
 import { AI_CONFIG_KEY, defaultAiConfig, saveAiConfig } from "../lib/agent-instructions";
 import { CLIENT_AUDIO_NOTICE_POLICY, clientAudioNoticeAllowed, clientAudioNoticeText } from "../lib/domain";
 import { migrate } from "../scripts/migrations.mjs";
@@ -19,9 +20,11 @@ if (fixtureUrl) {
 describe.skipIf(!fixtureUrl)("isolated phase5 AI PostgreSQL", () => {
   let client: pg.Client;
   const actor: AuthProfile = { id: "11111111-1111-4111-8111-111111111111", fullName: "Synthetic Manager", email: "synthetic@example.test", role: "developer", globalAccess: true, baseScope: [], siglaScope: [] };
-  const config = { ...defaultAiConfig, enabled: true, model: "configured-model", dailyCallLimit: 3 };
+  const config = { ...defaultAiConfig, enabled: true, model: "gpt-4.1-mini", dailyCallLimit: 3 };
   beforeAll(async () => {
     vi.stubEnv("ATENDIMENTO_DATABASE_URL", fixtureUrl!);
+    vi.stubEnv("OPENAI_API_KEY", "synthetic-openai");
+    vi.stubEnv("GEMINI_API_KEY", "synthetic-gemini");
     vi.stubGlobal("fetch", vi.fn(() => { throw new Error("Network forbidden in local fixture"); }));
     client = new pg.Client({ connectionString: fixtureUrl, application_name: "phase5_ai_isolated_fixture" });
     await client.connect();
@@ -30,6 +33,7 @@ describe.skipIf(!fixtureUrl)("isolated phase5 AI PostgreSQL", () => {
   beforeEach(async () => {
     identities.enabled.mockResolvedValue([actor]);
     await client.query("DELETE FROM alc_atendimento.agent_ai_daily_usage");
+    await client.query("DELETE FROM alc_atendimento.ai_provider_attempts");
     await client.query("INSERT INTO alc_atendimento.settings(key,value) VALUES($1,$2) ON CONFLICT(key) DO UPDATE SET value=excluded.value", [AI_CONFIG_KEY, config]);
   });
   afterAll(async () => {
@@ -46,6 +50,14 @@ describe.skipIf(!fixtureUrl)("isolated phase5 AI PostgreSQL", () => {
     expect(results.filter(result => result === null)).toHaveLength(3);
     expect(results.filter(result => result === "budget_exhausted")).toHaveLength(17);
     expect((await client.query("SELECT calls FROM alc_atendimento.agent_ai_daily_usage")).rows).toEqual([{ calls: 3 }]);
+    expect(fetch).not.toHaveBeenCalled();
+  });
+  it("charges at most three concurrent diagnostic attempts and shares the runtime daily budget", async () => {
+    const results = await Promise.allSettled(Array.from({ length: 10 }, () => reserveAiProviderAttempt(actor, "test", 3)));
+    expect(results.filter(r => r.status === "fulfilled")).toHaveLength(3);
+    expect((await client.query("SELECT calls FROM alc_atendimento.agent_ai_daily_usage")).rows).toEqual([{ calls: 3 }]);
+    expect((await client.query("SELECT * FROM alc_atendimento.ai_provider_attempts")).rowCount).toBe(3);
+    expect(await reserveAiCall(randomUUID(), config)).toBe("budget_exhausted");
     expect(fetch).not.toHaveBeenCalled();
   });
   it("keeps paid-attempt claims durable after inbound rollback and excludes duplicate cost", async () => {
@@ -73,7 +85,7 @@ describe.skipIf(!fixtureUrl)("isolated phase5 AI PostgreSQL", () => {
   });
   it("serializes first settings CAS writes and revalidates directory authorization in the transaction", async () => {
     await client.query("DELETE FROM alc_atendimento.settings WHERE key=$1", [AI_CONFIG_KEY]);
-    const results = await Promise.allSettled([saveAiConfig(actor, config), saveAiConfig(actor, { ...config, provider: "gemini" })]);
+    const results = await Promise.allSettled([saveAiConfig(actor, config), saveAiConfig(actor, { ...config, provider: "gemini", model: "gemini-2.5-flash" })]);
     expect(results.filter(result => result.status === "fulfilled")).toHaveLength(1);
     expect(results.find(result => result.status === "rejected")).toMatchObject({ reason: { status: 409 } });
     identities.enabled.mockResolvedValue([]);

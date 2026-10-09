@@ -1,0 +1,407 @@
+{
+  "synthetic": true,
+  "layouts": 50,
+  "results": [
+    {
+      "view": "atendentes",
+      "width": 1440,
+      "client": 1440,
+      "scroll": 1440,
+      "bad": [],
+      "dialogFits": true
+    },
+    {
+      "view": "atendente-modal",
+      "width": 1440,
+      "client": 1440,
+      "scroll": 1440,
+      "bad": [],
+      "dialogFits": true
+    },
+    {
+      "view": "bases",
+      "width": 1440,
+      "client": 1430,
+      "scroll": 1430,
+      "bad": [],
+      "dialogFits": true
+    },
+    {
+      "view": "cobertura-modal",
+      "width": 1440,
+      "client": 1440,
+      "scroll": 1440,
+      "bad": [],
+      "dialogFits": true
+    },
+    {
+      "view": "filas",
+      "width": 1440,
+      "client": 1440,
+      "scroll": 1440,
+      "bad": [],
+      "dialogFits": true
+    },
+    {
+      "view": "transferencia-modal",
+      "width": 1440,
+      "client": 1440,
+      "scroll": 1440,
+      "bad": [],
+      "dialogFits": true
+    },
+    {
+      "view": "visao-geral",
+      "width": 1440,
+      "client": 1430,
+      "scroll": 1430,
+      "bad": [],
+      "dialogFits": true
+    },
+    {
+      "view": "automacoes",
+      "width": 1440,
+      "client": 1440,
+      "scroll": 1440,
+      "bad": [],
+      "dialogFits": true
+    },
+    {
+      "view": "ia-configuracao",
+      "width": 1440,
+      "client": 1430,
+      "scroll": 1430,
+      "bad": [],
+      "dialogFits": true
+    },
+    {
+      "view": "ia-confirmacao",
+      "width": 1440,
+      "client": 1440,
+      "scroll": 1440,
+      "bad": [],
+      "dialogFits": true
+    },
+    {
+      "view": "atendentes",
+      "width": 1024,
+      "client": 1024,
+      "scroll": 1024,
+      "bad": [],
+      "dialogFits": true
+    },
+    {
+      "view": "atendente-modal",
+      "width": 1024,
+      "client": 1024,
+      "scroll": 1024,
+      "bad": [],
+      "dialogFits": true
+    },
+    {
+      "view": "bases",
+      "width": 1024,
+      "client": 1014,
+      "scroll": 1014,
+      "bad": [],
+      "dialogFits": true
+    },
+    {
+      "view": "cobertura-modal",
+      "width": 1024,
+      "client": 1024,
+      "scroll": 1024,
+      "bad": [],
+      "dialogFits": true
+    },
+    {
+      "view": "filas",
+      "width": 1024,
+      "client": 1024,
+      "scroll": 1024,
+      "bad": [],
+      "dialogFits": true
+    },
+    {
+      "view": "transferencia-modal",
+      "width": 1024,
+      "client": 1024,
+      "scroll": 1024,
+      "bad": [],
+      "dialogFits": true
+    },
+    {
+      "view": "visao-geral",
+      "width": 1024,
+      "client": 1014,
+      "scroll": 1014,
+      "bad": [],
+      "dialogFits": true
+    },
+    {
+      "view": "automacoes",
+      "width": 1024,
+      "client": 1024,
+      "scroll": 1024,
+      "bad": [],
+      "dialogFits": true
+    },
+    {
+      "view": "ia-configuracao",
+      "width": 1024,
+      "client": 1014,
+      "scroll": 1014,
+      "bad": [],
+      "dialogFits": true
+    },
+    {
+      "view": "ia-confirmacao",
+      "width": 1024,
+      "client": 1024,
+      "scroll": 1024,
+      "bad": [],
+      "dialogFits": true
+    },
+    {
+      "view": "atendentes",
+      "width": 768,
+      "client": 768,
+      "scroll": 768,
+      "bad": [],
+      "dialogFits": true
+    },
+    {
+      "view": "atendente-modal",
+      "width": 768,
+      "client": 768,
+      "scroll": 768,
+      "bad": [],
+      "dialogFits": true
+    },
+    {
+      "view": "bases",
+      "width": 768,
+      "client": 758,
+      "scroll": 758,
+      "bad": [],
+      "dialogFits": true
+    },
+    {
+      "view": "cobertura-modal",
+      "width": 768,
+      "client": 768,
+      "scroll": 768,
+      "bad": [],
+      "dialogFits": true
+    },
+    {
+      "view": "filas",
+      "width": 768,
+      "client": 768,
+      "scroll": 768,
+      "bad": [],
+      "dialogFits": true
+    },
+    {
+      "view": "transferencia-modal",
+      "width": 768,
+      "client": 768,
+      "scroll": 768,
+      "bad": [],
+      "dialogFits": true
+    },
+    {
+      "view": "visao-geral",
+      "width": 768,
+      "client": 758,
+      "scroll": 758,
+      "bad": [],
+      "dialogFits": true
+    },
+    {
+      "view": "automacoes",
+      "width": 768,
+      "client": 768,
+      "scroll": 768,
+      "bad": [],
+      "dialogFits": true
+    },
+    {
+      "view": "ia-configuracao",
+      "width": 768,
+      "client": 758,
+      "scroll": 758,
+      "bad": [],
+      "dialogFits": true
+    },
+    {
+      "view": "ia-confirmacao",
+      "width": 768,
+      "client": 768,
+      "scroll": 768,
+      "bad": [],
+      "dialogFits": true
+    },
+    {
+      "view": "atendentes",
+      "width": 390,
+      "client": 390,
+      "scroll": 390,
+      "bad": [],
+      "dialogFits": true
+    },
+    {
+      "view": "atendente-modal",
+      "width": 390,
+      "client": 390,
+      "scroll": 390,
+      "bad": [],
+      "dialogFits": true
+    },
+    {
+      "view": "bases",
+      "width": 390,
+      "client": 380,
+      "scroll": 380,
+      "bad": [],
+      "dialogFits": true
+    },
+    {
+      "view": "cobertura-modal",
+      "width": 390,
+      "client": 390,
+      "scroll": 390,
+      "bad": [],
+      "dialogFits": true
+    },
+    {
+      "view": "filas",
+      "width": 390,
+      "client": 390,
+      "scroll": 390,
+      "bad": [],
+      "dialogFits": true
+    },
+    {
+      "view": "transferencia-modal",
+      "width": 390,
+      "client": 390,
+      "scroll": 390,
+      "bad": [],
+      "dialogFits": true
+    },
+    {
+      "view": "visao-geral",
+      "width": 390,
+      "client": 380,
+      "scroll": 380,
+      "bad": [],
+      "dialogFits": true
+    },
+    {
+      "view": "automacoes",
+      "width": 390,
+      "client": 380,
+      "scroll": 380,
+      "bad": [],
+      "dialogFits": true
+    },
+    {
+      "view": "ia-configuracao",
+      "width": 390,
+      "client": 380,
+      "scroll": 380,
+      "bad": [],
+      "dialogFits": true
+    },
+    {
+      "view": "ia-confirmacao",
+      "width": 390,
+      "client": 390,
+      "scroll": 390,
+      "bad": [],
+      "dialogFits": true
+    },
+    {
+      "view": "atendentes",
+      "width": 320,
+      "client": 310,
+      "scroll": 310,
+      "bad": [],
+      "dialogFits": true
+    },
+    {
+      "view": "atendente-modal",
+      "width": 320,
+      "client": 320,
+      "scroll": 320,
+      "bad": [],
+      "dialogFits": true
+    },
+    {
+      "view": "bases",
+      "width": 320,
+      "client": 310,
+      "scroll": 310,
+      "bad": [],
+      "dialogFits": true
+    },
+    {
+      "view": "cobertura-modal",
+      "width": 320,
+      "client": 320,
+      "scroll": 320,
+      "bad": [],
+      "dialogFits": true
+    },
+    {
+      "view": "filas",
+      "width": 320,
+      "client": 310,
+      "scroll": 310,
+      "bad": [],
+      "dialogFits": true
+    },
+    {
+      "view": "transferencia-modal",
+      "width": 320,
+      "client": 320,
+      "scroll": 320,
+      "bad": [],
+      "dialogFits": true
+    },
+    {
+      "view": "visao-geral",
+      "width": 320,
+      "client": 310,
+      "scroll": 310,
+      "bad": [],
+      "dialogFits": true
+    },
+    {
+      "view": "automacoes",
+      "width": 320,
+      "client": 310,
+      "scroll": 310,
+      "bad": [],
+      "dialogFits": true
+    },
+    {
+      "view": "ia-configuracao",
+      "width": 320,
+      "client": 310,
+      "scroll": 310,
+      "bad": [],
+      "dialogFits": true
+    },
+    {
+      "view": "ia-confirmacao",
+      "width": 320,
+      "client": 320,
+      "scroll": 320,
+      "bad": [],
+      "dialogFits": true
+    }
+  ],
+  "pageErrors": []
+}
