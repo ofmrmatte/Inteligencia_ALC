@@ -3,17 +3,13 @@ import { useEffect, useState, useCallback } from "react";
 
 export const PRIVATE_CONTENT_CLEARED_EVENT = "alc-atendimento:private-content-cleared";
 const PRIVATE_CONTENT_SIGNAL = "alc-atendimento:private-content-cleared";
+let privateContentEpoch = 0;
 
 export function clearPrivateContent() {
   if (typeof window === "undefined") return;
+  privateContentEpoch += 1;
   try {
     window.localStorage.setItem(PRIVATE_CONTENT_SIGNAL, String(Date.now()));
-    window.localStorage.clear();
-  } catch {
-    // Storage can be unavailable; the in-memory event still clears mounted content.
-  }
-  try {
-    window.sessionStorage.clear();
   } catch {
     // Storage can be unavailable; the in-memory event still clears mounted content.
   }
@@ -21,30 +17,26 @@ export function clearPrivateContent() {
 }
 
 export async function api<T>(path: string, body?: unknown): Promise<T> {
+  const requestEpoch = privateContentEpoch;
   const response = await fetch(`/api/${path}`, {
     method: body ? "POST" : "GET",
     headers: body ? { "Content-Type": "application/json" } : {},
     body: body ? JSON.stringify(body) : undefined,
     cache: "no-store",
   });
-  const data = await response.json();
-  if (response.status === 401 || data.error === "MFA_REQUIRED") {
+  const data = (await response.json().catch(() => ({}))) as { error?: string };
+  const authFailure =
+    response.status === 401 || response.status === 403 || data.error === "MFA_REQUIRED";
+  if (authFailure) {
     clearPrivateContent();
-    window.location.replace(new URL("/login", window.location.origin).href);
-  } else if (
-    response.status === 403 &&
-    [
-      "Perfil sem acesso ao Atendimento.",
-      "Seu acesso ao Atendimento está desativado.",
-    ].includes(data.error)
-  ) {
-    clearPrivateContent();
-    window.location.replace(
-      new URL("/acesso-indisponivel", window.location.origin).href,
-    );
+    if (response.status === 401 || data.error === "MFA_REQUIRED")
+      window.location.replace(new URL("/login", window.location.origin).href);
+    else window.location.replace(new URL("/acesso-indisponivel", window.location.origin).href);
   }
+  if (requestEpoch !== privateContentEpoch)
+    throw new Error("Sessão encerrada.");
   if (!response.ok) throw new Error(data.error || "Falha ao carregar.");
-  return data;
+  return data as T;
 }
 /** In-app event used by the fixed header to reload the currently mounted views. */
 export const HEADER_REFRESH_EVENT = "alc-atendimento:refresh";
@@ -54,6 +46,7 @@ let stream: EventSource | null = null,
   retryTimer: ReturnType<typeof setTimeout> | null = null,
   fallbackTimer: ReturnType<typeof setInterval> | null = null,
   retryMs = 1_000,
+  authClosed = false,
   connected = false;
 
 function refreshMounted() {
@@ -67,8 +60,26 @@ function updateFallback() {
     fallbackTimer = setInterval(refreshMounted, delay);
   }
 }
+function reconnect() {
+  if (!listeners.size || authClosed || retryTimer) return;
+  retryTimer = setTimeout(() => {
+    retryTimer = null;
+    connectEvents();
+  }, retryMs);
+  retryMs = Math.min(retryMs * 2, 30_000);
+}
+function closeForAuth(status: 401 | 403) {
+  authClosed = true;
+  stream?.close();
+  stream = null;
+  connected = false;
+  clearPrivateContent();
+  window.location.replace(
+    new URL(status === 401 ? "/login" : "/acesso-indisponivel", window.location.origin).href,
+  );
+}
 function connectEvents() {
-  if (!listeners.size || stream || retryTimer || typeof EventSource === "undefined") return;
+  if (!listeners.size || stream || retryTimer || authClosed || typeof EventSource === "undefined") return;
   stream = new EventSource("/api/events");
   stream.onopen = () => {
     connected = true;
@@ -76,30 +87,25 @@ function connectEvents() {
     updateFallback();
   };
   stream.addEventListener("invalidate", refreshMounted);
+  stream.addEventListener("close401", () => closeForAuth(401));
+  stream.addEventListener("close403", () => closeForAuth(403));
+  stream.addEventListener("server503", () => {
+    connected = false;
+    updateFallback();
+  });
   stream.addEventListener("close", () => {
     stream?.close();
     stream = null;
     connected = false;
     updateFallback();
-    if (!listeners.size) return;
-    retryTimer = setTimeout(() => {
-      retryTimer = null;
-      connectEvents();
-    }, retryMs);
-    retryMs = Math.min(retryMs * 2, 30_000);
+    reconnect();
   });
   stream.onerror = () => {
     stream?.close();
     stream = null;
     connected = false;
     updateFallback();
-    if (listeners.size && !retryTimer) {
-      retryTimer = setTimeout(() => {
-        retryTimer = null;
-        connectEvents();
-      }, retryMs);
-      retryMs = Math.min(retryMs * 2, 30_000);
-    }
+    reconnect();
   };
 }
 function subscribeData(fallbackMs: number) {
@@ -113,6 +119,7 @@ function subscribeData(fallbackMs: number) {
       stream?.close();
       stream = null;
       connected = false;
+      authClosed = false;
       if (retryTimer) clearTimeout(retryTimer);
       if (fallbackTimer) clearInterval(fallbackTimer);
       retryTimer = fallbackTimer = null;
@@ -154,10 +161,20 @@ export function useData<T>(path: string, interval = 0) {
     void load();
     // Refreshes only the mounted screen's data; never triggers Case Center collection or WhatsApp sends.
     window.addEventListener(HEADER_REFRESH_EVENT, load);
+    const clear = () => {
+      if (active) {
+        setSnapshot({ path, value: null });
+        setError("Sessão encerrada.");
+      }
+    };
+    window.addEventListener(PRIVATE_CONTENT_CLEARED_EVENT, clear);
+    const timer = path === "profile" && interval ? setInterval(load, interval) : null;
     const unsubscribe = subscribeData(interval || 30_000);
     return () => {
       active = false;
       window.removeEventListener(HEADER_REFRESH_EVENT, load);
+      window.removeEventListener(PRIVATE_CONTENT_CLEARED_EVENT, clear);
+      if (timer) clearInterval(timer);
       unsubscribe();
     };
   }, [path, interval]);

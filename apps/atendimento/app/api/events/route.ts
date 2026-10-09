@@ -7,6 +7,19 @@ export const dynamic = "force-dynamic";
 const POLL_MS = 5_000;
 const MAX_AGE_MS = 5 * 60_000;
 
+function statusOf(error: unknown) {
+  return error instanceof HttpError && (error.status === 401 || error.status === 403)
+    ? error.status
+    : 503;
+}
+
+export function eventForError(error: unknown) {
+  const status = statusOf(error);
+  return status === 401 || status === 403
+    ? `event: close${status}\ndata: unauthorized\n\n`
+    : "event: server503\ndata: transient\n\n";
+}
+
 export async function GET(request: Request) {
   let profile: AuthProfile;
   try {
@@ -14,20 +27,28 @@ export async function GET(request: Request) {
   } catch (error) {
     return Response.json(
       { error: error instanceof Error ? error.message : "Acesso negado." },
-      { status: error instanceof HttpError ? error.status : 503 },
+      { status: statusOf(error) },
     );
   }
-  const encoder = new TextEncoder(), started = Date.now();
-  let closed = false, timer: ReturnType<typeof setInterval> | null = null;
+  const encoder = new TextEncoder();
+  const started = Date.now();
+  let closed = false;
+  let timer: ReturnType<typeof setInterval> | null = null;
+  let controllerRef: ReadableStreamDefaultController<Uint8Array> | null = null;
   const close = (controller: ReadableStreamDefaultController<Uint8Array>) => {
     if (closed) return;
     closed = true;
     if (timer) clearInterval(timer);
     request.signal.removeEventListener("abort", onAbort);
-    try { controller.close(); } catch { /* Stream already closed by the client. */ }
+    try {
+      controller.close();
+    } catch {
+      // The client may already have closed the stream.
+    }
   };
-  let controllerRef: ReadableStreamDefaultController<Uint8Array> | null = null;
-  const onAbort = () => { if (controllerRef) close(controllerRef); };
+  const onAbort = () => {
+    if (controllerRef) close(controllerRef);
+  };
   const body = new ReadableStream<Uint8Array>({
     start(controller) {
       controllerRef = controller;
@@ -52,10 +73,17 @@ export async function GET(request: Request) {
             lastVersion = version;
             send(`event: invalidate\ndata: ${JSON.stringify({ version })}\n\n`);
           } else send(": keepalive\n\n");
-        } catch {
-          send("event: close\ndata: unauthorized\n\n");
-          close(controller);
-        } finally { checking = false; }
+        } catch (error) {
+          const status = statusOf(error);
+          if (status === 401 || status === 403) {
+            send(eventForError(error));
+            close(controller);
+          } else {
+            send(eventForError(error));
+          }
+        } finally {
+          checking = false;
+        }
       }, POLL_MS);
       request.signal.addEventListener("abort", onAbort, { once: true });
     },
