@@ -374,7 +374,7 @@ describe("incoming handoff acknowledgement", () => {
     expect(mocks.transactionQuery).toHaveBeenCalledWith(expect.stringContaining("INSERT INTO alc_atendimento.outbox"), [
       "reply:synthetic-inbound", ID, "client", conversation.phone,
       expect.objectContaining({ type: "text", text: { body: expect.stringContaining("equipe") } }),
-      "ai", null, "Agente virtual",
+      "ai", null, "Ellie",
     ]);
     expect(mocks.transactionQuery.mock.calls.filter(([sql]) => sql.startsWith("INSERT INTO alc_atendimento.outbox"))).toHaveLength(1);
     expect(mocks.transactionQuery).toHaveBeenLastCalledWith("COMMIT");

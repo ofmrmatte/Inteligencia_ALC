@@ -2,7 +2,7 @@
 // M12 (negação de recebimento pelo destinatário) pertence ao fluxo do cliente.
 // O nome comercial do assistente ainda não está definido.
 // Dados entre [colchetes] são placeholders: em execução devem vir de fonte verificada.
-export const AGENT_PLAYBOOK_VERSION = "2026-10-08-v3";
+export const AGENT_PLAYBOOK_VERSION = "2026-10-09-v4";
 export type PlaybookStep = {id:string;code:string;title:string;goal:string;example:string};
 export const CUSTOMER_STEPS: readonly PlaybookStep[] = [
   {
@@ -219,7 +219,7 @@ export function fillScript(template:string, values:Record<string,string>) {
   return template.replace(/\[([^\]]+)\]/g, (_match,key:string) => values[key] ?? "["+key+"]");
 }
 export const AGENT_GUARDRAILS = [
-  "Nome do assistente indefinido; Tony é só exemplo.",
+  "O nome aprovado do assistente virtual é Ellie; nomes e autoria de atendentes humanos permanecem próprios.",
   "C01 exige contato, produto, valor, entrega registrada, envio e template Meta cliente_loss_v2 previamente aprovado.",
   "Somente confirmação de recebimento, data e produto correto permite C04, que finaliza a conversa sem aguardar resposta.",
   "Reclamação e status PNR não são encerrados automaticamente pelo assistente.",

@@ -1,4 +1,5 @@
 import { CUSTOMER_STEPS, fillScript } from "./agent-playbook";
+import { AGENT_DISPLAY_NAME } from "./agent-brand";
 function message(id: string) {
   return CUSTOMER_STEPS.find((step) => step.id === id)?.example || "";
 }
@@ -71,18 +72,20 @@ export type CaseRecord = {
 };
 export type AgentState = {
   step: string;
+  optOut?: boolean;
   receivedAt?: string;
   correctProduct?: boolean;
   result?: string;
   selectedCaseId?: string;
   selectedShipmentId?: string;
 };
+export type AgentReply = { state: AgentState; reply: string; handoff?: boolean };
 export function clientReply(
   state: AgentState,
   text: string,
   customerName?: string,
   context?: { shipmentId?: string; deliveryAt?: string; overrides?: Record<string,string> },
-): { state: AgentState; reply: string; handoff?: boolean } {
+): AgentReply {
   const t = normalize(text);
   const texts = context?.overrides;
   const message = (id: string) => {
@@ -92,7 +95,7 @@ export function clientReply(
   const addressed = (id: string, name?: string) =>
     message(id).replaceAll("[Nome do Cliente]", name?.trim() || "cliente");
   const human = () => ({ state: { ...state, step: "human" }, reply: message("handoff"), handoff: true });
-  if (state.step === "done" || state.step === "human")
+  if ((state.optOut && !contactOptedOut(text)) || state.step === "done" || state.step === "human")
     return { state, reply: "" }; // Prevent another automatic message after conclusion/takeover.
   if (/ATENDENTE|FALAR COM (ALGUEM|UMA PESSOA|UM HUMANO|A EQUIPE|EQUIPE)|EQUIPE LOSS|HUMANO|PARAR|CANCELAR CONTATO|NAO QUERO/.test(t))
     return human();
@@ -165,6 +168,99 @@ export function clientReply(
     return { state, reply: "Essa pessoa estava autorizada a receber a encomenda em seu nome? Se possível, informe também a data." };
   }
   return human();
+}
+
+export function contactOptedOut(text: string) {
+  return /PARAR|CANCELAR CONTATO|NAO QUERO/.test(normalize(text));
+}
+export const CLIENT_AUDIO_NOTICE_POLICY = "unsupported_client_audio_v1";
+export function clientAudioNoticeText() {
+  return `A ${AGENT_DISPLAY_NAME} não oferece suporte a áudio. Por favor, envie sua mensagem por texto.`;
+}
+export function clientAudioNoticeAllowed(
+  conversation: { id: string; channel: string; phone: string; status: string; agent_state: AgentState; last_inbound_at: string | Date | null },
+  job: { conversation_id: string; channel: string; phone: string; dedupe_key: string; sender_kind?: string; sender_user_id?: string | null; sender_display_name_snapshot?: string; agent_policy?: string | null; payload: unknown },
+  inbound: { conversation_id: string; provider_id: string; direction: string; type: string; created_at: string | Date } | undefined,
+  recentContactText: string,
+  now = Date.now(),
+) {
+  const withinWindow = (value: string | Date | null) => {
+    const elapsed = now - new Date(value ?? "").getTime();
+    return Number.isFinite(elapsed) && elapsed >= -60_000 && elapsed <= 86_400_000;
+  };
+  if (typeof recentContactText !== "string" || !inbound || !conversation.id || conversation.channel !== "client" || job.channel !== "client" ||
+    !["bot", "human", "pending"].includes(conversation.status) || conversation.agent_state.step === "done" ||
+    conversation.agent_state.optOut || contactOptedOut(recentContactText) ||
+    job.conversation_id !== conversation.id || inbound.conversation_id !== conversation.id ||
+    job.phone !== conversation.phone || phone(conversation.phone) !== conversation.phone ||
+    !withinWindow(conversation.last_inbound_at) || !withinWindow(inbound.created_at) ||
+    job.agent_policy !== CLIENT_AUDIO_NOTICE_POLICY || job.sender_kind !== "ai" || job.sender_user_id != null ||
+    job.sender_display_name_snapshot !== AGENT_DISPLAY_NAME || inbound.direction !== "in" || inbound.type !== "audio" ||
+    !inbound.provider_id || job.dedupe_key !== `reply:audio:${inbound.provider_id}` ||
+    !job.payload || typeof job.payload !== "object" || Array.isArray(job.payload)) return false;
+  const payload = job.payload as Record<string, unknown>;
+  if (Object.keys(payload).sort().join(",") !== "messaging_product,text,to,type" ||
+    payload.messaging_product !== "whatsapp" || payload.to !== conversation.phone || payload.type !== "text" ||
+    !payload.text || typeof payload.text !== "object" || Array.isArray(payload.text)) return false;
+  const text = payload.text as Record<string, unknown>;
+  return Object.keys(text).join(",") === "body" && text.body === clientAudioNoticeText();
+}
+type AgentAiPlan = { reason: "rules_terminal" | "identity_unverified" | "rules_protected" | "rules_decided" | "unsupported_state" | null; actions: string[]; code: string };
+export function agentAiPlan(channel: "client" | "driver", state: AgentState, text: string, baseline: AgentReply, verified: boolean): AgentAiPlan {
+  if (state.optOut || state.step === "human" || state.step === "done" || baseline.handoff || ["human", "done"].includes(baseline.state.step))
+    return { reason: "rules_terminal" as const, actions: [], code: "" };
+  if (!verified) return { reason: "identity_unverified" as const, actions: [], code: "" };
+  const t = normalize(text);
+  if (!baseline.reply || /ATENDENTE|HUMANO|LOSS|PARAR|CANCELAR CONTATO|NAO QUERO|RECLAMACAO|CARTAO|SENHA|TOKEN|CODIGO DE SEGURANCA|\b(SQL|SYSTEM|PROMPT)\b|IGNORE.*(REGRA|INSTRU|RULE)|ALTER.*(STATUS|PNR)/.test(t))
+    return { reason: "rules_protected" as const, actions: [], code: "" };
+  if (channel === "driver") {
+    if (state.step === "driver_continue" && baseline.state.step === "driver_continue") {
+      if (/ACAREACAO|TENHO (UM )?COMPROVANTE|TENHO EVIDENCIA|COMO (ENVIAR|ENTREGAR) (O )?COMPROVANTE/.test(t))
+        return { reason: null, actions: ["manual_evidence"], code: "M11" };
+      if (/COMO (RESOLVER|TRATAR|FAZER)|COMO PROCEDER/.test(t))
+        return { reason: null, actions: ["procedure"], code: "M10" };
+    }
+    return { reason: "unsupported_state" as const, actions: [], code: "" };
+  }
+  const codes: Record<string, string> = {
+    receipt: "C01", start: "C01", uncertain: "C10", date: "C02", found_later: "C11",
+    product: "C03", neighbors: "C05", neighbors_wait: "C06", third_party: "C08",
+  };
+  if (!codes[state.step] || !codes[baseline.state.step]) return { reason: "unsupported_state" as const, actions: [], code: "" };
+  if (baseline.state.step !== state.step && !(state.step === "start" && baseline.state.step === "receipt"))
+    return { reason: "rules_decided", actions: [], code: codes[state.step] };
+  const intents: Record<string, string[]> = {
+    start: ["yes", "no", "uncertain"], receipt: ["yes", "no", "uncertain"], uncertain: ["yes", "no", "uncertain"],
+    product: ["yes", "no"], neighbors: ["yes", "no", "checking"], neighbors_wait: ["yes", "no", "checking"],
+    date: [], found_later: [], third_party: [],
+  };
+  // Dates and third-party authorization require the original deterministic evidence, not model assertions.
+  return { reason: null, actions: ["clarify", "handoff", ...intents[state.step]], code: codes[state.step] };
+}
+
+export function validateAgentAiAction(
+  actionId: string, channel: "client" | "driver", state: AgentState, text: string,
+  baseline: AgentReply, verified: boolean,
+  context?: { customerName?: string; shipmentId?: string; overrides?: Record<string, string> },
+): AgentReply | null {
+  const independentlyValidated = channel === "client" ? clientReply(state, text, context?.customerName, context) : baseline;
+  const plan = agentAiPlan(channel, state, text, independentlyValidated, verified);
+  if (!plan.actions.includes(actionId)) return null;
+  if (channel === "driver") return baseline;
+  if (actionId === "clarify") return independentlyValidated;
+  const canonical: Record<string, string> = {
+    yes: state.step === "neighbors" || state.step === "neighbors_wait" ? "Encontrei" : "Sim, correto",
+    no: state.step === "neighbors" || state.step === "neighbors_wait" ? "Não encontrei" : "Não recebi",
+    uncertain: "Não tenho certeza", checking: "Vou verificar", handoff: "humano",
+  };
+  const answer = clientReply(state, canonical[actionId], context?.customerName, context);
+  const allowedNext: Record<string, string[]> = {
+    start: ["date", "neighbors", "uncertain", "human"], receipt: ["date", "neighbors", "uncertain", "human"],
+    uncertain: ["date", "neighbors", "uncertain", "human"], product: ["done", "human"],
+    neighbors: ["date", "human", "neighbors_wait"], neighbors_wait: ["date", "human", "neighbors_wait"],
+    date: ["human"], found_later: ["human"], third_party: ["human"],
+  };
+  return allowedNext[state.step]?.includes(answer.state.step) ? answer : null;
 }
 export function clientOpening(record: CaseRecord, operator: string) {
   if (

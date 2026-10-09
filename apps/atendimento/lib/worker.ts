@@ -5,6 +5,10 @@ import {
   phone,
   normalize,
   clientReply,
+  contactOptedOut,
+  CLIENT_AUDIO_NOTICE_POLICY,
+  clientAudioNoticeText,
+  clientAudioNoticeAllowed,
   driverNotificationEligible,
   type CaseRecord,
   type AgentState,
@@ -12,7 +16,9 @@ import {
 import { channelConfig, graph, type Channel } from "./meta";
 import { syncCore, type Automation } from "./source";
 import { fillScript, scriptText } from "./agent-playbook";
-import { loadInstructions, runtimeScripts } from "./agent-instructions";
+import { instructionSnapshotFor, loadInstructions, runtimeScripts } from "./agent-instructions";
+import { resolveInboundAgentDecision } from "./agent-ai";
+import { AGENT_DISPLAY_NAME } from "./agent-brand";
 import { validateQueuedAuthor } from "./dispatch-authorization";
 import { HttpError } from "./auth";
 import { outboundMedia } from "./media-service";
@@ -75,7 +81,7 @@ export async function queueText(
       payload,
       actor ? "human" : "ai",
       actor,
-      actor ? displayName : "Agente virtual",
+      actor ? displayName : AGENT_DISPLAY_NAME,
     ],
   );
   if (actor)
@@ -388,7 +394,29 @@ async function incoming(
     [conversation.id, inboundAt],
   );
   conversation.last_inbound_at = inboundAt;
+  if (channel === "client" && contactOptedOut(text) && !conversation.agent_state.optOut) {
+    await transaction.query("UPDATE alc_atendimento.conversations SET agent_state=jsonb_set(agent_state,'{optOut}','true'::jsonb) WHERE id=$1", [conversation.id]);
+    conversation.agent_state = { ...conversation.agent_state, optOut: true };
+  }
   if (Date.now() - new Date(inboundAt).getTime() > 86_400_000) return;
+  if (channel === "client" && type === "audio") {
+    // Retain only provider metadata. Audio cannot change treatment, human ownership or opt-out.
+    if (!["bot", "human", "pending"].includes(conversation.status) || conversation.agent_state.step === "done" || conversation.agent_state.optOut || contactOptedOut(text)) return;
+    const priorText = (await transaction.query(
+      "SELECT body FROM alc_atendimento.messages WHERE conversation_id=$1 AND direction='in' AND type IN ('text','button','interactive') ORDER BY created_at DESC,id DESC LIMIT 1",
+      [conversation.id],
+    )).rows[0]?.body;
+    if (priorText && contactOptedOut(priorText)) return;
+    const payload = { messaging_product: "whatsapp", to: conversation.phone, type: "text", text: { body: clientAudioNoticeText() } };
+    await transaction.query(
+      `INSERT INTO alc_atendimento.outbox(dedupe_key,conversation_id,channel,phone,payload,sender_kind,sender_user_id,sender_display_name_snapshot,agent_policy)
+       VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9) ON CONFLICT(dedupe_key) DO NOTHING`,
+      [`reply:audio:${id}`, conversation.id, channel, conversation.phone, payload, "ai", null, AGENT_DISPLAY_NAME, CLIENT_AUDIO_NOTICE_POLICY],
+    );
+    await audit(null, "agent_audio_notice_queued", conversation.id, { reason: "unsupported_client_audio" }, transaction);
+    return;
+  }
+  if (conversation.agent_state.optOut && !contactOptedOut(text)) return;
   if (conversation.status !== "bot") return;
   const automation = await setting<Automation>("automation");
   if (!automation.bot) {
@@ -398,7 +426,7 @@ async function incoming(
     );
     return;
   }
-  const savedInstructions = await loadInstructions();
+  const savedInstructions = await loadInstructions(transaction);
   let answer;
   if (!text)
     answer = {
@@ -428,6 +456,15 @@ async function incoming(
       shipmentId: conversation.case_id || "",
       overrides: runtimeScripts(savedInstructions, "client"),
     });
+  const agentDecision = await resolveInboundAgentDecision({
+    channel, state: conversation.agent_state, text, baseline: answer,
+    identityVerified: conversation.identity_verified,
+    instructions: savedInstructions, inboundKey: id,
+    customerName: conversation.name, shipmentId: conversation.case_id,
+    sensitiveValues: [conversation.phone, conversation.driver_id, conversation.agent_state.name ?? ""],
+  }, { transaction });
+  answer = agentDecision.answer;
+  if (channel === "client" && contactOptedOut(text)) answer.state = { ...answer.state, optOut: true };
   const updated = await transaction.query(
     "UPDATE alc_atendimento.conversations SET agent_state=$2,status=$3 WHERE id=$1 AND status='bot' AND agent_state=$4 RETURNING id",
     [
@@ -442,6 +479,13 @@ async function incoming(
     ],
   );
   if (!updated.rowCount) return;
+  await transaction.query(
+    `INSERT INTO alc_atendimento.agent_decisions(inbound_message_id,conversation_id,instruction_revision,instruction_snapshot,config_snapshot,decision)
+     VALUES($1,$2,$3,$4,$5,$6)`,
+    [inserted.rows[0].id, conversation.id, savedInstructions.revision,
+      instructionSnapshotFor(channel, savedInstructions), agentDecision.configSnapshot, agentDecision.decision],
+  );
+  await audit(null, "agent_decision", conversation.id, agentDecision.decision, transaction);
   if (answer.reply)
     await queueText(
       conversation,
@@ -666,24 +710,41 @@ export async function processOutbox() {
         [job.id],
       );
       if (!claimed.rowCount) continue;
-      // Recheck the service window and human takeover immediately before a bot reply.
-      if (job.payload.type !== "template") {
+      // The fixed audio notice is the only marked exception to normal bot takeover policy.
+      if (job.payload.type !== "template" || job.agent_policy != null) {
+        const markedNotice = job.agent_policy != null;
+        const inbound = markedNotice ? (await connection.query(
+          "SELECT conversation_id,provider_id,direction,type,created_at FROM alc_atendimento.messages WHERE conversation_id=$1 AND provider_id=$2",
+          [job.conversation_id, job.dedupe_key.slice("reply:audio:".length)],
+        )).rows[0] : undefined;
+        const recentText = markedNotice ? (await connection.query(
+          "SELECT body FROM alc_atendimento.messages WHERE conversation_id=$1 AND direction='in' AND type IN ('text','button','interactive') ORDER BY created_at DESC,id DESC LIMIT 1",
+          [job.conversation_id],
+        )).rows[0]?.body ?? "" : "";
         const c = (
           await connection.query(
-            "SELECT * FROM alc_atendimento.conversations WHERE id=$1",
+            markedNotice
+              ? "SELECT c.*,k.classification AS audio_case_classification FROM alc_atendimento.conversations c LEFT JOIN alc_atendimento.cases k ON k.case_id=c.case_id WHERE c.id=$1"
+              : "SELECT * FROM alc_atendimento.conversations WHERE id=$1",
             [job.conversation_id],
           )
         ).rows[0];
+        const noticeAllowed = markedNotice && c && !job.media_id &&
+          c.audio_case_classification !== "encerrada" &&
+          clientAudioNoticeAllowed(c, job, inbound, recentText);
         if (
+          (markedNotice && !noticeAllowed) ||
           !c?.last_inbound_at ||
           c.phone !== job.phone ||
           Date.now() - new Date(c.last_inbound_at).getTime() > 86_400_000 ||
-          (job.dedupe_key.startsWith("reply:") && !botReplyAllowed(c))
+          (job.dedupe_key.startsWith("reply:") && !botReplyAllowed(c) && !noticeAllowed)
         ) {
           await connection.query(
             "UPDATE alc_atendimento.outbox SET status='cancelled',error='Janela encerrada ou atendimento assumido.' WHERE id=$1",
             [job.id],
           );
+          if (markedNotice) await audit(null, "agent_audio_notice_cancelled", job.id,
+            { reason: "audio_notice_policy_rejected" }, sending ?? undefined);
           continue;
         }
       }

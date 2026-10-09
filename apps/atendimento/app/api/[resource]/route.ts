@@ -40,12 +40,10 @@ import {
   conversationScopeSql,
 } from "@/lib/inbox";
 import {
-  agentSettingsSchema,
-  editableInstructionSchema,
-  policiesSchema,
-  effectiveInstructions,
-  INSTRUCTION_KEY,
-  validateEditedScript,
+  aiDailyUsage,
+  loadAiConfig,
+  saveAiConfig,
+  saveInstructions,
   loadInstructions,
   stepsFor,
 } from "@/lib/agent-instructions";
@@ -341,6 +339,13 @@ export async function GET(
         policies: saved.policies,
       });
     }
+    if (resource === "ai-config") {
+      const config = await loadAiConfig();
+      const used = await aiDailyUsage();
+      return Response.json({ config, used, remaining: Math.max(0, config.dailyCallLimit - used),
+        credentialEnv: config.provider === "openai" ? "OPENAI_API_KEY" : "GEMINI_API_KEY / GOOGLE_API_KEY" },
+      { headers: { "Cache-Control": "private, no-store" } });
+    }
     if (resource === "collector")
       return Response.json({ collector: await setting("collector") });
     if (resource === "webhook-verify-token") {
@@ -620,6 +625,10 @@ export async function POST(
       });
     }
     requireAdmin(profile);
+    if (["agent-instructions", "ai-config", "template-contracts"].includes(resource)) {
+      if (request.headers.get("origin") !== new URL(request.url).origin)
+        throw new HttpError(403, "Origem da alteração não autorizada.");
+    }
     if (resource === "template-contracts") {
       const parsed = z.object({ kind: z.enum(["preview", "save"]) }).passthrough().parse(body);
       const { kind, ...input } = parsed;
@@ -629,66 +638,9 @@ export async function POST(
         headers: { "Cache-Control": "private, no-store" },
       });
     }
+    if (resource === "ai-config") return Response.json(await saveAiConfig(profile, body));
     if (resource === "agent-instructions") {
-      const parsed = z
-        .discriminatedUnion("kind", [
-          z
-            .object({
-              kind: z.literal("script"),
-              revision: z.number().int().nonnegative(),
-              entry: editableInstructionSchema,
-            })
-            .strict(),
-          z
-            .object({
-              kind: z.literal("policies"),
-              revision: z.number().int().nonnegative(),
-              policies: policiesSchema,
-            })
-            .strict(),
-        ])
-        .parse(body);
-      const existing = await loadInstructions();
-      if (existing.revision !== parsed.revision)
-        throw new HttpError(
-          409,
-          "As instruções foram alteradas por outro administrador. Atualize antes de salvar.",
-        );
-      const updated = { ...existing, revision: existing.revision + 1 };
-      if (parsed.kind === "script") {
-        const entry = validateEditedScript(parsed.entry);
-        updated.scripts = {
-          ...existing.scripts,
-          [`${entry.channel}:${entry.code}`]: entry,
-        };
-      } else {
-        updated.policies = parsed.policies;
-      }
-      const result = await db().query(
-        `INSERT INTO alc_atendimento.settings(key,value,updated_by) VALUES($1,$2,$3)
-         ON CONFLICT(key) DO UPDATE SET value=excluded.value,updated_by=excluded.updated_by,updated_at=now()
-         WHERE (alc_atendimento.settings.value->>'revision')::integer IS NOT DISTINCT FROM $4::integer
-         RETURNING key`,
-        [INSTRUCTION_KEY, updated, profile.id, existing.revision],
-      );
-      if (!result.rowCount)
-        throw new HttpError(
-          409,
-          "Conflito de revisão. Recarregue as instruções.",
-        );
-      await audit(
-        profile.id,
-        "agent_instructions_updated",
-        parsed.kind,
-        parsed.kind === "script"
-          ? {
-              code: parsed.entry.code,
-              channel: parsed.entry.channel,
-              revision: updated.revision,
-            }
-          : { policies: updated.policies?.length, revision: updated.revision },
-      );
-      return Response.json({ ok: true, revision: updated.revision });
+      return Response.json(await saveInstructions(profile, body));
     }
     if (resource === "sync") {
       const stats = await syncCore(false, false);

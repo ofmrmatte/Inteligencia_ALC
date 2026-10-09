@@ -515,7 +515,7 @@ describe("source import regressions", () => {
         }),
         "ai",
         null,
-        "Agente virtual",
+        "Ellie",
       ],
     );
     expect(mocks.templates).not.toHaveBeenCalled();
