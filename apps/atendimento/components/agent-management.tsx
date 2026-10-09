@@ -525,7 +525,7 @@ function OperatorEditor({
                       responsibility: b.responsibility,
                     })),
                   } : { ...empty, userId });
-                }
+                }}
               >
                 <option value="">Selecionar</option>
                 {directory.profiles.map((p) => (
