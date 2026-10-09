@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { resolve } from "node:path";
@@ -49,13 +49,70 @@ const expectPrivate = (response: Response) => {
 
 beforeEach(() => {
   vi.resetAllMocks();
+  vi.stubEnv("ATENDIMENTO_PUBLIC_URL", "");
+  vi.stubEnv("RAILWAY_PUBLIC_DOMAIN", "");
   mocks.factors.mockResolvedValue([{ id: FACTOR, friendlyName: "Authenticator" }]);
   mocks.challenge.mockResolvedValue({ challengeId: CHALLENGE, factorId: FACTOR, nonce: "nonce" });
   mocks.verify.mockResolvedValue({ proofId: PROOF });
   mocks.execute.mockResolvedValue({ ok: true });
 });
 
+afterEach(() => vi.unstubAllEnvs());
+
 describe("channel credential API", () => {
+  it("accepts trusted Railway browser origins behind private reverse proxies without bypassing MFA", async () => {
+    vi.stubEnv("ATENDIMENTO_PUBLIC_URL", "https://public-alc.example.test");
+    const body = { action: "challenge", payload: { operation: "replace_ai_credential", channel: "gemini", apiKey: "synthetic-key" }, factorId: FACTOR };
+    const proxied = new Request("http://127.0.0.1:3000/api/ai-credentials", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Origin: "https://public-alc.example.test" },
+      body: JSON.stringify(body),
+    });
+    const response = await aiPost(proxied);
+    expect(response.status).toBe(200);
+    expect(mocks.challenge).toHaveBeenCalledWith({ payload: body.payload, factorId: FACTOR });
+    expect(mocks.verify).not.toHaveBeenCalled();
+
+    mocks.challenge.mockClear();
+    const spoofed = new Request("http://127.0.0.1:3000/api/ai-credentials", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Origin: "https://evil.example.test",
+        "X-Forwarded-Host": "public-alc.example.test",
+        "X-Forwarded-Proto": "https",
+      },
+      body: JSON.stringify(body),
+    });
+    expect((await aiPost(spoofed)).status).toBe(403);
+    expect(mocks.challenge).not.toHaveBeenCalled();
+  });
+
+  it("recognizes Railway's configured public domain when canonical URL differs", async () => {
+    vi.stubEnv("ATENDIMENTO_PUBLIC_URL", "https://other-trusted.example.test");
+    vi.stubEnv("RAILWAY_PUBLIC_DOMAIN", "alc-atendimento-production.up.railway.app");
+    const response = await POST(new Request("http://internal:3000/api/channel-credentials", {
+      method: "POST",
+      headers: { Origin: "https://alc-atendimento-production.up.railway.app", "Content-Type": "application/json" },
+      body: JSON.stringify({ action: "challenge", payload, factorId: FACTOR }),
+    }));
+    expect(response.status).toBe(200);
+  });
+
+  it("does not trust missing, null, malformed or external origins, even when forwarded headers are forged", async () => {
+    vi.stubEnv("ATENDIMENTO_PUBLIC_URL", "https://public-alc.example.test");
+    for (const origin of [null, "null", "https://evil.example.test", "https://public-alc.example.test/forged", "https://public-alc.example.test.evil.test"]) {
+      const headers = new Headers({ "Content-Type": "application/json", "X-Forwarded-Host": "public-alc.example.test" });
+      if (origin !== null) headers.set("Origin", origin);
+      const response = await aiPost(new Request("http://internal:3000/api/ai-credentials", {
+        method: "POST", headers,
+        body: JSON.stringify({ action: "challenge", payload: { operation: "remove_ai_credential", channel: "gemini" }, factorId: FACTOR }),
+      }));
+      expect(response.status).toBe(403);
+    }
+    expect(mocks.challenge).not.toHaveBeenCalled();
+  });
+
   it("uses the same private, bounded, origin-checked MFA HTTP contract for AI credentials", async () => {
     const body = { action: "challenge", payload: { operation: "replace_ai_credential", channel: "openai", apiKey: "synthetic-private-key" }, factorId: FACTOR };
     const response = await aiPost(request(body)); expectPrivate(response); expect(response.status).toBe(200);
