@@ -34,10 +34,11 @@ export function authConfig() {
   if (!url || !key) throw new HttpError(503, "Acesso ainda não configurado.");
   return { url, key };
 }
-export async function supabase() {
+export async function supabase(fetcher?: typeof fetch) {
   const { url, key } = authConfig();
   const store = await cookies();
   return createServerClient(url, key, {
+    ...(fetcher ? { global: { fetch: fetcher } } : {}),
     cookies: {
       getAll: () => store.getAll(),
       setAll(values) {
@@ -52,8 +53,12 @@ export async function supabase() {
     },
   });
 }
-export async function currentProfile(): Promise<AuthProfile> {
-  const client = await supabase();
+export async function currentSessionContext(transaction?: import("pg").PoolClient, fetcher?: typeof fetch) {
+  const readSetting = <T>(key: string) => transaction
+    ? transaction.query<{ value: T }>("SELECT value FROM alc_atendimento.settings WHERE key=$1", [key])
+      .then((result) => result.rows[0]?.value)
+    : setting<T>(key);
+  const client = await supabase(fetcher);
   const { data, error } = await client.auth.getClaims();
   if (error || !data?.claims?.sub)
     throw new HttpError(401, "Entre com sua conta do Inteligência ALC.");
@@ -67,7 +72,8 @@ export async function currentProfile(): Promise<AuthProfile> {
   )
     throw new HttpError(401, "Abra o Atendimento pelo Inteligência ALC.");
   // A signed JWT can outlive logout; the panel owns this revocable entry grant.
-  if (!validEntryGrant(await setting(entrySessionKey(data.claims.session_id)), data.claims.sub))
+  const entryGrant = await readSetting(entrySessionKey(data.claims.session_id));
+  if (!validEntryGrant(entryGrant, data.claims.sub))
     throw new HttpError(401, "Sessão encerrada. Abra o Atendimento pelo Inteligência ALC.");
   if (data.claims.aal !== "aal2") {
     const factors = await client.auth.mfa.listFactors();
@@ -97,11 +103,26 @@ export async function currentProfile(): Promise<AuthProfile> {
     siglaScope: row.sigla_scope ?? [],
     moduleScope: row.module_scope ?? undefined,
   };
-  const access = await setting<{ active: boolean }>(`access_${profile.id}`);
+  const access = await readSetting<{ active: boolean }>(`access_${profile.id}`);
   profile.atendimentoAccess = access?.active;
   if (!canAccessAtendimento(profile))
     throw new HttpError(403, "Seu acesso ao Atendimento está desativado.");
-  return profile;
+  return {
+    client,
+    profile,
+    claims: {
+      sub: data.claims.sub,
+      session_id: data.claims.session_id,
+      aal: data.claims.aal,
+    },
+    entryGrant: {
+      profileId: data.claims.sub,
+      expiresAt: (entryGrant as { expiresAt: number }).expiresAt,
+    },
+  };
+}
+export async function currentProfile(): Promise<AuthProfile> {
+  return (await currentSessionContext()).profile;
 }
 export async function requireProfile() {
   try {
