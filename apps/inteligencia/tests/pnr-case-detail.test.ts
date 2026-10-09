@@ -95,6 +95,14 @@ describe("histórico durável de detalhes PNR", () => {
     expect(pnrDetailBatchIssue(batch)).toEqual({ code: "HTTP_ERROR", message: "HTTP 500", failedCount: 1 });
   });
 
+  it("isola timeout por caso e deixa os casos não consultados pendentes", () => {
+    const batch = [
+      { ok: false, error: { code: "REQUEST_TIMEOUT", message: "Tempo de consulta do detalhe excedido." } },
+      ...Array.from({ length: 49 }, () => ({ ok: false, error: { code: "BATCH_PAUSED" } })),
+    ];
+    expect(pnrDetailBatchIssue(batch)).toBeNull();
+  });
+
   it("permite somente uma aba por vez quando Web Locks está disponível", async () => {
     let held = false;
     let release: (() => void) | undefined;
