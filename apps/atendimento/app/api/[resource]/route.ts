@@ -13,7 +13,6 @@ import { db, setting, audit, core } from "@/lib/db";
 import {
   channelConfig,
   templates,
-  encrypt,
   type Channel,
 } from "@/lib/meta";
 import { syncCore, upsertCases, verifyCustomerContact } from "@/lib/source";
@@ -300,29 +299,6 @@ export async function GET(
     }
     if (resource === "collector")
       return Response.json({ collector: await setting("collector") });
-    if (resource === "webhook-verify-token") {
-      // Deliberate, permission-gated secret retrieval for configuring Meta webhooks.
-      // Never return verify tokens from the normal admin summary response.
-      const target = channel.parse(query.get("channel"));
-      const cfg = await channelConfig(target);
-      if (!cfg.verifyToken)
-        throw new HttpError(
-          404,
-          "Token de verificação ainda não configurado neste canal.",
-        );
-      await audit(profile.id, "webhook_verify_token_revealed", target);
-      return Response.json(
-        { verifyToken: cfg.verifyToken },
-        {
-          headers: {
-            "Cache-Control": "private, no-store, max-age=0",
-            Pragma: "no-cache",
-            "X-Robots-Tag": "noindex, noarchive",
-            "X-Content-Type-Options": "nosniff",
-          },
-        },
-      );
-    }
     if (resource === "admin") {
       const [automation, source, driver, client] = await Promise.all([
         setting("automation"),
@@ -632,43 +608,6 @@ export async function POST(
         [parsed, profile.id],
       );
       await audit(profile.id, "automation_updated");
-      return Response.json({ ok: true });
-    }
-    if (resource === "channel") {
-      const parsed = z
-        .object({
-          channel,
-          phoneId: z.string().regex(/^\d{5,30}$/),
-          wabaId: z.string().regex(/^\d{5,30}$/),
-          number: short,
-          token: z.string().max(3000).optional(),
-          appSecret: z.string().max(200).optional(),
-          verifyToken: z.string().max(200).optional(),
-        })
-        .strict()
-        .parse(body);
-      const existing =
-        (await setting<Record<string, unknown>>(`channel_${parsed.channel}`)) ||
-        {};
-      const value = {
-        ...existing,
-        phoneId: parsed.phoneId,
-        wabaId: parsed.wabaId,
-        number: phone(parsed.number),
-      };
-      Object.assign(
-        value,
-        parsed.token ? { tokenEncrypted: encrypt(parsed.token) } : {},
-        parsed.appSecret ? { secretEncrypted: encrypt(parsed.appSecret) } : {},
-        parsed.verifyToken
-          ? { verifyEncrypted: encrypt(parsed.verifyToken) }
-          : {},
-      );
-      await db().query(
-        "INSERT INTO alc_atendimento.settings(key,value,updated_by) VALUES($1,$2,$3) ON CONFLICT(key) DO UPDATE SET value=excluded.value,updated_by=excluded.updated_by,updated_at=now()",
-        [`channel_${parsed.channel}`, value, profile.id],
-      );
-      await audit(profile.id, "channel_updated", parsed.channel);
       return Response.json({ ok: true });
     }
     if (resource === "users") {
