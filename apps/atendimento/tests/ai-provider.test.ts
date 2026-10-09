@@ -153,6 +153,19 @@ it("requires a current successful provider probe before claiming AI is available
   expect((await aiConfigurationStatus()).diagnostic.effective).toBe("untested");
 });
 
+it("requires a credential-bound probe for newly discovered text models", async () => {
+  expect(await aiModelVerified("openai", "gpt-6-luna", "environment-key")).toBe(false);
+  expect(await aiModelVerified("gemini", "gemini-3.8-flash", "google-fallback")).toBe(false);
+  stored.set("ai_test_openai", {
+    model: "gpt-6-luna",
+    result: "ready",
+    testedAt: "2026-10-09T12:00:00Z",
+    fingerprint: createHash("sha256").update("environment-key").digest("hex"),
+  });
+  expect(await aiModelVerified("openai", "gpt-6-luna", "environment-key")).toBe(true);
+  expect(await aiModelVerified("openai", "gpt-6-luna", "wrong-key")).toBe(false);
+});
+
 it("authenticates and caches the provider catalog without assuming all listed models are compatible", async () => {
   vi.stubEnv("OPENAI_API_KEY", "catalog-key");
   const fetcher = vi.fn().mockResolvedValue(
@@ -160,6 +173,11 @@ it("authenticates and caches the provider catalog without assuming all listed mo
       data: [
         { id: "gpt-4.1-mini" },
         { id: "gpt-4o-2024-05-13" },
+        { id: "gpt-6-luna" },
+        { id: "gpt-6.1-sol" },
+        { id: "gpt-6-astra" },
+        { id: "gpt-image-2" },
+        { id: "gpt-6-luna-tts" },
         { id: "text-embedding-3-small" },
         { id: "gpt-audio" },
         { id: "custom-model" },
@@ -168,6 +186,10 @@ it("authenticates and caches the provider catalog without assuming all listed mo
   );
   const result = await aiModelCatalog(actor, "openai", fetcher);
   expect(result.models).toEqual([
+    { id: "gpt-6.1-sol", label: "gpt-6.1-sol" },
+    { id: "gpt-6-luna", label: "gpt-6-luna" },
+    { id: "gpt-6-astra", label: "gpt-6-astra" },
+    { id: "gpt-4o-2024-05-13", label: "gpt-4o-2024-05-13" },
     { id: "gpt-4.1-mini", label: "gpt-4.1-mini" },
   ]);
   expect(fetcher.mock.calls[0][0]).toBe("https://api.openai.com/v1/models");
@@ -189,6 +211,18 @@ it("paginates Gemini catalogs and requires generateContent support plus a docume
             supportedGenerationMethods: ["generateContent"],
           },
           {
+            name: "models/gemini-3.8-flash",
+            supportedGenerationMethods: ["generateContent"],
+          },
+          {
+            name: "models/gemini-3.1-pro-preview",
+            supportedGenerationMethods: ["generateContent"],
+          },
+          {
+            name: "models/gemini-3.8-live",
+            supportedGenerationMethods: ["generateContent"],
+          },
+          {
             name: "models/gemini-2.0-flash",
             supportedGenerationMethods: ["generateContent"],
           },
@@ -207,6 +241,8 @@ it("paginates Gemini catalogs and requires generateContent support plus a docume
       }),
     );
   expect((await aiModelCatalog(actor, "gemini", fetcher)).models).toEqual([
+    { id: "gemini-3.8-flash", label: "models/gemini-3.8-flash" },
+    { id: "gemini-3.1-pro-preview", label: "models/gemini-3.1-pro-preview" },
     { id: "gemini-2.5-flash", label: "models/gemini-2.5-flash" },
   ]);
   expect(String(fetcher.mock.calls[1][0])).toContain("pageToken=page2");
@@ -296,6 +332,19 @@ it("reserves bounded billable probes and returns only safe results without sendi
   ).rejects.toBeDefined();
   expect(fetcher).toHaveBeenCalledOnce();
 });
+it("probes GPT-6 Responses before accepting a model for automation", async () => {
+  const fetcher = vi.fn().mockResolvedValue(Response.json({
+    status: "completed",
+    output: [{ type: "message", content: [{ type: "output_text", text: JSON.stringify({ actionId: "clarify", rationale: "ambiguous_input" }) }] }],
+  }));
+  const result = await testAiConnection(actor, {
+    provider: "openai", model: "gpt-6-luna", timeoutMs: 1000, confirmed: true,
+  }, fetcher);
+  expect(result.result).toBe("ready");
+  expect(fetcher.mock.calls[0][0]).toBe("https://api.openai.com/v1/responses");
+  expect(JSON.stringify(result)).not.toContain("environment-key");
+});
+
 it.each([401, 404, 429, 400, 500])(
   "maps failed probe HTTP %s to a safe diagnostic",
   async (status) => {

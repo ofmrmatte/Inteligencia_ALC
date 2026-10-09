@@ -6,6 +6,7 @@ import {
 } from "./agent-instructions";
 import { agentAiPlan, normalize, validateAgentAiAction, type AgentReply, type AgentState } from "./domain";
 import { aiCredential, aiModelVerified, environmentAiCredential } from "./ai-provider";
+import { openAiUsesResponses, geminiUsesResponseFormat } from "./ai-models";
 
 const rationaleCodes = ["clear_match", "ambiguous_input", "human_requested", "insufficient_context"] as const;
 const inputSchema = z.object({
@@ -113,36 +114,85 @@ async function providerDecision(input: AgentAiInput, config: AgentAiConfig, apiK
   };
   const schema = { type: "object", properties, required: ["actionId", "rationale"], additionalProperties: false };
   const openai = config.provider === "openai";
-  const response = await fetcher(openai
-    ? "https://api.openai.com/v1/chat/completions"
-    : `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(config.model)}:generateContent`, {
+  const responses = openai && openAiUsesResponses(config.model);
+  const url = openai
+    ? responses ? "https://api.openai.com/v1/responses" : "https://api.openai.com/v1/chat/completions"
+    : `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(config.model)}:generateContent`;
+  // Reasoning models need a separate bounded output-token allowance for their
+  // internal reasoning. The observable response is still strictly schema
+  // constrained, limited to 16KB, and may not execute any actions directly.
+  const body = openai
+    ? responses
+      ? {
+          model: config.model, store: false, max_output_tokens: 1200,
+          reasoning: { effort: "low" },
+          text: { format: { type: "json_schema", name: "agent_action_proposal", strict: true, schema } },
+          input: [{ role: "system", content: SYSTEM }, { role: "user", content: prompt }],
+        }
+      : {
+          model: config.model, max_completion_tokens: AI_OUTPUT_TOKENS,
+          response_format: { type: "json_schema", json_schema: { name: "agent_action_proposal", strict: true, schema } },
+          messages: [{ role: "system", content: SYSTEM }, { role: "user", content: prompt }],
+        }
+    : {
+        systemInstruction: { parts: [{ text: SYSTEM }] },
+        contents: [{ role: "user", parts: [{ text: prompt }] }],
+        generationConfig: {
+          maxOutputTokens: geminiUsesResponseFormat(config.model) ? 1000 : AI_OUTPUT_TOKENS,
+          ...(geminiUsesResponseFormat(config.model)
+            ? { responseFormat: { text: { mimeType: "application/json", schema } } }
+            : { responseMimeType: "application/json", responseJsonSchema: schema }),
+          ...(["gemini-2.5-flash", "gemini-2.5-flash-lite"].includes(config.model)
+            ? { thinkingConfig: { thinkingBudget: 0 } } : {}),
+        },
+      };
+  const response = await fetcher(url, {
     method: "POST", signal, redirect: "error",
     headers: openai
       ? { "Content-Type": "application/json", Authorization: `Bearer ${apiKey}` }
       : { "Content-Type": "application/json", "x-goog-api-key": apiKey },
-    body: JSON.stringify(openai ? {
-      model: config.model, max_completion_tokens: AI_OUTPUT_TOKENS,
-      response_format: { type: "json_schema", json_schema: { name: "agent_action_proposal", strict: true, schema } },
-      messages: [{ role: "system", content: SYSTEM }, { role: "user", content: prompt }],
-    } : {
-      systemInstruction: { parts: [{ text: SYSTEM }] },
-      contents: [{ role: "user", parts: [{ text: prompt }] }],
-      generationConfig: { maxOutputTokens: AI_OUTPUT_TOKENS, responseMimeType: "application/json", responseJsonSchema: schema,
-        ...(["gemini-2.5-flash", "gemini-2.5-flash-lite"].includes(config.model) ? { thinkingConfig: { thinkingBudget: 0 } } : {}) },
-    }),
+    body: JSON.stringify(body),
   });
   if (!response.ok) {
     await response.body?.cancel();
     throw new AiFailure("provider_error");
   }
   const payload = await boundedJson(response, signal);
-  const envelope = openai
-    ? z.object({ choices: z.array(z.object({ finish_reason: z.literal("stop"), message: z.object({ content: z.string() }) })).min(1) }).safeParse(payload)
-    : z.object({ candidates: z.array(z.object({ finishReason: z.literal("STOP"), content: z.object({ parts: z.array(z.object({ text: z.string() })).length(1) }) })).min(1) }).safeParse(payload);
-  if (!envelope.success) throw new AiFailure("invalid_response");
-  const content = openai
-    ? (envelope.data as { choices: { message: { content: string } }[] }).choices[0].message.content
-    : (envelope.data as { candidates: { content: { parts: { text: string }[] } }[] }).candidates[0].content.parts[0].text;
+  let content: string;
+  if (responses) {
+    const envelope = z.object({
+      status: z.literal("completed"),
+      output: z.array(z.object({
+        type: z.string(),
+        content: z.array(z.object({ type: z.string(), text: z.string().optional() }).passthrough()).optional(),
+      }).passthrough()),
+    }).safeParse(payload);
+    if (!envelope.success) throw new AiFailure("invalid_response");
+    const textParts = envelope.data.output
+      .filter(item => item.type === "message")
+      .flatMap(item => item.content || [])
+      .filter(item => item.type === "output_text" && typeof item.text === "string");
+    if (textParts.length !== 1) throw new AiFailure("invalid_response");
+    content = textParts[0].text!;
+  } else if (openai) {
+    const envelope = z.object({
+      choices: z.array(z.object({
+        finish_reason: z.literal("stop"),
+        message: z.object({ content: z.string() }),
+      })).length(1),
+    }).safeParse(payload);
+    if (!envelope.success) throw new AiFailure("invalid_response");
+    content = envelope.data.choices[0].message.content;
+  } else {
+    const envelope = z.object({
+      candidates: z.array(z.object({
+        finishReason: z.literal("STOP"),
+        content: z.object({ parts: z.array(z.object({ text: z.string() })).length(1) }),
+      })).length(1),
+    }).safeParse(payload);
+    if (!envelope.success) throw new AiFailure("invalid_response");
+    content = envelope.data.candidates[0].content.parts[0].text;
+  }
   return JSON.parse(content) as unknown;
 }
 

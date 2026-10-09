@@ -7,7 +7,6 @@ import {
   ChannelCredentialStepUp,
   type AiCredentialPayload,
 } from "./channel-credential-step-up";
-import { documentedAiModel } from "../lib/ai-models";
 import type { AgentAiConfig } from "../lib/agent-instructions";
 import type { aiConfigurationStatus } from "../lib/ai-provider-service";
 
@@ -419,9 +418,7 @@ function ModelPicker({
   config: AgentAiConfig;
   onChange: (model: string) => void;
 }) {
-  const [manual, setManual] = useState(
-    !config.model || !documentedAiModel(config.provider, config.model),
-  );
+  const [manual, setManual] = useState(false);
   const { data, error, refresh } = useData<{
     models: { id: string; label: string }[];
     fetchedAt: string;
@@ -459,7 +456,7 @@ function ModelPicker({
         </label>
       ) : (
         <label>
-          Modelos compatíveis
+          Modelos de texto disponíveis para teste
           <select
             required={config.enabled}
             value={config.model}
@@ -485,7 +482,7 @@ function ModelPicker({
           {error ||
             (!data
               ? "Carregando catálogo…"
-              : `${data.models.length} modelo(s) compatível(is) · ${when(data.fetchedAt)}`)}
+              : `${data.models.length} modelo(s) de texto no catálogo · ${when(data.fetchedAt)}`)}
         </small>
         <button
           type="button"
@@ -498,8 +495,9 @@ function ModelPicker({
         </button>
       </div>
       <small>
-        Modelos fora do catálogo precisam passar pelo teste de resposta
-        estruturada antes da ativação.
+        O catálogo exibe modelos de texto disponibilizados para esta chave,
+        não uma garantia de compatibilidade. Modelos novos ou manuais
+        exigem teste de resposta estruturada antes da ativação.
       </small>
     </section>
   );
