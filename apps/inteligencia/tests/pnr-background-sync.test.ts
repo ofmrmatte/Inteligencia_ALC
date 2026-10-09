@@ -352,6 +352,106 @@ describe("sincronização de detalhes em background", () => {
     expect(getPnrBackgroundSyncStatus().phase).not.toBe("idle");
   });
 
+  it.each([
+    ["IDs externos", (caseIds: string[]) => [
+      ...source(true, caseIds).results.slice(0, -1),
+      source(true, [ids[5]]).results[0],
+    ]],
+    ["IDs duplicados", (caseIds: string[]) => [
+      ...source(true, caseIds).results.slice(0, -1),
+      source(true, [caseIds[0]]).results[0],
+    ]],
+    ["IDs ausentes", (caseIds: string[]) => source(true, caseIds).results.slice(0, -1)],
+    ["data.caseId divergente", (caseIds: string[]) => source(true, caseIds).results.map((item, index) =>
+      index === 0 && item.ok ? { ...item, data: { ...item.data, caseId: "99999" } } : item,
+    )],
+    ["falha sem error", (caseIds: string[]) => [
+      { caseId: caseIds[0], ok: false }, ...source(true, caseIds.slice(1)).results,
+    ]],
+    ["falha com code não string", (caseIds: string[]) => [
+      { caseId: caseIds[0], ok: false, error: { code: 500, message: "Falha" } }, ...source(true, caseIds.slice(1)).results,
+    ]],
+    ["falha com message não string", (caseIds: string[]) => [
+      { caseId: caseIds[0], ok: false, error: { code: "HTTP_ERROR", message: 500 } }, ...source(true, caseIds.slice(1)).results,
+    ]],
+    ["falha com error array", (caseIds: string[]) => [
+      { caseId: caseIds[0], ok: false, error: [] }, ...source(true, caseIds.slice(1)).results,
+    ]],
+    ["data em array", (caseIds: string[]) => [
+      { caseId: caseIds[0], ok: true, data: Object.assign([], { caseId: caseIds[0], events: [] }) },
+      ...source(true, caseIds.slice(1)).results,
+    ]],
+    ["events ausentes", (caseIds: string[]) => [
+      { caseId: caseIds[0], ok: true, data: { caseId: caseIds[0] } }, ...source(true, caseIds.slice(1)).results,
+    ]],
+    ["evento nulo", (caseIds: string[]) => [
+      { caseId: caseIds[0], ok: true, data: { caseId: caseIds[0], events: [null] } }, ...source(true, caseIds.slice(1)).results,
+    ]],
+  ])("bloqueia a persistência quando o conector retorna %s", async (_label, makeResults) => {
+    const caseIds = ids.slice(0, 5);
+    requestMock.mockImplementation(async (type) => type === "PING"
+      ? {
+          installed: true,
+          version: LATEST_CONNECTOR_VERSION,
+          mlTabAvailable: true,
+          sessionAvailable: true,
+        }
+      : { results: makeResults(caseIds) },
+    );
+
+    await start();
+
+    expect(fetchMock.mock.calls.filter(([path]) => !String(path).endsWith("/queue"))).toHaveLength(0);
+    expect(getPnrBackgroundSyncStatus()).toMatchObject({ phase: "paused", pending: 50, processed: 0, errors: 5 });
+    expect(getPnrBackgroundSyncStatus().message).toContain("IDs divergentes, duplicados ou incompletos");
+    expect(requestMock.mock.calls.filter(([type]) => type === "FETCH_TIMELINES")).toHaveLength(1);
+    await act(async () => {
+      window.dispatchEvent(new Event("focus"));
+      await vi.advanceTimersByTimeAsync(3_600_000);
+    });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(requestMock.mock.calls.filter(([type]) => type === "FETCH_TIMELINES")).toHaveLength(1);
+  });
+
+  it("preserva o primeiro grupo confirmado e bloqueia o segundo incoerente sem retry", async () => {
+    const confirmation = deferred<Response>();
+    fetchMock.mockImplementation(async (path) => path.endsWith("/queue")
+      ? Response.json({ pending: 50, cases: ids.map((caseId) => ({ caseId, priority: 1 })), case: null })
+      : confirmation.promise,
+    );
+    let connectorCalls = 0;
+    requestMock.mockImplementation(async (type, payload) => {
+      if (type === "PING") return {
+        installed: true,
+        version: LATEST_CONNECTOR_VERSION,
+        mlTabAvailable: true,
+        sessionAvailable: true,
+      };
+      connectorCalls += 1;
+      const caseIds = payload?.caseIds as string[];
+      return source(true, connectorCalls === 2 ? [ids[10], ...caseIds.slice(1)] : caseIds);
+    });
+
+    await start();
+    expect(connectorCalls).toBe(1);
+    expect(getPnrBackgroundSyncStatus().processed).toBe(0);
+    expect(JSON.parse(fetchMock.mock.calls[1][1].body).items.map((item: { caseId: string }) => item.caseId)).toEqual(ids.slice(0, 5));
+    await act(async () => {
+      confirmation.resolve(Response.json({ results: ids.slice(0, 5).map((caseId) => ({ caseId, ok: true, status: 200 })) }));
+    });
+
+    expect(connectorCalls).toBe(2);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(getPnrBackgroundSyncStatus()).toMatchObject({ phase: "paused", pending: 45, processed: 5, errors: 5 });
+    await act(async () => {
+      window.dispatchEvent(new Event("focus"));
+      await vi.advanceTimersByTimeAsync(3_600_000);
+    });
+    expect(connectorCalls).toBe(2);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(getPnrBackgroundSyncStatus()).toMatchObject({ phase: "paused", pending: 45, processed: 5 });
+  });
+
   it("conta apenas sucesso único confirmado quando o bulk retorna IDs duplicados, externos e incompletos", async () => {
     const caseIds = ids.slice(0, 5);
     fetchMock.mockImplementation(async (path) => {

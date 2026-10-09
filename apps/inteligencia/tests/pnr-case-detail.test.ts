@@ -6,7 +6,7 @@ import {
   uniquePnrCaseDetailSnapshots,
 } from "@/lib/pnr-case-detail";
 import { dedupeCaseTimelineEvents } from "@/lib/pnr-case-center";
-import { pnrDetailBatchIssue, pnrDetailEmptySyncDelayMs, pnrDetailQueuePriority, pnrPersistBatchConfirmation, runWithPnrSyncLock } from "@/lib/pnr-case-sync";
+import { pnrConnectorBatchIssue, pnrDetailBatchIssue, pnrDetailEmptySyncDelayMs, pnrDetailQueuePriority, pnrPersistBatchConfirmation, runWithPnrSyncLock } from "@/lib/pnr-case-sync";
 
 describe("histórico durável de detalhes PNR", () => {
   it("mantém valores e listas antigas quando a captura nova vem vazia", () => {
@@ -101,6 +101,33 @@ describe("histórico durável de detalhes PNR", () => {
       ...Array.from({ length: 49 }, () => ({ ok: false, error: { code: "BATCH_PAUSED" } })),
     ];
     expect(pnrDetailBatchIssue(batch)).toBeNull();
+  });
+
+  it("exige correspondência exata entre o lote solicitado e os IDs do conector", () => {
+    const ids = ["10001", "10002"];
+    const ok = (caseId: string, dataCaseId = caseId) => ({ caseId, ok: true, data: { caseId: dataCaseId, events: [] } });
+    expect(pnrConnectorBatchIssue(ids, ids.map((caseId) => ok(caseId)))).toBeNull();
+    expect(pnrConnectorBatchIssue(ids, [
+      { caseId: ids[1], ok: false, error: { code: "BATCH_PAUSED", message: "Caso permanece pendente." } },
+      ok(ids[0]),
+    ])).toBeNull();
+    expect(pnrConnectorBatchIssue(ids, [ok(ids[0]), ok("99999")])).toMatchObject({ code: "INVALID_RESPONSE" });
+    expect(pnrConnectorBatchIssue(ids, [ok(ids[0]), ok(ids[0])])).toMatchObject({ code: "INVALID_RESPONSE" });
+    expect(pnrConnectorBatchIssue(ids, [ok(ids[0])])).toMatchObject({ code: "INVALID_RESPONSE" });
+    expect(pnrConnectorBatchIssue(ids, [ok(ids[0]), ok(ids[1], "99999")])).toMatchObject({ code: "INVALID_RESPONSE" });
+    expect(pnrConnectorBatchIssue(ids, undefined)).toMatchObject({ code: "INVALID_RESPONSE" });
+    expect(pnrConnectorBatchIssue(ids, [ok(ids[0]), null])).toMatchObject({ code: "INVALID_RESPONSE" });
+  });
+
+  it("rejeita shapes que o componente não pode consumir antes da persistência", () => {
+    const caseId = "10001";
+    const validData = { caseId, events: [] };
+    for (const error of [undefined, null, [], { code: 500, message: "Falha" }, { code: "HTTP_ERROR", message: 500 }]) {
+      expect(pnrConnectorBatchIssue([caseId], [{ caseId, ok: false, error }])).toMatchObject({ code: "INVALID_RESPONSE" });
+    }
+    for (const data of [undefined, null, Object.assign([], validData), { caseId }, { caseId, events: [null] }]) {
+      expect(pnrConnectorBatchIssue([caseId], [{ caseId, ok: true, data }])).toMatchObject({ code: "INVALID_RESPONSE" });
+    }
   });
 
   it("exige uma confirmação única e bem-sucedida para cada caso enviado", () => {

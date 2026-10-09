@@ -15,6 +15,7 @@ import {
   PNR_DETAIL_SYNC_RATE_LIMIT_BACKOFF_MS,
   pnrDetailEmptySyncDelayMs,
   pnrDetailBatchIssue,
+  pnrConnectorBatchIssue,
   pnrPersistBatchConfirmation,
   runWithPnrSyncLock,
 } from "@/lib/pnr-case-sync";
@@ -283,12 +284,19 @@ export function PnrCaseCenterBackgroundSync() {
           let allSuccessful = true;
           for (let index = 0; index < caseIds.length; index += PNR_DETAIL_CONNECTOR_BATCH_SIZE) {
             if (disposed || getPnrBackgroundSyncStatus().manuallyPaused) break;
+            const requestedCaseIds = caseIds.slice(index, index + PNR_DETAIL_CONNECTOR_BATCH_SIZE);
             const batch = await requestPnrConnector<TimelineConnectorBatchResult>(
               "FETCH_TIMELINES",
-              { caseIds: caseIds.slice(index, index + PNR_DETAIL_CONNECTOR_BATCH_SIZE), concurrency: connectorConcurrency },
+              { caseIds: requestedCaseIds, concurrency: connectorConcurrency },
               120_000,
             );
             if (disposed || getPnrBackgroundSyncStatus().manuallyPaused) break;
+            const responseIssue = pnrConnectorBatchIssue(requestedCaseIds, batch?.results);
+            if (responseIssue) {
+              const status = getPnrBackgroundSyncStatus();
+              publishPnrBackgroundSyncStatus({ errors: status.errors + responseIssue.failedCount });
+              throw new PnrConnectorError(responseIssue.code, responseIssue.message);
+            }
             const issue = pnrDetailBatchIssue(batch.results);
             if (issue) {
               const status = getPnrBackgroundSyncStatus();
