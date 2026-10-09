@@ -1,0 +1,16 @@
+**/node_modules
+**/.next
+**/.turbo
+**/coverage
+**/*.tsbuildinfo
+.git
+.github
+.env
+.env.*
+!.env.example
+!.env.*.example
+output/playwright
+.testagent
+.vercel
+.DS_Store
+*.log
