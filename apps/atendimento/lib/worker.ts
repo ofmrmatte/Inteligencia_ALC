@@ -549,10 +549,22 @@ export async function processOutbox() {
           !driverNotificationEligible(current.classification));
       if (invalid) {
         await db().query(
-          "UPDATE alc_atendimento.outbox SET status='cancelled',error='Caso ou contato mudou após entrar na fila.' WHERE id=$1",
+          "UPDATE alc_atendimento.outbox SET status='cancelled',error='Caso ou contato mudou após entrar na fila.' WHERE id=$1 AND status='pending'",
           [job.id],
         );
         continue;
+      }
+    }
+    // Read the provider outside DB locks; reread the reviewed baseline inside them.
+    let providerCatalog: unknown, catalogError: unknown;
+    if (job.payload.type === "template") {
+      try {
+        const { readTemplateContract } = await import("./template-contract-config");
+        const { templates } = await import("./meta");
+        await readTemplateContract(job.channel);
+        providerCatalog = await templates(job.channel, config);
+      } catch (error) {
+        catalogError = error;
       }
     }
     // Serialize takeover and sends for this conversation, including the bounded provider request.
@@ -566,7 +578,8 @@ export async function processOutbox() {
         ? await db().connect()
         : null;
     let directoryLocked = false,
-      caseLocked = false;
+      caseLocked = false,
+      contractLocked = false;
     try {
       if (sending && authorizationRequired) {
         await sending.query(
@@ -605,6 +618,46 @@ export async function processOutbox() {
             { reason: error.message },
             sending,
           );
+          continue;
+        }
+      }
+      if (job.payload.type === "template") {
+        try {
+          const { readTemplateContract } = await import("./template-contract-config");
+          const { isDeepStrictEqual } = await import("node:util");
+          const { assertTemplateSender, reviewTemplateContract, parseTemplateCatalog, parseTemplatePayload, validateTemplateContract, semanticTemplateValues, TemplateContractError } = await import("./template-contract");
+          if (catalogError) throw catalogError;
+          await connection.query("SELECT pg_advisory_lock(hashtext($1))", [`atendimento_meta_contract:${job.channel}`]);
+          contractLocked = true;
+          const { revision, contract } = await readTemplateContract(job.channel, connection);
+          assertTemplateSender(contract, config);
+          const payload = parseTemplatePayload(job.payload, contract, job.phone);
+          if (job.media_id || typeof job.operator_name_snapshot !== "string")
+            throw new TemplateContractError("snapshot do responsável ou tipo de envio inválido");
+          const record = (await connection.query(
+            "SELECT record FROM alc_atendimento.cases WHERE case_id=$1", [job.case_id],
+          )).rows[0]?.record as CaseRecord | undefined;
+          if (!record) throw new TemplateContractError("caso da fila ausente");
+          const catalog = parseTemplateCatalog(providerCatalog);
+          reviewTemplateContract(contract, catalog);
+          const approved = catalog.find((entry) => entry.name === contract.name && entry.language === contract.language);
+          const evidence = validateTemplateContract(approved, contract, payload.template.components,
+            semanticTemplateValues(job.channel, record, job.operator_name_snapshot));
+          if (
+            job.template_contract_revision !== revision ||
+            job.template_name !== contract.name || job.template_version !== evidence.contentVersion ||
+            job.rendered_template_text !== evidence.renderedText ||
+            !isDeepStrictEqual(job.template_evidence, evidence)
+          ) throw new TemplateContractError("snapshot ou revisão mudou desde o enfileiramento");
+        } catch (error) {
+          const { TemplateContractError } = await import("./template-contract");
+          const reason = error instanceof TemplateContractError || error instanceof HttpError
+            ? error.message : "Catálogo ou baseline Meta indisponível; envio bloqueado antes da solicitação.";
+          await connection.query(
+            "UPDATE alc_atendimento.outbox SET status='cancelled',error=$2,updated_at=now() WHERE id=$1 AND status='pending'",
+            [job.id, reason],
+          );
+          await audit(null, "meta_contract_send_blocked", job.id, { reason }, sending || undefined);
           continue;
         }
       }
@@ -683,8 +736,11 @@ export async function processOutbox() {
         if (job.conversation_id) {
           await connection.query(
             `WITH inserted AS (
-              INSERT INTO alc_atendimento.messages(conversation_id,provider_id,direction,body,status,type,sender_kind,sender_user_id,sender_display_name_snapshot,actor_id,attachment,case_id)
-              VALUES($1,$2,'out',$3,'sent',$4,$5,$6,$7,$6,CASE WHEN $8::uuid IS NULL THEN NULL ELSE jsonb_build_object('internalId',$8::uuid) END,(SELECT coalesce(o.case_id,c.case_id) FROM alc_atendimento.outbox o LEFT JOIN alc_atendimento.conversations c ON c.id=o.conversation_id WHERE o.id=$9))
+              INSERT INTO alc_atendimento.messages(conversation_id,provider_id,direction,body,status,type,sender_kind,sender_user_id,sender_display_name_snapshot,actor_id,attachment,case_id,template_version,template_contract_revision,template_evidence)
+              VALUES($1,$2,'out',$3,'sent',$4,$5,$6,$7,$6,CASE WHEN $8::uuid IS NULL THEN NULL ELSE jsonb_build_object('internalId',$8::uuid) END,(SELECT coalesce(o.case_id,c.case_id) FROM alc_atendimento.outbox o LEFT JOIN alc_atendimento.conversations c ON c.id=o.conversation_id WHERE o.id=$9),
+                (SELECT template_version FROM alc_atendimento.outbox WHERE id=$9),
+                (SELECT template_contract_revision FROM alc_atendimento.outbox WHERE id=$9),
+                (SELECT template_evidence FROM alc_atendimento.outbox WHERE id=$9))
               ON CONFLICT(provider_id) DO NOTHING RETURNING id
             ), linked AS (UPDATE alc_atendimento.media SET message_id=inserted.id FROM inserted WHERE alc_atendimento.media.id=$8::uuid)
             UPDATE alc_atendimento.outbox SET status='sent',provider_id=$2,delivery_status='sent',updated_at=now() WHERE id=$9`,
@@ -693,8 +749,9 @@ export async function processOutbox() {
               provider,
               job.media_id
                 ? job.payload.caption || ""
-                : job.payload.text?.body ||
-                  `[Modelo: ${job.payload.template?.name}]`,
+                : job.payload.type === "template"
+                  ? job.rendered_template_text
+                  : job.payload.text?.body || "",
               job.payload.type,
               job.sender_kind || "system",
               job.sender_user_id || null,
@@ -730,6 +787,8 @@ export async function processOutbox() {
     } finally {
       if (sending) {
         try {
+          if (contractLocked)
+            await sending.query("SELECT pg_advisory_unlock(hashtext($1))", [`atendimento_meta_contract:${job.channel}`]);
           await sending.query(
             "SELECT pg_advisory_unlock(hashtextextended($1,0))",
             [job.conversation_id],

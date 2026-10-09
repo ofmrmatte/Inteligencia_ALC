@@ -1,225 +1,202 @@
-import {
-  templateContentVersion,
-  type Channel,
-  type MetaTemplate,
-} from "./meta";
+import { createHash } from "node:crypto";
+import { isDeepStrictEqual } from "node:util";
+import { z } from "zod";
+import { templateParameters, type CaseRecord } from "./domain";
+import { HttpError } from "./auth";
+import type { Channel, ChannelConfig } from "./meta";
+import { templateContractDraftSchema, templateParameterNameSchema as parameterName, templateButtonSchema as buttonSchema, templateCategorySchema as categorySchema } from "./template-contract-fields";
 
-type SupportedButton = {
-  type: "QUICK_REPLY" | "URL" | "PHONE_NUMBER";
-  text: string;
-  url?: string;
-  phone_number?: string;
-};
-
-export type TemplateContract = {
-  channel: Channel;
-  name: string;
-  language: string;
-  category: "UTILITY" | "MARKETING" | "AUTHENTICATION";
-  bodyText: string;
-  headerText: string | null;
-  buttons: SupportedButton[];
-  parameterValues: Record<string, string>;
-};
-
-export type TemplateEvidence = {
-  channel: Channel;
-  name: string;
-  language: string;
-  category: string;
-  contentVersion: string;
-  approvedBodyText: string;
-  renderedBodyText: string;
-  approvedHeaderText: string | null;
-  renderedHeaderText: string | null;
-  approvedFooterText: string | null;
-  renderedFooterText: string | null;
-  buttons: SupportedButton[];
-};
-
-function fail(reason: string): never {
-  throw new Error(`Contrato do modelo Meta incompatível: ${reason}.`);
+export class TemplateContractError extends HttpError {
+  constructor(reason: string) {
+    super(409, `Contrato do modelo Meta bloqueado: ${reason}.`);
+  }
+}
+function parse<T>(schema: z.ZodType<T>, input: unknown, reason: string): T {
+  const result = schema.safeParse(input);
+  if (!result.success) throw new TemplateContractError(reason);
+  return result.data;
 }
 
-function object(value: unknown): Record<string, unknown> {
-  if (!value || typeof value !== "object" || Array.isArray(value))
-    return fail("estrutura desconhecida");
-  return value as Record<string, unknown>;
-}
+const valueSchema = z.string().min(1).max(1024).refine(
+  (value) => Boolean(value.trim()) && !/[\u0000-\u001f\u007f]/.test(value),
+);
+const driverValues = z.object({ nome_motorista: valueSchema }).strict();
+const clientValues = z.object({
+  customer_name: valueSchema, nome_disparou: valueSchema, product_name: valueSchema,
+  delivery_date: valueSchema, delivery_time: valueSchema,
+  product_id: valueSchema, purchase_value: valueSchema,
+}).strict();
+const exampleParameter = z.object({ param_name: z.string().min(1).max(100), example: z.string().max(1024) }).strict();
+const headerExampleSchema = z.object({
+  header_text: z.array(z.string().max(1024)).max(10).optional(),
+  header_text_named_params: z.array(exampleParameter).max(20).optional(),
+}).strict();
+const bodyExampleSchema = z.object({
+  body_text: z.array(z.array(z.string().max(1024)).max(20)).max(10).optional(),
+  body_text_named_params: z.array(exampleParameter).max(20).optional(),
+}).strict();
+const componentSchema = z.discriminatedUnion("type", [
+  z.object({ type: z.literal("HEADER"), format: z.literal("TEXT"), text: z.string().min(1).max(60), example: headerExampleSchema.optional() }).strict(),
+  z.object({ type: z.literal("BODY"), text: z.string().min(1).max(1024), example: bodyExampleSchema.optional() }).strict(),
+  z.object({ type: z.literal("FOOTER"), text: z.string().min(1).max(60) }).strict(),
+  z.object({ type: z.literal("BUTTONS"), buttons: z.array(buttonSchema).min(1).max(10) }).strict(),
+]);
+const catalogEntrySchema = z.object({
+  id: z.string().min(1).max(200).optional(),
+  name: z.string().regex(/^[a-z0-9_]{1,512}$/),
+  status: z.enum(["APPROVED", "PENDING", "REJECTED", "PAUSED", "DISABLED"]),
+  language: z.string().min(1).max(35),
+  category: categorySchema,
+  parameter_format: z.enum(["NAMED", "POSITIONAL"]),
+  components: z.array(componentSchema).min(1).max(4),
+}).strict();
+const contractSchema = templateContractDraftSchema.extend({
+  sender: z.object({ phoneId: z.string().regex(/^[A-Za-z0-9_-]{1,100}$/), wabaId: z.string().regex(/^[A-Za-z0-9_-]{1,100}$/) }).strict(),
+  contentVersion: z.string().regex(/^[a-f0-9]{64}$/),
+}).strict();
+export type TemplateContract = z.infer<typeof contractSchema>;
 
-function text(value: unknown): string {
-  if (typeof value !== "string") return fail("texto ausente ou inválido");
-  return value;
-}
-
-function variables(value: string) {
-  const found: string[] = [];
-  const stripped = value.replace(/{{([^{}]*)}}/g, (_, name: string) => {
-    if (!/^[A-Za-z][A-Za-z0-9_]*$/.test(name))
-      fail("parâmetro nomeado desconhecido");
-    if (!found.includes(name)) found.push(name);
+function variables(text: string) {
+  const names: string[] = [];
+  const remainder = text.replace(/{{([^{}]*)}}/g, (_, name: string) => {
+    if (!/^[a-z][a-z0-9_]*$/.test(name)) throw new TemplateContractError("parâmetro nomeado desconhecido");
+    if (!names.includes(name)) names.push(name);
     return "";
   });
-  if (stripped.includes("{{") || stripped.includes("}}"))
-    fail("marcação de parâmetro desconhecida");
-  return found;
+  if (remainder.includes("{{") || remainder.includes("}}")) throw new TemplateContractError("marcação de parâmetro inválida");
+  return names;
 }
-
-function render(value: string | null, values: Record<string, string>) {
-  if (value === null) return null;
-  return value.replace(/{{([A-Za-z][A-Za-z0-9_]*)}}/g, (_, name: string) => {
-    if (!(name in values)) fail("parâmetro sem valor semântico");
-    return values[name];
-  });
-}
-
-function normalizeButtons(component: Record<string, unknown> | undefined) {
-  if (!component) return [] as SupportedButton[];
-  if (!Array.isArray(component.buttons)) return fail("botões desconhecidos");
-  return component.buttons.map((value) => {
-    const button = object(value);
-    const type = text(button.type) as SupportedButton["type"];
-    const label = text(button.text);
-    if (variables(label).length) return fail("variável em rótulo de botão");
-    if (type === "QUICK_REPLY") return { type, text: label };
-    if (type === "URL") {
-      const url = text(button.url);
-      if (variables(url).length) return fail("URL dinâmica não suportada");
-      return { type, text: label, url };
-    }
-    if (type === "PHONE_NUMBER")
-      return { type, text: label, phone_number: text(button.phone_number) };
-    return fail("tipo de botão não suportado");
-  });
-}
-
-function payloadParameters(components: unknown) {
-  if (!Array.isArray(components)) return fail("parâmetros de envio ausentes");
-  const result: Record<string, string[]> = {};
-  const values: Record<string, string> = {};
-  for (const raw of components) {
-    const component = object(raw);
-    const type = text(component.type);
-    if (type !== "body" && type !== "header")
-      return fail("componente de envio não suportado");
-    if (type in result || !Array.isArray(component.parameters))
-      return fail("parâmetros duplicados ou inválidos");
-    result[type] = [];
-    for (const rawParameter of component.parameters) {
-      const parameter = object(rawParameter);
-      const name = text(parameter.parameter_name);
-      const value = text(parameter.text);
-      if (
-        parameter.type !== "text" ||
-        result[type].includes(name) ||
-        (name in values && values[name] !== value) ||
-        !value.trim()
-      )
-        return fail("parâmetro nomeado inválido");
-      result[type].push(name);
-      values[name] = value;
-    }
-  }
-  return { names: result, values };
-}
-
-export function validateTemplateContract(
-  templateValue: unknown,
-  expected: TemplateContract,
-  payloadComponents: unknown,
-): TemplateEvidence {
-  const catalog = object(templateValue);
-  const template = catalog as unknown as MetaTemplate;
-  const name = text(catalog.name);
-  const status = text(catalog.status);
-  const language = text(catalog.language);
-  const category = text(catalog.category);
-  if (
-    status !== "APPROVED" ||
-    name !== expected.name ||
-    name !== (expected.channel === "driver" ? "pnraberta" : "cliente_loss_v2") ||
-    language !== "pt_BR" ||
-    language !== expected.language ||
-    category !== expected.category
-  )
-    fail("status, nome, idioma ou categoria divergente");
-  if (!Array.isArray(template.components)) return fail("componentes ausentes");
-
-  let body: Record<string, unknown> | undefined;
-  let header: Record<string, unknown> | undefined;
-  let buttons: Record<string, unknown> | undefined;
-  let footer: Record<string, unknown> | undefined;
-  for (const raw of template.components) {
-    const component = object(raw);
-    switch (component.type) {
-      case "BODY":
-        if (body) return fail("corpos duplicados");
-        body = component;
-        break;
-      case "HEADER":
-        if (header) return fail("cabeçalhos duplicados");
-        header = component;
-        break;
-      case "BUTTONS":
-        if (buttons) return fail("grupos de botões duplicados");
-        buttons = component;
-        break;
-      case "FOOTER":
-        if (footer) return fail("rodapés duplicados");
-        footer = component;
-        break;
-      default:
-        return fail("componente Meta não suportado");
-    }
-  }
-
-  const bodyText = text(body?.text);
-  const headerText = header
-    ? header.format === "TEXT"
-      ? text(header.text)
-      : fail("formato de cabeçalho não suportado")
-    : null;
-  const footerText = footer ? text(footer.text) : null;
-  if (bodyText !== expected.bodyText || headerText !== expected.headerText)
-    fail("texto aprovado diverge do baseline");
-  if (footerText !== null && variables(footerText).length)
-    fail("variável em rodapé não suportada");
-  const actualButtons = normalizeButtons(buttons);
-  if (JSON.stringify(actualButtons) !== JSON.stringify(expected.buttons))
-    fail("botões aprovados divergem do baseline");
-
-  const { names, values } = payloadParameters(payloadComponents);
-  const expectedNames = Object.keys(expected.parameterValues);
-  for (const [componentName, componentText] of [
-    ["body", bodyText],
-    ["header", headerText],
-  ] as const) {
-    const variablesInText = componentText === null ? [] : variables(componentText);
-    const payloadNames = names[componentName] || [];
-    if (
-      JSON.stringify(payloadNames) !== JSON.stringify(variablesInText) ||
-      payloadNames.some((name) => !(name in expected.parameterValues))
-    )
-      fail("nomes ou ordem dos parâmetros divergentes");
-  }
-  if (
-    Object.keys(values).length !== expectedNames.length ||
-    expectedNames.some((name) => values[name] !== expected.parameterValues[name])
-  )
-    fail("semântica dos parâmetros divergente");
-
+function content(contract: Omit<TemplateContract, "channel" | "sender" | "contentVersion">) {
   return {
-    channel: expected.channel,
-    name,
-    language,
-    category,
-    contentVersion: templateContentVersion(template),
-    approvedBodyText: bodyText,
-    renderedBodyText: render(bodyText, values)!,
-    approvedHeaderText: headerText,
-    renderedHeaderText: render(headerText, values),
-    approvedFooterText: footerText,
-    renderedFooterText: footerText,
-    buttons: actualButtons,
+    name: contract.name, status: "APPROVED", language: contract.language,
+    category: contract.category, bodyText: contract.bodyText,
+    headerText: contract.headerText, footerText: contract.footerText,
+    buttons: contract.buttons, parameters: contract.parameters,
   };
+}
+export function templateContractContentVersion(contract: Parameters<typeof content>[0]) {
+  return createHash("sha256").update(JSON.stringify(content(contract))).digest("hex");
+}
+export function parseTemplateContract(input: unknown): TemplateContract {
+  const contract = parse(contractSchema, input, "baseline ausente, desconhecido ou inválido");
+  const expectedNames = contract.channel === "driver"
+    ? { header: ["nome_motorista"], body: ["nome_motorista"] }
+    : { header: [], body: Object.keys(clientValues.shape) };
+  if (
+    contract.name !== (contract.channel === "driver" ? "pnraberta" : "cliente_loss_v2") ||
+    !isDeepStrictEqual(contract.parameters, expectedNames) ||
+    !isDeepStrictEqual(variables(contract.bodyText), contract.parameters.body) ||
+    !isDeepStrictEqual(contract.headerText === null ? [] : variables(contract.headerText), contract.parameters.header) ||
+    (contract.footerText !== null && variables(contract.footerText).length) ||
+    contract.buttons.some((button) => variables(button.text).length || (button.type === "URL" && (variables(button.url).length || !/^https?:\/\//.test(button.url)))) ||
+    templateContractContentVersion(contract) !== contract.contentVersion
+  ) throw new TemplateContractError("baseline diverge do canal, parâmetros ou hash revisados");
+  return contract;
+}
+export function parseTemplateCatalog(input: unknown) {
+  let serialized: string | undefined;
+  try { serialized = JSON.stringify(input); } catch { /* malformed non-JSON input */ }
+  if (!serialized || serialized.length > 262144) throw new TemplateContractError("catálogo ausente ou acima do limite");
+  const catalog = parse(z.array(catalogEntrySchema).max(100), input, "schema do catálogo inválido");
+  const identities = catalog.map((entry) => `${entry.name}:${entry.language}`);
+  if (new Set(identities).size !== identities.length) throw new TemplateContractError("catálogo ambíguo");
+  return catalog;
+}
+function matchApproved(templateValue: unknown, contract: TemplateContract) {
+  const template = parse(catalogEntrySchema, templateValue, "schema do modelo inválido");
+  if (template.status !== "APPROVED" || template.parameter_format === "POSITIONAL")
+    throw new TemplateContractError("modelo não APPROVED ou parâmetros incompatíveis");
+  const components = parse(z.array(componentSchema).min(1).max(4), template.components, "componente, cabeçalho ou botão não suportado");
+  if (new Set(components.map((entry) => entry.type)).size !== components.length)
+    throw new TemplateContractError("componentes duplicados");
+  const body = components.find((entry) => entry.type === "BODY");
+  if (!body) throw new TemplateContractError("corpo aprovado ausente");
+  const header = components.find((entry) => entry.type === "HEADER");
+  const footer = components.find((entry) => entry.type === "FOOTER");
+  const buttons = components.find((entry) => entry.type === "BUTTONS");
+  if (header?.example?.header_text || body.example?.body_text)
+    throw new TemplateContractError("exemplos posicionais incompatíveis com parâmetros nomeados");
+  for (const [examples, names] of [
+    [header?.example?.header_text_named_params, header ? variables(header.text) : []],
+    [body.example?.body_text_named_params, variables(body.text)],
+  ] as const) {
+    if (examples && !isDeepStrictEqual(examples.map((example) => example.param_name), names))
+      throw new TemplateContractError("nomes dos parâmetros do catálogo divergentes");
+  }
+  const actual = {
+    name: template.name, status: template.status, language: template.language,
+    category: template.category, bodyText: body.text, headerText: header?.text ?? null,
+    footerText: footer?.text ?? null, buttons: buttons?.buttons ?? [],
+    parameters: { header: header ? variables(header.text) : [], body: variables(body.text) },
+  };
+  if (!isDeepStrictEqual(actual, content(contract)))
+    throw new TemplateContractError("catálogo diverge do texto, rodapé, botões ou parâmetros revisados");
+  if (templateContractContentVersion(contract) !== contract.contentVersion)
+    throw new TemplateContractError("hash de conteúdo divergente");
+}
+export function reviewTemplateContract(input: unknown, catalogValue: unknown) {
+  const contract = parseTemplateContract(input);
+  const catalog = parseTemplateCatalog(catalogValue);
+  const approved = catalog.find((entry) => entry.name === contract.name && entry.language === contract.language);
+  if (!approved) throw new TemplateContractError("Modelo aprovado indisponível");
+  matchApproved(approved, contract);
+  return contract;
+}
+export function assertTemplateSender(contract: TemplateContract, config: ChannelConfig) {
+  if (contract.sender.phoneId !== config.phoneId || contract.sender.wabaId !== config.wabaId)
+    throw new TemplateContractError("canal remetente diverge do baseline revisado");
+}
+
+const payloadComponentsSchema = z.array(z.object({
+  type: z.enum(["header", "body"]),
+  parameters: z.array(z.object({ type: z.literal("text"), parameter_name: parameterName, text: valueSchema }).strict()).min(1).max(7),
+}).strict()).max(2);
+export function semanticTemplateValues(channel: Channel, record: CaseRecord, operator: string) {
+  return Object.fromEntries(templateParameters(channel, record, operator)
+    .flatMap((component) => component.parameters.map((parameter) => [parameter.parameter_name, parameter.text])));
+}
+export function validateTemplateContract(
+  templateValue: unknown, expected: unknown, payloadComponents: unknown, parameterValues: unknown,
+) {
+  const contract = parseTemplateContract(expected);
+  matchApproved(templateValue, contract);
+  const values = parse<Record<string, string>>(contract.channel === "driver" ? driverValues : clientValues, parameterValues, "valores semânticos ausentes, desconhecidos ou acima do limite");
+  const components = parse(payloadComponentsSchema, payloadComponents, "chaves ou valores dos parâmetros de envio inválidos");
+  const requiredTypes = ["header", "body"] as const;
+  for (const type of requiredTypes) {
+    const matched = components.filter((component) => component.type === type);
+    const names = contract.parameters[type];
+    if (matched.length !== (names.length ? 1 : 0) || !isDeepStrictEqual(matched[0]?.parameters.map((parameter) => parameter.parameter_name) ?? [], names))
+      throw new TemplateContractError("nomes ou ordem dos parâmetros divergentes");
+    if (matched[0]?.parameters.some((parameter) => values[parameter.parameter_name] !== parameter.text))
+      throw new TemplateContractError("semântica dos parâmetros divergente");
+  }
+  const render = (text: string | null) => text === null ? null : text.replace(/{{([a-z][a-z0-9_]*)}}/g, (_, name: string) => values[name]);
+  const renderedHeaderText = render(contract.headerText);
+  const renderedBodyText = render(contract.bodyText)!;
+  if ((renderedHeaderText?.length ?? 0) > 60 || renderedBodyText.length > 4096)
+    throw new TemplateContractError("texto renderizado acima do limite");
+  return {
+    channel: contract.channel, name: contract.name, language: contract.language,
+    category: contract.category, contentVersion: contract.contentVersion,
+    approvedBodyText: contract.bodyText, renderedBodyText,
+    approvedHeaderText: contract.headerText, renderedHeaderText,
+    approvedFooterText: contract.footerText, renderedFooterText: contract.footerText,
+    buttons: contract.buttons, parameterValues: values,
+    renderedText: [renderedHeaderText, renderedBodyText, contract.footerText, ...contract.buttons.map((button) => button.text)]
+      .filter((text) => text !== null).join("\n\n"),
+  };
+}
+export type TemplateEvidence = ReturnType<typeof validateTemplateContract>;
+
+const graphTemplatePayloadSchema = z.object({
+  messaging_product: z.literal("whatsapp"), to: z.string().regex(/^[1-9]\d{7,14}$/),
+  type: z.literal("template"),
+  template: z.object({ name: z.string(), language: z.object({ code: z.literal("pt_BR") }).strict(), components: payloadComponentsSchema }).strict(),
+}).strict();
+export function parseTemplatePayload(input: unknown, contract: TemplateContract, recipient: string) {
+  const payload = parse(graphTemplatePayloadSchema, input, "payload Graph desconhecido ou inválido");
+  if (payload.to !== recipient || payload.template.name !== contract.name)
+    throw new TemplateContractError("telefone ou modelo do payload diverge da fila");
+  return payload;
 }

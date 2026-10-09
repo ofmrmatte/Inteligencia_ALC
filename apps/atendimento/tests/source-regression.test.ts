@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { CaseRecord } from "../lib/domain";
 import type { AuthProfile } from "@alc/identity/auth";
+import { mockSender, providerCatalog, reviewedRow } from "./meta-contract-fixtures";
 
 type QueryResult = { rows: Record<string, unknown>[]; rowCount: number };
 const mocks = vi.hoisted(() => {
@@ -140,17 +141,16 @@ beforeEach(() => {
           intervalMinutes: 30,
         },
   );
-  mocks.templates.mockReset().mockResolvedValue([
-    { name: "pnraberta", status: "APPROVED", language: "pt_BR" },
-    { name: "cliente_loss_v2", status: "APPROVED", language: "pt_BR" },
-  ]);
+  mocks.templates.mockReset().mockResolvedValue(providerCatalog);
   mocks.channelConfig
     .mockReset()
-    .mockResolvedValue({ phoneId: "synthetic-phone-id" });
+    .mockResolvedValue(mockSender);
   mocks.graph
     .mockReset()
     .mockRejectedValue(new Error("Unexpected provider send"));
   mocks.query.mockReset().mockImplementation(async (sql, values) => {
+    if (sql.startsWith("SELECT channel,revision,baseline"))
+      return { rows: [reviewedRow(values?.[0] as "driver" | "client")], rowCount: 1 };
     if (sql.startsWith("SELECT id FROM alc_atendimento.outbox"))
       return queuedKeys.has(`${values?.[1]}:${values?.[0]}:initial`)
         ? { rows: [{ id: "synthetic-job" }], rowCount: 1 }
@@ -181,6 +181,7 @@ beforeEach(() => {
         rowCount: 1,
       };
     if (
+      sql.startsWith("SELECT channel,revision,baseline") ||
       sql.startsWith("INSERT INTO alc_atendimento.outbox") ||
       sql.startsWith("INSERT INTO alc_atendimento.conversations") ||
       sql.startsWith("SELECT id FROM alc_atendimento.outbox") ||
@@ -284,7 +285,7 @@ describe("source import regressions", () => {
 
   it("refuses to send the old C01 Meta template without the approved purchase value", async () => {
     mocks.templates.mockResolvedValueOnce([
-      { name: "cliente_loss", status: "APPROVED", language: "pt_BR" },
+      { ...providerCatalog[1], name: "cliente_loss" },
     ]);
     await expect(queueTemplate("client", record(), OPERATOR)).rejects.toThrow(
       "Modelo aprovado indisponível",

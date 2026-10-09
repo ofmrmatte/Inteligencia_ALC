@@ -124,14 +124,18 @@ export async function queueTemplate(
   automatic = false,
   options: { batchId?: string; global?: boolean } = {},
 ) {
+  // Local until the parent's client-safe agent-brand constant is integrated.
+  const AGENT_DISPLAY_NAME = "Ellie";
   validateInitialContact(channel, input);
+  const { readTemplateContract } = await import("./template-contract-config");
+  const { assertTemplateSender, reviewTemplateContract, validateTemplateContract, semanticTemplateValues } = await import("./template-contract");
+  const { channelConfig } = await import("./meta");
+  await readTemplateContract(channel);
+  const config = await channelConfig(channel);
   // The legacy cliente_loss template omits the approved purchase amount.
   // Require separately approved v2 to avoid silently sending an outdated script.
   const name = channel === "driver" ? "pnraberta" : "cliente_loss_v2";
-  const approved = (await templates(channel)).find(
-    (t) => t.name === name && t.status === "APPROVED" && t.language === "pt_BR",
-  );
-  if (!approved) throw new Error("Modelo aprovado indisponível.");
+  const catalog = await templates(channel, config);
   const transaction = await db().connect();
   try {
     await transaction.query("BEGIN");
@@ -186,6 +190,14 @@ export async function queueTemplate(
       await transaction.query("COMMIT");
       return false;
     }
+    await transaction.query("SELECT pg_advisory_xact_lock(hashtext($1))", [`atendimento_meta_contract:${channel}`]);
+    const { revision, contract } = await readTemplateContract(channel, transaction);
+    assertTemplateSender(contract, config);
+    reviewTemplateContract(contract, catalog);
+    const components = templateParameters(channel, record, owner.fullName!);
+    const approved = catalog.find((entry) => entry.name === name && entry.language === "pt_BR");
+    const evidence = validateTemplateContract(approved, contract, components,
+      semanticTemplateValues(channel, record, owner.fullName!));
     const previous = (
       await transaction.query(
         "SELECT * FROM alc_atendimento.conversations WHERE channel=$1 AND phone=$2",
@@ -260,15 +272,13 @@ export async function queueTemplate(
       template: {
         name,
         language: { code: "pt_BR" },
-        components: templateParameters(channel, record, owner.fullName!),
+        components,
       },
     };
-    const version = createHash("sha256")
-      .update(JSON.stringify(approved))
-      .digest("hex");
+    const version = evidence.contentVersion;
     const result = await transaction.query(
-      `INSERT INTO alc_atendimento.outbox(dedupe_key,conversation_id,case_id,channel,phone,payload,triggered_by,assigned_to,assignment_version,operator_name_snapshot,base_key,sigla,dispatch_batch_id,template_name,template_version,sender_kind,sender_display_name_snapshot)
-       VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,'system','Mensagem automática') ON CONFLICT(dedupe_key) DO NOTHING RETURNING id`,
+      `INSERT INTO alc_atendimento.outbox(dedupe_key,conversation_id,case_id,channel,phone,payload,triggered_by,assigned_to,assignment_version,operator_name_snapshot,base_key,sigla,dispatch_batch_id,template_name,template_version,sender_kind,sender_display_name_snapshot,template_contract_revision,template_evidence,rendered_template_text)
+       VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,'system',$19,$16,$17,$18) ON CONFLICT(dedupe_key) DO NOTHING RETURNING id`,
       [
         `${channel}:${record.caseId}:initial`,
         conversation.rows[0].id,
@@ -285,6 +295,10 @@ export async function queueTemplate(
         batchId,
         name,
         version,
+        revision,
+        evidence,
+        evidence.renderedText,
+        AGENT_DISPLAY_NAME,
       ],
     );
     await audit(
@@ -297,6 +311,7 @@ export async function queueTemplate(
         assignedTo: owner.id,
         batchId,
         templateVersion: version,
+        templateContractRevision: revision,
       },
       transaction,
     );

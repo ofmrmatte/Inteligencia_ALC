@@ -1,136 +1,105 @@
 import { describe, expect, it } from "vitest";
-import {
-  validateTemplateContract,
-  type TemplateContract,
-} from "../lib/template-contract";
-import type { MetaTemplate } from "../lib/meta";
+import { parseTemplateCatalog, parseTemplateContract, reviewTemplateContract, templateContractContentVersion, validateTemplateContract } from "../lib/template-contract";
+import { clientContract, driverContract, providerCatalog } from "./meta-contract-fixtures";
 
-const template: MetaTemplate = {
-  id: "provider-mock-id",
-  name: "pnraberta",
-  status: "APPROVED",
-  language: "pt_BR",
-  category: "UTILITY",
-  components: [
-    {
-      type: "HEADER",
-      format: "TEXT",
-      text: "Olá {{nome_motorista}}",
-    },
-    {
-      type: "BODY",
-      text: "PNR de {{nome_motorista}}: {{shipment_id}}",
-    },
-    { type: "FOOTER", text: "Mensagem automática" },
-    {
-      type: "BUTTONS",
-      buttons: [
-        { type: "QUICK_REPLY", text: "Recebi" },
-        { type: "URL", text: "Acompanhar", url: "https://example.test/status" },
-      ],
-    },
-  ],
-};
-const contract: TemplateContract = {
-  channel: "driver",
-  name: template.name,
-  language: "pt_BR",
-  category: "UTILITY",
-  bodyText: "PNR de {{nome_motorista}}: {{shipment_id}}",
-  headerText: "Olá {{nome_motorista}}",
-  buttons: [
-    { type: "QUICK_REPLY", text: "Recebi" },
-    { type: "URL", text: "Acompanhar", url: "https://example.test/status" },
-  ],
-  parameterValues: {
-    nome_motorista: "Nome do responsável verificado",
-    shipment_id: "mock-shipment-id",
-  },
-};
-const payload = [
-  {
-    type: "header",
-    parameters: [
-      { type: "text", parameter_name: "nome_motorista", text: "Nome do responsável verificado" },
-    ],
-  },
-  {
-    type: "body",
-    parameters: [
-      { type: "text", parameter_name: "nome_motorista", text: "Nome do responsável verificado" },
-      { type: "text", parameter_name: "shipment_id", text: "mock-shipment-id" },
-    ],
-  },
-];
+const values = { nome_motorista: "Synthetic driver" };
+const payload = ["header", "body"].map((type) => ({ type, parameters: [
+  { type: "text", parameter_name: "nome_motorista", text: values.nome_motorista },
+] }));
 
-describe("Meta approved template contract", () => {
-  it("validates provider catalog and returns rendered text plus content hash", () => {
-    const evidence = validateTemplateContract(template, contract, payload);
+describe("reviewed Meta contract", () => {
+  it("preserves exact rendered header/body/footer/buttons and a content hash", () => {
+    const evidence = validateTemplateContract(providerCatalog[0], driverContract, payload, values);
     expect(evidence).toMatchObject({
-      channel: "driver",
-      category: "UTILITY",
-      approvedBodyText: contract.bodyText,
-      renderedBodyText: "PNR de Nome do responsável verificado: mock-shipment-id",
-      approvedHeaderText: contract.headerText,
-      renderedHeaderText: "Olá Nome do responsável verificado",
-      approvedFooterText: "Mensagem automática",
-      renderedFooterText: "Mensagem automática",
-      buttons: contract.buttons,
+      contentVersion: driverContract.contentVersion,
+      renderedHeaderText: "Olá Synthetic driver", renderedBodyText: "Motorista Synthetic driver",
+      approvedFooterText: "Mensagem automática", renderedFooterText: "Mensagem automática",
+      renderedText: "Olá Synthetic driver\n\nMotorista Synthetic driver\n\nMensagem automática\n\nRecebi",
     });
-    expect(evidence.contentVersion).toMatch(/^[a-f0-9]{64}$/);
+    expect(reviewTemplateContract(driverContract, providerCatalog)).toEqual(driverContract);
+  });
+
+  it.each(["status", "language", "category", "body", "header", "footer", "buttons", "parameters"])(
+    "blocks a provider change to %s instead of deriving a new baseline", (field) => {
+      const candidate = structuredClone(providerCatalog[0]);
+      if (field === "status") candidate.status = "PENDING";
+      else if (field === "language") candidate.language = "en_US";
+      else if (field === "category") candidate.category = "MARKETING";
+      else if (field === "buttons") candidate.components[3].buttons![0].text = "Changed";
+      else candidate.components[field === "header" ? 0 : field === "footer" ? 2 : 1].text = field === "parameters" ? "Motorista {{unknown}}" : "Changed";
+      expect(() => reviewTemplateContract(driverContract, [candidate])).toThrow("Contrato do modelo Meta bloqueado");
+      expect(driverContract.footerText).toBe("Mensagem automática");
+    },
+  );
+
+  it.each([
+    { ...driverContract, footerText: undefined },
+    { ...driverContract, extra: true },
+    { ...driverContract, contentVersion: "0".repeat(64) },
+  ])("rejects incomplete, open-key or tampered baselines", (candidate) => {
+    expect(() => parseTemplateContract(candidate)).toThrow();
   });
 
   it.each([
-    ["status", { ...template, status: "PENDING" }],
-    ["language", { ...template, language: "en_US" }],
-    ["category", { ...template, category: "MARKETING" }],
-    ["body text", { ...template, components: [{ type: "BODY", text: "Different {{nome_motorista}} {{shipment_id}}" }, ...template.components.slice(1)] }],
-    ["unknown component", { ...template, components: [...template.components, { type: "CAROUSEL" }] }],
-    ["unsupported header", { ...template, components: template.components.map((c) => c.type === "HEADER" ? { ...c, format: "IMAGE" } : c) }],
-    ["unsupported button", { ...template, components: template.components.map((c) => c.type === "BUTTONS" ? { type: "BUTTONS", buttons: [{ type: "COPY_CODE", text: "Copiar" }] } : c) }],
-  ])("blocks an incompatible provider %s", (_reason, candidate) => {
-    expect(() => validateTemplateContract(candidate as MetaTemplate, contract, payload)).toThrow(
-      "Contrato do modelo Meta incompatível:",
-    );
+    { catalog: [{ ...providerCatalog[0], category: undefined }] }, { catalog: [null] },
+    { catalog: [providerCatalog[0], providerCatalog[0]] },
+    { catalog: [{ ...providerCatalog[0], unexpected: true }] },
+  ])("rejects malformed or ambiguous catalogs", ({ catalog }) => {
+    expect(() => parseTemplateCatalog(catalog)).toThrow();
   });
 
-  it("blocks reordered, missing, and semantically wrong parameters", () => {
-    const bodyOnly = [payload[1]];
-    expect(() => validateTemplateContract(template, contract, bodyOnly)).toThrow(/nomes ou ordem/);
-    expect(() => validateTemplateContract(template, contract, [
-      payload[0],
-      { ...payload[1], parameters: [...payload[1].parameters].reverse() },
-    ])).toThrow(/nomes ou ordem/);
-    expect(() => validateTemplateContract(template, {
-      ...contract,
-      parameterValues: { ...contract.parameterValues, nome_motorista: "Nome de outro usuário" },
-    }, payload)).toThrow(/semântica/);
-  });
-
-  it("fails closed on positional variables and dynamic URL buttons", () => {
-    const positional = {
-      ...template,
-      components: template.components.map((c) => c.type === "BODY" ? { ...c, text: "Olá {{1}}" } : c),
+  it("checks named example structure without treating provider examples as send values", () => {
+    const named = {
+      ...providerCatalog[0], parameter_format: "NAMED",
+      components: [
+        { ...providerCatalog[0].components[0], example: { header_text_named_params: [{ param_name: "nome_motorista", example: "Example only" }] } },
+        { ...providerCatalog[0].components[1], example: { body_text_named_params: [{ param_name: "nome_motorista", example: "Example only" }] } },
+        ...providerCatalog[0].components.slice(2),
+      ],
     };
-    expect(() => validateTemplateContract(positional, contract, payload)).toThrow();
-    const dynamicButton = {
-      ...template,
-      components: template.components.map((c) => c.type === "BUTTONS" ? {
-        type: "BUTTONS",
-        buttons: [{ type: "URL", text: "Acompanhar", url: "https://example.test/{{shipment_id}}" }],
-      } : c),
-    };
-    expect(() => validateTemplateContract(dynamicButton, contract, payload)).toThrow(/URL dinâmica/);
+    expect(validateTemplateContract(named, driverContract, payload, values).renderedText).not.toContain("Example only");
+    expect(() => reviewTemplateContract(driverContract, [{ ...named, parameter_format: "POSITIONAL" }])).toThrow();
+    const wrong = { ...named, components: [named.components[0], { ...named.components[1], example: { body_text_named_params: [{ param_name: "wrong", example: "Example only" }] } }, ...named.components.slice(2)] };
+    expect(() => reviewTemplateContract(driverContract, [wrong])).toThrow(/nomes/);
+    expect(() => reviewTemplateContract(driverContract, [{ ...named, components: [{ ...named.components[0], example: { body_text_named_params: [] } }, ...named.components.slice(1)] }])).toThrow(/schema/);
   });
 
-  it("fails safely for malformed provider records and wrong channel names", () => {
-    expect(() => validateTemplateContract(null, contract, payload)).toThrow(
-      "Contrato do modelo Meta incompatível: estrutura desconhecida.",
-    );
-    expect(() => validateTemplateContract(
-      { ...template, name: "cliente_loss_v2" },
-      contract,
-      payload,
-    )).toThrow(/status, nome, idioma ou categoria/);
+  it("supports only static reviewed URL and phone buttons and preserves their destinations in evidence", () => {
+    const buttons = [
+      { type: "URL" as const, text: "View", url: "https://example.test/order" },
+      { type: "PHONE_NUMBER" as const, text: "Call", phone_number: "+5511900000000" },
+    ];
+    const candidate = { ...driverContract, buttons };
+    const contract = { ...candidate, contentVersion: templateContractContentVersion(candidate) };
+    const provider = { ...providerCatalog[0], components: [...providerCatalog[0].components.slice(0, 3), { type: "BUTTONS", buttons }] };
+    expect(validateTemplateContract(provider, contract, payload, values).buttons).toEqual(buttons);
+    const dynamic = { ...contract, buttons: [{ type: "URL" as const, text: "View", url: "https://example.test/{{product_id}}" }] };
+    expect(() => parseTemplateContract({ ...dynamic, contentVersion: templateContractContentVersion(dynamic) })).toThrow();
+    const unknown = { ...contract, buttons: [{ type: "FLOW", text: "Open" }] };
+    expect(() => parseTemplateContract(unknown)).toThrow();
+  });
+
+  it.each([
+    { type: "text", parameter_name: "nome_motorista", text: "x".repeat(1025) },
+    { type: "text", parameter_name: "nome_motorista", text: "line\nbreak" },
+    { type: "text", parameter_name: "nome_motorista", text: values.nome_motorista, extra: true },
+    { type: "text", parameter_name: "constructor", text: values.nome_motorista },
+  ])("rejects unknown keys/names and unbounded parameter values", (parameter) => {
+    expect(() => validateTemplateContract(providerCatalog[0], driverContract, [payload[0], { type: "body", parameters: [parameter] }], values)).toThrow();
+  });
+
+  it("rejects wrong semantic owner values, extra components and header overflow", () => {
+    expect(() => validateTemplateContract(providerCatalog[0], driverContract, payload, { nome_motorista: "Other driver" })).toThrow(/semântica/);
+    expect(() => validateTemplateContract(providerCatalog[0], driverContract, [...payload, payload[0]], values)).toThrow();
+    expect(() => validateTemplateContract(providerCatalog[0], driverContract, payload, { ...values, constructor: "unexpected" })).toThrow();
+    const longValues = { nome_motorista: "x".repeat(60) };
+    const longPayload = payload.map((component) => ({ ...component, parameters: [{ ...component.parameters[0], text: longValues.nome_motorista }] }));
+    expect(() => validateTemplateContract(providerCatalog[0], driverContract, longPayload, longValues)).toThrow(/renderizado/);
+  });
+  it("bounds approved body and the expanded body independently", () => {
+    expect(() => parseTemplateContract({ ...driverContract, bodyText: "x".repeat(1025) })).toThrow();
+    const clientValues = Object.fromEntries(clientContract.parameters.body.map((name) => [name, "x".repeat(900)]));
+    const components = [{ type: "body", parameters: clientContract.parameters.body.map((name) => ({ type: "text", parameter_name: name, text: clientValues[name] })) }];
+    expect(() => validateTemplateContract(providerCatalog[1], clientContract, components, clientValues)).toThrow(/renderizado/);
   });
 });
