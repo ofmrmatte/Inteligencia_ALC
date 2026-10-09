@@ -513,6 +513,83 @@ describe("source import regressions", () => {
     });
   });
 
+  it.each([
+    { customerName: "Conflicting buyer" },
+    { customerPhone: "5511977770000" },
+    { customerDocument: "conflicting-document" },
+    { customerAddress: "Conflicting address" },
+    { customerAddressFields: { city: "Conflicting city" } },
+    { customerSource: "https://envios.adminml.com/logistics/package-management/package/synthetic-shipment" },
+  ])("preserves verified buyer and audits equal-time conflicts: %j", async (changes) => {
+    const existing = record({ customerDocument: "known-document", customerAddress: "Known address",
+      customerAddressFields: { city: "Known city" } });
+    await upsertCases([existing], NOW.toISOString(), true, null, false);
+    mocks.audit.mockClear(); mocks.transactionQuery.mockClear();
+    const conflict = { ...existing, ...changes, sourceAt: "2026-10-08T15:01:00Z" };
+    expect(await upsertCases([conflict], NOW.toISOString(), false, OPERATOR.id, false))
+      .toMatchObject({ new: 0, updated: 0, unchanged: 1, verifiedPhoneAdded: 0, verifiedContactConflicts: 1 });
+    expect(persisted.get(existing.caseId)?.record).toEqual(existing);
+    expect(mocks.audit).toHaveBeenCalledOnce();
+    expect(mocks.audit).toHaveBeenCalledWith(OPERATOR.id, "customer_contact_conflict", existing.caseId,
+      { capturedAt: NOW.toISOString(), reason: "equal_capture_time" },
+      expect.objectContaining({ query: expect.any(Function), release: expect.any(Function) }));
+    expect(JSON.stringify(mocks.audit.mock.calls)).not.toMatch(/Conflicting|known-document|5511977770000/);
+    const enrichment = mocks.transactionQuery.mock.calls.find(([sql]) => sql.startsWith("INSERT INTO alc_atendimento.pnr_enrichment_outbox"));
+    expect(enrichment?.[1]?.[2]).toMatchObject({ name: existing.customerName, phone: existing.customerPhone });
+    expect(mocks.transactionQuery).toHaveBeenLastCalledWith("COMMIT");
+    expect(mocks.templates).not.toHaveBeenCalled();
+  });
+
+  it("treats an equivalent equal-time capture as unchanged and accepts only a strictly newer buyer", async () => {
+    const existing = record({ customerCapturedAt: "2026-10-08T14:59:00Z" });
+    await upsertCases([existing], NOW.toISOString(), true, null, false);
+    const equivalent = { ...existing, customerCapturedAt: "2026-10-08T11:59:00-03:00" };
+    expect(await upsertCases([equivalent], NOW.toISOString(), false, null, false))
+      .toMatchObject({ unchanged: 1, updated: 0, verifiedContactConflicts: 0 });
+    expect(persisted.get(existing.caseId)?.record).toEqual(existing);
+    expect(mocks.audit).not.toHaveBeenCalled();
+    const newer = { ...existing, customerName: "Newer buyer", customerCapturedAt: NOW.toISOString() };
+    expect(await upsertCases([newer], NOW.toISOString(), false, null, false))
+      .toMatchObject({ updated: 1, verifiedContactConflicts: 0 });
+    expect(persisted.get(existing.caseId)?.record).toMatchObject({ customerName: "Newer buyer" });
+  });
+
+  it.each([null, undefined, "", "  ", 0, "0", NaN, Infinity, -10, "invalid", "0x10", "R$ 10,00", false, true])(
+    "fromCore keeps unknown purchase value as null: %j", (value) => {
+      expect(fromCore({ ...coreRow(record()), purchase_value: value }).purchaseValue).toBeNull();
+    },
+  );
+
+  it.each([199.9, "199.90"])("fromCore preserves a real positive purchase value: %j", (value) => {
+    expect(fromCore({ ...coreRow(record()), purchase_value: value }).purchaseValue).toBe(199.9);
+  });
+
+  it("persists unknown amounts as null without inventing zero or enabling client dispatch", async () => {
+    const unknown = record({ purchaseValue: 0 });
+    await upsertCases([unknown], NOW.toISOString(), true, null, false);
+    const saved = persisted.get(unknown.caseId)?.record as CaseRecord;
+    expect(saved.purchaseValue).toBeNull();
+    expect(JSON.parse(JSON.stringify(saved)).purchaseValue).toBeNull();
+    expect(await upsertCases([unknown], NOW.toISOString(), false, null, false))
+      .toMatchObject({ new: 0, updated: 0, unchanged: 1 });
+    await expect(queueTemplate("client", saved, OPERATOR)).rejects.toThrow("incompletos");
+    expect(mocks.templates).not.toHaveBeenCalled();
+    const known = { ...unknown, purchaseValue: 199.9 };
+    expect(await upsertCases([known], NOW.toISOString(), false, null, false))
+      .toMatchObject({ new: 0, updated: 1, unchanged: 0 });
+    expect(persisted.get(unknown.caseId)?.record).toMatchObject({ purchaseValue: 199.9 });
+  });
+
+  it("preserves a known purchase value when a later snapshot omits it", async () => {
+    const existing = record({ purchaseValue: 199.9 });
+    await upsertCases([existing], NOW.toISOString(), true, null, false);
+    const sparse = { ...existing, purchaseValue: 0, sourceAt: "2026-10-08T15:01:00Z" };
+
+    expect(await upsertCases([sparse], NOW.toISOString(), false, null, false))
+      .toMatchObject({ new: 0, updated: 0, unchanged: 1 });
+    expect(persisted.get(existing.caseId)?.record).toMatchObject({ purchaseValue: 199.9 });
+  });
+
   it("counts fingerprint backfill as unchanged rather than a new or updated PNR", async () => {
     const initial = record();
     persisted.set(initial.caseId, { record: initial, sourceAt: NOW.toISOString(), fingerprint: "", comparisonVersion: 1 });

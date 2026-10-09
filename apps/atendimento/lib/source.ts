@@ -4,6 +4,7 @@ import {
   classification,
   driverNotificationEligible,
   phone,
+  knownPurchaseValue,
   templateParameters,
   type CaseRecord,
 } from "./domain";
@@ -347,6 +348,7 @@ export async function upsertCases(
     unchanged: 0,
     classificationChanged: 0,
     verifiedPhoneAdded: 0,
+    verifiedContactConflicts: 0,
     scopeChanged: 0,
     stale: 0,
     errors: 0,
@@ -381,16 +383,31 @@ export async function upsertCases(
       // A list response must not erase details or a verified complementary contact.
       const incomingCapture = Date.parse(record.customerCapturedAt || "");
       const existingCapture = Date.parse(old?.customerCapturedAt || "");
+      const contactConflict = Boolean(
+        old?.customerVerified && record.customerVerified &&
+        Number.isFinite(incomingCapture) && incomingCapture === existingCapture &&
+        caseFingerprint({
+          ...old,
+          customerName: record.customerName,
+          customerPhone: record.customerPhone,
+          customerDocument: record.customerDocument,
+          customerAddress: record.customerAddress,
+          customerAddressFields: record.customerAddressFields,
+          customerSource: record.customerSource,
+        }) !== caseFingerprint(old),
+      );
       const acceptVerifiedContact = Boolean(
         record.customerVerified &&
           (!old?.customerVerified ||
             (Number.isFinite(incomingCapture) &&
               Number.isFinite(existingCapture) &&
-              incomingCapture >= existingCapture)),
+              incomingCapture > existingCapture)),
       );
       const merged = {
         ...old,
         ...record,
+        purchaseValue:
+          knownPurchaseValue(record.purchaseValue) ?? knownPurchaseValue(old?.purchaseValue),
         driverId: record.driverId || old?.driverId || "",
         driverPhone: record.driverPhone || old?.driverPhone || "",
         products: record.products.length
@@ -463,6 +480,11 @@ export async function upsertCases(
       if (!persisted.rowCount) {
         stats.stale += 1;
         continue;
+      }
+      if (contactConflict) {
+        stats.verifiedContactConflicts += 1;
+        await audit(actor, "customer_contact_conflict", record.caseId,
+          { capturedAt: new Date(existingCapture).toISOString(), reason: "equal_capture_time" }, client);
       }
       if (!old) stats.new += 1;
       else if (unchanged) stats.unchanged += 1;
@@ -572,7 +594,7 @@ export function fromCore(row: Record<string, unknown>): CaseRecord {
       ? (detail.products as { title: string }[])
       : [],
     deliveryAt: String(detail.deliveryAt || ""),
-    purchaseValue: Number(row.purchase_value || 0),
+    purchaseValue: knownPurchaseValue(row.purchase_value),
     ...{
       sourceAt: new Date(Math.max(
         ...[row.source_last_seen_at, row.updated_at]

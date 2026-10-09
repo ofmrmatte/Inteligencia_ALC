@@ -126,6 +126,10 @@ describe("regras operacionais do Atendimento", () => {
     expect(text).not.toMatch(/\[[^\]]+\]/);
     expect(() => clientOpening({ ...record, purchaseValue: 0 }, "Equipe ALC"))
       .toThrow("incompletos");
+    expect(() => clientOpening({ ...record, purchaseValue: null }, "Equipe ALC"))
+      .toThrow("incompletos");
+    expect(() => templateParameters("client", { ...record, purchaseValue: null }, "Equipe ALC"))
+      .toThrow("incompletos");
     expect(() => clientOpening({ ...record, customerVerified: false }, "Equipe ALC"))
       .toThrow("incompletos");
     expect(() => clientOpening(record, "")).toThrow("incompletos");

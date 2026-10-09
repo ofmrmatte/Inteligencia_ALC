@@ -20,6 +20,13 @@ export function phone(value: unknown) {
   if (/^\d{10,11}$/.test(n)) return "55" + n;
   return "";
 }
+export function knownPurchaseValue(value: unknown): number | null {
+  if (typeof value !== "number" &&
+      (typeof value !== "string" || !/^\d+(?:\.\d+)?$/.test(value.trim()))) return null;
+  const amount = Number(value);
+  // Zero is also the legacy missing-value default, without provenance to confirm it.
+  return Number.isFinite(amount) && amount > 0 ? amount : null;
+}
 export function competence(now = new Date()) {
   const parts = Object.fromEntries(
     new Intl.DateTimeFormat("en-CA", {
@@ -68,7 +75,7 @@ export type CaseRecord = {
   customerAddressFields?: Record<string, string>;
   products: { title: string }[];
   deliveryAt: string;
-  purchaseValue: number;
+  purchaseValue: number | null;
 };
 export type AgentState = {
   step: string;
@@ -271,6 +278,7 @@ export function clientOpening(record: CaseRecord, operator: string) {
     !record.products?.length ||
     !record.deliveryAt ||
     !record.shipmentId?.trim() ||
+    typeof record.purchaseValue !== "number" ||
     !Number.isFinite(record.purchaseValue) ||
     record.purchaseValue <= 0 ||
     !operator.trim()
@@ -315,6 +323,7 @@ export function templateParameters(
     !record.customerPhone ||
     !record.products.length ||
     !record.deliveryAt ||
+    typeof record.purchaseValue !== "number" ||
     !Number.isFinite(record.purchaseValue) ||
     record.purchaseValue <= 0
   )
