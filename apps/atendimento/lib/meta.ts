@@ -4,6 +4,7 @@ import {
   createCipheriv,
   createDecipheriv,
   randomBytes,
+  createHash,
 } from "node:crypto";
 import { setting } from "./db";
 export type Channel = "driver" | "client";
@@ -14,6 +15,14 @@ export type ChannelConfig = {
   verifyToken: string;
   appSecret: string;
   number: string;
+};
+export type MetaTemplate = {
+  id?: string;
+  name: string;
+  status: string;
+  language: string;
+  category: string;
+  components: Record<string, unknown>[];
 };
 const prefixes = { driver: "WHATSAPP_DRIVER", client: "WHATSAPP_CLIENT" };
 export function encrypt(value: string) {
@@ -111,11 +120,8 @@ export async function templates(channel: Channel) {
     cfg,
     `${cfg.wabaId}/message_templates?fields=id,name,status,language,category,components&limit=100`,
   );
-  return data.data as {
-    name: string;
-    status: string;
-    language: string;
-    category: string;
-    components: Record<string, unknown>[];
-  }[];
+  return data.data as MetaTemplate[];
+}
+export function templateContentVersion(template: MetaTemplate) {
+  return createHash("sha256").update(JSON.stringify(template)).digest("hex");
 }
