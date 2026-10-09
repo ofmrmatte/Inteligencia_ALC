@@ -267,8 +267,8 @@ export function Dispatches({ channel = "client" }: { channel?: Channel }) {
       <div className="page-tools">
         <p className="muted">
           {channel === "driver"
-            ? "Notificações e acompanhamento das PNRs dos motoristas."
-            : "Contato e tratativa dos clientes vinculados às PNRs."}
+            ? "Disparo exclusivamente para o telefone do motorista vinculado à PNR. Confira o destinatário antes de enviar."
+            : "Disparo exclusivamente para o telefone do comprador validado da PNR. Contatos não verificados são bloqueados."}
         </p>
         {tab === "preview" && (
           <button
@@ -493,6 +493,7 @@ export function Dispatches({ channel = "client" }: { channel?: Channel }) {
                         <td>
                           {number ? `+${number}` : "Não localizado"}
                           <small>{contact.format} · {contact.association}</small>
+                          <small>{channel === "driver" ? "Origem: cadastro do motorista" : "Origem: comprador validado"}</small>
                           <small>{contact.whatsapp}</small>
                         </td>
                         <td>{block || "Contato elegível para conferência"}</td>
