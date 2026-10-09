@@ -301,10 +301,10 @@ it.each([null, "invalid", "", "   "])(
     expect(finances.textContent?.match(/Subtotal confirmado/g)).toHaveLength(3);
     expect(finances.textContent?.match(/—/g)).toHaveLength(2);
     expect(finances.textContent).not.toContain("0,00");
-    expect(container.querySelectorAll(".sync-group")).toHaveLength(4);
+    expect(container.querySelectorAll(".sync-group")).toHaveLength(3);
     expect(
       container.querySelectorAll(".sync-metrics .kpi-card__head i svg"),
-    ).toHaveLength(15);
+    ).toHaveLength(12);
     expect(mocks.useData).toHaveBeenCalledWith("overview", 15000);
   },
 );

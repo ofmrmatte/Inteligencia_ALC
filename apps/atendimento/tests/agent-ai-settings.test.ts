@@ -6,7 +6,7 @@ vi.mock("../lib/db", () => ({ db: () => ({ query: mocks.query, connect: mocks.co
 vi.mock("../lib/operator-directory", async original => ({ ...(await original()), enabledProfiles: mocks.enabledProfiles }));
 import type { AuthProfile } from "@alc/identity/auth";
 import { GET, POST } from "../app/api/[resource]/route";
-import { AI_CONFIG_KEY, defaultAiConfig, saveAiConfig, saveInstructions, INSTRUCTION_KEY } from "../lib/agent-instructions";
+import { AI_CONFIG_KEY, MAX_AI_DAILY_CALLS, defaultAiConfig, saveAiConfig, saveInstructions, INSTRUCTION_KEY } from "../lib/agent-instructions";
 import { CUSTOMER_STEPS } from "../lib/agent-playbook";
 
 const actor: AuthProfile = { id: "11111111-1111-4111-8111-111111111111", email: "synthetic@example.test", fullName: "Synthetic Manager", role: "developer", globalAccess: true, baseScope: [], siglaScope: [] };
@@ -68,11 +68,15 @@ it("preserves editable policies and legacy script settings under the same transa
   expect(mocks.audit.mock.calls[0][4]).toBeDefined();
 });
 it("rejects enabling without model and prevents credential mass assignment", async () => {
-  for (const body of [{ ...config, model: "" }, { ...config, apiKey: "sensitive" }, { ...config, dailyCallLimit: 1001 }]) {
+  for (const body of [{ ...config, model: "" }, { ...config, apiKey: "sensitive" }, { ...config, dailyCallLimit: MAX_AI_DAILY_CALLS + 1 }]) {
     const response = await POST(request("ai-config", body), context("ai-config"));
     expect(response.status).toBe(400);
   }
   expect(mocks.connect).not.toHaveBeenCalled();
+});
+it("accepts daily AI budgets above 1000 without limiting total conversations", async () => {
+  expect((await POST(request("ai-config", { ...config, dailyCallLimit: 12_000 }), context("ai-config"))).status).toBe(200);
+  expect(values.get(AI_CONFIG_KEY)).toMatchObject({ dailyCallLimit: 12_000, enabled: true });
 });
 it("restricts configuration and instruction updates to admins and same-origin requests", async () => {
   const policies = { kind: "policies", revision: 0, policies: ["Preservar restrições da equipe."] };

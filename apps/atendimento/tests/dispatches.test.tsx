@@ -84,6 +84,8 @@ it.each(["driver", "client"] as const)(
     expect(html).not.toContain(
       channel === "driver" ? "Test buyer" : "Test driver",
     );
+    expect(html).toContain(channel === "driver" ? "Origem: cadastro do motorista" : "Origem: comprador validado");
+    expect(html).toContain(channel === "driver" ? "5511999990000" : "5511988880000");
     expect(html).toContain("Prévia de envio");
     expect(html).toContain("Competência");
     expect(html).not.toContain("Atualizar disparos"); // A atualização geral agora fica no cabeçalho.

@@ -72,12 +72,14 @@ export function instructionSnapshotFor(channel: "client" | "driver", current: Ag
 }
 
 export const AI_CONFIG_KEY = "agent_ai_config_v1";
+// A cap on billable AI requests, never a cap on customer conversations or PNRs.
+export const MAX_AI_DAILY_CALLS = 100_000;
 export const aiConfigSchema = z.object({
   revision: z.number().int().nonnegative(),
   enabled: z.boolean(),
   provider: z.enum(["openai", "gemini"]),
   model: z.string().trim().max(120).regex(/^[a-zA-Z0-9._:/-]*$/),
-  dailyCallLimit: z.number().int().min(1).max(1000),
+  dailyCallLimit: z.number().int().min(1).max(MAX_AI_DAILY_CALLS),
   timeoutMs: z.number().int().min(100).max(8000),
 }).strict().refine(config => !config.enabled || config.model.length > 0, {
   message: "Informe o modelo para ativar a IA.", path: ["model"],

@@ -20,23 +20,29 @@ vi.mock("../components/collector", () => ({ request: vi.fn() }));
 import { Overview } from "../components/overview";
 
 describe("coletas na Visão Geral", () => {
-  it("mostra os dois botões de coleta, sem os links de disparo anteriores", () => {
+  it("mostra coleta geral única e elimina painéis sem utilidade", () => {
     const html = renderToStaticMarkup(<Overview />);
-    expect(html).toContain("Coletar Cliente");
-    expect(html).toContain("Coletar Driver");
-    expect(html).toContain("Estes botões não enviam mensagens");
+    expect(html).toContain("Coletar geral");
+    expect(html).not.toContain("Coletar Cliente");
+    expect(html).not.toContain("Coletar Driver");
+    expect(html).toContain("sem envio ou enfileiramento de mensagens");
+    expect(html).not.toContain("Fila da equipe");
+    expect(html).not.toContain("PNRs recentemente atualizadas");
+    expect(html).not.toContain("Conversas por atendente");
     expect(html).not.toContain("Disparo Cliente</a>");
     expect(html).not.toContain("Atendimento motoristas</a>");
-    expect(html).toContain("Última coleta de clientes");
-    expect(html).toContain("Última coleta de motoristas");
+    expect(html).toContain("Clientes:");
+    expect(html).toContain("Motoristas:");
   });
 
-  it("somente permite os dois públicos na coleta manual e desliga disparos", () => {
+  it("coleta geral usa o canal nulo e continua impedindo disparos", () => {
     const worker = readFileSync(
       new URL("../../../extensions/pnr-connector/src/service-worker.js", import.meta.url), "utf8",
     );
     expect(worker).toContain('if (message.type === "ATENDIMENTO_COLLECT")');
     expect(worker).toContain("channel: message.payload?.channel || null, collectOnly: true");
+    expect(readFileSync(new URL("../components/overview.tsx", import.meta.url), "utf8"))
+      .toContain('request<{ message: string }>("ATENDIMENTO_COLLECT")');
     expect(worker).toContain('channel !== "client" && channel !== "driver"');
     expect(worker).toContain("extensionId: chrome.runtime.id");
   });

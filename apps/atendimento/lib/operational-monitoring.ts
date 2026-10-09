@@ -4,7 +4,6 @@ import { db, setting } from "./db";
 import { competence } from "./domain";
 import { conversationScopeSql, inboxScopeSql } from "./inbox";
 import { emptySyncCounts, type SyncCounts } from "./sync-delta";
-import { enabledProfiles } from "./operator-directory";
 
 const knownPurchaseValue = `CASE
   WHEN jsonb_typeof(c.record->'purchaseValue') IN ('number','string')
@@ -19,7 +18,6 @@ export async function operationalOverview(profile: AuthProfile) {
   const scope = await scopeFor(profile),
     conversationValues: unknown[] = [],
     conversationScope = await conversationScopeSql(profile, conversationValues);
-  // Queue details must not survive an ownership transfer in an in-memory cache.
   return queryOperationalOverview(scope, conversationScope, conversationValues);
 }
 
@@ -57,7 +55,7 @@ async function queryOperationalOverview(
 ) {
   const caseValues: unknown[] = [competence()];
   const caseScope = inboxScopeSql(scope, caseValues);
-  const [cases, conversations, authorship, operators, recent, queue, source, collector, profiles] =
+  const [cases, conversations, authorship, source, collector] =
     await Promise.all([
       db().query(
         `SELECT count(*) FILTER(WHERE c.classification<>'encerrada')::int AS open,
@@ -79,33 +77,14 @@ async function queryOperationalOverview(
         `SELECT m.sender_kind,count(*)::int AS messages
          FROM alc_atendimento.messages m JOIN alc_atendimento.conversations c ON c.id=m.conversation_id
          WHERE ${conversationScope} GROUP BY m.sender_kind`, conversationValues),
-      db().query(
-        `SELECT c.assigned_to,count(*)::int AS conversations
-         FROM alc_atendimento.conversations c WHERE ${conversationScope} AND c.assigned_to IS NOT NULL
-         GROUP BY c.assigned_to ORDER BY conversations DESC,c.assigned_to LIMIT 50`, conversationValues),
-      db().query(
-        `SELECT c.case_id,c.classification,c.base_key,c.sigla,c.updated_at,
-          ${knownPurchaseValue}::text AS purchase_value
-         FROM alc_atendimento.cases c WHERE ${caseScope} AND c.competence=$1
-         ORDER BY c.updated_at DESC,c.case_id DESC LIMIT 10`, caseValues),
-      db().query(
-        `SELECT c.id,c.name,c.phone,c.channel,c.status,c.unread,c.updated_at
-         FROM alc_atendimento.conversations c
-         WHERE ${conversationScope} AND c.status IN ('human','pending')
-         ORDER BY c.unread DESC,c.updated_at DESC,c.id DESC LIMIT 10`, conversationValues),
       setting<Record<string, unknown>>("source"),
       setting<Record<string, unknown>>("collector"),
-      enabledProfiles(),
     ]);
   return {
     ...cases.rows[0],
     ...conversations.rows[0],
     competence: competence(),
     authorship: Object.fromEntries(authorship.rows.map((row) => [row.sender_kind, row.messages])),
-    conversationsByOperator: operators.rows.map(row => ({ ...row,
-      operator_name: profiles.find(p => p.id === row.assigned_to)?.fullName || "Atendente indisponível" })),
-    recentCases: recent.rows,
-    queue: queue.rows,
     source: syncSummary(scope, source || {}, collector || {}),
     collector: {
       enabled: collector?.enabled === true,
