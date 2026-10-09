@@ -11,6 +11,7 @@ Na raiz: `npm ci`, `npm run dev:atendimento`, `npm run build:atendimento` e `npm
 - Visão geral de PNRs na competência vigente e atendimentos humanos.
 - Gestão operacional separada do acesso central: funções explícitas, bases principais/substitutas, disponibilidade, recebimento, atribuição única por PNR e histórico de redistribuições. Consulte [a entrega por fases](../../docs/atendimento-evolucao-fases.md) antes de ativar esta evolução.
 - Caixa por canal, busca, histórico, anexos recebidos, notas internas, assumir, concluir e retomar robô.
+- Anexos privados duráveis, upload humano com progresso, players e quarentena antimalware. Hash e permissões são conferidos antes do download/envio. Consulte a fase 3 antes de configurar bucket e scanner; sem configuração não há liberação de arquivos.
 - PNRs com filtros, comprador, produtos, entrega, contato validado e histórico preservado.
 - Consulta do motorista exige nome, base e vínculo de telefone/ID; ambiguidades vão para a equipe. Consultas anteriores são explícitas, incluindo casos encerrados.
 - Tratativa determinística do cliente: recebimento, data, produto, confirmação no aplicativo; negativa, portaria/vizinhos e encaminhamento. O sistema registra o relato, sem afirmar que alterou o Mercado Livre.
@@ -35,6 +36,8 @@ A extensão também lê campos explicitamente identificados como comprador em um
 `ATENDIMENTO_DATABASE_URL`, `CORE_DATABASE_URL`, `NEXT_PUBLIC_SUPABASE_URL`, `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY`, `SUPABASE_SERVICE_ROLE_KEY`, `ATENDIMENTO_ENCRYPTION_KEY` (32 bytes em hexadecimal), `ATENDIMENTO_PUBLIC_URL`, `INTELIGENCIA_PUBLIC_URL`, `HOSTNAME`, `PORT`.
 
 Para cada prefixo `WHATSAPP_DRIVER` / `WHATSAPP_CLIENT`: `_NUMBER`, `_PHONE_ID`, `_WABA_ID`, `_TOKEN`, `_VERIFY_TOKEN`, `_APP_SECRET`. `_TOKEN`, `_VERIFY_TOKEN` e `_APP_SECRET` também podem ser substituídos com segurança na Administração. `META_GRAPH_VERSION` é opcional, padrão v24.0.
+
+Anexos: `ATENDIMENTO_MEDIA_BUCKET` (bucket privado no Supabase central, sem acesso direto por anon/authenticated), `ATENDIMENTO_CLAMAV_HOST` (scanner INSTREAM TCP/3310 apenas em rede privada), `ATENDIMENTO_MEDIA_RETENTION_DAYS` (180 por padrão, aplicável aos novos arquivos). Não são criados serviços, buckets ou permissões automaticamente. Scanner ausente deixa quarentena. `npm run media:retention --workspace=@alc/atendimento` simula; `-- --apply` exclui até 100 expirados sem legal hold ou envio pendente/incerto, somente após aprovação da política.
 
 ## Ativação externa
 

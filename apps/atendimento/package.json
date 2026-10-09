@@ -11,23 +11,27 @@
     "build": "npm run build --workspace=alc-pnr-connector && next build",
     "start": "node scripts/start.mjs",
     "migrate": "node scripts/migrate.mjs",
+    "media:retention": "tsx scripts/media-retention.ts",
     "lint": "eslint .",
     "typecheck": "tsc --noEmit",
     "test": "vitest run"
   },
   "dependencies": {
+    "@alc/identity": "*",
     "@alc/ui": "*",
     "@supabase/ssr": "^0.12.4",
     "@supabase/supabase-js": "^2.112.3",
+    "alc-pnr-connector": "*",
+    "cfb": "1.2.2",
+    "file-type": "22.1.1",
     "lucide-react": "^1.31.0",
     "next": "^16.3.5",
     "pg": "^8.13.1",
     "react": "^19.2.8",
     "react-dom": "^19.2.8",
-    "zod": "^4.4.3",
-    "@alc/identity": "*",
-    "alc-pnr-connector": "*",
-    "tsx": "^4.23.12"
+    "sharp": "0.35.5",
+    "tsx": "^4.23.12",
+    "zod": "^4.4.3"
   },
   "devDependencies": {
     "@types/node": "^26.2.0",

@@ -207,9 +207,9 @@ describe("inbox filters and scoped queries", () => {
       .mockResolvedValueOnce({ rows: cases, rowCount: 4 });
     const result = await conversationDetail(profile, ID, new URLSearchParams({ before: NOW.toISOString(), beforeId: OTHER }));
     expect(mocks.query.mock.calls[1]).toEqual([
-      expect.stringContaining("(created_at,id)<($2::timestamptz,$3::uuid)"), [ID, NOW.toISOString(), OTHER],
+      expect.stringContaining("(m.created_at,m.id)<($2::timestamptz,$3::uuid)"), [ID, NOW.toISOString(), OTHER],
     ]);
-    expect(mocks.query.mock.calls[1][0]).toContain("ORDER BY created_at DESC,id DESC LIMIT 51");
+    expect(mocks.query.mock.calls[1][0]).toContain("ORDER BY m.created_at DESC,m.id DESC LIMIT 51");
     expect(mocks.query.mock.calls[2][0]).toContain("NOT EXISTS");
     expect(mocks.query.mock.calls[3][1]).toEqual(["synthetic-case", "synthetic-driver", conversation.phone, "BASE A", "SP"]);
     expect(result).toMatchObject({ messages: messages.slice(0, 50).reverse(), queued, cases: [cases[0]], hasMore: true });

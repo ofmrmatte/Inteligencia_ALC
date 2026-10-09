@@ -1,6 +1,7 @@
 import { db, audit } from "../lib/db";
 import { syncCore } from "../lib/source";
 import { processEvents, processOutbox } from "../lib/worker";
+import { archiveIncomingMedia } from "../lib/media-service";
 let stopping = false;
 process.on("SIGTERM", () => {
   stopping = true;
@@ -9,6 +10,7 @@ process.on("SIGINT", () => {
   stopping = true;
 });
 let lastSync = 0;
+let archiving: Promise<void> | null = null;
 async function tick() {
   const client = await db().connect();
   try {
@@ -30,6 +32,17 @@ async function tick() {
       }
       await processEvents();
       await processOutbox();
+      // Private object storage/scanning must not stall text replies or start overlapping local scans.
+      if (!archiving)
+        archiving = archiveIncomingMedia()
+          .catch(() => {
+            console.error(
+              "Atendimento: arquivamento de anexos temporariamente indisponível.",
+            );
+          })
+          .finally(() => {
+            archiving = null;
+          });
     } finally {
       await client.query(
         "SELECT pg_advisory_unlock(hashtext('alc_atendimento_worker'))",
@@ -47,4 +60,5 @@ while (!stopping) {
   }
   await new Promise((resolve) => setTimeout(resolve, 5000));
 }
+await archiving;
 await db().end();

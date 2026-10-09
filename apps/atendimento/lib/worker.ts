@@ -15,6 +15,7 @@ import { fillScript, scriptText } from "./agent-playbook";
 import { loadInstructions, runtimeScripts } from "./agent-instructions";
 import { validateQueuedAuthor } from "./dispatch-authorization";
 import { HttpError } from "./auth";
+import { outboundMedia } from "./media-service";
 type Conversation = {
   id: string;
   channel: Channel;
@@ -353,6 +354,7 @@ async function incoming(
         mime_type?: string;
         filename?: string;
         caption?: string;
+        voice?: boolean;
       })
     : undefined;
   const attachment = media?.id
@@ -361,16 +363,18 @@ async function incoming(
         mime: media.mime_type || "",
         filename: media.filename || "",
         caption: media.caption || "",
+        voice: media.voice === true,
       }
     : null;
   const inserted = await transaction.query(
-    `INSERT INTO alc_atendimento.messages(conversation_id,provider_id,direction,body,type,attachment,sender_kind) VALUES($1,$2,'in',$3,$4,$5,'contact') ON CONFLICT(provider_id) DO NOTHING RETURNING id`,
+    `INSERT INTO alc_atendimento.messages(conversation_id,provider_id,direction,body,type,attachment,sender_kind,case_id) VALUES($1,$2,'in',$3,$4,$5,'contact',$6) ON CONFLICT(provider_id) DO NOTHING RETURNING id`,
     [
       conversation.id,
       id,
       text || media?.caption || `[${type} recebido]`,
       type,
       attachment,
+      conversation.case_id || null,
     ],
   );
   if (!inserted.rowCount) return;
@@ -610,7 +614,7 @@ export async function processOutbox() {
       );
       if (!claimed.rowCount) continue;
       // Recheck the service window and human takeover immediately before a bot reply.
-      if (job.payload.type === "text") {
+      if (job.payload.type !== "template") {
         const c = (
           await connection.query(
             "SELECT * FROM alc_atendimento.conversations WHERE id=$1",
@@ -630,37 +634,84 @@ export async function processOutbox() {
           continue;
         }
       }
+      let messageRequested = false;
       try {
-        const sent = await graph(
-          config,
-          `${config.phoneId}/messages`,
-          job.payload,
-        );
+        let payload = job.payload;
+        if (job.media_id) {
+          const { row, bytes } = await outboundMedia(job.media_id, sending!);
+          let providerMedia = row.provider_media_id;
+          if (!providerMedia) {
+            const multipart = new FormData();
+            multipart.set("messaging_product", "whatsapp");
+            multipart.set(
+              "file",
+              new Blob([new Uint8Array(bytes)], { type: row.mime }),
+              row.filename,
+            );
+            const uploaded = await graph(
+              config,
+              `${config.phoneId}/media`,
+              multipart,
+            );
+            if (
+              typeof uploaded.id !== "string" ||
+              !/^[0-9]{1,100}$/.test(uploaded.id)
+            )
+              throw new Error("Meta não confirmou o anexo.");
+            providerMedia = uploaded.id;
+            await connection.query(
+              "UPDATE alc_atendimento.media SET provider_media_id=$2 WHERE id=$1",
+              [row.id, providerMedia],
+            );
+          }
+          payload = {
+            messaging_product: "whatsapp",
+            to: job.phone,
+            type: row.type,
+            [row.type]: {
+              id: providerMedia,
+              ...(job.payload.caption ? { caption: job.payload.caption } : {}),
+              ...(row.type === "document" ? { filename: row.filename } : {}),
+            },
+          };
+        }
+        messageRequested = true;
+        const sent = await graph(config, `${config.phoneId}/messages`, payload);
         const provider = sent.messages?.[0]?.id;
         if (!provider)
           throw new Error("Meta não confirmou o identificador de envio.");
-        await connection.query(
-          "UPDATE alc_atendimento.outbox SET status='sent',provider_id=$2,delivery_status='sent',updated_at=now() WHERE id=$1",
-          [job.id, provider],
-        );
-        if (job.conversation_id)
+        if (job.conversation_id) {
           await connection.query(
-            `INSERT INTO alc_atendimento.messages(conversation_id,provider_id,direction,body,status,type,sender_kind,sender_user_id,sender_display_name_snapshot,actor_id) VALUES($1,$2,'out',$3,'sent',$4,$5,$6,$7,$6) ON CONFLICT(provider_id) DO NOTHING`,
+            `WITH inserted AS (
+              INSERT INTO alc_atendimento.messages(conversation_id,provider_id,direction,body,status,type,sender_kind,sender_user_id,sender_display_name_snapshot,actor_id,attachment,case_id)
+              VALUES($1,$2,'out',$3,'sent',$4,$5,$6,$7,$6,CASE WHEN $8::uuid IS NULL THEN NULL ELSE jsonb_build_object('internalId',$8::uuid) END,(SELECT coalesce(o.case_id,c.case_id) FROM alc_atendimento.outbox o LEFT JOIN alc_atendimento.conversations c ON c.id=o.conversation_id WHERE o.id=$9))
+              ON CONFLICT(provider_id) DO NOTHING RETURNING id
+            ), linked AS (UPDATE alc_atendimento.media SET message_id=inserted.id FROM inserted WHERE alc_atendimento.media.id=$8::uuid)
+            UPDATE alc_atendimento.outbox SET status='sent',provider_id=$2,delivery_status='sent',updated_at=now() WHERE id=$9`,
             [
               job.conversation_id,
               provider,
-              job.payload.text?.body ||
-                `[Modelo: ${job.payload.template?.name}]`,
+              job.media_id
+                ? job.payload.caption || ""
+                : job.payload.text?.body ||
+                  `[Modelo: ${job.payload.template?.name}]`,
               job.payload.type,
               job.sender_kind || "system",
               job.sender_user_id || null,
               job.sender_display_name_snapshot || "",
+              job.media_id || null,
+              job.id,
             ],
           );
+        } else
+          await connection.query(
+            "UPDATE alc_atendimento.outbox SET status='sent',provider_id=$2,delivery_status='sent',updated_at=now() WHERE id=$1",
+            [job.id, provider],
+          );
       } catch (error) {
-        const uncertain = !(
-          error instanceof Error && /^Meta 4\d\d \(/.test(error.message)
-        );
+        const uncertain =
+          messageRequested &&
+          !(error instanceof Error && /^Meta 4\d\d \(/.test(error.message));
         await connection.query(
           "UPDATE alc_atendimento.outbox SET status=$2,error=$3,updated_at=now() WHERE id=$1",
           [
@@ -668,7 +719,11 @@ export async function processOutbox() {
             uncertain ? "uncertain" : "failed",
             uncertain
               ? "Resposta do provedor não confirmada. Revisão manual necessária."
-              : (error as Error).message,
+              : error instanceof HttpError
+                ? error.message
+                : !messageRequested
+                  ? "Anexo não enviado. Tente novamente após conferir o acervo."
+                  : (error as Error).message,
           ],
         );
       }

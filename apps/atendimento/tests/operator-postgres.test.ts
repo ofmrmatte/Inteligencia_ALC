@@ -1,4 +1,6 @@
 import { readFile } from "node:fs/promises";
+import { randomUUID, createHash } from "node:crypto";
+import sharp from "sharp";
 import pg from "pg";
 import {
   afterAll,
@@ -13,7 +15,17 @@ import type { AuthProfile } from "@alc/identity/auth";
 const identities = vi.hoisted(() => ({
   rows: [] as Record<string, unknown>[],
 }));
-const provider = vi.hoisted(() => ({ graph: vi.fn(), templates: vi.fn() }));
+const provider = vi.hoisted(() => ({
+  graph: vi.fn(),
+  templates: vi.fn(),
+  scan: vi.fn(),
+  publicBucket: false,
+  objects: new Map<string, Buffer>(),
+}));
+vi.mock("../lib/media-validation", async (original) => ({
+  ...(await original()),
+  scanMedia: provider.scan,
+}));
 vi.mock("../lib/meta", () => ({
   channelConfig: vi.fn(async () => ({
     phoneId: "synthetic-phone",
@@ -26,6 +38,34 @@ vi.mock("../lib/meta", () => ({
 }));
 vi.mock("@supabase/supabase-js", () => ({
   createClient: () => ({
+    storage: {
+      getBucket: async () => ({
+        data: { public: provider.publicBucket },
+        error: null,
+      }),
+      from: () => ({
+        upload: async (
+          key: string,
+          bytes: Buffer,
+          options: { upsert: boolean },
+        ) => {
+          if (options.upsert || provider.objects.has(key))
+            return { error: new Error("Refused overwrite") };
+          provider.objects.set(key, Buffer.from(bytes));
+          return { error: null };
+        },
+        download: async (key: string) => ({
+          data: provider.objects.has(key)
+            ? new Blob([new Uint8Array(provider.objects.get(key)!)])
+            : null,
+          error: null,
+        }),
+        remove: async (keys: string[]) => {
+          keys.forEach((key) => provider.objects.delete(key));
+          return { error: null };
+        },
+      }),
+    },
     from: () => ({
       select: () => ({
         limit: async () => ({ data: identities.rows, error: null }),
@@ -48,6 +88,13 @@ import {
 } from "../lib/dispatch-batches";
 import { competence, type CaseRecord } from "../lib/domain";
 import { authorizedFolder, createEvidenceFolder } from "../lib/evidence-store";
+import {
+  reserveUpload,
+  finishUpload,
+  mediaAccess,
+  purgeExpiredMedia,
+  archiveIncomingMedia,
+} from "../lib/media-service";
 
 const url = process.env.ATENDIMENTO_TEST_DATABASE_URL,
   coreUrl = process.env.ATENDIMENTO_TEST_CORE_URL;
@@ -81,7 +128,7 @@ function localTestUrl(value: string | undefined, name: string) {
 describe.skipIf(!url || !coreUrl)(
   "PostgreSQL migrations, assignments and authorship (isolated)",
   () => {
-    let client: pg.Client, source: pg.Client;
+    let client: pg.Client, source: pg.Client, png: Buffer;
     beforeAll(async () => {
       client = new pg.Client({
         connectionString: localTestUrl(url, "alc_atendimento_test"),
@@ -96,6 +143,12 @@ describe.skipIf(!url || !coreUrl)(
       vi.stubEnv("SUPABASE_SERVICE_ROLE_KEY", "synthetic");
       vi.stubEnv("NEXT_PUBLIC_SUPABASE_URL", "https://example.test");
       vi.stubEnv("NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY", "synthetic");
+      vi.stubEnv("ATENDIMENTO_MEDIA_BUCKET", "synthetic-private");
+      png = await sharp({
+        create: { width: 4, height: 4, channels: 3, background: "#ffffff" },
+      })
+        .png()
+        .toBuffer();
       await source.query(
         `CREATE TABLE IF NOT EXISTS public.operational_units(unit_key text PRIMARY KEY,base_key text,sigla text,base_name text,xpt_code text,coordinator_name text,active boolean); CREATE TABLE IF NOT EXISTS public.operational_unit_supervisors(unit_key text,supervisor_name text,active boolean)`,
       );
@@ -117,6 +170,9 @@ describe.skipIf(!url || !coreUrl)(
       await migrate(client);
     }, 30000);
     beforeEach(async () => {
+      provider.publicBucket = false;
+      provider.objects.clear();
+      provider.scan.mockReset().mockResolvedValue("clean");
       provider.graph
         .mockReset()
         .mockResolvedValue({ messages: [{ id: "synthetic-provider-id" }] });
@@ -144,7 +200,7 @@ describe.skipIf(!url || !coreUrl)(
         email: "synthetic@example.test",
       }));
       await client.query(
-        "TRUNCATE alc_atendimento.webhook_events,alc_atendimento.assignment_history,alc_atendimento.case_assignments,alc_atendimento.operator_bases,alc_atendimento.operators,alc_atendimento.evidence_images,alc_atendimento.evidence_folders,alc_atendimento.messages,alc_atendimento.outbox,alc_atendimento.dispatch_batches,alc_atendimento.conversations,alc_atendimento.cases,alc_atendimento.audit RESTART IDENTITY",
+        "TRUNCATE alc_atendimento.media,alc_atendimento.webhook_events,alc_atendimento.assignment_history,alc_atendimento.case_assignments,alc_atendimento.operator_bases,alc_atendimento.operators,alc_atendimento.evidence_images,alc_atendimento.evidence_folders,alc_atendimento.messages,alc_atendimento.outbox,alc_atendimento.dispatch_batches,alc_atendimento.conversations,alc_atendimento.cases,alc_atendimento.audit RESTART IDENTITY",
       );
       await client.query(
         "DELETE FROM alc_atendimento.settings WHERE key LIKE 'access_%'",
@@ -233,7 +289,7 @@ describe.skipIf(!url || !coreUrl)(
             "SELECT name FROM alc_atendimento.schema_migrations ORDER BY name",
           )
         ).rows,
-      ).toHaveLength(3);
+      ).toHaveLength(4);
       expect(
         (await client.query("SELECT * FROM alc_atendimento.operators"))
           .rowCount,
@@ -251,6 +307,316 @@ describe.skipIf(!url || !coreUrl)(
         "UPDATE alc_atendimento.schema_migrations SET sha256=$1 WHERE name='002_operators_and_assignments.sql'",
         [createHash("sha256").update(sql).digest("hex")],
       );
+    });
+    const mediaConversation = async () => {
+      await owned(A);
+      return (
+        await client.query(
+          "INSERT INTO alc_atendimento.conversations(channel,phone,case_id,base_key,sigla,status,assigned_to,last_inbound_at,identity_verified) VALUES('client','5511988880000','test-case','TEST BASE A','TEST-A','human',$1,now(),true) RETURNING id",
+          [A],
+        )
+      ).rows[0].id as string;
+    };
+    const uploadedMedia = async (conversationId: string) => {
+      const reservation = await reserveUpload(profile(A), {
+        id: randomUUID(),
+        conversationId,
+        filename: "synthetic.png",
+        mime: "image/png",
+      });
+      return finishUpload(reservation, png, "image/png");
+    };
+    it("archives private media with its hash and hides object references", async () => {
+      const conversationId = await mediaConversation(),
+        media = await uploadedMedia(conversationId);
+      expect(media.status).toBe("ready");
+      expect(media).not.toHaveProperty("object_key");
+      expect((await mediaAccess(profile(A), media.id)).bytes).toEqual(png);
+      expect(
+        (
+          await client.query(
+            "SELECT sha256,size FROM alc_atendimento.media WHERE id=$1",
+            [media.id],
+          )
+        ).rows[0],
+      ).toEqual({
+        sha256: createHash("sha256").update(png).digest("hex"),
+        size: png.length,
+      });
+      expect(
+        (
+          await client.query(
+            "SELECT action FROM alc_atendimento.audit WHERE action='media_access'",
+          )
+        ).rowCount,
+      ).toBe(1);
+    });
+    it("blocks media enumeration by another owner even within the same base", async () => {
+      const conversationId = await mediaConversation(),
+        media = await uploadedMedia(conversationId);
+      await enroll(B);
+      await expect(mediaAccess(profile(B), media.id)).rejects.toMatchObject({
+        status: 404,
+      });
+      await expect(
+        reserveUpload(profile(B), {
+          id: randomUUID(),
+          conversationId,
+          filename: "synthetic.png",
+          mime: "image/png",
+        }),
+      ).rejects.toMatchObject({ status: 404 });
+    });
+    it.each(["unavailable", "infected"])(
+      "never queues or downloads when scanner says %s",
+      async (scan) => {
+        const conversationId = await mediaConversation();
+        provider.scan.mockResolvedValue(scan);
+        const media = await uploadedMedia(conversationId);
+        expect(media.status).toBe(
+          scan === "infected" ? "rejected" : "quarantined",
+        );
+        await expect(mediaAccess(profile(A), media.id)).rejects.toMatchObject({
+          status: 409,
+        });
+        await expect(
+          mutateConversation(profile(A), {
+            id: conversationId,
+            action: "attachment",
+            mediaId: media.id,
+          }),
+        ).rejects.toMatchObject({ status: 409 });
+        expect(provider.graph).not.toHaveBeenCalled();
+      },
+    );
+    it("refuses a public bucket and never overwrites a reserved upload", async () => {
+      const conversationId = await mediaConversation();
+      provider.publicBucket = true;
+      await expect(uploadedMedia(conversationId)).rejects.toMatchObject({
+        status: 503,
+      });
+      expect(provider.objects.size).toBe(0);
+      const id = randomUUID(),
+        request = {
+          id,
+          conversationId,
+          filename: "synthetic.png",
+          mime: "image/png",
+        };
+      await reserveUpload(profile(A), request);
+      await expect(reserveUpload(profile(A), request)).rejects.toMatchObject({
+        status: 409,
+      });
+    });
+    it("limits concurrent upload reservations before reading file bodies", async () => {
+      const conversationId = await mediaConversation();
+      const requests = await Promise.allSettled(
+        Array.from({ length: 3 }, () =>
+          reserveUpload(profile(A), {
+            id: randomUUID(),
+            conversationId,
+            filename: "synthetic.png",
+            mime: "image/png",
+          }),
+        ),
+      );
+      expect(requests.filter((r) => r.status === "fulfilled")).toHaveLength(2);
+      expect(requests.filter((r) => r.status === "rejected")).toHaveLength(1);
+    });
+    it("queues media once and atomically links its confirmed message", async () => {
+      const conversationId = await mediaConversation(),
+        media = await uploadedMedia(conversationId);
+      const request = {
+        id: conversationId,
+        action: "attachment",
+        mediaId: media.id,
+        body: "Synthetic caption",
+      };
+      await mutateConversation(profile(A), request);
+      await mutateConversation(profile(A), request);
+      expect(
+        (await client.query("SELECT * FROM alc_atendimento.outbox")).rowCount,
+      ).toBe(1);
+      provider.graph
+        .mockResolvedValueOnce({ id: "123456" })
+        .mockResolvedValueOnce({
+          messages: [{ id: "synthetic-media-message" }],
+        });
+      await processOutbox();
+      expect(provider.graph).toHaveBeenLastCalledWith(
+        expect.anything(),
+        "synthetic-phone/messages",
+        {
+          messaging_product: "whatsapp",
+          to: "5511988880000",
+          type: "image",
+          image: { id: "123456", caption: "Synthetic caption" },
+        },
+      );
+      const row = (
+        await client.query(
+          "SELECT a.message_id,m.attachment,m.sender_user_id,o.status FROM alc_atendimento.media a JOIN alc_atendimento.messages m ON m.id=a.message_id JOIN alc_atendimento.outbox o ON o.media_id=a.id WHERE a.id=$1",
+          [media.id],
+        )
+      ).rows[0];
+      expect(row).toMatchObject({
+        status: "sent",
+        sender_user_id: A,
+        attachment: { internalId: media.id },
+      });
+    });
+    it("permits retry after a failed upload but never retries an uncertain message", async () => {
+      const conversationId = await mediaConversation(),
+        media = await uploadedMedia(conversationId);
+      const request = {
+        id: conversationId,
+        action: "attachment",
+        mediaId: media.id,
+      };
+      await mutateConversation(profile(A), request);
+      provider.graph.mockRejectedValueOnce(
+        new Error("Network before messaging"),
+      );
+      await processOutbox();
+      expect(
+        (await client.query("SELECT status FROM alc_atendimento.outbox"))
+          .rows[0].status,
+      ).toBe("failed");
+      await mutateConversation(profile(A), { ...request, retry: true });
+      provider.graph
+        .mockResolvedValueOnce({ id: "123456" })
+        .mockRejectedValueOnce(new Error("Network after messaging"));
+      await processOutbox();
+      expect(
+        (await client.query("SELECT status FROM alc_atendimento.outbox"))
+          .rows[0].status,
+      ).toBe("uncertain");
+      await expect(
+        mutateConversation(profile(A), { ...request, retry: true }),
+      ).rejects.toMatchObject({ status: 409 });
+      const calls = provider.graph.mock.calls.length;
+      await processOutbox();
+      expect(provider.graph.mock.calls).toHaveLength(calls);
+    });
+    it("cancels queued media after ownership transfer without provider submission", async () => {
+      const conversationId = await mediaConversation(),
+        media = await uploadedMedia(conversationId);
+      await mutateConversation(profile(A), {
+        id: conversationId,
+        action: "attachment",
+        mediaId: media.id,
+      });
+      await enroll(B);
+      await assignCase(manager, {
+        caseId: "test-case",
+        assignedTo: B,
+        version: 1,
+        reason: "Synthetic transfer",
+      });
+      await processOutbox();
+      expect(provider.graph).not.toHaveBeenCalled();
+      await expect(mediaAccess(profile(A), media.id)).rejects.toMatchObject({
+        status: 404,
+      });
+    });
+    it("plans retention without deletion and preserves files under legal hold", async () => {
+      const conversationId = await mediaConversation(),
+        first = await uploadedMedia(conversationId),
+        held = await uploadedMedia(conversationId);
+      await client.query(
+        "UPDATE alc_atendimento.media SET retention_until=now()-interval '1 day',legal_hold=(id=$1) WHERE conversation_id=$2",
+        [held.id, conversationId],
+      );
+      expect(await purgeExpiredMedia(false)).toMatchObject({
+        candidates: 1,
+        deleted: 0,
+      });
+      expect(provider.objects.size).toBe(2);
+      await expect(mediaAccess(profile(A), first.id)).rejects.toMatchObject({
+        status: 409,
+      });
+      expect((await mediaAccess(profile(A), held.id)).bytes).toEqual(png);
+      expect(await purgeExpiredMedia(true)).toMatchObject({
+        candidates: 1,
+        deleted: 1,
+      });
+      expect(provider.objects.size).toBe(1);
+    });
+    it("archives inbound attachments without losing their original message", async () => {
+      const conversationId = await mediaConversation();
+      await client.query(
+        "INSERT INTO alc_atendimento.messages(conversation_id,direction,body,type,attachment) VALUES($1,'in','','image',$2)",
+        [conversationId, { id: "123456", filename: "inbound.png" }],
+      );
+      provider.graph.mockResolvedValue({
+        url: "https://lookaside.fbsbx.com/whatsapp_business/attachments/?id=synthetic",
+        file_size: png.length,
+        mime_type: "image/png",
+        sha256: createHash("sha256").update(png).digest("hex"),
+      });
+      const fetchMock = vi
+        .fn()
+        .mockResolvedValue(new Response(new Uint8Array(png)));
+      vi.stubGlobal("fetch", fetchMock);
+      try {
+        await archiveIncomingMedia();
+        await archiveIncomingMedia();
+      } finally {
+        vi.unstubAllGlobals();
+      }
+      expect(fetchMock).toHaveBeenCalledOnce();
+      expect(
+        (
+          await client.query(
+            "SELECT status,origin,message_id FROM alc_atendimento.media",
+          )
+        ).rows[0],
+      ).toMatchObject({ status: "ready", origin: "inbound" });
+      expect(
+        (await client.query("SELECT * FROM alc_atendimento.messages")).rowCount,
+      ).toBe(1);
+    });
+    it("recovers transient inbound archival failure without another message or object", async () => {
+      const conversationId = await mediaConversation();
+      await client.query(
+        "INSERT INTO alc_atendimento.messages(conversation_id,direction,body,type,attachment,case_id) VALUES($1,'in','','image',$2,'test-case')",
+        [conversationId, { id: "123456" }],
+      );
+      provider.graph.mockRejectedValueOnce(new Error("Transient Meta outage"));
+      await archiveIncomingMedia();
+      expect(
+        (await client.query("SELECT status FROM alc_atendimento.media")).rows[0]
+          .status,
+      ).toBe("failed");
+      await client.query(
+        "UPDATE alc_atendimento.media SET updated_at=now()-interval '6 minutes'",
+      );
+      provider.graph.mockResolvedValue({
+        url: "https://lookaside.fbsbx.com/whatsapp_business/attachments/?id=synthetic",
+        file_size: png.length,
+        mime_type: "image/png",
+        sha256: createHash("sha256").update(png).digest("hex"),
+      });
+      vi.stubGlobal(
+        "fetch",
+        vi.fn().mockResolvedValue(new Response(new Uint8Array(png))),
+      );
+      try {
+        await archiveIncomingMedia();
+      } finally {
+        vi.unstubAllGlobals();
+      }
+      expect(
+        (
+          await client.query(
+            "SELECT status,attempts,filename FROM alc_atendimento.media",
+          )
+        ).rows,
+      ).toEqual([{ status: "ready", attempts: 1, filename: "anexo.png" }]);
+      expect(provider.objects.size).toBe(1);
+      expect(
+        (await client.query("SELECT * FROM alc_atendimento.messages")).rowCount,
+      ).toBe(1);
     });
     it("persists membership and narrows legacy global scope without changing identity", async () => {
       expect((await scopeFor(profile(A))).pairs.size).toBe(0);

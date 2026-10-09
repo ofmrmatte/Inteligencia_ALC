@@ -3,7 +3,7 @@
 ## Limites desta entrega
 
 O plano aprovado em `writing-block.md` sera executado em sete PRs dependentes.
-Esta branch entrega as fases 1 e 2, em PRs dependentes. Nao autoriza merge, deploy, migracao remota,
+Esta branch entrega as fases 1 a 3, em PRs dependentes. Nao autoriza merge, deploy, migracao remota,
 ativacao de automacoes ou mensagens reais. Core, Aux e RH continuam separados;
 o Supabase central permanece responsavel por identidade, MFA e revogacao.
 
@@ -11,7 +11,7 @@ o Supabase central permanece responsavel por identidade, MFA e revogacao.
 | --- | --- | --- |
 | 1 | Atendentes, bases, atribuicoes, permissao e autoria | Implementada; revisao remota pendente |
 | 2 | Disparos individual/global, nome do dono da PNR, lotes e dedupe | Implementada; revisao remota pendente |
-| 3 | Midia privada duravel, upload e visualizadores seguros | Pendente; depende da fase 2 |
+| 3 | Midia privada duravel, upload e visualizadores seguros | Implementada; revisao remota pendente |
 | 4 | Evidencias paginadas com midia, pasta por PNR e ZIP opcional | Pendente; depende da fase 3 |
 | 5 | IA opcional OpenAI/Gemini, fallback deterministico e modelos Meta | Pendente; depende da fase 2 |
 | 6 | Diferenciais de sync, enriquecimento versionado e indicadores/eventos | Pendente; depende das fases 1 e 2 |
@@ -112,6 +112,88 @@ worker. Historico permanece acessivel; registros pendentes exigem revisao.
    Sem homologacao de WhatsApp, catalogo remoto, SSO ou screenshot.
 10. Proxima fase: anexos privados duraveis, validacao binaria, upload humano
     autorizado e players seguros, sem depender do disco efemero Railway.
+
+## Fase 3
+
+1. Funcionalidades: imagens/figurinhas com ampliacao, audio com duracao e
+   velocidade, video nativo com erro de incompatibilidade, documentos e PDF
+   em visualizador sandbox. Compositor com selecao, previa local, legenda,
+   progresso e verificacao do upload. Envio e upload sao passos distintos.
+2. Arquivos: migracao `004_private_media.sql`, `lib/media-service.ts`,
+   `media-validation.ts`, `media-response.ts`, APIs `media/upload` e `media/[id]`,
+   `media-composer.tsx`, `media-viewer.tsx`, caixa, inbox, Meta e worker,
+   `scripts/media-retention.ts`, testes focados/PG e READMEs.
+3. Banco: metadados privados de origem, canal, hash/tamanho, objeto, retencao,
+   quarentena e autor. Vinculos message/outbox/media e PNR capturada na chegada
+   da mensagem. Sem atribuir retrospectivamente uma PNR atual a anexos legados.
+   Arquivos ficam no Storage privado, nunca no disco Railway.
+4. APIs: POST `media/upload` binario, reserva autorizada antes do corpo e limite
+   real de stream; GET `media/[id]` com bytes/ranges autenticados ou `status=true`;
+   POST `media/[id]` pede nova verificacao de quarentena; acao `attachment` no
+   POST `conversation` com mediaId, legenda e retry explicito somente para falha
+   confirmada. GET `media?id=messageId` legado usa o mesmo acervo, sem bypass Meta.
+5. Testes: 374 Atendimento + 375 Inteligencia, 749 no total, incluindo 44 casos
+   PostgreSQL local. Typecheck do monorepo, builds dos dois apps/conector e audit
+   de producao passaram (zero vulnerabilidades). Lint escopado: zero erros e
+   tres advertencias legadas; lint global tem cinco erros legados. Navegador
+   sintetico em 320/391/768/1280 CSS, sem overflow; imagem ampliada, audio de 1s
+   e velocidade 1,5x verificados. Captura visual desta fase funcionou.
+6. Seguranca: autorizacao atual da conversa e da PNR do anexo, hash antes do
+   envio/download, objetos UUID imutaveis, bucket privado, sem URL assinada no
+   cliente. Validacao de assinatura/extensao/MIME, pixels e Office legado;
+   macros/cifrados/executaveis rejeitados. ClamAV inacessivel ou resposta
+   desconhecida deixa quarentena. SSRF bloqueado por allowlist HTTPS e sem
+   redirects. Limites por usuario e no maximo quatro uploads reservados.
+7. GitHub: branch `codex/atendimento-private-media`, base
+   `codex/atendimento-dispatch-ownership` (PR #78). Entrega draft dependente;
+   sem merge ou deploy. A migracao remota permanece pendente de aprovacao.
+8. Dependencias: Storage server-side do Supabase existente; adicionados
+   file-type (detector binario com limites de arquivo compactado), sharp
+   (decodificacao/dimensoes) e cfb (streams Office legado, sem macros).
+   Variaveis novas: `ATENDIMENTO_MEDIA_BUCKET`, `ATENDIMENTO_CLAMAV_HOST`,
+   `ATENDIMENTO_MEDIA_RETENTION_DAYS`. Nao provisionados bucket/scanner remoto.
+9. Pendencias: fase 4 inclui esses anexos nos comprovantes. OpenAI/transcricao
+   opcional nao ativados. Falhas de leitura inbound podem ser tentadas cinco
+   vezes com intervalo de 5 min, nunca repetindo um envio WhatsApp incerto.
+   Media upload sem confirmacao exige consultar status; nao sobrescreve objeto.
+   Nao houve prova de Storage/ClamAV real, codecs MP4/PDF ou Meta/SSO remotos.
+10. Proxima fase: evidencias multimidia sem omissoes, PNG paginado, manifesto
+    e hashes na pasta por PNR, preservando exportacao ZIP opcional.
+
+### Preparacao externa dos anexos (nao executada)
+
+Reutilizar o projeto Supabase central e escolher um bucket exclusivamente
+privado, sem politicas anon/authenticated de listagem, leitura ou gravacao
+direta. Somente a API server-side usa a credencial privilegiada. Conferir
+politicas efetivas antes de ativar; `public=false` nao substitui essa revisao.
+
+ClamAV usa INSTREAM em TCP/3310, apenas em rede privada confiavel. Nao publicar
+a porta; protocolo nao possui autenticacao/TLS. Exigir assinaturas atualizadas,
+`StreamMaxLength`, `MaxFileSize` e `MaxScanSize` >= 25 MB e
+`AlertExceedsMax=true`/alerta para arquivo cifrado. Nunca desligar quarentena
+para contornar falta do scanner. Avaliar custo/infra e aprovar antes de instalar.
+
+Limites locais: imagem JPEG/PNG 5 MB, audio/video 16 MB, WebP 500 KB e documento
+25 MB (deliberadamente abaixo do limite maior do provedor). A Meta ainda pode
+recusar codecs/containeres; o erro e visivel, sem declarar sucesso falso.
+PDF e servido sandbox/nosniff; nao executamos macros ou scripts de documentos.
+
+Retencao inicial 180 dias, ajustavel de 1 a 3650 para NOVOS arquivos. Excluir
+objetos exige politica/backup aprovados e comando explicito. `legal_hold`
+preserva evidencias; a proxima fase vincula essa protecao a pasta persistente.
+Jobs pending/sending/uncertain nao sao purgados. O metadata/hash/auditoria
+permanecem depois da remocao; anexos expirados sem hold nao sao servidos.
+
+```sh
+npm run media:retention --workspace=@alc/atendimento
+# Somente depois de aprovar politica e confirmar o destino:
+npm run media:retention --workspace=@alc/atendimento -- --apply
+```
+
+O primeiro comando simula, o segundo remove ate 100 objetos expirados por
+execucao. Nao ha exclusao automatica e nenhum comando de retencao foi usado
+em dados reais. Rollback mantem metadados, arquivos privados e auditoria;
+nao voltar ao download direto da Meta sem a verificacao de seguranca.
 
 ## Catalogo e organograma
 

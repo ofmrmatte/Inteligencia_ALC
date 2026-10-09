@@ -13,7 +13,6 @@ import {
   ChevronLeft,
   ChevronRight,
   Clock3,
-  Download,
   Inbox,
   Info,
   MessageSquare,
@@ -27,6 +26,8 @@ import {
 import { StatusBadge } from "@alc/ui/components";
 import { api, useData, labels, when } from "./data";
 import type { CaseRecord } from "@/lib/domain";
+import { MediaViewer, type ChatAttachment } from "./media-viewer";
+import { MediaComposer } from "./media-composer";
 
 type Conversation = {
   id: string;
@@ -55,7 +56,7 @@ type Message = {
   body: string;
   status: string;
   created_at: string;
-  attachment?: { id: string; filename?: string } | null;
+  attachment?: ChatAttachment | null;
   sender_kind?: "ai" | "human" | "system" | "contact";
   sender_display_name_snapshot?: string;
 };
@@ -64,7 +65,12 @@ type Detail = {
   messages: Message[];
   queued: {
     id: string;
-    payload: { text?: { body?: string }; template?: { name?: string } };
+    payload: {
+      text?: { body?: string };
+      template?: { name?: string };
+      caption?: string;
+    };
+    media_id?: string;
     status: string;
     error?: string;
     created_at: string;
@@ -81,7 +87,9 @@ type Detail = {
 };
 type Agent = { id: string; name: string };
 type Profile = { profile: { id: string }; admin: boolean };
-function author(message: Pick<Message, "sender_kind" | "sender_display_name_snapshot">) {
+function author(
+  message: Pick<Message, "sender_kind" | "sender_display_name_snapshot">,
+) {
   return message.sender_kind === "ai"
     ? "Agente virtual"
     : message.sender_display_name_snapshot || "ALC · autoria não registrada";
@@ -132,7 +140,11 @@ export function Conversations({
     [assignee, setAssignee] = useState("all"),
     [label, setLabel] = useState(""),
     [offset, setOffset] = useState(0);
-  const [base, setBase] = useState(""), [sigla, setSigla] = useState(""), [classification, setClassification] = useState("all"), [priority, setPriority] = useState("all"), [waitingMinutes, setWaitingMinutes] = useState("0");
+  const [base, setBase] = useState(""),
+    [sigla, setSigla] = useState(""),
+    [classification, setClassification] = useState("all"),
+    [priority, setPriority] = useState("all"),
+    [waitingMinutes, setWaitingMinutes] = useState("0");
   const term = useDeferredValue(search),
     tag = useDeferredValue(label);
   const query = new URLSearchParams({
@@ -143,7 +155,11 @@ export function Conversations({
     assignee,
     label: tag,
     offset: String(offset),
-    base, sigla, classification, priority, waitingMinutes,
+    base,
+    sigla,
+    classification,
+    priority,
+    waitingMinutes,
   });
   const { data, error, refresh } = useData<{
     records: Conversation[];
@@ -236,13 +252,70 @@ export function Conversations({
           </button>
         </div>
       </div>
-      <details className="inbox-extra-filters"><summary>Filtros operacionais</summary><div className="inbox-filters">
-        <label>Base<input value={base} onChange={e => changed(setBase,e.target.value)} maxLength={250} /></label>
-        <label>Sigla operacional<input value={sigla} onChange={e => changed(setSigla,e.target.value)} maxLength={100} /></label>
-        <label>Classificação<select value={classification} onChange={e => changed(setClassification,e.target.value)}><option value="all">Todas</option>{["aberta", "aguardando_comprovante", "penalidade", "encerrada"].map(id => <option key={id} value={id}>{labels[id] || id}</option>)}</select></label>
-        <label>Prioridade<select value={priority} onChange={e => changed(setPriority,e.target.value)}><option value="all">Todas</option><option value="normal">Normal</option><option value="high">Alta</option><option value="urgent">Urgente</option></select></label>
-        <label>Sem resposta há<select value={waitingMinutes} onChange={e => changed(setWaitingMinutes,e.target.value)}><option value="0">Qualquer tempo</option><option value="30">30 minutos</option><option value="60">1 hora</option><option value="240">4 horas</option></select></label>
-      </div></details>
+      <details className="inbox-extra-filters">
+        <summary>Filtros operacionais</summary>
+        <div className="inbox-filters">
+          <label>
+            Base
+            <input
+              value={base}
+              onChange={(e) => changed(setBase, e.target.value)}
+              maxLength={250}
+            />
+          </label>
+          <label>
+            Sigla operacional
+            <input
+              value={sigla}
+              onChange={(e) => changed(setSigla, e.target.value)}
+              maxLength={100}
+            />
+          </label>
+          <label>
+            Classificação
+            <select
+              value={classification}
+              onChange={(e) => changed(setClassification, e.target.value)}
+            >
+              <option value="all">Todas</option>
+              {[
+                "aberta",
+                "aguardando_comprovante",
+                "penalidade",
+                "encerrada",
+              ].map((id) => (
+                <option key={id} value={id}>
+                  {labels[id] || id}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label>
+            Prioridade
+            <select
+              value={priority}
+              onChange={(e) => changed(setPriority, e.target.value)}
+            >
+              <option value="all">Todas</option>
+              <option value="normal">Normal</option>
+              <option value="high">Alta</option>
+              <option value="urgent">Urgente</option>
+            </select>
+          </label>
+          <label>
+            Sem resposta há
+            <select
+              value={waitingMinutes}
+              onChange={(e) => changed(setWaitingMinutes, e.target.value)}
+            >
+              <option value="0">Qualquer tempo</option>
+              <option value="30">30 minutos</option>
+              <option value="60">1 hora</option>
+              <option value="240">4 horas</option>
+            </select>
+          </label>
+        </div>
+      </details>
       {error && (
         <p className="notice error" role="alert">
           {error}
@@ -295,9 +368,11 @@ export function Conversations({
                   </small>
                   <small>{when(c.updated_at)}</small>
                   <span className="row-labels">
-                    {[...(c.operational_labels || []), ...(c.labels || [])].map((l) => (
-                      <span key={l}>{l}</span>
-                    ))}
+                    {[...(c.operational_labels || []), ...(c.labels || [])].map(
+                      (l) => (
+                        <span key={l}>{l}</span>
+                      ),
+                    )}
                   </span>
                 </span>
                 {c.unread > 0 && <span className="unread">{c.unread}</span>}
@@ -582,14 +657,7 @@ function Thread({
               </small>
               <p>{m.body}</p>
               {m.attachment && (
-                <a
-                  className="attachment"
-                  href={`/api/media?id=${m.id}`}
-                  download
-                >
-                  <Download size={15} />
-                  {m.attachment.filename || "Baixar anexo"}
-                </a>
+                <MediaViewer attachment={m.attachment} messageId={m.id} />
               )}
               <footer>
                 <time>{when(m.created_at)}</time>
@@ -601,14 +669,32 @@ function Thread({
             <article key={m.id} className="message out">
               <small>{author(m)} · envio</small>
               <p>
-                {m.payload.text?.body ||
-                  `Modelo: ${m.payload.template?.name || "WhatsApp"}`}
+                {m.media_id
+                  ? m.payload.caption || "Anexo"
+                  : m.payload.text?.body ||
+                    `Modelo: ${m.payload.template?.name || "WhatsApp"}`}
               </p>
               <footer>
                 <time>{when(m.created_at)}</time>
                 <Badge value={m.status} />
               </footer>
               {m.error && <p className="message-error">{m.error}</p>}
+              {m.media_id && m.status === "failed" && owns && windowOpen && (
+                <button
+                  type="button"
+                  disabled={busy}
+                  onClick={() =>
+                    void action("attachment", {
+                      mediaId: m.media_id,
+                      ...(m.payload.caption ? { body: m.payload.caption } : {}),
+                      retry: true,
+                    })
+                  }
+                >
+                  <RefreshCw size={15} />
+                  Tentar envio novamente
+                </button>
+              )}
             </article>
           ))}
           {!messages.length && !data?.queued.length && (
@@ -679,6 +765,16 @@ function Thread({
               {note ? "Salvar nota" : "Enviar"}
             </button>
           </div>
+          {!note && (
+            <MediaComposer
+              conversationId={id}
+              disabled={busy || !owns || !windowOpen}
+              onQueued={async () => {
+                await refresh();
+                await onUpdate();
+              }}
+            />
+          )}
         </form>
       </section>
       <aside className="contact-details" aria-label="Detalhes do contato">
@@ -731,7 +827,21 @@ function Thread({
             ))}
           </select>
         </label>
-        <label>Prioridade<select aria-label="Prioridade do atendimento" value={c.priority || "normal"} disabled={busy} onChange={e => void action("priority", { priority: e.target.value })}><option value="normal">Normal</option><option value="high">Alta</option><option value="urgent">Urgente</option></select></label>
+        <label>
+          Prioridade
+          <select
+            aria-label="Prioridade do atendimento"
+            value={c.priority || "normal"}
+            disabled={busy}
+            onChange={(e) =>
+              void action("priority", { priority: e.target.value })
+            }
+          >
+            <option value="normal">Normal</option>
+            <option value="high">Alta</option>
+            <option value="urgent">Urgente</option>
+          </select>
+        </label>
         <div className="details-labels">
           <h3>Etiquetas</h3>
           <div className="row-labels">

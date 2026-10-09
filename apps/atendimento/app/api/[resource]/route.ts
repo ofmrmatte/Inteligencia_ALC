@@ -14,7 +14,6 @@ import {
   channelConfig,
   templates,
   encrypt,
-  graph,
   type Channel,
 } from "@/lib/meta";
 import { syncCore, upsertCases, verifyCustomerContact } from "@/lib/source";
@@ -61,6 +60,7 @@ import {
   saveAssignmentPolicy,
 } from "@/lib/assignment-engine";
 import { dispatchBatch, dispatchPreview } from "@/lib/dispatch-batches";
+import { mediaResponse } from "@/lib/media-response";
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 const channel = z.enum(["driver", "client"]);
@@ -239,38 +239,11 @@ export async function GET(
         [messageId],
       );
       const row = result.rows[0];
-      if (!row?.attachment?.id)
-        throw new HttpError(404, "Anexo não encontrado.");
-      const conversation = await conversationAccess(
-          row.conversation_id,
-          profile,
-        ),
-        cfg = await channelConfig(conversation.channel);
-      const media = await graph(cfg, String(row.attachment.id)),
-        url = new URL(media.url);
-      if (
-        url.protocol !== "https:" ||
-        !["lookaside.fbsbx.com", "lookaside.facebook.com"].includes(
-          url.hostname,
-        )
-      )
-        throw new HttpError(502, "Origem de anexo inválida.");
-      if (Number(media.file_size) > 25 * 1024 * 1024)
-        throw new HttpError(413, "Anexo excede 25 MB.");
-      const response = await fetch(url, {
-        headers: { Authorization: `Bearer ${cfg.token}` },
-        redirect: "error",
-        signal: AbortSignal.timeout(30_000),
-      });
-      if (!response.ok) throw new HttpError(502, "Anexo indisponível na Meta.");
-      return new Response(response.body, {
-        headers: {
-          "Content-Type": media.mime_type || "application/octet-stream",
-          "Content-Disposition": 'attachment; filename="anexo-pnr"',
-          "Cache-Control": "private, no-store",
-          "X-Content-Type-Options": "nosniff",
-        },
-      });
+      if (!row) throw new HttpError(404, "Anexo não encontrado.");
+      await conversationAccess(row.conversation_id, profile);
+      const archived = (await db().query("SELECT id FROM alc_atendimento.media WHERE message_id=$1", [messageId])).rows[0];
+      if (!archived) throw new HttpError(409, "Anexo ainda não arquivado. Aguarde o processamento.");
+      return mediaResponse(profile, archived.id, request);
     }
     if (resource === "outbox") {
       const target = query.has("channel")

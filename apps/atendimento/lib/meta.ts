@@ -91,9 +91,9 @@ export async function graph(
       method: body ? "POST" : "GET",
       headers: {
         Authorization: `Bearer ${config.token}`,
-        ...(body ? { "Content-Type": "application/json" } : {}),
+        ...(body && !(body instanceof FormData) ? { "Content-Type": "application/json" } : {}),
       },
-      body: body ? JSON.stringify(body) : undefined,
+      body: body instanceof FormData ? body : body ? JSON.stringify(body) : undefined,
       cache: "no-store",
       signal: AbortSignal.timeout(20_000),
     },
