@@ -111,7 +111,7 @@ export function AiProviderPanel() {
           <h3 id="ai-provider-title">Provedor de IA</h3>
           <p className="muted">
             {data
-              ? `Chamadas hoje (UTC): ${data.used} / ${data.config.dailyCallLimit} · Disponíveis: ${data.remaining}`
+              ? `Chamadas à IA hoje (UTC): ${data.used.toLocaleString("pt-BR")} / ${data.config.dailyCallLimit.toLocaleString("pt-BR")} · Restantes: ${data.remaining.toLocaleString("pt-BR")}`
               : "Uso ainda não verificado."}
           </p>
         </div>
@@ -285,11 +285,11 @@ export function AiProviderPanel() {
                 />
                 <div className="management-form-grid">
                   <label>
-                    Limite diário de chamadas
+                    Limite diário de chamadas à IA
                     <input
                       type="number"
                       min={1}
-                      max={1000}
+                      max={100_000}
                       step={1}
                       required
                       value={draft.dailyCallLimit}
@@ -319,6 +319,7 @@ export function AiProviderPanel() {
                     />
                   </label>
                 </div>
+                <small>O limite controla chamadas faturáveis à IA, não atendimentos ou PNRs. Ao atingir a cota, o sistema usa regras determinísticas. Limites maiores podem gerar mais custos.</small>
                 <div className="actions">
                   <button type="submit" className="primary">
                     <Save size={15} />
