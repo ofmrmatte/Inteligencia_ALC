@@ -73,8 +73,8 @@ vi.mock("@supabase/supabase-js", () => ({
   }),
 }));
 import { migrate } from "../scripts/migrations.mjs";
-import { assignCase, saveAssignmentPolicy } from "../lib/assignment-engine";
-import { saveOperator } from "../lib/operator-directory";
+import { assignCase, assignmentQueue, saveAssignmentPolicy } from "../lib/assignment-engine";
+import { saveOperator, saveCoverage } from "../lib/operator-directory";
 import { scopeFor } from "../lib/auth";
 import * as auth from "../lib/auth";
 import { GET as evidenceIndex } from "../app/api/evidence/route";
@@ -233,6 +233,40 @@ describe.skipIf(!url || !coreUrl)(
         receiving: true,
         bases: [{ unitKey, responsibility: "primary" }],
       });
+    it("updates only attendance coverage, preserving organogram and other units", async () => {
+      await enroll(A); await enroll(A, "test-b"); await enroll(B);
+      const before = (await source.query("SELECT * FROM public.operational_units ORDER BY unit_key")).rows;
+      await saveCoverage(manager, { unitKey: "test-a", expected: [{ userId: B, responsibility: "primary" }], assignments: [{ userId: A, responsibility: "substitute" }] });
+      expect((await client.query("SELECT unit_key,responsibility FROM alc_atendimento.operator_bases WHERE user_id=$1 ORDER BY unit_key", [A])).rows).toEqual([
+        { unit_key: "test-a", responsibility: "substitute" }, { unit_key: "test-b", responsibility: "primary" },
+      ]);
+      expect((await source.query("SELECT * FROM public.operational_units ORDER BY unit_key")).rows).toEqual(before);
+      expect((await client.query("SELECT roles FROM alc_atendimento.operators WHERE user_id=$1", [A])).rows[0].roles).toEqual(["agent"]);
+      await expect(saveCoverage(manager, { unitKey: "test-a", expected: [], assignments: [] })).rejects.toMatchObject({ status: 409 });
+    });
+    it("rejects unregistered, non-agent, unauthorized and centrally revoked coverage", async () => {
+      await expect(saveCoverage(manager, { unitKey: "test-a", expected: [], assignments: [{ userId: A, responsibility: "primary" }] })).rejects.toMatchObject({ status: 403 });
+      await enroll(A);
+      await client.query("UPDATE alc_atendimento.operators SET roles=ARRAY['supervisor'] WHERE user_id=$1", [A]);
+      const expected = [{ userId: A, responsibility: "primary" }];
+      await expect(saveCoverage(manager, { unitKey: "test-a", expected, assignments: expected })).rejects.toMatchObject({ status: 403 });
+      await client.query("UPDATE alc_atendimento.operators SET roles=ARRAY['agent'] WHERE user_id=$1", [A]);
+      await client.query("INSERT INTO alc_atendimento.settings(key,value) VALUES($1,'{\"active\":false}')", [`access_${A}`]);
+      await expect(saveCoverage(manager, { unitKey: "test-a", expected, assignments: expected })).rejects.toMatchObject({ status: 403 });
+      identities.rows.find(r => r.id === ADMIN)!.active = false;
+      await expect(saveCoverage(manager, { unitKey: "test-a", expected, assignments: [] })).rejects.toMatchObject({ status: 403 });
+    });
+    it("filters and counts assignments and immutable history using the same scope", async () => {
+      await enroll(A); await enroll(B);
+      await assignCase(manager, { caseId: "test-case", assignedTo: A, version: 0, reason: "Initial owner" });
+      await assignCase(manager, { caseId: "test-case", assignedTo: B, version: 1, reason: "Transfer owner" });
+      const result = await assignmentQueue(manager, 0, false, { base: "TEST BASE A", sigla: "TEST-A", owner: B, search: "test-case" });
+      expect(result.summary).toEqual({ total: 1, assigned: 1, unassigned: 0, recentRedistributions: 1 });
+      expect(result.records[0]).toMatchObject({ case_id: "test-case", assigned_to: B, version: 2, classification: "aguardando_comprovante" });
+      expect((await assignmentQueue(manager, 0, false, { sigla: "TEST-B" })).records).toEqual([]);
+      expect((await assignmentQueue(manager, 0, true, { owner: A })).summary.total).toBe(1);
+      expect((await assignmentQueue(manager, 30, false)).records).toEqual([]);
+    });
     const currentRecord = (
       overrides: Partial<CaseRecord> = {},
     ): CaseRecord => ({
@@ -318,7 +352,7 @@ describe.skipIf(!url || !coreUrl)(
             "SELECT name FROM alc_atendimento.schema_migrations ORDER BY name",
           )
         ).rows,
-      ).toHaveLength(9);
+      ).toHaveLength(10);
       expect(
         (await client.query("SELECT * FROM alc_atendimento.operators"))
           .rowCount,

@@ -1,11 +1,18 @@
 import { z } from "zod";
 import type { PoolClient } from "pg";
 import type { AuthProfile } from "@alc/identity/auth";
-import { HttpError, requireAdmin, scopeFor, visible } from "./auth";
+import {
+  HttpError,
+  identityScopeFor,
+  requireAdmin,
+  scopeFor,
+  visible,
+} from "./auth";
 import { audit, db, setting } from "./db";
+import { inboxScopeSql } from "./inbox";
 import {
   canonicalUnit,
-  eligibleOperators,
+  enabledProfiles,
   operationalUnits,
 } from "./operator-directory";
 
@@ -82,19 +89,25 @@ export async function assignCase(
       "primary_then_least_loaded"
   )
     return { assigned: false };
-  const units = await operationalUnits(),
-    candidates = await eligibleOperators();
-  const candidateScopes = new Map(
-    await Promise.all(
-      candidates.map(async (p) => [p.id, await scopeFor(p)] as const),
-    ),
-  );
-  const actorScope = profile ? await scopeFor(profile) : null;
   const transaction = await db().connect();
   try {
     await transaction.query("BEGIN");
     await transaction.query(
       "SELECT pg_advisory_xact_lock(hashtext('atendimento_operator_directory'))",
+    );
+    const units = await operationalUnits(),
+      candidates = await enabledProfiles(transaction);
+    const actor = profile ? candidates.find((p) => p.id === profile.id) : null;
+    if (profile && !actor)
+      throw new HttpError(403, "Permissão administrativa revogada.");
+    if (actor) requireAdmin(actor);
+    const actorScope = actor ? await identityScopeFor(actor, units) : null;
+    const candidateScopes = new Map(
+      await Promise.all(
+        candidates.map(
+          async (p) => [p.id, await identityScopeFor(p, units)] as const,
+        ),
+      ),
     );
     if (
       automatic &&
@@ -258,13 +271,86 @@ export async function assignmentQueue(
   profile: AuthProfile,
   offset: number,
   history = false,
+  input: unknown = {},
 ) {
   requireAdmin(profile);
-  const records = await db().query(
-    history
-      ? `SELECT h.* FROM alc_atendimento.assignment_history h ORDER BY h.created_at DESC,h.id DESC LIMIT 30 OFFSET $1`
-      : `SELECT c.case_id,c.base_key,c.sigla,c.classification,a.assigned_to,coalesce(a.version,0)::int AS version FROM alc_atendimento.cases c LEFT JOIN alc_atendimento.case_assignments a USING(case_id) WHERE c.classification<>'encerrada' ORDER BY (a.assigned_to IS NULL) DESC,c.updated_at DESC,c.case_id LIMIT 30 OFFSET $1`,
-    [offset],
+  const filters = z
+    .object({
+      base: z.string().max(250).default(""),
+      sigla: z.string().max(80).default(""),
+      owner: z
+        .union([z.uuid(), z.literal(""), z.literal("unassigned")])
+        .default(""),
+      search: z.string().trim().max(120).default(""),
+    })
+    .strict()
+    .parse(input);
+  const scope = await scopeFor(profile);
+  function conditionsFor(
+    alias: "c" | "h",
+    ownerAlias: "a" | "h",
+    values: unknown[],
+  ) {
+    const conditions = [inboxScopeSql(scope, values, alias)];
+    const param = (value: unknown) => {
+      values.push(value);
+      return `$${values.length}`;
+    };
+    if (filters.base)
+      conditions.push(`${alias}.base_key=${param(filters.base)}`);
+    if (filters.sigla)
+      conditions.push(`${alias}.sigla=${param(filters.sigla)}`);
+    if (filters.owner === "unassigned")
+      conditions.push(`${ownerAlias}.assigned_to IS NULL`);
+    else if (filters.owner)
+      conditions.push(
+        `${ownerAlias}.assigned_to=${param(filters.owner)}::uuid`,
+      );
+    if (filters.search)
+      conditions.push(
+        `position(${param(filters.search)} in ${alias}.case_id)>0`,
+      );
+    return conditions;
+  }
+  const values: unknown[] = [],
+    recentValues: unknown[] = [];
+  const conditions = conditionsFor(
+    history ? "h" : "c",
+    history ? "h" : "a",
+    values,
   );
-  return { records: records.rows, limit: 30, offset };
+  if (!history) conditions.push("c.classification<>'encerrada'");
+  const recentWhere = conditionsFor("h", "h", recentValues).join(" AND ");
+  const from = history
+    ? "alc_atendimento.assignment_history h LEFT JOIN alc_atendimento.cases c USING(case_id)"
+    : "alc_atendimento.cases c LEFT JOIN alc_atendimento.case_assignments a USING(case_id)";
+  const where = conditions.join(" AND ");
+  const [summary, records, recent] = await Promise.all([
+    db().query(
+      `SELECT count(*)::int AS total,count(*) FILTER(WHERE ${history ? "h" : "a"}.assigned_to IS NULL)::int AS unassigned,
+      count(*) FILTER(WHERE ${history ? "h" : "a"}.assigned_to IS NOT NULL)::int AS assigned
+      FROM ${from} WHERE ${where}`,
+      values,
+    ),
+    db().query(
+      history
+        ? `SELECT h.*,c.classification FROM ${from} WHERE ${where} ORDER BY h.created_at DESC,h.id DESC LIMIT 30 OFFSET $${values.length + 1}`
+        : `SELECT c.case_id,c.base_key,c.sigla,c.classification,a.assigned_to,coalesce(a.version,0)::int AS version FROM ${from} WHERE ${where} ORDER BY (a.assigned_to IS NULL) DESC,c.updated_at DESC,c.case_id LIMIT 30 OFFSET $${values.length + 1}`,
+      [...values, offset],
+    ),
+    db().query(
+      `SELECT count(*)::int AS total FROM alc_atendimento.assignment_history h WHERE ${recentWhere}
+      AND h.created_at>=now()-interval '7 days' AND h.previous_owner IS NOT NULL AND h.previous_owner IS DISTINCT FROM h.assigned_to`,
+      recentValues,
+    ),
+  ]);
+  return {
+    records: records.rows,
+    summary: {
+      ...summary.rows[0],
+      recentRedistributions: recent.rows[0].total,
+    },
+    limit: 30,
+    offset,
+  };
 }

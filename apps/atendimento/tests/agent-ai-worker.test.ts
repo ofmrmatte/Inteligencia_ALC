@@ -9,7 +9,7 @@ import { defaultAiConfig } from "../lib/agent-instructions";
 import { clientReply } from "../lib/domain";
 import type { AgentState } from "../lib/domain";
 
-const config = { ...defaultAiConfig, enabled: true, model: "configured-model" };
+const config = { ...defaultAiConfig, enabled: true, model: "gpt-4.1-mini" };
 const id = "11111111-1111-4111-8111-111111111111";
 const messageId = "22222222-2222-4222-8222-222222222222";
 let text: string, inserted: boolean, charged: boolean, bot: boolean, type: string, timestamp: string, priorText: string;

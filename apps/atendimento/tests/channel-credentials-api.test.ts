@@ -19,8 +19,10 @@ vi.mock("../lib/channel-credentials", () => ({
   verifyChannelCredential: mocks.verify,
   executeChannelCredential: mocks.execute,
 }));
+vi.mock("../lib/ai-credentials", () => ({ createAiCredentialChallenge: mocks.challenge, verifyAiCredential: mocks.verify, executeAiCredential: mocks.execute }));
 
 import { GET, POST } from "../app/api/channel-credentials/route";
+import { GET as aiFactors, POST as aiPost } from "../app/api/ai-credentials/route";
 import { HttpError } from "../lib/auth";
 
 const payload = {
@@ -54,6 +56,15 @@ beforeEach(() => {
 });
 
 describe("channel credential API", () => {
+  it("uses the same private, bounded, origin-checked MFA HTTP contract for AI credentials", async () => {
+    const body = { action: "challenge", payload: { operation: "replace_ai_credential", channel: "openai", apiKey: "synthetic-private-key" }, factorId: FACTOR };
+    const response = await aiPost(request(body)); expectPrivate(response); expect(response.status).toBe(200);
+    expect(await response.json()).not.toHaveProperty("apiKey");
+    expect(mocks.challenge).toHaveBeenCalledWith({ payload: body.payload, factorId: FACTOR });
+    expect((await aiPost(request(body, "https://evil.example"))).status).toBe(403);
+    mocks.factors.mockRejectedValueOnce(new HttpError(403, "Administração restrita a gestores autorizados."));
+    const denied = await aiFactors(); expectPrivate(denied); expect(denied.status).toBe(403);
+  });
   it("keeps the generic resource route free of legacy credential writes and reveals", () => {
     const source = readFileSync(
       resolve(fileURLToPath(new URL(".", import.meta.url)), "../app/api/[resource]/route.ts"),

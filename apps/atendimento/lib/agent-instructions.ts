@@ -5,6 +5,8 @@ import { HttpError } from "./auth";
 import { canManageUsers, type AuthProfile } from "@alc/identity/auth";
 import { enabledProfiles } from "./operator-directory";
 import type { PoolClient } from "pg";
+import { aiCredential, aiModelVerified } from "./ai-provider";
+import { validAiModelId } from "./ai-models";
 
 /** Editable operational copy; immutable authorization / identity / delivery rules stay in code. */
 export const editableInstructionSchema = z.object({
@@ -103,7 +105,7 @@ export const instructionUpdateSchema = z.discriminatedUnion("kind", [
 
 async function saveSetting(
   key: string, profile: AuthProfile, revision: number,
-  update: (saved: unknown) => AgentInstructions | AgentAiConfig,
+  update: (saved: unknown, transaction: PoolClient) => AgentInstructions | AgentAiConfig | Promise<AgentInstructions | AgentAiConfig>,
   action: string, details: Record<string, unknown>,
 ) {
   const transaction = await db().connect();
@@ -117,7 +119,7 @@ async function saveSetting(
     const row = (await transaction.query("SELECT value FROM alc_atendimento.settings WHERE key=$1 FOR UPDATE", [key])).rows[0];
     const currentRevision = row?.value?.revision ?? 0;
     if (currentRevision !== revision) throw new HttpError(409, "Conflito de revisão. Recarregue as instruções e configurações.");
-    const value = update(row?.value);
+    const value = await update(row?.value, transaction);
     await transaction.query(
       `INSERT INTO alc_atendimento.settings(key,value,updated_by) VALUES($1,$2,$3)
        ON CONFLICT(key) DO UPDATE SET value=excluded.value,updated_by=excluded.updated_by,updated_at=now()`,
@@ -150,7 +152,15 @@ export async function saveInstructions(actor: AuthProfile, body: unknown) {
 
 export async function saveAiConfig(actor: AuthProfile, body: unknown) {
   const config = aiConfigSchema.parse(body);
+  if (config.model && !validAiModelId(config.model)) throw new HttpError(400, "Identificador de modelo inválido.");
   return saveSetting(AI_CONFIG_KEY, actor, config.revision,
-    () => ({ ...config, revision: config.revision + 1 }),
+    async (_saved, transaction) => {
+      if (config.enabled) {
+        const credential = await aiCredential(config.provider, transaction);
+        if (!credential.value) throw new HttpError(409, "Configure uma credencial antes de ativar a IA.");
+        if (!await aiModelVerified(config.provider, config.model, credential.value)) throw new HttpError(409, "Modelo não validado para respostas estruturadas. Teste a conexão antes de ativar.");
+      }
+      return { ...config, revision: config.revision + 1 };
+    },
     "agent_ai_config_updated", { enabled: config.enabled, provider: config.provider });
 }

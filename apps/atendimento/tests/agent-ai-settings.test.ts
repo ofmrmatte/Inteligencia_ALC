@@ -1,5 +1,5 @@
 import { readFileSync } from "node:fs";
-import { beforeEach, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 const mocks = vi.hoisted(() => ({ profile: vi.fn(), enabledProfiles: vi.fn(), query: vi.fn(), setting: vi.fn(), connect: vi.fn(), audit: vi.fn() }));
 vi.mock("../lib/auth", async original => ({ ...(await original()), currentProfile: mocks.profile }));
 vi.mock("../lib/db", () => ({ db: () => ({ query: mocks.query, connect: mocks.connect }), core: vi.fn(), setting: mocks.setting, audit: mocks.audit }));
@@ -10,7 +10,7 @@ import { AI_CONFIG_KEY, defaultAiConfig, saveAiConfig, saveInstructions, INSTRUC
 import { CUSTOMER_STEPS } from "../lib/agent-playbook";
 
 const actor: AuthProfile = { id: "11111111-1111-4111-8111-111111111111", email: "synthetic@example.test", fullName: "Synthetic Manager", role: "developer", globalAccess: true, baseScope: [], siglaScope: [] };
-const config = { ...defaultAiConfig, enabled: true, model: "configured-model" };
+const config = { ...defaultAiConfig, enabled: true, model: "gpt-4.1-mini" };
 const context = (resource: string) => ({ params: Promise.resolve({ resource }) });
 const request = (resource: string, body: unknown, origin = "https://example.test") => new Request(`https://example.test/api/${resource}`, {
   method: "POST", headers: { "Content-Type": "application/json", Origin: origin }, body: JSON.stringify(body),
@@ -18,6 +18,8 @@ const request = (resource: string, body: unknown, origin = "https://example.test
 let values: Map<string, unknown>, queries: string[], releases: ReturnType<typeof vi.fn>[];
 beforeEach(() => {
   vi.resetAllMocks();
+  vi.stubEnv("OPENAI_API_KEY", "synthetic-openai-key");
+  vi.stubEnv("GEMINI_API_KEY", "synthetic-gemini-key");
   values = new Map(); queries = []; releases = [];
   mocks.profile.mockResolvedValue(actor);
   mocks.enabledProfiles.mockResolvedValue([actor]);
@@ -43,8 +45,9 @@ beforeEach(() => {
     }) };
   });
 });
+afterEach(() => vi.unstubAllEnvs());
 it("serializes concurrent first writes and rejects stale optimistic settings revisions", async () => {
-  const results = await Promise.allSettled([saveAiConfig(actor, config), saveAiConfig(actor, { ...config, provider: "gemini" })]);
+  const results = await Promise.allSettled([saveAiConfig(actor, config), saveAiConfig(actor, { ...config, provider: "gemini", model: "gemini-2.5-flash" })]);
   expect(results.filter(result => result.status === "fulfilled")).toHaveLength(1);
   expect(results.find(result => result.status === "rejected")).toMatchObject({ reason: { status: 409 } });
   expect(values.get(AI_CONFIG_KEY)).toMatchObject({ revision: 1 });
@@ -103,8 +106,15 @@ it("returns only managed configuration, environment names and daily budget count
   values.set(AI_CONFIG_KEY, config);
   const response = await GET(new Request("https://example.test/api/ai-config"), context("ai-config"));
   expect(response.status).toBe(200);
-  expect(await response.json()).toEqual({ config, used: 3, remaining: 7, credentialEnv: "OPENAI_API_KEY" });
+  const body = await response.json();
+  expect(body).toMatchObject({ config, used: 3, remaining: 7, credentialEnv: "OPENAI_API_KEY", credentials: { openai: { configured: true, source: "environment" } }, diagnostic: { effective: "untested" } });
+  expect(JSON.stringify(body)).not.toContain("synthetic-openai-key");
   expect(response.headers.get("Cache-Control")).toContain("no-store");
+});
+it("requires a successful credential-bound structured probe for a manual model", async () => {
+  await expect(saveAiConfig(actor, { ...config, model: "custom-model" })).rejects.toMatchObject({ status: 409 });
+  expect(values.has(AI_CONFIG_KEY)).toBe(false);
+  await expect(saveAiConfig(actor, { ...config, model: "https://attacker.test/model" })).rejects.toMatchObject({ status: 400 });
 });
 it("migration makes treatment snapshots and request claims append-only", () => {
   const sql = readFileSync(new URL("../db/006_agent_decisions.sql", import.meta.url), "utf8");

@@ -170,3 +170,12 @@ it("um registro bloqueado não é apresentado como enfileirado", async () => {
   );
   expect(response.status).toBe(409);
 });
+it("preserva atributos legados das automações sem permitir substituir o nome do atendente", async () => {
+  const response = await POST(request({ driverNotifications: false, clientOutreach: false, bot: true, operatorName: "Nome legado enviado pela interface antiga", intervalMinutes: 30 }), context("automation"));
+  expect(response.status).toBe(200);
+  const [sql, parameters] = mocks.query.mock.calls[0];
+  expect(sql).toContain("SET value=value || $1::jsonb");
+  expect(parameters[0]).toEqual({ driverNotifications: false, clientOutreach: false, bot: true, intervalMinutes: 30 });
+  expect(parameters[0]).not.toHaveProperty("operatorName");
+  expect(mocks.batch).not.toHaveBeenCalled();
+});

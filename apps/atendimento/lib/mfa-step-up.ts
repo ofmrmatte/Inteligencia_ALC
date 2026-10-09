@@ -50,17 +50,17 @@ function transactionError(error: unknown) {
 }
 
 const bindingSchema = z.object({
-  operation: z.enum(["reveal_token_verification", "replace_access_token", "replace_app_secret", "change_webhook_critical"]),
-  channel: z.enum(["driver", "client"]),
+  operation: z.enum(["reveal_token_verification", "replace_access_token", "replace_app_secret", "change_webhook_critical", "replace_ai_credential", "remove_ai_credential"]),
+  channel: z.enum(["driver", "client", "openai", "gemini"]),
   intentHash: z.string().regex(/^[a-f0-9]{64}$/),
-}).strict();
-const challengeSchema = bindingSchema.extend({ factorId: z.uuid() });
-const verifySchema = challengeSchema.extend({
+}).strict().refine(binding => binding.operation.endsWith("ai_credential") === ["openai", "gemini"].includes(binding.channel), { message: "Operacao incompatível com o destino." });
+const challengeSchema = bindingSchema.safeExtend({ factorId: z.uuid() });
+const verifySchema = challengeSchema.safeExtend({
   challengeId: z.uuid(),
   nonce: z.string().regex(/^[A-Za-z0-9_-]{43}$/),
   code: z.string().regex(/^[0-9]{6}$/),
 });
-const consumeSchema = bindingSchema.extend({ proofId: z.uuid() });
+const consumeSchema = bindingSchema.safeExtend({ proofId: z.uuid() });
 type Context = Awaited<ReturnType<typeof currentSessionContext>>;
 type Challenge = { id: string; factor_id: string; nonce_sealed: string };
 

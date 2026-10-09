@@ -5,6 +5,7 @@ import {
   type AgentAiConfig, type AgentInstructions,
 } from "./agent-instructions";
 import { agentAiPlan, normalize, validateAgentAiAction, type AgentReply, type AgentState } from "./domain";
+import { aiCredential, aiModelVerified, environmentAiCredential } from "./ai-provider";
 
 const rationaleCodes = ["clear_match", "ambiguous_input", "human_requested", "insufficient_context"] as const;
 const inputSchema = z.object({
@@ -34,7 +35,7 @@ export type AgentAiResult =
   | { status: "proposed"; provider: "openai" | "gemini"; model: string; instructionRevision: number; scriptCode: string; actionId: string; rationale: typeof rationaleCodes[number] }
   | { status: "off"; reason: "disabled" }
   | { status: "fallback"; reason: FallbackReason };
-type RequestOptions = { config?: AgentAiConfig; env?: Record<string, string | undefined>; fetcher?: typeof fetch; transaction?: PoolClient };
+type RequestOptions = { config?: AgentAiConfig; env?: Record<string, string | undefined>; credential?: string; fetcher?: typeof fetch; transaction?: PoolClient };
 class AiFailure extends Error { constructor(public reason: FallbackReason) { super(reason); } }
 const MAX_RESPONSE_BYTES = 16_384;
 const MAX_PROMPT_BYTES = 12_000;
@@ -68,8 +69,10 @@ function providerPrompt(input: AgentAiInput) {
   });
 }
 
-function secretFor(config: AgentAiConfig, env: Record<string, string | undefined>) {
-  return config.provider === "openai" ? env.OPENAI_API_KEY : env.GEMINI_API_KEY || env.GOOGLE_API_KEY;
+async function secretFor(config: AgentAiConfig, options: RequestOptions) {
+  if (options.credential !== undefined) return options.credential;
+  if (options.env) return environmentAiCredential(config.provider, options.env);
+  return (await aiCredential(config.provider, options.transaction)).value;
 }
 
 async function boundedJson(response: Response, signal: AbortSignal): Promise<unknown> {
@@ -124,7 +127,8 @@ async function providerDecision(input: AgentAiInput, config: AgentAiConfig, apiK
     } : {
       systemInstruction: { parts: [{ text: SYSTEM }] },
       contents: [{ role: "user", parts: [{ text: prompt }] }],
-      generationConfig: { maxOutputTokens: AI_OUTPUT_TOKENS, responseMimeType: "application/json", responseJsonSchema: schema },
+      generationConfig: { maxOutputTokens: AI_OUTPUT_TOKENS, responseMimeType: "application/json", responseJsonSchema: schema,
+        ...(["gemini-2.5-flash", "gemini-2.5-flash-lite"].includes(config.model) ? { thinkingConfig: { thinkingBudget: 0 } } : {}) },
     }),
   });
   if (!response.ok) {
@@ -149,7 +153,8 @@ export async function proposeAgentDecision(value: unknown, options: RequestOptio
   if (!config.enabled) return { status: "off", reason: "disabled" };
   const parsed = inputSchema.safeParse(value);
   if (!parsed.success) return { status: "fallback", reason: "invalid_input" };
-  const apiKey = secretFor(config, options.env ?? process.env);
+  let apiKey: string;
+  try { apiKey = await secretFor(config, options); } catch { return { status: "fallback", reason: "invalid_config" }; }
   if (!apiKey?.trim()) return { status: "fallback", reason: "invalid_config" };
   const controller = new AbortController();
   let timer: ReturnType<typeof setTimeout> | undefined;
@@ -234,14 +239,15 @@ export async function resolveInboundAgentDecision(input: InboundAgentInput, opti
         allowedActions: plan.actions.map(id => ({ id, description: "Canonical intent validated independently for the current treatment step." })),
       };
       const validInput = inputSchema.safeParse(aiInput);
+      const apiKey = await secretFor(config, options);
       if (!validInput.success || !input.inboundKey || input.inboundKey.length > 200) decision = { status: "fallback", reason: "invalid_input" };
       else if (new TextEncoder().encode(SYSTEM + providerPrompt(validInput.data)).byteLength > MAX_PROMPT_BYTES) decision = { status: "fallback", reason: "prompt_too_large" };
-      else if (!secretFor(config, options.env ?? process.env)?.trim()) decision = { status: "fallback", reason: "invalid_config" };
+      else if (!apiKey.trim() || (!options.env && !await aiModelVerified(config.provider, config.model, apiKey))) decision = { status: "fallback", reason: "invalid_config" };
       else {
         const reason = await reserveAiCall(input.inboundKey, config);
         if (reason) decision = { status: "fallback", reason };
         else {
-          const proposal = await proposeAgentDecision(aiInput, { ...options, config });
+          const proposal = await proposeAgentDecision(aiInput, { ...options, config, credential: apiKey });
           if (proposal.status !== "proposed") decision = proposal;
           else if (["yes", "no", "checking"].includes(proposal.actionId) && proposal.rationale !== "clear_match")
             decision = { status: "fallback", reason: "transition_rejected" };
@@ -260,4 +266,15 @@ export async function resolveInboundAgentDecision(input: InboundAgentInput, opti
     }
   } catch (error) { decision = { status: "fallback", reason: error instanceof AiFailure ? error.reason : error instanceof z.ZodError ? "invalid_config" : "storage_error" }; }
   return { answer, configSnapshot: config, decision: { ...decision, priorStep: input.state.step, nextStep: answer.state.step } };
+}
+
+// The diagnostic uses the same adapter/schema with synthetic text, never a contact or dispatch.
+export async function testAgentProvider(config: AgentAiConfig, credential: string, fetcher: typeof fetch = fetch) {
+  let status = 0;
+  const observedFetch: typeof fetch = async (input, init) => { const response = await fetcher(input, init); status = response.status; return response; };
+  const result = await proposeAgentDecision({ channel: "client", step: "receipt", message: "Não tenho certeza.",
+    script: { channel: "client", revision: 0, code: "C02", title: "Teste de conexão", goal: "Escolher somente o esclarecimento autorizado.", example: "Teste sintético, sem envio de mensagens." },
+    allowedActions: [{ id: "clarify", description: "Solicitar esclarecimento." }], policies: [],
+  }, { config: { ...config, enabled: true }, credential, fetcher: observedFetch });
+  return result.status === "proposed" ? "ready" : status === 401 || status === 403 ? "authentication_failed" : status === 404 ? "model_unavailable" : status === 429 ? "provider_limit" : result.status === "fallback" && result.reason === "timeout" ? "timeout" : status === 400 ? "incompatible_model" : "unavailable";
 }

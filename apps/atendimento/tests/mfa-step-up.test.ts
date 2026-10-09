@@ -50,7 +50,8 @@ vi.mock("@supabase/supabase-js", () => ({
 import { currentProfile, currentSessionContext } from "../lib/auth";
 import { createStepUpChallenge, listStepUpFactors, verifyStepUp, withRecentMfa } from "../lib/mfa-step-up";
 import { createChannelCredentialChallenge, executeChannelCredential, verifyChannelCredential } from "../lib/channel-credentials";
-import { channelConfig, encrypt } from "../lib/meta";
+import { createAiCredentialChallenge, executeAiCredential, verifyAiCredential } from "../lib/ai-credentials";
+import { channelConfig, encrypt, decrypt } from "../lib/meta";
 import { migrate } from "../scripts/migrations.mjs";
 
 beforeEach(() => {
@@ -129,6 +130,11 @@ describe("verified session context", () => {
     await expect(withRecentMfa({ ...bound, proofId: OTHER, code }, vi.fn())).rejects.toMatchObject({ status: 400 });
     expect(mocks.getClaims).not.toHaveBeenCalled();
   });
+  it("rejects cross-purpose operation and destination bindings", async () => {
+    for (const change of [{ channel: "openai" }, { operation: "replace_ai_credential" }, { operation: "remove_ai_credential", channel: "driver" }])
+      await expect(createStepUpChallenge({ ...bound, ...change, factorId: FACTOR })).rejects.toMatchObject({ status: 400 });
+    expect(mocks.challenge).not.toHaveBeenCalled();
+  });
   it("bounds a hung provider and never exposes its response body", async () => {
     vi.useFakeTimers();
     try {
@@ -193,6 +199,37 @@ describe.skipIf(!fixtureUrl)("isolated recent MFA PostgreSQL", () => {
     const result = await verifyStepUp(request);
     return { ...bound, ...overrides, proofId: result.proofId };
   }
+  async function aiProof(payload: unknown) {
+    const challenge = await createAiCredentialChallenge({ payload, factorId: FACTOR });
+    return verifyAiCredential({ payload, factorId: FACTOR, challengeId: challenge.challengeId, nonce: challenge.nonce, code });
+  }
+  it("encrypts AI credentials with recent bound MFA and rejects provider, value and replay changes", async () => {
+    const payload = { operation: "replace_ai_credential", channel: "openai", apiKey: "synthetic-private-ai-key" };
+    await expect(executeAiCredential({ payload, proofId: OTHER })).rejects.toMatchObject({ status: 403 });
+    const verified = await aiProof(payload);
+    for (const altered of [{ ...payload, channel: "gemini" }, { ...payload, apiKey: "different-key" }, { operation: "remove_ai_credential", channel: "openai" }])
+      await expect(executeAiCredential({ payload: altered, proofId: verified.proofId })).rejects.toMatchObject({ status: 403 });
+    expect(await executeAiCredential({ payload, proofId: verified.proofId })).toEqual({ ok: true });
+    const stored = (await pool().query("SELECT value FROM alc_atendimento.settings WHERE key='ai_credential_openai'")).rows[0].value;
+    expect(decrypt(stored.encrypted)).toBe(payload.apiKey);
+    const audits = (await pool().query("SELECT * FROM alc_atendimento.audit")).rows;
+    expect(JSON.stringify([stored, audits, await row(verified.proofId)])).not.toContain(payload.apiKey);
+    expect(audits).toContainEqual(expect.objectContaining({ action: "ai_credential_changed", target: "openai", data: { operation: payload.operation } }));
+    await expect(executeAiCredential({ payload, proofId: verified.proofId })).rejects.toMatchObject({ status: 403 });
+  });
+  it("rolls back AI credential, audit and proof together, then permits an exact retry", async () => {
+    const payload = { operation: "replace_ai_credential", channel: "gemini", apiKey: "synthetic-gemini-key" }, verified = await aiProof(payload);
+    await pool().query("ALTER TABLE alc_atendimento.audit ADD CONSTRAINT synthetic_ai_failure CHECK(action<>'ai_credential_changed')");
+    try {
+      await expect(executeAiCredential({ payload, proofId: verified.proofId })).rejects.toMatchObject({ status: 503 });
+      expect((await pool().query("SELECT value FROM alc_atendimento.settings WHERE key='ai_credential_gemini'")).rows).toHaveLength(0);
+      expect((await row(verified.proofId)).consumed_at).toBeNull();
+    } finally { await pool().query("ALTER TABLE alc_atendimento.audit DROP CONSTRAINT synthetic_ai_failure"); }
+    await executeAiCredential({ payload, proofId: verified.proofId });
+    const remove = { operation: "remove_ai_credential", channel: "gemini" }, removal = await aiProof(remove);
+    await executeAiCredential({ payload: remove, proofId: removal.proofId });
+    expect((await pool().query("SELECT value FROM alc_atendimento.settings WHERE key='ai_credential_gemini'")).rows).toHaveLength(0);
+  });
   async function attemptCount() { return Number((await pool().query("SELECT count(*) AS count FROM alc_atendimento.step_up_attempts")).rows[0].count); }
   async function row(id: string) { return (await pool().query("SELECT * FROM alc_atendimento.step_up_challenges WHERE id=$1", [id])).rows[0]; }
   async function waitForLock(fragment: string) {
