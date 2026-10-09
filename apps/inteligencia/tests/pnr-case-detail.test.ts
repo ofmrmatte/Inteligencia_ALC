@@ -6,7 +6,7 @@ import {
   uniquePnrCaseDetailSnapshots,
 } from "@/lib/pnr-case-detail";
 import { dedupeCaseTimelineEvents } from "@/lib/pnr-case-center";
-import { pnrDetailBatchIssue, pnrDetailEmptySyncDelayMs, pnrDetailQueuePriority, runWithPnrSyncLock } from "@/lib/pnr-case-sync";
+import { pnrDetailBatchIssue, pnrDetailEmptySyncDelayMs, pnrDetailQueuePriority, pnrPersistBatchConfirmation, runWithPnrSyncLock } from "@/lib/pnr-case-sync";
 
 describe("histórico durável de detalhes PNR", () => {
   it("mantém valores e listas antigas quando a captura nova vem vazia", () => {
@@ -101,6 +101,33 @@ describe("histórico durável de detalhes PNR", () => {
       ...Array.from({ length: 49 }, () => ({ ok: false, error: { code: "BATCH_PAUSED" } })),
     ];
     expect(pnrDetailBatchIssue(batch)).toBeNull();
+  });
+
+  it("exige uma confirmação única e bem-sucedida para cada caso enviado", () => {
+    const ids = ["10001", "10002"];
+    expect(pnrPersistBatchConfirmation(ids, ids.map((caseId) => ({ caseId, ok: true, status: 200 })))).toMatchObject({
+      confirmedCaseIds: ids,
+      issue: null,
+    });
+    expect(pnrPersistBatchConfirmation(ids, [
+      { caseId: ids[0], ok: true, status: 200 },
+      { caseId: ids[0], ok: true, status: 200 },
+    ])).toMatchObject({ confirmedCaseIds: [], issue: { failedCount: 2 } });
+    expect(pnrPersistBatchConfirmation(ids, [
+      { caseId: ids[0], ok: true, status: 200 },
+      { caseId: "99999", ok: true, status: 200 },
+    ])).toMatchObject({ confirmedCaseIds: [ids[0]], issue: { failedCount: 1 } });
+    expect(pnrPersistBatchConfirmation(ids, [{ caseId: ids[0], ok: true, status: 200 }])).toMatchObject({
+      confirmedCaseIds: [ids[0]],
+      issue: { failedCount: 1 },
+    });
+    expect(pnrPersistBatchConfirmation(ids, [
+      { caseId: ids[0], ok: true, status: 200 },
+      { caseId: ids[1], ok: false, status: 500 },
+    ])).toMatchObject({ confirmedCaseIds: [ids[0]], issue: { failedCount: 1 } });
+    expect(pnrPersistBatchConfirmation([ids[0]], [
+      { caseId: ids[0], ok: true, status: 403 },
+    ])).toMatchObject({ confirmedCaseIds: [], issue: { failedCount: 1 } });
   });
 
   it("permite somente uma aba por vez quando Web Locks está disponível", async () => {
