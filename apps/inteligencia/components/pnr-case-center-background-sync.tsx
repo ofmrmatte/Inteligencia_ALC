@@ -6,6 +6,7 @@ import type { PnrCaseDetailSnapshot } from "@/lib/pnr-case-detail";
 import type { PnrCaseTimelineEvent } from "@/lib/pnr-case-center";
 import {
   PNR_DETAIL_PERSIST_BATCH_SIZE,
+  PNR_DETAIL_CONNECTOR_BATCH_SIZE,
   PNR_DETAIL_SYNC_ACTIVE_INTERVAL_MS,
   PNR_DETAIL_SYNC_CONNECTION_RETRY_MS,
   PNR_DETAIL_SYNC_BATCH_SIZE,
@@ -281,65 +282,69 @@ export function PnrCaseCenterBackgroundSync() {
             message: `Sincronizando lote de ${caseIds.length} casos · concorrência ${connectorConcurrency}`,
           });
 
-          const batch = await requestPnrConnector<TimelineConnectorBatchResult>(
-            "FETCH_TIMELINES",
-            { caseIds, concurrency: connectorConcurrency },
-            120_000,
-          );
-          const issue = pnrDetailBatchIssue(batch.results);
-          if (issue) {
-            const status = getPnrBackgroundSyncStatus();
-            publishPnrBackgroundSyncStatus({ errors: status.errors + issue.failedCount });
-            throw new PnrConnectorError(issue.code as PnrConnectorErrorCode, issue.message);
-          }
-
-          const sourceSuccess = new Map(batch.results.map((item) => [item.caseId, item.ok]));
-          const payloads = batch.results.filter((item) => item.ok || item.error.code !== "BATCH_PAUSED").map(toPersistPayload);
-          let persistedCount = 0;
-          let completedCount = 0;
-          let errorCount = 0;
-
-          for (let index = 0; index < payloads.length; index += PNR_DETAIL_PERSIST_BATCH_SIZE) {
-            if (disposed || getPnrBackgroundSyncStatus().manuallyPaused) break;
-            const chunk = payloads.slice(index, index + PNR_DETAIL_PERSIST_BATCH_SIZE);
-            const persisted = await persistTimelineBatch(chunk);
-            const resultRows = Array.isArray(persisted.results) ? persisted.results : [];
-            if (!resultRows.length || resultRows.every((item) => !item.ok)) {
+          let persistedTotal = 0;
+          let allSuccessful = true;
+          for (let index = 0; index < caseIds.length; index += PNR_DETAIL_CONNECTOR_BATCH_SIZE) {
+            const batch = await requestPnrConnector<TimelineConnectorBatchResult>(
+              "FETCH_TIMELINES",
+              { caseIds: caseIds.slice(index, index + PNR_DETAIL_CONNECTOR_BATCH_SIZE), concurrency: connectorConcurrency },
+              120_000,
+            );
+            const issue = pnrDetailBatchIssue(batch.results);
+            if (issue) {
               const status = getPnrBackgroundSyncStatus();
-              publishPnrBackgroundSyncStatus({ errors: status.errors + resultRows.length });
-              throw new PnrConnectorError("PERSISTENCE_ERROR", resultRows[0]?.error || "O servidor não confirmou a persistência dos detalhes. Confira o banco antes de retomar.");
+              publishPnrBackgroundSyncStatus({ errors: status.errors + issue.failedCount });
+              throw new PnrConnectorError(issue.code as PnrConnectorErrorCode, issue.message);
             }
-            for (const result of resultRows) {
-              if (!result.ok) {
-                errorCount += 1;
-                continue;
+
+            const sourceSuccess = new Map(batch.results.map((item) => [item.caseId, item.ok]));
+            const payloads = batch.results.filter((item) => item.ok || item.error.code !== "BATCH_PAUSED").map(toPersistPayload);
+            let completedCount = 0;
+            let errorCount = 0;
+
+            for (let persistIndex = 0; persistIndex < payloads.length; persistIndex += PNR_DETAIL_PERSIST_BATCH_SIZE) {
+              if (disposed || getPnrBackgroundSyncStatus().manuallyPaused) break;
+              const chunk = payloads.slice(persistIndex, persistIndex + PNR_DETAIL_PERSIST_BATCH_SIZE);
+              const persisted = await persistTimelineBatch(chunk);
+              const resultRows = Array.isArray(persisted.results) ? persisted.results : [];
+              if (!resultRows.length || resultRows.every((item) => !item.ok)) {
+                const status = getPnrBackgroundSyncStatus();
+                publishPnrBackgroundSyncStatus({ errors: status.errors + resultRows.length });
+                throw new PnrConnectorError("PERSISTENCE_ERROR", resultRows[0]?.error || "O servidor não confirmou a persistência dos detalhes. Confira o banco antes de retomar.");
               }
-              if (sourceSuccess.get(result.caseId)) { completedCount += 1; persistedCount += 1; }
-              else errorCount += 1;
+              for (const result of resultRows) {
+                if (!result.ok) {
+                  errorCount += 1;
+                  continue;
+                }
+                if (sourceSuccess.get(result.caseId)) { completedCount += 1; persistedTotal += 1; }
+                else errorCount += 1;
+              }
+              const status = getPnrBackgroundSyncStatus();
+              publishPnrBackgroundSyncStatus({
+                pending: Math.max(0, queue.pending - persistedTotal),
+                processed: status.processed + completedCount,
+                errors: status.errors + errorCount,
+                ...(completedCount ? { lastSuccessAt: new Date().toISOString() } : {}),
+              });
+              completedCount = 0;
+              errorCount = 0;
             }
-            const status = getPnrBackgroundSyncStatus();
-            publishPnrBackgroundSyncStatus({
-              pending: Math.max(0, queue.pending - persistedCount),
-              processed: status.processed + completedCount,
-              errors: status.errors + errorCount,
-              ...(completedCount ? { lastSuccessAt: new Date().toISOString() } : {}),
-            });
-            completedCount = 0;
-            errorCount = 0;
+
+            allSuccessful &&= batch.results.every((item) => item.ok);
+            const rateLimited = batch.results.some((item) => !item.ok && /\b429\b/.test(item.error.message || ""));
+            if (rateLimited) {
+              connectorConcurrency = Math.max(1, Math.floor(connectorConcurrency / 2));
+              nextDelayMs = PNR_DETAIL_SYNC_RATE_LIMIT_BACKOFF_MS;
+              publishPnrBackgroundSyncStatus({
+                phase: "paused",
+                message: `Mercado Livre limitou o lote · retomando em ${Math.round(nextDelayMs / 1000)}s com concorrência ${connectorConcurrency}`,
+              });
+              return;
+            }
           }
 
-          const rateLimited = batch.results.some((item) => !item.ok && /\b429\b/.test(item.error.message || ""));
-          if (rateLimited) {
-            connectorConcurrency = Math.max(1, Math.floor(connectorConcurrency / 2));
-            nextDelayMs = PNR_DETAIL_SYNC_RATE_LIMIT_BACKOFF_MS;
-            publishPnrBackgroundSyncStatus({
-              phase: "paused",
-              message: `Mercado Livre limitou o lote · retomando em ${Math.round(nextDelayMs / 1000)}s com concorrência ${connectorConcurrency}`,
-            });
-            return;
-          }
-
-          if (batch.results.every((item) => item.ok) && connectorConcurrency < PNR_DETAIL_SYNC_CONCURRENCY) {
+          if (allSuccessful && connectorConcurrency < PNR_DETAIL_SYNC_CONCURRENCY) {
             connectorConcurrency += 1;
           }
           publishPnrBackgroundSyncStatus({

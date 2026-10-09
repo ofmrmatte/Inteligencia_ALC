@@ -2,6 +2,7 @@ import { CASE_CENTER_TIMELINE_PARSER_VERSION } from "@/lib/pnr-case-center";
 
 export const PNR_DETAIL_SYNC_LOCK = "alc-pnr-case-detail-sync";
 export const PNR_DETAIL_SYNC_BATCH_SIZE = 50;
+export const PNR_DETAIL_CONNECTOR_BATCH_SIZE = 5;
 export const PNR_DETAIL_QUEUE_CANDIDATE_LIMIT = 500;
 export const PNR_DETAIL_SYNC_CONCURRENCY = 2;
 export const PNR_DETAIL_PERSIST_BATCH_SIZE = 10;
@@ -16,10 +17,12 @@ export const PNR_DETAIL_SYNC_LEADER_LEASE_MS = 15_000;
 
 export function pnrDetailBatchIssue(results: Array<{ ok: boolean; error?: { code?: string; message?: string } }>) {
   const failures = results.filter((item) => !item.ok && item.error?.code !== "BATCH_PAUSED");
-  const fatal = failures.find((item) => ["MERCADO_LIVRE_SESSION_REQUIRED", "MERCADO_LIVRE_ACCESS_DENIED", "INVALID_RESPONSE", "REQUEST_TIMEOUT", "RATE_LIMITED"].includes(item.error?.code || ""));
+  const fatal = failures.find((item) => ["MERCADO_LIVRE_SESSION_REQUIRED", "MERCADO_LIVRE_ACCESS_DENIED", "INVALID_RESPONSE", "RATE_LIMITED"].includes(item.error?.code || ""));
   const interrupted = results.some((item) => !item.ok && item.error?.code === "BATCH_PAUSED");
-  const failure = fatal || (results.length && (interrupted || results.every((item) => !item.ok)) ? failures[0] : null);
-  if (results.length && !failure && !interrupted) return null;
+  const timeoutOnly = failures.length > 0 && failures.every((item) => item.error?.code === "REQUEST_TIMEOUT");
+  const resumable = timeoutOnly || (failures.length === 0 && results.some((item) => item.ok));
+  const failure = fatal || (!resumable && results.length && (interrupted || results.every((item) => !item.ok)) ? failures[0] : null);
+  if (results.length && !failure && (!interrupted || resumable)) return null;
   return {
     code: failure?.error?.code || "INVALID_RESPONSE",
     message: failure?.error?.message || "O conector não retornou nenhum detalhe. Atualize a extensão antes de retomar.",

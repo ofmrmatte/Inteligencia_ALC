@@ -17,6 +17,7 @@ import {
 
 import {
   LATEST_CONNECTOR_VERSION,
+  PnrConnectorError,
   requestPnrConnector,
 } from "@/lib/pnr-connector-client";
 import {
@@ -29,9 +30,9 @@ let host: HTMLDivElement;
 const ids = Array.from({ length: 50 }, (_, index) => String(10001 + index));
 const fetchMock = vi.fn();
 const requestMock = vi.mocked(requestPnrConnector);
-function source(success: boolean) {
+function source(success: boolean, caseIds = ids) {
   return {
-    results: ids.map((caseId, index) =>
+    results: caseIds.map((caseId, index) =>
       success
         ? {
             caseId,
@@ -94,7 +95,7 @@ beforeEach(() => {
   });
   requestMock
     .mockReset()
-    .mockImplementation(async (type) =>
+    .mockImplementation(async (type, payload) =>
       type === "PING"
         ? {
             installed: true,
@@ -102,7 +103,7 @@ beforeEach(() => {
             mlTabAvailable: true,
             sessionAvailable: true,
           }
-        : source(true),
+        : source(true, payload?.caseIds as string[]),
     );
   host = document.createElement("div");
   document.body.append(host);
@@ -122,7 +123,7 @@ async function start() {
 }
 describe("sincronização de detalhes em background", () => {
   it("pausa na falha geral, mantém 50 pendentes e só retoma por ação explícita", async () => {
-    requestMock.mockImplementation(async (type) =>
+    requestMock.mockImplementation(async (type, payload) =>
       type === "PING"
         ? {
             installed: true,
@@ -130,7 +131,7 @@ describe("sincronização de detalhes em background", () => {
             mlTabAvailable: true,
             sessionAvailable: true,
           }
-        : source(false),
+        : source(false, payload?.caseIds as string[]),
     );
     await start();
     expect(getPnrBackgroundSyncStatus()).toMatchObject({
@@ -145,7 +146,7 @@ describe("sincronização de detalhes em background", () => {
       await vi.advanceTimersByTimeAsync(3_600_000);
     });
     expect(fetchMock).toHaveBeenCalledTimes(1);
-    requestMock.mockImplementation(async (type) =>
+    requestMock.mockImplementation(async (type, payload) =>
       type === "PING"
         ? {
             installed: true,
@@ -153,7 +154,7 @@ describe("sincronização de detalhes em background", () => {
             mlTabAvailable: true,
             sessionAvailable: true,
           }
-        : source(true),
+        : source(true, payload?.caseIds as string[]),
     );
     await act(async () => {
       requestPnrBackgroundSyncNow();
@@ -194,6 +195,97 @@ describe("sincronização de detalhes em background", () => {
     });
     expect(getPnrBackgroundSyncStatus().message).toContain("Campos: events");
   });
+
+  it("persiste sucesso e timeout individual sem converter o restante pausado em erro", async () => {
+    const shortIds = ids.slice(0, 5);
+    const persisted: Array<Array<{ caseId: string; status: string }>> = [];
+    fetchMock.mockImplementation(async (path, options) => {
+      if (path.endsWith("/queue"))
+        return Response.json({ pending: 5, cases: shortIds.map((caseId) => ({ caseId, priority: 1 })), case: null });
+      const items = JSON.parse(options.body).items;
+      persisted.push(items);
+      return Response.json({
+        results: items.map((item: { caseId: string }) => ({ caseId: item.caseId, ok: true, status: 200 })),
+      });
+    });
+    requestMock.mockImplementation(async (type) => type === "PING"
+      ? {
+          installed: true,
+          version: LATEST_CONNECTOR_VERSION,
+          mlTabAvailable: true,
+          sessionAvailable: true,
+        }
+      : {
+          results: [
+            {
+              caseId: shortIds[0],
+              ok: true,
+              data: {
+                caseId: shortIds[0],
+                sourceEventCount: 1,
+                events: [{ eventId: "1", eventType: "CREATE_CASE_BY_CONSUMER", dateCreated: "2026-10-01T12:00:00Z" }],
+              },
+            },
+            { caseId: shortIds[1], ok: false, error: { code: "REQUEST_TIMEOUT", message: "Tempo de consulta do detalhe excedido." } },
+            ...shortIds.slice(2).map((caseId) => ({ caseId, ok: false, error: { code: "BATCH_PAUSED", message: "Caso permanece pendente." } })),
+          ],
+        });
+
+    await start();
+
+    expect(persisted.flat().map(({ caseId, status }) => ({ caseId, status }))).toEqual([
+      { caseId: ids[0], status: "COMPLETE" },
+      { caseId: ids[1], status: "ERROR" },
+    ]);
+    expect(getPnrBackgroundSyncStatus()).toMatchObject({ phase: "idle", pending: 4, processed: 1, errors: 1 });
+  });
+
+  it("mantém grupos já persistidos quando uma chamada posterior do conector expira", async () => {
+    const connectorCalls: string[][] = [];
+    const persisted: Array<Array<{ caseId: string; status: string }>> = [];
+    fetchMock.mockImplementation(async (path, options) => {
+      if (path.endsWith("/queue"))
+        return Response.json({ pending: 50, cases: ids.map((caseId) => ({ caseId, priority: 1 })), case: null });
+      const items = JSON.parse(options.body).items;
+      persisted.push(items);
+      return Response.json({
+        results: items.map((item: { caseId: string }) => ({ caseId: item.caseId, ok: true, status: 200 })),
+      });
+    });
+    requestMock.mockImplementation(async (type, payload) => {
+      if (type === "PING") return {
+        installed: true,
+        version: LATEST_CONNECTOR_VERSION,
+        mlTabAvailable: true,
+        sessionAvailable: true,
+      };
+      const caseIds = payload?.caseIds as string[];
+      connectorCalls.push(caseIds);
+      if (connectorCalls.length === 2) {
+        throw new PnrConnectorError("REQUEST_TIMEOUT", "O conector excedeu o prazo da consulta.");
+      }
+      return {
+        results: caseIds.map((caseId) => ({
+          caseId,
+          ok: true,
+          data: {
+            caseId,
+            sourceEventCount: 1,
+            events: [{ eventId: "1", eventType: "CREATE_CASE_BY_CONSUMER", dateCreated: "2026-10-01T12:00:00Z" }],
+          },
+        })),
+      };
+    });
+
+    await start();
+
+    expect(connectorCalls.map((call) => call.length)).toEqual([5, 5]);
+    expect(persisted.flat().map(({ caseId, status }) => ({ caseId, status }))).toEqual(
+      ids.slice(0, 5).map((caseId) => ({ caseId, status: "COMPLETE" })),
+    );
+    expect(getPnrBackgroundSyncStatus()).toMatchObject({ phase: "paused", pending: 45, processed: 5, errors: 0 });
+  });
+
   it("processa lotes consecutivos de PNRs sem esperar 30 minutos", async () => {
     let queueReads = 0;
     fetchMock.mockImplementation(async (path, options) => {
@@ -208,18 +300,18 @@ describe("sincronização de detalhes em background", () => {
       });
     });
     await start();
-    expect(fetchMock).toHaveBeenCalledTimes(6); // 1 fila e 5 gravações de 10 casos
+    expect(fetchMock).toHaveBeenCalledTimes(11); // 1 fila e 10 gravações de 5 casos
     await act(async () => {
       window.dispatchEvent(new Event("focus"));
       await vi.advanceTimersByTimeAsync(PNR_DETAIL_SYNC_ACTIVE_INTERVAL_MS - 1);
     });
-    expect(fetchMock).toHaveBeenCalledTimes(6);
+    expect(fetchMock).toHaveBeenCalledTimes(11);
     await act(async () => vi.advanceTimersByTimeAsync(1));
-    expect(fetchMock).toHaveBeenCalledTimes(12); // segundo lote imediatamente após intervalo curto
+    expect(fetchMock).toHaveBeenCalledTimes(22); // segundo lote imediatamente após intervalo curto
     expect(getPnrBackgroundSyncStatus().processed).toBe(100);
     await act(async () => vi.advanceTimersByTimeAsync(PNR_DETAIL_SYNC_ACTIVE_INTERVAL_MS));
     expect(queueReads).toBe(3);
-    expect(fetchMock).toHaveBeenCalledTimes(13); // fila vazia: só leitura, sem replay
+    expect(fetchMock).toHaveBeenCalledTimes(23); // fila vazia: só leitura, sem replay
     expect(getPnrBackgroundSyncStatus().message).toContain("nova verificação");
   });
 
