@@ -80,6 +80,8 @@ const record = (overrides: Partial<CaseRecord> = {}): CaseRecord =>
     customerName: "Synthetic buyer",
     customerPhone: "5511988880000",
     customerVerified: true,
+    customerSource: "validado_pela_equipe",
+    customerCapturedAt: NOW.toISOString(),
     products: [{ title: "Synthetic product" }],
     deliveryAt: "2026-10-07T12:00:00Z",
     purchaseValue: 10,
@@ -110,9 +112,9 @@ const coreRow = (r: CaseRecord): Record<string, unknown> => ({
   },
 });
 const empty = (): QueryResult => ({ rows: [], rowCount: 0 });
-let persisted: Map<string, { record: unknown; sourceAt: string }>;
+let persisted: Map<string, { record: unknown; sourceAt: string; fingerprint: string; comparisonVersion: number }>;
 let queuedKeys: Set<string>;
-let source: { baselineComplete: boolean };
+let source: { baselineComplete: boolean; lastSync?: string };
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -188,10 +190,12 @@ beforeEach(() => {
       sql.startsWith("SELECT * FROM alc_atendimento.conversations")
     )
       return mocks.query(sql, values);
-    if (sql.startsWith("SELECT record FROM alc_atendimento.cases")) {
+    if (sql.startsWith("SELECT record,source_at,comparison_version,fingerprint FROM alc_atendimento.cases")) {
       const previous = persisted.get(id);
       return {
-        rows: previous ? [{ record: previous.record }] : [],
+        rows: previous
+          ? [{ record: previous.record, source_at: previous.sourceAt, fingerprint: previous.fingerprint, comparison_version: previous.comparisonVersion }]
+          : [],
         rowCount: previous ? 1 : 0,
       };
     }
@@ -199,7 +203,12 @@ beforeEach(() => {
       const sourceAt = String(values?.[9]);
       const previous = persisted.get(id);
       if (previous && previous.sourceAt > sourceAt) return empty();
-      persisted.set(id, { record: values?.[8], sourceAt });
+      persisted.set(id, {
+        record: values?.[8],
+        sourceAt,
+        fingerprint: String(values?.[10]),
+        comparisonVersion: 1,
+      });
       return { rows: [{ case_id: id }], rowCount: 1 };
     }
     return empty();
@@ -215,8 +224,9 @@ describe("source import regressions", () => {
     const initial = record();
     expect(
       await upsertCases([initial], NOW.toISOString(), false, null, false),
-    ).toEqual({
+    ).toMatchObject({
       processed: 1,
+      found: 1,
       new: 1,
     });
     expect(persisted.get(initial.caseId)?.record).toMatchObject({
@@ -238,7 +248,7 @@ describe("source import regressions", () => {
       rows: [coreRow(initial)],
       rowCount: 1,
     });
-    expect(await syncCore(false, false)).toEqual({ processed: 1, new: 1 });
+    expect(await syncCore(false, false)).toMatchObject({ processed: 1, found: 1, new: 1 });
     expect(queuedKeys.size).toBe(0);
     expect(mocks.templates).not.toHaveBeenCalled();
     expect(mocks.setting).not.toHaveBeenCalledWith("automation");
@@ -251,10 +261,10 @@ describe("source import regressions", () => {
       rows: [coreRow(initial)],
       rowCount: 1,
     });
-    expect(await syncCore()).toEqual({ processed: 1, new: 0 });
+    expect(await syncCore()).toMatchObject({ processed: 1, found: 1, new: 1 });
     expect(mocks.coreQuery).toHaveBeenCalledWith(
-      expect.stringContaining("WHERE ($1::boolean OR competence=$2)"),
-      [false, "202610Q1"],
+      expect.stringContaining("source_last_seen_at >= $3::timestamptz - interval '5 minutes'"),
+      [false, "202610Q1", null],
     );
     expect(persisted.get(initial.caseId)?.record).toMatchObject({
       caseId: initial.caseId,
@@ -274,13 +284,28 @@ describe("source import regressions", () => {
           baselineComplete: true,
           lastSync: NOW.toISOString(),
           processed: 1,
-          new: 0,
+          new: 1,
         }),
       ],
     );
     expect(mocks.templates).not.toHaveBeenCalled();
     expect(queuedKeys.size).toBe(0);
     expect(mocks.graph).not.toHaveBeenCalled();
+  });
+
+  it("fetches only a bounded-overlap Core delta after baseline", async () => {
+    source.baselineComplete = true;
+    source.lastSync = "2026-10-08T14:55:00Z";
+    expect(await syncCore(false, false)).toMatchObject({
+      found: 0,
+      new: 0,
+      updated: 0,
+      unchanged: 0,
+    });
+    expect(mocks.coreQuery).toHaveBeenCalledWith(
+      expect.stringContaining("source_last_seen_at >= $3::timestamptz - interval '5 minutes'"),
+      [false, "202610Q1", "2026-10-08T14:55:00.000Z"],
+    );
   });
 
   it("refuses to send the old C01 Meta template without the approved purchase value", async () => {
@@ -296,10 +321,28 @@ describe("source import regressions", () => {
 
   it("imports new verified contacts once and reimport does not queue duplicate outreach", async () => {
     const initial = record();
-    expect(await upsertCases([initial], NOW.toISOString(), false)).toEqual({
+    expect(await upsertCases([initial], NOW.toISOString(), false)).toMatchObject({
       processed: 1,
+      found: 1,
       new: 1,
+      updated: 0,
+      unchanged: 0,
     });
+    const initialEnrichment = mocks.transactionQuery.mock.calls.find(([sql]) =>
+      sql.startsWith("INSERT INTO alc_atendimento.pnr_enrichment_outbox"),
+    );
+    expect(initialEnrichment?.[1]?.[2]).toMatchObject({
+      schemaVersion: 1,
+      caseId: initial.caseId,
+      verified: true,
+    });
+    expect(
+      mocks.transactionQuery.mock.calls.findIndex(([sql]) =>
+        sql.startsWith("INSERT INTO alc_atendimento.pnr_enrichment_outbox"),
+      ),
+    ).toBeLessThan(
+      mocks.transactionQuery.mock.calls.findIndex(([sql]) => sql === "COMMIT"),
+    );
     expect([...queuedKeys]).toEqual([
       `driver:${initial.caseId}:initial`,
       `client:${initial.caseId}:initial`,
@@ -319,10 +362,18 @@ describe("source import regressions", () => {
       mocks.transaction,
     );
     expect(mocks.templates).toHaveBeenCalledTimes(2);
-    expect(await upsertCases([initial], NOW.toISOString(), false)).toEqual({
+    expect(await upsertCases([initial], NOW.toISOString(), false)).toMatchObject({
       processed: 1,
+      found: 1,
       new: 0,
+      updated: 0,
+      unchanged: 1,
     });
+    const enrichmentWrites = mocks.transactionQuery.mock.calls.filter(([sql]) =>
+      sql.startsWith("INSERT INTO alc_atendimento.pnr_enrichment_outbox"),
+    );
+    expect(enrichmentWrites).toHaveLength(2);
+    expect(enrichmentWrites[1][1]?.[0]).toBe(enrichmentWrites[0][1]?.[0]);
     expect(queuedKeys.size).toBe(2);
     expect(mocks.templates).toHaveBeenCalledTimes(2);
     expect(mocks.audit).toHaveBeenCalledTimes(2);
@@ -347,9 +398,12 @@ describe("source import regressions", () => {
       products: [],
       deliveryAt: "",
     });
-    expect(await upsertCases([sparse], NOW.toISOString(), false)).toEqual({
+    expect(await upsertCases([sparse], NOW.toISOString(), false)).toMatchObject({
       processed: 1,
+      found: 1,
       new: 0,
+      updated: 0,
+      unchanged: 1,
     });
     expect(persisted.get(initial.caseId)?.record).toMatchObject({
       driverId: initial.driverId,
@@ -364,6 +418,67 @@ describe("source import regressions", () => {
     expect(mocks.templates).not.toHaveBeenCalled();
   });
 
+  it("does not replace a verified buyer contact with an older verified capture", async () => {
+    const existing = record();
+    await upsertCases([existing], NOW.toISOString(), true, null, false);
+    const older = record({
+      customerName: "Older buyer name",
+      customerPhone: "5511977770000",
+      customerCapturedAt: "2026-10-07T15:00:00Z",
+    }) as CaseRecord & { sourceAt: string };
+    older.sourceAt = "2026-10-08T15:01:00Z";
+    expect(await upsertCases([older], NOW.toISOString(), false, null, false)).toMatchObject({
+      updated: 0,
+      unchanged: 1,
+      verifiedPhoneAdded: 0,
+    });
+    expect(persisted.get(existing.caseId)?.record).toMatchObject({
+      customerName: existing.customerName,
+      customerPhone: existing.customerPhone,
+      customerCapturedAt: existing.customerCapturedAt,
+    });
+  });
+
+  it("counts a real source change and ignores stale source snapshots", async () => {
+    const initial = record({ customerVerified: false, customerSource: "", customerCapturedAt: "" });
+    await upsertCases([initial], NOW.toISOString(), true, null, false);
+    const changed = record({
+      mainStatus: "CLOSED",
+      subStatus: "BILLED",
+      classification: "encerrada",
+      baseKey: "BASE B",
+    });
+    expect(
+      await upsertCases(
+        [changed as CaseRecord & { sourceAt: string }],
+        NOW.toISOString(),
+        false,
+        null,
+        false,
+      ),
+    ).toMatchObject({
+      found: 1,
+      new: 0,
+      updated: 1,
+      unchanged: 0,
+      classificationChanged: 1,
+      scopeChanged: 1,
+      verifiedPhoneAdded: 1,
+    });
+
+    const stale = { ...changed, mainStatus: "NEW", sourceAt: "2026-10-07T00:00:00Z" };
+    expect(await upsertCases([stale], NOW.toISOString(), false, null, false)).toMatchObject({
+      found: 1,
+      updated: 0,
+      unchanged: 0,
+      stale: 1,
+    });
+    expect(persisted.get(initial.caseId)?.record).toMatchObject({
+      mainStatus: "CLOSED",
+      baseKey: "BASE B",
+    });
+  });
+
   it("preserves historical closed cases and verified contact without automatic outreach or changing baseline", async () => {
     const historical = record({
       competence: "202609Q2",
@@ -374,15 +489,17 @@ describe("source import regressions", () => {
     persisted.set(historical.caseId, {
       record: historical,
       sourceAt: "2026-10-07T12:00:00Z",
+      fingerprint: "",
+      comparisonVersion: 0,
     });
     mocks.coreQuery.mockResolvedValueOnce({
       rows: [coreRow(historical)],
       rowCount: 1,
     });
-    expect(await syncCore(true)).toEqual({ processed: 1, new: 0 });
+    expect(await syncCore(true)).toMatchObject({ processed: 1, found: 1, new: 0 });
     expect(mocks.coreQuery).toHaveBeenCalledWith(
       expect.stringContaining("WHERE ($1::boolean OR competence=$2)"),
-      [true, "202610Q1"],
+      [true, "202610Q1", null],
     );
     expect(persisted.get(historical.caseId)?.record).toMatchObject({
       competence: "202609Q2",
@@ -490,6 +607,7 @@ describe("source import regressions", () => {
     expect(mocks.coreQuery).toHaveBeenCalledWith(expect.any(String), [
       true,
       "202610Q1",
+      null,
     ]);
     const lookup = mocks.transactionQuery.mock.calls.find(([sql]) =>
       sql.includes("WHERE driver_id=$1 AND driver_phone=$2"),

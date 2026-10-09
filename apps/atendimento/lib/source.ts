@@ -13,6 +13,8 @@ import { createHash, randomUUID } from "node:crypto";
 import type { AuthProfile } from "@alc/identity/auth";
 import { HttpError, requireAdmin, scopeFor, visible } from "./auth";
 import { authorizeDispatch } from "./dispatch-authorization";
+import { caseFingerprint } from "./sync-delta";
+import { enqueueVerifiedContact } from "./sync-enrichment";
 import { z } from "zod";
 export type Automation = {
   driverNotifications: boolean;
@@ -77,11 +79,13 @@ export async function verifyCustomerContact(
       customerDocument: parsed.document || row.record.customerDocument || "",
       customerAddress: parsed.address || row.record.customerAddress || "",
       customerSource: parsed.sourceUrl || "validado_pela_equipe",
+      customerCapturedAt: new Date().toISOString(),
     };
     await transaction.query(
       "UPDATE alc_atendimento.cases SET record=$2,customer_phone=$3,updated_at=now() WHERE case_id=$1",
       [parsed.caseId, record, number],
     );
+    await enqueueVerifiedContact(transaction, record);
     await audit(
       profile.id,
       "customer_contact_verified",
@@ -333,6 +337,18 @@ export async function upsertCases(
 ) {
   const client = await db().connect();
   const newlySeen: CaseRecord[] = [];
+  const stats = {
+    processed: records.length,
+    found: records.length,
+    new: 0,
+    updated: 0,
+    unchanged: 0,
+    classificationChanged: 0,
+    verifiedPhoneAdded: 0,
+    scopeChanged: 0,
+    stale: 0,
+    errors: 0,
+  };
   try {
     await client.query("BEGIN");
     for (const record of records) {
@@ -340,13 +356,33 @@ export async function upsertCases(
         `atendimento_case:${record.caseId}`,
       ]);
       const previous = await client.query(
-        "SELECT record FROM alc_atendimento.cases WHERE case_id=$1 FOR UPDATE",
+        "SELECT record,source_at,comparison_version,fingerprint FROM alc_atendimento.cases WHERE case_id=$1 FOR UPDATE",
         [record.caseId],
       );
-      const old = previous.rows[0]?.record as CaseRecord | undefined;
+      const previousRow = previous.rows[0];
+      const old = previousRow?.record as CaseRecord | undefined;
       const sourceTime =
         (record as CaseRecord & { sourceAt?: string }).sourceAt || sourceAt;
+      if (!Number.isFinite(Date.parse(sourceTime)))
+        throw new Error("Data de origem da PNR inválida.");
+      if (
+        old &&
+        previousRow?.source_at &&
+        Date.parse(String(previousRow.source_at)) > Date.parse(sourceTime)
+      ) {
+        stats.stale += 1;
+        continue;
+      }
       // A list response must not erase details or a verified complementary contact.
+      const incomingCapture = Date.parse(record.customerCapturedAt || "");
+      const existingCapture = Date.parse(old?.customerCapturedAt || "");
+      const acceptVerifiedContact = Boolean(
+        record.customerVerified &&
+          (!old?.customerVerified ||
+            (Number.isFinite(incomingCapture) &&
+              Number.isFinite(existingCapture) &&
+              incomingCapture >= existingCapture)),
+      );
       const merged = {
         ...old,
         ...record,
@@ -356,29 +392,89 @@ export async function upsertCases(
           ? record.products
           : old?.products || [],
         deliveryAt: record.deliveryAt || old?.deliveryAt || "",
-        customerName: record.customerName || old?.customerName || "",
-        customerPhone: record.customerPhone || old?.customerPhone || "",
-        customerVerified:
-          record.customerVerified || old?.customerVerified || false,
+        customerName: acceptVerifiedContact
+          ? record.customerName
+          : old?.customerVerified
+            ? old.customerName
+            : record.customerName || old?.customerName || "",
+        customerPhone: acceptVerifiedContact
+          ? record.customerPhone
+          : old?.customerVerified
+            ? old.customerPhone
+            : record.customerPhone || old?.customerPhone || "",
+        customerVerified: acceptVerifiedContact || old?.customerVerified || false,
+        customerDocument: acceptVerifiedContact
+          ? record.customerDocument
+          : old?.customerVerified
+            ? old.customerDocument
+            : record.customerDocument || old?.customerDocument,
+        customerAddress: acceptVerifiedContact
+          ? record.customerAddress
+          : old?.customerVerified
+            ? old.customerAddress
+            : record.customerAddress || old?.customerAddress,
+        customerAddressFields: acceptVerifiedContact
+          ? record.customerAddressFields
+          : old?.customerVerified
+            ? old.customerAddressFields
+            : record.customerAddressFields || old?.customerAddressFields,
+        customerSource: acceptVerifiedContact
+          ? record.customerSource
+          : old?.customerVerified
+            ? old.customerSource
+            : record.customerSource || old?.customerSource,
+        customerCapturedAt: acceptVerifiedContact
+          ? record.customerCapturedAt
+          : old?.customerVerified
+            ? old.customerCapturedAt
+            : record.customerCapturedAt || old?.customerCapturedAt,
       };
+      const fingerprint = caseFingerprint(merged);
+      const unchanged = Boolean(
+        old &&
+          previousRow?.comparison_version === 1 &&
+          previousRow?.fingerprint === fingerprint,
+      );
+      const stored = unchanged ? old! : merged;
       const persisted = await client.query(
-        `INSERT INTO alc_atendimento.cases(case_id,competence,base_key,sigla,driver_id,driver_phone,customer_phone,classification,record,source_at)
-        VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) ON CONFLICT(case_id) DO UPDATE SET competence=excluded.competence,base_key=excluded.base_key,sigla=excluded.sigla,driver_id=excluded.driver_id,driver_phone=excluded.driver_phone,customer_phone=excluded.customer_phone,classification=excluded.classification,record=excluded.record,source_at=excluded.source_at,updated_at=now() WHERE alc_atendimento.cases.source_at<=excluded.source_at RETURNING case_id`,
+        `INSERT INTO alc_atendimento.cases(case_id,competence,base_key,sigla,driver_id,driver_phone,customer_phone,classification,record,source_at,comparison_version,fingerprint)
+        VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,1,$11) ON CONFLICT(case_id) DO UPDATE SET competence=excluded.competence,base_key=excluded.base_key,sigla=excluded.sigla,driver_id=excluded.driver_id,driver_phone=excluded.driver_phone,customer_phone=excluded.customer_phone,classification=excluded.classification,record=excluded.record,source_at=excluded.source_at,comparison_version=1,fingerprint=excluded.fingerprint,updated_at=CASE WHEN alc_atendimento.cases.fingerprint IS DISTINCT FROM excluded.fingerprint OR alc_atendimento.cases.comparison_version<>1 THEN now() ELSE alc_atendimento.cases.updated_at END WHERE alc_atendimento.cases.source_at<=excluded.source_at RETURNING case_id`,
         [
-          merged.caseId,
-          merged.competence,
-          merged.baseKey,
-          merged.sigla,
-          merged.driverId,
-          merged.driverPhone,
-          merged.customerPhone,
-          merged.classification,
-          merged,
+          stored.caseId,
+          stored.competence,
+          stored.baseKey,
+          stored.sigla,
+          stored.driverId,
+          stored.driverPhone,
+          stored.customerPhone,
+          stored.classification,
+          stored,
           sourceTime,
+          fingerprint,
         ],
       );
+      if (!persisted.rowCount) {
+        stats.stale += 1;
+        continue;
+      }
+      if (!old) stats.new += 1;
+      else if (unchanged) stats.unchanged += 1;
+      else stats.updated += 1;
+      if (old && old.classification !== merged.classification)
+        stats.classificationChanged += 1;
       if (
-        persisted.rowCount &&
+        old &&
+        merged.customerVerified &&
+        (!old.customerVerified || old.customerPhone !== merged.customerPhone)
+      )
+        stats.verifiedPhoneAdded += 1;
+      if (
+        old &&
+        (old.baseKey !== merged.baseKey || old.sigla !== merged.sigla)
+      )
+        stats.scopeChanged += 1;
+      if (merged.customerVerified) await enqueueVerifiedContact(client, merged);
+      if (
         !baseline &&
         (!old ||
           (!old.driverPhone && merged.driverPhone) ||
@@ -421,7 +517,7 @@ export async function upsertCases(
   }
   // A manual collection is data-only, even if automatic outreach is enabled.
   if (!allowAutomaticOutreach)
-    return { processed: records.length, new: newlySeen.length };
+    return stats;
   const automation = await setting<Automation>("automation");
   for (const record of newlySeen.filter((r) => r.competence === competence())) {
     for (const channel of ["driver", "client"] as const) {
@@ -442,7 +538,7 @@ export async function upsertCases(
       }
     }
   }
-  return { processed: records.length, new: newlySeen.length };
+  return stats;
 }
 export function fromCore(row: Record<string, unknown>): CaseRecord {
   const raw = row.raw_snapshot_jsonb as
@@ -481,10 +577,21 @@ export async function syncCore(history = false, allowAutomaticOutreach = true) {
     baselineComplete: boolean;
     lastSync?: string;
   }>("source");
+  const cursor =
+    !history &&
+    source.baselineComplete &&
+    source.lastSync &&
+    Number.isFinite(Date.parse(source.lastSync))
+      ? new Date(source.lastSync).toISOString()
+      : null;
+  const syncStartedAt = new Date().toISOString();
   // Historical data is imported only by an explicit driver inquiry or staff action.
   const result = await core().query(
-    `SELECT * FROM public.pnr_case_center_cases WHERE ($1::boolean OR competence=$2) ORDER BY case_date DESC,case_id DESC`,
-    [history, competence()],
+    `SELECT * FROM public.pnr_case_center_cases
+     WHERE ($1::boolean OR competence=$2)
+       AND ($1::boolean OR $3::timestamptz IS NULL OR source_last_seen_at >= $3::timestamptz - interval '5 minutes')
+     ORDER BY case_date DESC,case_id DESC`,
+    [history, competence(), cursor],
   );
   const stats = await upsertCases(
     result.rows.map(fromCore),
@@ -499,7 +606,7 @@ export async function syncCore(history = false, allowAutomaticOutreach = true) {
       [
         {
           baselineComplete: source.baselineComplete || result.rows.length > 0,
-          lastSync: new Date().toISOString(),
+          lastSync: syncStartedAt,
           origin: "Inteligência",
           ...stats,
         },
