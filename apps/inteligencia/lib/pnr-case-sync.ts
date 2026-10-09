@@ -15,6 +15,53 @@ export const PNR_DETAIL_SYNC_RATE_LIMIT_BACKOFF_MS = 5 * 60 * 1000;
 export const PNR_DETAIL_SYNC_CONNECTION_RETRY_MS = 60_000;
 export const PNR_DETAIL_SYNC_LEADER_LEASE_MS = 15_000;
 
+export function pnrConnectorBatchIssue(requestedCaseIds: string[], results: unknown) {
+  const expected = new Set(requestedCaseIds);
+  let exact = expected.size === requestedCaseIds.length
+    && Array.isArray(results)
+    && results.length === requestedCaseIds.length;
+  const returned = new Set<string>();
+
+  if (Array.isArray(results)) {
+    for (const result of results) {
+      if (!result || typeof result !== "object" || Array.isArray(result)) {
+        exact = false;
+        continue;
+      }
+      const item = result as {
+        caseId?: unknown;
+        ok?: unknown;
+        data?: { caseId?: unknown; events?: unknown };
+        error?: { code?: unknown; message?: unknown };
+      };
+      if (typeof item.caseId !== "string" || !expected.has(item.caseId) || returned.has(item.caseId)) {
+        exact = false;
+        continue;
+      }
+      returned.add(item.caseId);
+      if (item.ok === true) {
+        if (!item.data || typeof item.data !== "object" || Array.isArray(item.data)
+          || item.data.caseId !== item.caseId
+          || !Array.isArray(item.data.events)
+          || item.data.events.some((event) => !event || typeof event !== "object" || Array.isArray(event))) exact = false;
+      } else if (item.ok === false) {
+        if (!item.error || typeof item.error !== "object" || Array.isArray(item.error)
+          || typeof item.error.code !== "string" || typeof item.error.message !== "string") exact = false;
+      } else {
+        exact = false;
+      }
+    }
+  }
+
+  if (returned.size !== expected.size) exact = false;
+  if (exact) return null;
+  return {
+    code: "INVALID_RESPONSE" as const,
+    message: "O conector retornou detalhes inválidos ou IDs divergentes, duplicados ou incompletos para o lote solicitado. Nenhum caso deste lote foi persistido.",
+    failedCount: Math.max(requestedCaseIds.length, 1),
+  };
+}
+
 export function pnrDetailBatchIssue(results: Array<{ ok: boolean; error?: { code?: string; message?: string } }>) {
   const failures = results.filter((item) => !item.ok && item.error?.code !== "BATCH_PAUSED");
   const fatal = failures.find((item) => ["MERCADO_LIVRE_SESSION_REQUIRED", "MERCADO_LIVRE_ACCESS_DENIED", "INVALID_RESPONSE", "RATE_LIMITED"].includes(item.error?.code || ""));
