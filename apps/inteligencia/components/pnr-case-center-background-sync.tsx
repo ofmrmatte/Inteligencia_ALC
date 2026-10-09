@@ -15,6 +15,7 @@ import {
   PNR_DETAIL_SYNC_RATE_LIMIT_BACKOFF_MS,
   pnrDetailEmptySyncDelayMs,
   pnrDetailBatchIssue,
+  pnrPersistBatchConfirmation,
   runWithPnrSyncLock,
 } from "@/lib/pnr-case-sync";
 import {
@@ -112,10 +113,6 @@ async function persistTimelineBatch(items: TimelinePersistPayload[]) {
   }
   if (!response.ok) throw new Error(await readError(response, "Falha ao persistir lote de timelines PNR."));
   const body = await response.json() as BulkPersistResponse;
-  const authFailure = body.results?.find((item) => item.status === 401 || item.status === 403);
-  if (authFailure) {
-    throw new PnrBackgroundAuthError(authFailure.status, authFailure.error || "Sessão administrativa indisponível.");
-  }
   return body;
 }
 
@@ -285,11 +282,13 @@ export function PnrCaseCenterBackgroundSync() {
           let persistedTotal = 0;
           let allSuccessful = true;
           for (let index = 0; index < caseIds.length; index += PNR_DETAIL_CONNECTOR_BATCH_SIZE) {
+            if (disposed || getPnrBackgroundSyncStatus().manuallyPaused) break;
             const batch = await requestPnrConnector<TimelineConnectorBatchResult>(
               "FETCH_TIMELINES",
               { caseIds: caseIds.slice(index, index + PNR_DETAIL_CONNECTOR_BATCH_SIZE), concurrency: connectorConcurrency },
               120_000,
             );
+            if (disposed || getPnrBackgroundSyncStatus().manuallyPaused) break;
             const issue = pnrDetailBatchIssue(batch.results);
             if (issue) {
               const status = getPnrBackgroundSyncStatus();
@@ -307,19 +306,12 @@ export function PnrCaseCenterBackgroundSync() {
               const chunk = payloads.slice(persistIndex, persistIndex + PNR_DETAIL_PERSIST_BATCH_SIZE);
               const persisted = await persistTimelineBatch(chunk);
               const resultRows = Array.isArray(persisted.results) ? persisted.results : [];
-              if (!resultRows.length || resultRows.every((item) => !item.ok)) {
-                const status = getPnrBackgroundSyncStatus();
-                publishPnrBackgroundSyncStatus({ errors: status.errors + resultRows.length });
-                throw new PnrConnectorError("PERSISTENCE_ERROR", resultRows[0]?.error || "O servidor não confirmou a persistência dos detalhes. Confira o banco antes de retomar.");
-              }
-              for (const result of resultRows) {
-                if (!result.ok) {
-                  errorCount += 1;
-                  continue;
-                }
-                if (sourceSuccess.get(result.caseId)) { completedCount += 1; persistedTotal += 1; }
+              const confirmation = pnrPersistBatchConfirmation(chunk.map((item) => item.caseId), resultRows);
+              for (const caseId of confirmation.confirmedCaseIds) {
+                if (sourceSuccess.get(caseId)) { completedCount += 1; persistedTotal += 1; }
                 else errorCount += 1;
               }
+              if (confirmation.issue) errorCount += confirmation.issue.failedCount;
               const status = getPnrBackgroundSyncStatus();
               publishPnrBackgroundSyncStatus({
                 pending: Math.max(0, queue.pending - persistedTotal),
@@ -329,8 +321,17 @@ export function PnrCaseCenterBackgroundSync() {
               });
               completedCount = 0;
               errorCount = 0;
+              if (disposed || getPnrBackgroundSyncStatus().manuallyPaused) break;
+              const authFailure = resultRows.find((item) => item?.status === 401 || item?.status === 403);
+              if (authFailure) {
+                throw new PnrBackgroundAuthError(authFailure.status, authFailure.error || "Sessão administrativa indisponível.");
+              }
+              if (confirmation.issue) {
+                throw new PnrConnectorError("PERSISTENCE_ERROR", confirmation.issue.message);
+              }
             }
 
+            if (disposed || getPnrBackgroundSyncStatus().manuallyPaused) break;
             allSuccessful &&= batch.results.every((item) => item.ok);
             const rateLimited = batch.results.some((item) => !item.ok && /\b429\b/.test(item.error.message || ""));
             if (rateLimited) {
@@ -344,6 +345,7 @@ export function PnrCaseCenterBackgroundSync() {
             }
           }
 
+          if (disposed || getPnrBackgroundSyncStatus().manuallyPaused) return;
           if (allSuccessful && connectorConcurrency < PNR_DETAIL_SYNC_CONCURRENCY) {
             connectorConcurrency += 1;
           }

@@ -30,6 +30,48 @@ export function pnrDetailBatchIssue(results: Array<{ ok: boolean; error?: { code
   };
 }
 
+export function pnrPersistBatchConfirmation(
+  caseIds: string[],
+  results: Array<{ caseId?: unknown; ok?: unknown; status?: unknown; error?: unknown }>,
+) {
+  const expected = new Set(caseIds);
+  const returned = new Map<string, Array<{ ok?: unknown; status?: unknown; error?: unknown }>>();
+  let unexpected = false;
+  for (const result of results) {
+    const caseId = typeof result?.caseId === "string" ? result.caseId : "";
+    if (!expected.has(caseId)) {
+      unexpected = true;
+      continue;
+    }
+    returned.set(caseId, [...(returned.get(caseId) ?? []), result]);
+  }
+
+  const confirmedCaseIds = [...expected].filter((caseId) => {
+    const matches = returned.get(caseId);
+    const status = matches?.[0]?.status;
+    return matches?.length === 1
+      && matches[0].ok === true
+      && typeof status === "number"
+      && Number.isInteger(status)
+      && status >= 200
+      && status < 300;
+  });
+  const exact = expected.size === caseIds.length
+    && results.length === caseIds.length
+    && !unexpected
+    && confirmedCaseIds.length === caseIds.length;
+  if (exact) return { confirmedCaseIds, issue: null };
+
+  const error = results.find((result) => result?.ok !== true && typeof result?.error === "string")?.error;
+  return {
+    confirmedCaseIds,
+    issue: {
+      failedCount: Math.max(caseIds.length - confirmedCaseIds.length, unexpected ? 1 : 0, 1),
+      message: typeof error === "string" ? error : "O servidor não confirmou a persistência de cada caso enviado. Confira antes de retomar.",
+    },
+  };
+}
+
 export function pnrDetailEmptySyncDelayMs(consecutiveEmptyPolls: number) {
   const index = Math.min(
     Math.max(consecutiveEmptyPolls - 1, 0),
