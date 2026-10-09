@@ -2,6 +2,7 @@ import { z } from "zod";
 import { HttpError } from "./auth";
 import { boundedBytes } from "./media-validation";
 import { listStepUpFactors } from "./mfa-step-up";
+import { assertTrustedOrigin } from "./request-origin";
 
 const MAX_JSON_BYTES = 8 * 1024;
 export const CREDENTIAL_HEADERS = {
@@ -84,8 +85,7 @@ export async function credentialRequest(
   },
 ) {
   try {
-    if (request.headers.get("origin") !== new URL(request.url).origin)
-      throw new HttpError(403, "Origem da requisicao invalida.");
+    assertTrustedOrigin(request);
     const length = request.headers.get("content-length");
     if (length && (!/^\d+$/.test(length) || Number(length) > MAX_JSON_BYTES))
       throw new HttpError(413, "Lote muito grande.");

@@ -17,6 +17,7 @@ import {
 } from "@/lib/meta";
 import { syncCore, upsertCases, verifyCustomerContact } from "@/lib/source";
 import { combineSyncStats, type SyncStats } from "@/lib/sync-delta";
+import { assertTrustedOrigin } from "@/lib/request-origin";
 import { operationalOverview, operationalSyncSummary } from "@/lib/operational-monitoring";
 import {
   competence,
@@ -562,8 +563,7 @@ export async function POST(
     }
     requireAdmin(profile);
     if (["agent-instructions", "ai-config", "ai-test", "template-contracts"].includes(resource)) {
-      if (request.headers.get("origin") !== new URL(request.url).origin)
-        throw new HttpError(403, "Origem da alteração não autorizada.");
+      assertTrustedOrigin(request, "Origem da alteração não autorizada.");
     }
     if (resource === "template-contracts") {
       const parsed = z.object({ kind: z.enum(["preview", "save"]) }).passthrough().parse(body);

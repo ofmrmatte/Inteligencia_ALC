@@ -18,6 +18,8 @@ const request = (resource: string, body: unknown, origin = "https://example.test
 let values: Map<string, unknown>, queries: string[], releases: ReturnType<typeof vi.fn>[];
 beforeEach(() => {
   vi.resetAllMocks();
+  vi.stubEnv("ATENDIMENTO_PUBLIC_URL", "");
+  vi.stubEnv("RAILWAY_PUBLIC_DOMAIN", "");
   vi.stubEnv("OPENAI_API_KEY", "synthetic-openai-key");
   vi.stubEnv("GEMINI_API_KEY", "synthetic-gemini-key");
   values = new Map(); queries = []; releases = [];
@@ -116,6 +118,16 @@ it("requires a successful credential-bound structured probe for a manual model",
   expect(values.has(AI_CONFIG_KEY)).toBe(false);
   await expect(saveAiConfig(actor, { ...config, model: "https://attacker.test/model" })).rejects.toMatchObject({ status: 400 });
 });
+it("accepts trusted public origins for protected AI configuration behind Railway proxy", async () => {
+  vi.stubEnv("ATENDIMENTO_PUBLIC_URL", "https://alc-atendimento-production.up.railway.app");
+  const incoming = new Request("http://127.0.0.1:3000/api/ai-config", {
+    method: "POST",
+    headers: { "Content-Type": "application/json", Origin: "https://alc-atendimento-production.up.railway.app" },
+    body: JSON.stringify(config),
+  });
+  expect((await POST(incoming, context("ai-config"))).status).toBe(200);
+});
+
 it("migration makes treatment snapshots and request claims append-only", () => {
   const sql = readFileSync(new URL("../db/006_agent_decisions.sql", import.meta.url), "utf8");
   expect(sql).toContain("BEFORE UPDATE OR DELETE ON alc_atendimento.agent_decisions");
