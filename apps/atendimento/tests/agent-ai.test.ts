@@ -43,6 +43,58 @@ describe("bounded optional providers", () => {
       expect(await proposeAgentDecision(value, { config, env, fetcher })).toEqual({ status: "fallback", reason: "invalid_input" });
     expect(fetcher).not.toHaveBeenCalled();
   });
+  it("uses OpenAI Responses for GPT-6 with a bounded structured decision and no response storage", async () => {
+    const proposal = { actionId: "yes", rationale: "clear_match" };
+    const response = Response.json({
+      status: "completed",
+      output: [{ type: "message", status: "completed", content: [{ type: "output_text", text: JSON.stringify(proposal) }] }],
+    });
+    const fetcher = vi.fn<typeof fetch>().mockResolvedValue(response);
+    expect(await proposeAgentDecision(input(), { config: { ...config, model: "gpt-6-luna" }, env, fetcher }))
+      .toMatchObject({ status: "proposed", model: "gpt-6-luna", ...proposal });
+    const [url, init] = fetcher.mock.calls[0];
+    expect(url).toBe("https://api.openai.com/v1/responses");
+    expect(JSON.stringify(init?.body)).not.toContain("secret");
+    const body = JSON.parse(String(init?.body));
+    expect(body).toMatchObject({
+      model: "gpt-6-luna", store: false, max_output_tokens: 1200,
+      reasoning: { effort: "low" },
+      text: { format: { type: "json_schema", strict: true } },
+    });
+    expect(body.input).toHaveLength(2);
+    expect(init?.redirect).toBe("error");
+  });
+
+  it("does not trust incomplete, refused or multi-message Responses outputs", async () => {
+    const proposal = { actionId: "yes", rationale: "clear_match" };
+    for (const response of [
+      { status: "incomplete", output: [{ type: "message", content: [{ type: "output_text", text: JSON.stringify(proposal) }] }] },
+      { status: "completed", output: [{ type: "message", content: [{ type: "refusal", refusal: "Cannot comply" }] }] },
+      { status: "completed", output: [{ type: "message", content: [{ type: "output_text", text: JSON.stringify(proposal) }, { type: "output_text", text: JSON.stringify(proposal) }] }] },
+    ]) {
+      const fetcher = vi.fn<typeof fetch>().mockResolvedValue(Response.json(response));
+      expect(await proposeAgentDecision(input(), { config: { ...config, model: "gpt-6.1-sol" }, env, fetcher }))
+        .toEqual({ status: "fallback", reason: "invalid_response" });
+    }
+  });
+
+  it("uses the Gemini 3 structured response format without affecting Gemini 2.5", async () => {
+    const proposal = { actionId: "yes", rationale: "clear_match" };
+    const fetcher = vi.fn<typeof fetch>().mockResolvedValue(Response.json({
+      candidates: [{ finishReason: "STOP", content: { parts: [{ text: JSON.stringify(proposal) }] } }],
+    }));
+    expect(await proposeAgentDecision(input(), {
+      config: { ...config, provider: "gemini", model: "gemini-3.8-flash" }, env, fetcher,
+    })).toMatchObject({ status: "proposed", model: "gemini-3.8-flash", ...proposal });
+    const [url, init] = fetcher.mock.calls[0];
+    expect(String(url)).toContain("models/gemini-3.8-flash:generateContent");
+    const body = JSON.parse(String(init?.body));
+    expect(body.generationConfig.responseFormat.text).toMatchObject({ mimeType: "application/json" });
+    expect(body.generationConfig.responseFormat.text.schema.required).toContain("actionId");
+    expect(body.generationConfig.responseMimeType).toBeUndefined();
+    expect(String(init?.body)).not.toContain("gemini-secret");
+  });
+
   it.each(["openai", "gemini"] as const)("%s sends bounded structured output with header-only secrets", async provider => {
     const proposal = { actionId: "yes", rationale: "clear_match" };
     const response = provider === "openai" ? openai(proposal) : new Response(JSON.stringify({ candidates: [{ finishReason: "STOP", content: { parts: [{ text: JSON.stringify(proposal) }] } }] }));

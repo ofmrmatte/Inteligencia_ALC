@@ -332,6 +332,19 @@ it("reserves bounded billable probes and returns only safe results without sendi
   ).rejects.toBeDefined();
   expect(fetcher).toHaveBeenCalledOnce();
 });
+it("probes GPT-6 Responses before accepting a model for automation", async () => {
+  const fetcher = vi.fn().mockResolvedValue(Response.json({
+    status: "completed",
+    output: [{ type: "message", content: [{ type: "output_text", text: JSON.stringify({ actionId: "clarify", rationale: "ambiguous_input" }) }] }],
+  }));
+  const result = await testAiConnection(actor, {
+    provider: "openai", model: "gpt-6-luna", timeoutMs: 1000, confirmed: true,
+  }, fetcher);
+  expect(result.result).toBe("ready");
+  expect(fetcher.mock.calls[0][0]).toBe("https://api.openai.com/v1/responses");
+  expect(JSON.stringify(result)).not.toContain("environment-key");
+});
+
 it.each([401, 404, 429, 400, 500])(
   "maps failed probe HTTP %s to a safe diagnostic",
   async (status) => {
