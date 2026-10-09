@@ -1,7 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { z } from "zod";
 import { AGENT_GUARDRAILS, CUSTOMER_STEPS } from "../lib/agent-playbook";
-import { effectiveInstructions, stepsFor, editableInstructionSchema, validateEditedScript } from "../lib/agent-instructions";
+import { effectiveInstructions, scriptSnapshotFor, stepsFor, editableInstructionSchema, validateEditedScript } from "../lib/agent-instructions";
 import { paginateEvidence, splitEvidenceMessage, validateEvidence, type EvidenceMessage } from "../lib/evidence";
 import { packZip } from "../lib/zip";
 
@@ -16,6 +15,8 @@ describe("editable instruction model",()=>{
     expect(CUSTOMER_STEPS.find(x=>x.code==="C04")?.example).not.toContain("Obrigado pelo seu tempo.");
     expect(snapshot.policies).toHaveLength(1);
     expect(effectiveInstructions(null).policies).toHaveLength(AGENT_GUARDRAILS.length);
+    expect(scriptSnapshotFor("client", "C04", snapshot)).toMatchObject({ revision: 1, code: "C04", example: revised.example });
+    expect(() => scriptSnapshotFor("client", "C99", snapshot)).toThrow(/inexistente/);
   });
   it("rejects removing or adding delivery/identity placeholders and unrecognized codes",()=>{
     const original=CUSTOMER_STEPS[0];

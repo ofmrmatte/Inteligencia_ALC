@@ -32,6 +32,11 @@ export function stepsFor(channel: "client" | "driver", current: AgentInstruction
     channel, code: step.code, title: step.title, goal: step.goal, example: step.example,
   });
 }
+export function scriptSnapshotFor(channel: "client" | "driver", code: string, current: AgentInstructions) {
+  const script = stepsFor(channel, current).find(step => step.code === code);
+  if (!script) throw new Error("Código de instrução inexistente.");
+  return { revision: current.revision, ...script };
+}
 export function validateEditedScript(entry: z.infer<typeof editableInstructionSchema>) {
   const source = (entry.channel === "client" ? CUSTOMER_STEPS : DRIVER_STEPS)
     .find(step => step.code === entry.code);
