@@ -88,6 +88,7 @@ import {
   dispatchBatchSchema,
 } from "../lib/dispatch-batches";
 import { competence, type CaseRecord } from "../lib/domain";
+import { clientContract, driverContract, providerCatalog } from "./meta-contract-fixtures";
 import { authorizedFolder, createEvidenceFolder, evidencePrint } from "../lib/evidence-store";
 import {
   reserveUpload,
@@ -178,22 +179,7 @@ describe.skipIf(!url || !coreUrl)(
       provider.graph
         .mockReset()
         .mockResolvedValue({ messages: [{ id: "synthetic-provider-id" }] });
-      provider.templates.mockReset().mockResolvedValue([
-        {
-          name: "pnraberta",
-          status: "APPROVED",
-          language: "pt_BR",
-          category: "UTILITY",
-          components: [],
-        },
-        {
-          name: "cliente_loss_v2",
-          status: "APPROVED",
-          language: "pt_BR",
-          category: "UTILITY",
-          components: [],
-        },
-      ]);
+      provider.templates.mockReset().mockResolvedValue(structuredClone(providerCatalog));
       identities.rows = [A, B, ADMIN].map((id) => ({
         id,
         role: id === ADMIN ? "developer" : "supervisor",
@@ -202,11 +188,17 @@ describe.skipIf(!url || !coreUrl)(
         email: "synthetic@example.test",
       }));
       await client.query(
-        "TRUNCATE alc_atendimento.evidence_media,alc_atendimento.media,alc_atendimento.webhook_events,alc_atendimento.assignment_history,alc_atendimento.case_assignments,alc_atendimento.operator_bases,alc_atendimento.operators,alc_atendimento.evidence_images,alc_atendimento.evidence_folders,alc_atendimento.messages,alc_atendimento.outbox,alc_atendimento.dispatch_batches,alc_atendimento.conversations,alc_atendimento.cases,alc_atendimento.audit RESTART IDENTITY",
+        "TRUNCATE alc_atendimento.evidence_media,alc_atendimento.media,alc_atendimento.webhook_events,alc_atendimento.assignment_history,alc_atendimento.case_assignments,alc_atendimento.operator_bases,alc_atendimento.operators,alc_atendimento.evidence_images,alc_atendimento.evidence_folders,alc_atendimento.messages,alc_atendimento.outbox,alc_atendimento.meta_template_contracts,alc_atendimento.dispatch_batches,alc_atendimento.conversations,alc_atendimento.cases,alc_atendimento.audit RESTART IDENTITY",
       );
       await client.query(
         "DELETE FROM alc_atendimento.settings WHERE key LIKE 'access_%'",
       );
+      for (const contract of [clientContract, driverContract]) {
+        await client.query(
+          "INSERT INTO alc_atendimento.meta_template_contracts(channel,revision,baseline,reviewed_by) VALUES($1,1,$2,$3)",
+          [contract.channel, { ...contract, sender: { phoneId: "synthetic-phone", wabaId: "synthetic-waba" } }, ADMIN],
+        );
+      }
       await client.query(
         "UPDATE alc_atendimento.settings SET value='{\"mode\":\"manual\"}' WHERE key='assignment_policy'",
       );
@@ -291,7 +283,7 @@ describe.skipIf(!url || !coreUrl)(
             "SELECT name FROM alc_atendimento.schema_migrations ORDER BY name",
           )
         ).rows,
-      ).toHaveLength(5);
+      ).toHaveLength(7);
       expect(
         (await client.query("SELECT * FROM alc_atendimento.operators"))
           .rowCount,

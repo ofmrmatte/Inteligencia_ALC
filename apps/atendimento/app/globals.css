@@ -588,6 +588,18 @@ p {
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 20px;
 }
+.contract-fields { border: 0; padding: 0; margin: 0; display: grid; gap: 14px; grid-template-columns: repeat(2,minmax(0,1fr)); }
+.contract-fields legend { padding: 0 0 12px; font-weight: 600; }
+.contract-fields input, .contract-fields select, .contract-fields textarea { width: 100%; min-width: 0; }
+.contract-body { grid-column: 1 / -1; }
+.contract-buttons { display: grid; gap: 12px; }
+.contract-button { display: flex; gap: 10px; align-items: end; flex-wrap: wrap; }
+.contract-button > label { flex: 1 1 140px; }
+.contract-button > button { flex: 0 0 36px; }
+.contract-preview { padding: 16px 0; border-top: 1px solid var(--line); }
+.contract-preview p { white-space: pre-wrap; overflow-wrap: anywhere; }
+.contract-preview .check { margin: 16px 0; }
+@media (max-width: 640px) { .contract-fields { grid-template-columns: minmax(0,1fr); } }
 .text-link {
   display: inline-flex;
   align-items: center;

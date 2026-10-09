@@ -3,6 +3,7 @@ import { useEffect, useState, type FormEvent } from "react";
 import { api, useData, labels, when } from "./data";
 import { Collector } from "./collector";
 import { AgentPanel } from "./agent-panel";
+import { TemplateContracts } from "./template-contracts";
 import { Copy, Eye, EyeOff } from "lucide-react";
 type Channel = {
   channel: "driver" | "client";
@@ -40,6 +41,7 @@ export function Administration() {
       <nav className="tabs" aria-label="Áreas dos Ajustes">
         {[
           ["channels", "Números & Meta"],
+          ["contracts", "Contratos Meta"],
           ["automation", "Automações"],
           ["agent", "Modelo de instruções"],
           ["collector", "Conector & dados"],
@@ -66,6 +68,8 @@ export function Administration() {
             />
           ))}
         </div>
+      ) : tab === "contracts" ? (
+        <TemplateContracts />
       ) : tab === "automation" && data ? (
         <AutomationForm
           key={JSON.stringify(data.automation)}

@@ -61,6 +61,12 @@ import {
 } from "@/lib/assignment-engine";
 import { dispatchBatch, dispatchPreview } from "@/lib/dispatch-batches";
 import { mediaResponse } from "@/lib/media-response";
+import {
+  loadTemplateContractReview,
+  previewTemplateContractDraft,
+  persistTemplateContract,
+  requireCentralManager,
+} from "@/lib/template-contract-config";
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 const channel = z.enum(["driver", "client"]);
@@ -320,6 +326,12 @@ export async function GET(
       });
     }
     requireAdmin(profile);
+    if (resource === "template-contracts") {
+      await requireCentralManager(profile);
+      return Response.json(await loadTemplateContractReview(channel.parse(query.get("channel"))), {
+        headers: { "Cache-Control": "private, no-store" },
+      });
+    }
     if (resource === "agent-instructions") {
       const saved = await loadInstructions();
       return Response.json({
@@ -608,6 +620,15 @@ export async function POST(
       });
     }
     requireAdmin(profile);
+    if (resource === "template-contracts") {
+      const parsed = z.object({ kind: z.enum(["preview", "save"]) }).passthrough().parse(body);
+      const { kind, ...input } = parsed;
+      return Response.json(kind === "preview"
+        ? await previewTemplateContractDraft(profile, input)
+        : await persistTemplateContract(profile, input), {
+        headers: { "Cache-Control": "private, no-store" },
+      });
+    }
     if (resource === "agent-instructions") {
       const parsed = z
         .discriminatedUnion("kind", [
