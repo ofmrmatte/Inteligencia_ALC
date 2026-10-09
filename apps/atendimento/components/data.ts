@@ -25,6 +25,77 @@ export async function api<T>(path: string, body?: unknown): Promise<T> {
 }
 /** In-app event used by the fixed header to reload the currently mounted views. */
 export const HEADER_REFRESH_EVENT = "alc-atendimento:refresh";
+type DataListener = { fallbackMs: number };
+const listeners = new Set<DataListener>();
+let stream: EventSource | null = null,
+  retryTimer: ReturnType<typeof setTimeout> | null = null,
+  fallbackTimer: ReturnType<typeof setInterval> | null = null,
+  retryMs = 1_000,
+  connected = false;
+
+function refreshMounted() {
+  window.dispatchEvent(new Event(HEADER_REFRESH_EVENT));
+}
+function updateFallback() {
+  if (fallbackTimer) clearInterval(fallbackTimer);
+  fallbackTimer = null;
+  if (!connected && listeners.size) {
+    const delay = Math.max(5_000, Math.min(...[...listeners].map((item) => item.fallbackMs)));
+    fallbackTimer = setInterval(refreshMounted, delay);
+  }
+}
+function connectEvents() {
+  if (!listeners.size || stream || retryTimer || typeof EventSource === "undefined") return;
+  stream = new EventSource("/api/events");
+  stream.onopen = () => {
+    connected = true;
+    retryMs = 1_000;
+    updateFallback();
+  };
+  stream.addEventListener("invalidate", refreshMounted);
+  stream.addEventListener("close", () => {
+    stream?.close();
+    stream = null;
+    connected = false;
+    updateFallback();
+    if (!listeners.size) return;
+    retryTimer = setTimeout(() => {
+      retryTimer = null;
+      connectEvents();
+    }, retryMs);
+    retryMs = Math.min(retryMs * 2, 30_000);
+  });
+  stream.onerror = () => {
+    stream?.close();
+    stream = null;
+    connected = false;
+    updateFallback();
+    if (listeners.size && !retryTimer) {
+      retryTimer = setTimeout(() => {
+        retryTimer = null;
+        connectEvents();
+      }, retryMs);
+      retryMs = Math.min(retryMs * 2, 30_000);
+    }
+  };
+}
+function subscribeData(fallbackMs: number) {
+  const listener = { fallbackMs };
+  listeners.add(listener);
+  connectEvents();
+  updateFallback();
+  return () => {
+    listeners.delete(listener);
+    if (!listeners.size) {
+      stream?.close();
+      stream = null;
+      connected = false;
+      if (retryTimer) clearTimeout(retryTimer);
+      if (fallbackTimer) clearInterval(fallbackTimer);
+      retryTimer = fallbackTimer = null;
+    } else updateFallback();
+  };
+}
 export function useData<T>(path: string, interval = 0) {
   const [snapshot, setSnapshot] = useState<{
       path: string;
@@ -60,11 +131,11 @@ export function useData<T>(path: string, interval = 0) {
     void load();
     // Refreshes only the mounted screen's data; never triggers Case Center collection or WhatsApp sends.
     window.addEventListener(HEADER_REFRESH_EVENT, load);
-    const timer = interval ? setInterval(load, interval) : null;
+    const unsubscribe = subscribeData(interval || 30_000);
     return () => {
       active = false;
       window.removeEventListener(HEADER_REFRESH_EVENT, load);
-      if (timer) clearInterval(timer);
+      unsubscribe();
     };
   }, [path, interval]);
   return {

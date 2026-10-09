@@ -58,13 +58,14 @@ export function Collector() {
     }
   }, []);
   useEffect(() => {
-    void check();
+    const initialCheck = window.setTimeout(() => void check(), 0);
     const whenVisible = () => {
       if (document.visibilityState === "visible") void check();
     };
     window.addEventListener("focus", whenVisible);
     document.addEventListener("visibilitychange", whenVisible);
     return () => {
+      window.clearTimeout(initialCheck);
       window.removeEventListener("focus", whenVisible);
       document.removeEventListener("visibilitychange", whenVisible);
     };
@@ -77,6 +78,8 @@ export function Collector() {
       lastSync?: string;
       enabled?: boolean;
       lastError?: string;
+      completed?: boolean;
+      channelSync?: Partial<Record<"client" | "driver", { lastSync?: string; completed?: boolean }>>;
     } | null;
   }>("collector");
   async function run(type: string) {
@@ -127,6 +130,12 @@ export function Collector() {
         <dd>Competência vigente, mais recentes primeiro</dd>
         <dt>Última coleta</dt>
         <dd>{when(data?.collector?.lastSync)}</dd>
+        <dt>Última sincronização concluída</dt>
+        <dd>{data?.collector?.completed ? when(data.collector.lastSync) : "Ainda sem conclusão confirmada"}</dd>
+        <dt>Clientes</dt>
+        <dd>{when(data?.collector?.channelSync?.client?.lastSync)}</dd>
+        <dt>Motoristas</dt>
+        <dd>{when(data?.collector?.channelSync?.driver?.lastSync)}</dd>
         <dt>Agendamento</dt>
         <dd>
           {data?.collector?.enabled

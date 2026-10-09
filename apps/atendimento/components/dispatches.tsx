@@ -285,6 +285,9 @@ export function Dispatches({ channel = "client" }: { channel?: Channel }) {
             <strong>{value}</strong> {label}
           </span>
         ))}
+        {tab === "history" && events[0] ? (
+          <span>Último registro no recorte: <strong>{when(events[0].created_at)}</strong></span>
+        ) : null}
       </div>
       <div className="dispatch-filters">
         <div className="segmented" aria-label="Visualização dos disparos">

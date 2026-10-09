@@ -19,8 +19,14 @@ type OverviewData = {
   human: number;
   pending: number;
   unread: number;
+  automated?: number;
+  purchase_value_confirmed?: string;
+  purchase_value_unknown?: number;
+  authorship?: Record<string, number>;
+  conversationsByOperator?: { assigned_to: string; conversations: number }[];
+  recentCases?: { case_id: string; classification: string; base_key: string; sigla: string; updated_at: string }[];
   competence: string;
-  source: { lastSync?: string };
+  source: { lastSync?: string | null; lastCompletedSync?: string | null; syncStats?: Record<string, number> };
   collector: {
     enabled: boolean;
     lastSync: string | null;
@@ -45,6 +51,8 @@ export function Overview() {
   const [collecting, setCollecting] = useState<"client" | "driver" | null>(null);
   const [collectionNotice, setCollectionNotice] = useState("");
   const [collectionError, setCollectionError] = useState(false);
+  const confirmedValue = Number(data?.purchase_value_confirmed);
+  const syncStats = data?.source.syncStats || {};
   async function collect(channel: "client" | "driver") {
     setCollecting(channel);
     setCollectionNotice("");
@@ -100,7 +108,7 @@ export function Overview() {
         <KpiCard
           label="Pendentes"
           value={String(data?.pending ?? "—")}
-          detail="Aguardando continuidade"
+          detail={`${data?.automated ?? "—"} automatizados`}
           icon={<Clock3 size={18} />}
           tone="amber"
         />
@@ -143,7 +151,9 @@ export function Overview() {
             <dt>Competência</dt>
             <dd>{data?.competence || "—"}</dd>
             <dt>Última sincronização</dt>
-            <dd>{when(data?.source.lastSync)}</dd>
+            <dd>{when(data?.source.lastSync ?? undefined)}</dd>
+            <dt>Último sync concluído</dt>
+            <dd>{data?.source.lastCompletedSync ? when(data.source.lastCompletedSync) : "Sem conclusão confirmada"}</dd>
             <dt>Coletor</dt>
             <dd>
               {data?.collector.enabled
@@ -189,6 +199,44 @@ export function Overview() {
               {collectionError ? <> <Link href="/admin">Verificar extensão nos Ajustes</Link></> : null}
             </p>
           ) : null}
+        </Panel>
+        <Panel title="Resumo da sincronização">
+          <dl>
+            <dt>Valor de compra confirmado</dt>
+            <dd>{data?.purchase_value_confirmed == null || !Number.isFinite(confirmedValue) ? "—" : confirmedValue.toLocaleString("pt-BR", { style: "currency", currency: "BRL" })}</dd>
+            <dt>PNRs sem valor confirmado</dt>
+            <dd>{data?.purchase_value_unknown ?? "—"}</dd>
+            <dt>Mensagens por IA</dt>
+            <dd>{data?.authorship?.ai ?? "—"}</dd>
+            <dt>Mensagens humanas</dt>
+            <dd>{data?.authorship?.human ?? "—"}</dd>
+            <dt>PNRs novas / atualizadas</dt>
+            <dd>{syncStats.new ?? "—"} / {syncStats.updated ?? "—"}</dd>
+            <dt>PNRs sem alteração / obsoletas</dt>
+            <dd>{syncStats.unchanged ?? "—"} / {syncStats.stale ?? "—"}</dd>
+            <dt>Erros na última sincronização</dt>
+            <dd>{syncStats.errors ?? "—"}</dd>
+          </dl>
+          {data?.conversationsByOperator?.length ? (
+            <ul>
+              {data.conversationsByOperator.map((item) => (
+                <li key={item.assigned_to}>
+                  <span>Atendente {item.assigned_to.slice(0, 8)}</span>
+                  <strong>{item.conversations}</strong>
+                </li>
+              ))}
+            </ul>
+          ) : null}
+          {data?.recentCases?.length ? (
+            <ul>
+              {data.recentCases.map((item) => (
+                <li key={item.case_id}>
+                  <strong>PNR {item.case_id}</strong>
+                  <span>{item.sigla || item.base_key} · {when(item.updated_at)}</span>
+                </li>
+              ))}
+            </ul>
+          ) : <p className="muted">Sem atualizações recentes.</p>}
         </Panel>
       </div>
     </main>
