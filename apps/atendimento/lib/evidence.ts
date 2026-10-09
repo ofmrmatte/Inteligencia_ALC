@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import { createRequire } from "node:module";
 import { dirname, join } from "node:path";
 import sharp from "sharp";
+import { CLIENT_AUDIO_NOTICE_POLICY, UNSUPPORTED_AUDIO_RECORD } from "./domain";
 const resolveModule=createRequire(import.meta.url).resolve.bind(null);
 const fontfile=join(dirname(resolveModule("next/package.json")),"dist/compiled/@vercel/og/Geist-Regular.ttf");
 
@@ -23,6 +24,15 @@ export type EvidenceMessage = {
   media?: EvidenceMedia | null;
 };
 
+function unsupportedAudio(message: EvidenceMessage) {
+  if (!message.attachment || typeof message.attachment !== "object" || Array.isArray(message.attachment)) return false;
+  const attachment = message.attachment as Record<string, unknown>;
+  return message.direction === "in" && message.type === "audio" && !message.media &&
+    message.body === UNSUPPORTED_AUDIO_RECORD && attachment.unsupported === true &&
+    attachment.policy === CLIENT_AUDIO_NOTICE_POLICY && typeof attachment.id === "string" &&
+    Boolean(attachment.id.trim());
+}
+
 export function validateEvidence(
   conversation: { status: string; phone: string },
   messages: readonly EvidenceMessage[],
@@ -40,7 +50,7 @@ export function validateEvidence(
   for (const message of messages) {
     if (message.direction === "note" || !message.provider_id)
       return "O comprovante não pode conter notas internas nem envios sem confirmação do provedor.";
-    if (message.type !== "text" || message.attachment || message.media) {
+    if ((message.type !== "text" || message.attachment || message.media) && !unsupportedAudio(message)) {
       const media = message.media;
       if (!media || !["image", "audio", "video", "document", "sticker"].includes(message.type) ||
           media.type !== message.type || media.message_id !== message.id || !media.case_id ||
@@ -71,6 +81,10 @@ export function evidenceFingerprint(
       caseId,
       messages: messages.map((m) => {
         const source: unknown[] = [m.id, m.provider_id, m.direction, m.body, m.type, m.status, new Date(m.created_at).toISOString()];
+        if (unsupportedAudio(m)) {
+          const attachment = m.attachment as Record<string, unknown>;
+          source.push([attachment.policy, attachment.unsupported, attachment.id, attachment.mime]);
+        }
         if (m.media) source.push([m.media.id, m.media.message_id, m.media.case_id, m.media.filename, m.media.mime, m.media.type, m.media.size, m.media.sha256]);
         return source;
       }),

@@ -1,4 +1,3 @@
-import { readFileSync } from "node:fs";
 import { randomUUID } from "node:crypto";
 import pg from "pg";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
@@ -9,13 +8,13 @@ import { db } from "../lib/db";
 import { reserveAiCall } from "../lib/agent-ai";
 import { AI_CONFIG_KEY, defaultAiConfig, saveAiConfig } from "../lib/agent-instructions";
 import { CLIENT_AUDIO_NOTICE_POLICY, clientAudioNoticeAllowed, clientAudioNoticeText } from "../lib/domain";
+import { migrate } from "../scripts/migrations.mjs";
 
-// This fixture never accepts the parent's generic test URL, port or database.
-const fixtureUrl = process.env.AI_PHASE5_TEST_DATABASE_URL;
+const fixtureUrl = process.env.ATENDIMENTO_TEST_DATABASE_URL;
 if (fixtureUrl) {
   const url = new URL(fixtureUrl);
-  if (url.hostname !== "127.0.0.1" || url.port !== "55587" || url.pathname !== "/alc_ai_phase5_test" || url.username !== "phase5_ai")
-    throw new Error("Only the isolated phase5 AI local fixture is permitted");
+  if (!["127.0.0.1", "localhost"].includes(url.hostname) || url.pathname !== "/alc_atendimento_test")
+    throw new Error("Only the isolated local Atendimento test database is permitted");
 }
 describe.skipIf(!fixtureUrl)("isolated phase5 AI PostgreSQL", () => {
   let client: pg.Client;
@@ -26,10 +25,7 @@ describe.skipIf(!fixtureUrl)("isolated phase5 AI PostgreSQL", () => {
     vi.stubGlobal("fetch", vi.fn(() => { throw new Error("Network forbidden in local fixture"); }));
     client = new pg.Client({ connectionString: fixtureUrl, application_name: "phase5_ai_isolated_fixture" });
     await client.connect();
-    await client.query("BEGIN");
-    for (const name of ["001_atendimento.sql", "006_agent_decisions.sql"])
-      await client.query(readFileSync(new URL(`../db/${name}`, import.meta.url), "utf8"));
-    await client.query("COMMIT");
+    await migrate(client);
   });
   beforeEach(async () => {
     identities.enabled.mockResolvedValue([actor]);
@@ -109,7 +105,7 @@ describe.skipIf(!fixtureUrl)("isolated phase5 AI PostgreSQL", () => {
     for (let attempt=0; attempt<2; attempt++) await client.query("INSERT INTO alc_atendimento.outbox(dedupe_key,conversation_id,channel,phone,payload,agent_policy) VALUES($1,$2,'client',$3,$4,$5) ON CONFLICT(dedupe_key) DO NOTHING", [key, conversation.id, conversation.phone, payload, CLIENT_AUDIO_NOTICE_POLICY]);
     const result = await client.query("SELECT * FROM alc_atendimento.outbox WHERE dedupe_key=$1", [key]);
     expect(result.rowCount).toBe(1);
-    // Phase1 author columns are supplied as the real worker does; this fixture applies only migrations 001/006.
+    // The fixed policy validates authorship independently of the queue's defaults.
     const job = { ...result.rows[0], sender_kind: "ai", sender_user_id: null, sender_display_name_snapshot: "Ellie" };
     expect(clientAudioNoticeAllowed(conversation, job, inbound, "")).toBe(true);
     await client.query("UPDATE alc_atendimento.conversations SET agent_state=jsonb_set(agent_state,'{optOut}','true') WHERE id=$1", [conversation.id]);

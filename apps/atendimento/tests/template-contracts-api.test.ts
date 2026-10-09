@@ -54,3 +54,13 @@ it("surfaces template mismatch as an actionable conflict, without a false approv
   expect((await response.json()).error).toContain("rodapé divergente");
   expect(mocks.save).not.toHaveBeenCalled();
 });
+it("blocks missing or foreign origins before reviewing or saving", async () => {
+  for (const origin of [null, "https://foreign.example.test"]) {
+    const incoming = request({ kind: "preview" });
+    if (origin) incoming.headers.set("Origin", origin);
+    else incoming.headers.delete("Origin");
+    expect((await POST(incoming, context)).status).toBe(403);
+  }
+  expect(mocks.preview).not.toHaveBeenCalled();
+  expect(mocks.save).not.toHaveBeenCalled();
+});

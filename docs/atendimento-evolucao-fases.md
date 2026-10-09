@@ -3,7 +3,7 @@
 ## Limites desta entrega
 
 O plano aprovado em `writing-block.md` sera executado em sete PRs dependentes.
-Esta branch entrega as fases 1 a 4, em PRs dependentes. Nao autoriza merge, deploy, migracao remota,
+Esta branch entrega as fases 1 a 5, em PRs dependentes. Nao autoriza merge, deploy, migracao remota,
 ativacao de automacoes ou mensagens reais. Core, Aux e RH continuam separados;
 o Supabase central permanece responsavel por identidade, MFA e revogacao.
 
@@ -13,7 +13,7 @@ o Supabase central permanece responsavel por identidade, MFA e revogacao.
 | 2 | Disparos individual/global, nome do dono da PNR, lotes e dedupe | Implementada; revisao remota pendente |
 | 3 | Midia privada duravel, upload e visualizadores seguros | Implementada; revisao remota pendente |
 | 4 | Evidencias paginadas com midia, pasta por PNR e ZIP opcional | Implementada; revisao remota pendente |
-| 5 | IA opcional OpenAI/Gemini, fallback deterministico e modelos Meta | Pendente; depende da fase 2 |
+| 5 | IA opcional OpenAI/Gemini, fallback deterministico e modelos Meta | Implementada localmente; revisao e homologacao externas pendentes |
 | 6 | Diferenciais de sync, enriquecimento versionado e indicadores/eventos | Pendente; depende das fases 1 e 2 |
 | 7 | MFA recente, titularidade de telefone, hardening e E2E controlado | Pendente; depende das anteriores |
 
@@ -243,6 +243,53 @@ nao voltar ao download direto da Meta sem a verificacao de seguranca.
    por teclado aos ultimos itens verificados. Outras barras nao foram ocultadas.
    Suite final Atendimento: 394 testes passaram; typecheck, lint do chat e
    build Atendimento/conector passaram depois dos ajustes visuais.
+
+## Fase 5
+
+1. Ellie e o nome oficial da agente virtual, conforme a atualizacao do usuario.
+   Novos envios usam esse snapshot; autores historicos permanecem inalterados.
+   O nome do atendente atribuido continua no parametro humano do template.
+2. IA opcional OpenAI/Gemini, inicialmente desligada. As respostas do provedor
+   selecionam apenas intencoes permitidas na etapa atual; o motor deterministico
+   decide a transicao e o texto. Identidade, opt-out, transferencias e status
+   oficiais nao podem ser modificados pelo modelo. Contexto minimo com redacao
+   de identificadores conhecidos, limites de corpo/tokens e timeout de 8 segundos.
+   Nao houve chamada a provedor nem credencial configurada.
+3. Migracao aditiva `006_agent_decisions.sql`: snapshots imutaveis de instrucoes,
+   configuracao e decisao; admissao de chamadas e quota diaria atomicas e duraveis.
+   Falha ou rollback do inbound nao devolve uma tentativa ja admitida. Configuracao
+   administrativa usa revisao otimista e permissao central vigente.
+4. Contratos `cliente_loss_v2` e `pnraberta` devem ser comparados e revisados por
+   gestor em Ajustes > Contratos Meta. Migracao `007_meta_contracts.sql` mantem
+   revisoes e evidencia imutaveis. Texto, categoria, idioma, parametros, botoes,
+   remetente, hash e revisao sao relidos antes da fila e antes do envio. Sem
+   contrato revisado, envio bloqueado. Filas legadas nao recebem evidencia ficticia.
+   Catalogo Meta real ainda nao inspecionado; nenhum contrato real foi aprovado.
+5. Atualizacao do usuario substitui o suporte a audio da fase 3. Nao ha player,
+   upload, arquivamento novo ou transcricao. Audio de cliente recebe somente o
+   aviso fixo para enviar texto, inclusive sob atendimento humano/pending ou robo
+   desligado. Opt-out, encerramento, troca de telefone e janela de 24h continuam
+   bloqueando o aviso. Deduplicacao e politica explicita impedem bypass por chave.
+   Historico existente nao foi apagado. Comprovantes registram a recusa explicita,
+   sem alegar preservacao do conteudo nao armazenado; outras midias mantem os gates.
+6. Chat com cabecalho compacto, baloes claros/verdes, hora e entrega confirmada,
+   compositor inferior, notas internas e painel de detalhes progressivo. Sidebar
+   continua rolavel sem barra visivel. Testes de componentes nao equivalem a uma
+   nova homologacao visual; a ferramenta de navegador falhou nesta rodada.
+7. Prova de integracao usa PostgreSQL 17 descartavel em loopback e mocks de
+   Supabase/Meta, nunca dados ou mensagens reais. Quota/CAS/imutabilidade e aviso
+   de audio sao executados tambem no CI com o banco de teste compartilhado, em
+   arquivos serializados. Preparacao da fixture e atomica para evitar resets parciais.
+8. Entrega: branch `codex/atendimento-agent-contracts`, PR draft dependente do
+   PR #80. Sem merge, deploy, migracao remota, buckets, scanner ou automacao ativada.
+   Fases 6 e 7 e a correcao final de logout ainda precisam de integracao/revisao
+   do pai; commits de subagentes nao representam essas fases concluidas.
+
+Validacao final desta etapa: 46 arquivos e 635 testes passaram, sem skips,
+incluindo 64 testes reais no PostgreSQL local descartavel. Build de producao
+do Atendimento, incluindo TypeScript, passou. ESLint dos arquivos alterados:
+zero erros e tres warnings existentes. `git diff --check` passou. Sem nova
+captura visual, Meta real, IA real, migracao remota ou deploy nesta rodada.
 
 ## Catalogo e organograma
 

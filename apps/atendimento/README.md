@@ -11,11 +11,12 @@ Na raiz: `npm ci`, `npm run dev:atendimento`, `npm run build:atendimento` e `npm
 - Visão geral de PNRs na competência vigente e atendimentos humanos.
 - Gestão operacional separada do acesso central: funções explícitas, bases principais/substitutas, disponibilidade, recebimento, atribuição única por PNR e histórico de redistribuições. Consulte [a entrega por fases](../../docs/atendimento-evolucao-fases.md) antes de ativar esta evolução.
 - Caixa por canal, busca, histórico, anexos recebidos, notas internas, assumir, concluir e retomar robô.
-- Anexos privados duráveis, upload humano com progresso, players e quarentena antimalware. Hash e permissões são conferidos antes do download/envio. Consulte a fase 3 antes de configurar bucket e scanner; sem configuração não há liberação de arquivos.
+- Anexos privados duráveis, upload humano com progresso, imagens, vídeo, documentos e quarentena antimalware. Áudio não é suportado: o cliente recebe orientação para enviar texto, sem download ou transcrição do áudio. O histórico existente não é apagado. Hash e permissões são conferidos antes do download/envio. Consulte a fase 3 antes de configurar bucket e scanner; sem configuração não há liberação de arquivos.
 - Comprovantes paginados em prints 900 x 840, com texto integral, miniaturas e referencias verificadas aos originais privados. Pasta por PNR e ZIP opcional; captura bloqueada se historico, escopo ou hash mudar. Consulte a fase 4 para limites e retencao dos originais associados.
 - PNRs com filtros, comprador, produtos, entrega, contato validado e histórico preservado.
 - Consulta do motorista exige nome, base e vínculo de telefone/ID; ambiguidades vão para a equipe. Consultas anteriores são explícitas, incluindo casos encerrados.
 - Tratativa determinística do cliente: recebimento, data, produto, confirmação no aplicativo; negativa, portaria/vizinhos e encaminhamento. O sistema registra o relato, sem afirmar que alterou o Mercado Livre.
+- Ellie é a agente virtual. IA OpenAI/Gemini é opcional e começa desativada; propõe somente intenções permitidas na etapa atual, com fallback para o roteiro determinístico. Instruções, decisões e autoria são auditáveis, sem renomear autores históricos ou substituir o responsável humano no template.
 - Disparos idempotentes por caso/canal/contato. Carga inicial não dispara histórico. Erro ambíguo de rede não é reenviado automaticamente.
 - Administração interna para usuários já cadastrados, canais/credenciais, catálogo Meta, coleta, automações e auditoria. Credenciais editadas são cifradas; nenhum segredo é devolvido ao navegador.
 - Acesso exclusivamente pelo Inteligência, com o mesmo Supabase Auth, perfis e MFA. O botão no menu lateral abre outra aba com transferência de sessão por ticket cifrado de uso único, válido por 60 segundos. Não há login ou cadastro próprios. A entrada exige um comprovante de passagem pelo painel vinculado à mesma sessão Supabase; ele não contém credenciais nem concede permissões. Abrir a URL diretamente encaminha ao Inteligência. Encerrar a conta permanece uma ação do painel central.
@@ -40,11 +41,13 @@ Para cada prefixo `WHATSAPP_DRIVER` / `WHATSAPP_CLIENT`: `_NUMBER`, `_PHONE_ID`,
 
 Anexos: `ATENDIMENTO_MEDIA_BUCKET` (bucket privado no Supabase central, sem acesso direto por anon/authenticated), `ATENDIMENTO_CLAMAV_HOST` (scanner INSTREAM TCP/3310 apenas em rede privada), `ATENDIMENTO_MEDIA_RETENTION_DAYS` (180 por padrão, aplicável aos novos arquivos). Não são criados serviços, buckets ou permissões automaticamente. Scanner ausente deixa quarentena. `npm run media:retention --workspace=@alc/atendimento` simula; `-- --apply` exclui até 100 expirados sem legal hold ou envio pendente/incerto, somente após aprovação da política.
 
+IA opcional, apenas server-side: `OPENAI_API_KEY`, `GEMINI_API_KEY` ou `GOOGLE_API_KEY`. Provedor, modelo, limite diário e timeout são salvos em Ajustes. Padrão desativado, limite inicial de 10 chamadas/dia e timeout máximo de 8 segundos. Não há retry pago nem ativação automática. Nenhuma credencial foi configurada nesta entrega local.
+
 ## Ativação externa
 
 Configure `/webhooks/whatsapp/driver` e `/webhooks/whatsapp/client` na Meta com seus respectivos tokens de verificação e assine `messages`. App Secret é distinto do token de verificação. Sem App Secret o webhook POST responde 503 e a fila não envia. Disparos automáticos começam desativados e só podem ser ativados com os canais configurados. Confirme a entrega real dos eventos antes de ativar a operação.
 
-Modelos iniciais: `cliente_loss` e `pnraberta`, consultados na Meta antes de enviar. O modelo de motorista menciona Aguardando comprovante; demais classificações podem ser notificadas por texto dentro da janela de 24h de um motorista validado, ou exigem outro modelo aprovado. Dados insuficientes geram registro de bloqueio, sem envio.
+Modelos iniciais: `cliente_loss_v2` e `pnraberta`. Após a migração 007, um gestor deve comparar e salvar explicitamente o contrato em Ajustes > Contratos Meta. Idioma, categoria, texto completo, botões, parâmetros, revisão e remetente são conferidos antes da fila e novamente antes do envio. Sem contrato revisado ou com divergência, o disparo é bloqueado; não há modelo alternativo automático. Filas legadas sem evidência de contrato não são reenviadas. Dados insuficientes geram registro de bloqueio, sem envio. O catálogo real da Meta e o logout central permanecem pendentes de homologação externa.
 
 ## Verificação
 

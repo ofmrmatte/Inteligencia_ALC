@@ -174,6 +174,7 @@ export function contactOptedOut(text: string) {
   return /PARAR|CANCELAR CONTATO|NAO QUERO/.test(normalize(text));
 }
 export const CLIENT_AUDIO_NOTICE_POLICY = "unsupported_client_audio_v1";
+export const UNSUPPORTED_AUDIO_RECORD = "Áudio não suportado. Conteúdo não armazenado nem transcrito.";
 export function clientAudioNoticeText() {
   return `A ${AGENT_DISPLAY_NAME} não oferece suporte a áudio. Por favor, envie sua mensagem por texto.`;
 }

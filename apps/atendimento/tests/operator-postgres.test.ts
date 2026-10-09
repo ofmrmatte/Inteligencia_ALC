@@ -87,7 +87,7 @@ import {
   dispatchPreview,
   dispatchBatchSchema,
 } from "../lib/dispatch-batches";
-import { competence, type CaseRecord } from "../lib/domain";
+import { clientAudioNoticeText, competence, type CaseRecord } from "../lib/domain";
 import { clientContract, driverContract, providerCatalog } from "./meta-contract-fixtures";
 import { authorizedFolder, createEvidenceFolder, evidencePrint } from "../lib/evidence-store";
 import {
@@ -172,6 +172,8 @@ describe.skipIf(!url || !coreUrl)(
       await migrate(client);
     }, 30000);
     beforeEach(async () => {
+      await client.query("BEGIN");
+      try {
       provider.publicBucket = false;
       provider.beforeDownload = null;
       provider.objects.clear();
@@ -188,7 +190,7 @@ describe.skipIf(!url || !coreUrl)(
         email: "synthetic@example.test",
       }));
       await client.query(
-        "TRUNCATE alc_atendimento.evidence_media,alc_atendimento.media,alc_atendimento.webhook_events,alc_atendimento.assignment_history,alc_atendimento.case_assignments,alc_atendimento.operator_bases,alc_atendimento.operators,alc_atendimento.evidence_images,alc_atendimento.evidence_folders,alc_atendimento.messages,alc_atendimento.outbox,alc_atendimento.meta_template_contracts,alc_atendimento.dispatch_batches,alc_atendimento.conversations,alc_atendimento.cases,alc_atendimento.audit RESTART IDENTITY",
+        "TRUNCATE alc_atendimento.agent_decisions,alc_atendimento.evidence_media,alc_atendimento.media,alc_atendimento.webhook_events,alc_atendimento.assignment_history,alc_atendimento.case_assignments,alc_atendimento.operator_bases,alc_atendimento.operators,alc_atendimento.evidence_images,alc_atendimento.evidence_folders,alc_atendimento.messages,alc_atendimento.outbox,alc_atendimento.meta_template_contracts,alc_atendimento.dispatch_batches,alc_atendimento.conversations,alc_atendimento.cases,alc_atendimento.audit RESTART IDENTITY",
       );
       await client.query(
         "DELETE FROM alc_atendimento.settings WHERE key LIKE 'access_%'",
@@ -205,6 +207,11 @@ describe.skipIf(!url || !coreUrl)(
       await client.query(
         "INSERT INTO alc_atendimento.cases(case_id,competence,base_key,sigla,classification,record) VALUES('test-case','202610Q1','TEST BASE A','TEST-A','aguardando_comprovante','{}')",
       );
+      await client.query("COMMIT");
+      } catch (error) {
+        await client.query("ROLLBACK");
+        throw error;
+      }
     });
     afterAll(async () => {
       if (client) await client.end();
@@ -1056,8 +1063,46 @@ describe.skipIf(!url || !coreUrl)(
       ).toMatchObject({
         sender_kind: "ai",
         sender_user_id: null,
-        sender_display_name_snapshot: "Agente virtual",
+        sender_display_name_snapshot: "Ellie",
       });
+    });
+    async function receiveCustomerAudio(state: string) {
+      await owned();
+      await client.query("UPDATE alc_atendimento.settings SET value=jsonb_set(value,'{bot}','false'::jsonb) WHERE key='automation'");
+      const agentState = { step: state === "bot" ? "receipt" : "human", optOut: false };
+      const row = (await client.query(
+        "INSERT INTO alc_atendimento.conversations(channel,phone,base_key,sigla,case_id,status,assigned_to,agent_state) VALUES('client','5511988880000','TEST BASE A','TEST-A','test-case',$1,$2,$3) RETURNING id",
+        [state, A, agentState],
+      )).rows[0];
+      const event = { entry: [{ changes: [{ value: {
+        metadata: { phone_number_id: "synthetic-phone" },
+        messages: [{ id: "synthetic-audio-inbound", from: "5511988880000", timestamp: String(Math.floor(Date.now() / 1000)), type: "audio", audio: { id: "synthetic-audio-media", mime_type: "audio/ogg", voice: true } }],
+      } }] }] };
+      for (const eventKey of ["audio-first", "audio-duplicate"]) {
+        await client.query("INSERT INTO alc_atendimento.webhook_events(event_key,channel,payload) VALUES($1,'client',$2)", [eventKey, event]);
+        await processEvents();
+      }
+      return { id: row.id, agentState };
+    }
+    it.each(["human", "bot", "pending"])("confirms one fixed audio notice for %s without changing ownership or treatment", async state => {
+      const { id, agentState } = await receiveCustomerAudio(state);
+      await processOutbox();
+      await processOutbox();
+      expect(provider.graph).toHaveBeenCalledOnce();
+      expect(provider.graph.mock.calls[0][2]).toMatchObject({ type: "text", text: { body: clientAudioNoticeText() } });
+      expect((await client.query("SELECT status,assigned_to,agent_state FROM alc_atendimento.conversations WHERE id=$1", [id])).rows[0])
+        .toEqual({ status: state, assigned_to: A, agent_state: agentState });
+      expect((await client.query("SELECT status FROM alc_atendimento.outbox")).rows).toEqual([{ status: "sent" }]);
+      expect((await client.query("SELECT * FROM alc_atendimento.media")).rowCount).toBe(0);
+      expect(provider.objects.size).toBe(0);
+    });
+    it.each(["resolved", "optout"])("cancels the queued audio notice after %s without contacting the provider", async reason => {
+      const { id } = await receiveCustomerAudio("human");
+      if (reason === "resolved") await client.query("UPDATE alc_atendimento.conversations SET status='resolved' WHERE id=$1", [id]);
+      else await client.query("UPDATE alc_atendimento.conversations SET agent_state=jsonb_set(agent_state,'{optOut}','true'::jsonb) WHERE id=$1", [id]);
+      await processOutbox();
+      expect(provider.graph).not.toHaveBeenCalled();
+      expect((await client.query("SELECT status FROM alc_atendimento.outbox")).rows).toEqual([{ status: "cancelled" }]);
     });
     it("uses each PNR owner, never the global batch administrator name", async () => {
       const first = await owned();

@@ -7,6 +7,7 @@ import {
   clientReply,
   contactOptedOut,
   CLIENT_AUDIO_NOTICE_POLICY,
+  UNSUPPORTED_AUDIO_RECORD,
   clientAudioNoticeText,
   clientAudioNoticeAllowed,
   driverNotificationEligible,
@@ -370,6 +371,9 @@ async function incoming(
         filename: media.filename || "",
         caption: media.caption || "",
         voice: media.voice === true,
+        ...(channel === "client" && type === "audio"
+          ? { unsupported: true, policy: CLIENT_AUDIO_NOTICE_POLICY }
+          : {}),
       }
     : null;
   const inserted = await transaction.query(
@@ -377,7 +381,9 @@ async function incoming(
     [
       conversation.id,
       id,
-      text || media?.caption || `[${type} recebido]`,
+      channel === "client" && type === "audio"
+        ? UNSUPPORTED_AUDIO_RECORD
+        : text || media?.caption || `[${type} recebido]`,
       type,
       attachment,
       conversation.case_id || null,
