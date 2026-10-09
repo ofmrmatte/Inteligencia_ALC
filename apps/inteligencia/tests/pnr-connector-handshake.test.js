@@ -9,11 +9,14 @@ let probeResult = { ok: true };
 let probeArgs;
 let updatedTab;
 let createdTab;
+let createdCount = 0;
+let onActivated;
 let injectedTabs = [];
 let serviceWorker;
 let onAlarm;
 let removedTab;
 let redirectNewTab = false;
+let loadingNewTab = false;
 let store = {};
 const panelUrl = "https://inteligenciaalc-production.up.railway.app/bandeja-pnr";
 const listUrl = "https://envios.adminml.com/logistics/case-center/cases";
@@ -40,12 +43,14 @@ beforeAll(async () => {
         return updated;
       },
       create: async (options) => {
+        createdCount++;
         createdTab = options;
-        const created = { id: 8, status: "complete", url: redirectNewTab ? "https://envios.adminml.com/login" : options.url, active: options.active };
+        const created = { id: 8, status: loadingNewTab ? "loading" : "complete", url: redirectNewTab ? "https://envios.adminml.com/login" : options.url, active: options.active };
         tabs = [...tabs, created];
         return created;
       },
       remove: async (id) => { removedTab = id; tabs = tabs.filter(tab => tab.id !== id); },
+      onActivated: { addListener: listener => { onActivated = listener; } },
     },
     storage: { local: {
       get: async (name) => ({ [name]: store[name] }),
@@ -71,9 +76,11 @@ beforeEach(() => {
   probeArgs = undefined;
   updatedTab = undefined;
   createdTab = undefined;
+  createdCount = 0;
   injectedTabs = [];
   removedTab = undefined;
   redirectNewTab = false;
+  loadingNewTab = false;
   store = {};
 });
 
@@ -138,7 +145,7 @@ describe("handshake do Conector PNR", () => {
     expect(removedTab).toBeUndefined();
   });
 
-  it("informa sessão expirada e fecha a aba auxiliar em um redirecionamento para login", async () => {
+  it("informa sessão expirada sem abrir e fechar abas a cada tentativa", async () => {
     tabs = [];
     redirectNewTab = true;
     const response = await ping();
@@ -146,8 +153,46 @@ describe("handshake do Conector PNR", () => {
       mlTabAvailable: false, sessionAvailable: false,
       sessionError: "MERCADO_LIVRE_SESSION_REQUIRED",
     } });
-    expect(removedTab).toBe(8);
+    const again = await ping();
+    expect(again).toMatchObject({ ok: true, data: { sessionError: "MERCADO_LIVRE_SESSION_REQUIRED" } });
+    expect(createdCount).toBe(1);
+    expect(removedTab).toBeUndefined();
+    expect(store.alcPnrManagedCaseCenter?.id).toBe(8);
+    store.alcPnrManagedCaseCenter.lastUsed = Date.now() - 6 * 60_000;
+    await onAlarm({ name: "alc-pnr-managed-case-center-cleanup" });
+    await ping();
+    expect(createdCount).toBe(1);
+    expect(removedTab).toBeUndefined();
+    tabs[0].url = listUrl;
+    expect(await ping()).toMatchObject({ ok: true, data: { mlTabAvailable: true } });
+    expect(createdCount).toBe(1);
+  });
+
+  it("deixa de possuir a aba assim que o usuário a seleciona, mesmo se voltar ao painel", async () => {
+    await ping();
+    await onActivated({ tabId: 8 });
+    tabs[0].active = false;
+    if (store.alcPnrManagedCaseCenter) store.alcPnrManagedCaseCenter.lastUsed = Date.now() - 6 * 60_000;
+    await onAlarm({ name: "alc-pnr-managed-case-center-cleanup" });
+    expect(removedTab).toBeUndefined();
     expect(store.alcPnrManagedCaseCenter).toBeUndefined();
+  });
+
+  it("mantém a mesma aba após timeout e recupera quando ela termina de carregar", async () => {
+    vi.useFakeTimers();
+    try {
+      loadingNewTab = true;
+      const first = ping();
+      await vi.runAllTimersAsync();
+      expect(await first).toMatchObject({ ok: true, data: { sessionError: "REQUEST_TIMEOUT" } });
+      const second = ping();
+      await vi.runAllTimersAsync();
+      expect(await second).toMatchObject({ ok: true, data: { sessionError: "REQUEST_TIMEOUT" } });
+      expect(createdCount).toBe(1);
+      expect(removedTab).toBeUndefined();
+      tabs[0].status = "complete";
+      expect(await ping()).toMatchObject({ ok: true, data: { mlTabAvailable: true } });
+    } finally { vi.useRealTimers(); }
   });
 
   it("lê a competência atualmente selecionada sem alterar filtros", async () => {
