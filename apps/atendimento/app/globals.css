@@ -1969,3 +1969,17 @@ html:has(.management-dialog[open]),body:has(.management-dialog[open]) { overflow
   .overview-collector-details { grid-template-columns: 1fr; gap: 12px; }
   .overview-collector-foot { flex-direction: column; gap: 8px; }
 }
+
+/* Persisted Case Center import progress: minimal, accessible and responsive. */
+.overview-collector-progress { border-top: 1px solid var(--line); margin-top: 15px; padding-top: 14px; }
+.overview-collector-progress-text { display: flex; justify-content: space-between; gap: 12px; align-items: center; font-size: 12px; margin-bottom: 9px; }
+.overview-collector-progress-text strong { font-variant-numeric: tabular-nums; }
+.overview-collector-progress-track { width: 100%; height: 6px; overflow: hidden; border-radius: 999px; background: var(--gray-200); }
+.overview-collector-progress-bar { width: 0; height: 100%; border-radius: inherit; background: #d20a16; transition: width 300ms ease-out; }
+.overview-collector-progress-bar.indeterminate { width: 34%; animation: alc-collect-indeterminate 1.6s ease-in-out infinite alternate; }
+.overview-collector-progress > p { margin: 7px 0 0; font-size: 11px; overflow-wrap: anywhere; }
+@keyframes alc-collect-indeterminate { from { transform: translateX(0); } to { transform: translateX(194%); } }
+@media (prefers-reduced-motion: reduce) {
+  .overview-collector-progress-bar { transition: none; }
+  .overview-collector-progress-bar.indeterminate { animation: none; }
+}
