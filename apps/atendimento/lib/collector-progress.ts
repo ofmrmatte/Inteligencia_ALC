@@ -2,7 +2,7 @@ import { z } from "zod";
 import { db } from "./db";
 
 const syncId = z.string().uuid();
-const competence = z.string().regex(/^20\\d{4}Q[12]$/);
+const competence = z.string().regex(/^20\d{4}Q[12]$/);
 const phase = z.enum(["preparing", "fetching", "details", "buyers", "saving", "collecting", "completed", "failed"]);
 const count = z.number().int().nonnegative().max(100_000);
 
