@@ -426,9 +426,9 @@ export async function POST(
       requireAdmin(profile);
       assertTrustedOrigin(request, "Origem da coleta não autorizada.");
       const parsed = z.object({
-        competence: z.string().regex(/^20\\d{4}Q[12]$/),
+        competence: z.string().regex(/^20\d{4}Q[12]$/),
         records: z.array(z.object({
-          caseId: z.string().regex(/^\\d{1,30}$/),
+          caseId: z.string().regex(/^\d{1,30}$/),
           shipmentId: z.string().min(1).max(120),
           mainStatus: short,
           subStatus: short,
@@ -470,7 +470,7 @@ export async function POST(
           channel: z.enum(["client", "driver"]).nullable().optional(),
           collectOnly: z.boolean().optional(),
           records: z.array(listRecord.extend({ statusOnly: z.boolean().optional() })).max(300),
-          skippedCaseIds: z.array(z.string().regex(/^\\d{1,30}$/)).max(300).default([]),
+          skippedCaseIds: z.array(z.string().regex(/^\d{1,30}$/)).max(300).default([]),
         })
         .parse(body);
       if (parsed.competence !== competence())
