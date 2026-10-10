@@ -25,13 +25,14 @@ Ativos: PNRs, dados operacionais, compradores/motoristas, conversas, arquivos pr
 2. **Atendimento / Ellie:** aceitar no Responses API uma única mensagem de assistente concluída, com único `output_text`. Rejeitar resposta com `refusal` misturada, mensagens extras, tool calls ou status parcial; permitir apenas blocos de raciocínio não executáveis junto da mensagem.
 3. **Coletor:** exigir progresso/total/erros monotônicos tanto na verificação lógica quanto no `UPDATE` SQL; evitar regressão por checkpoints atrasados ou concorrentes.
 
-As alterações só devem ser chamadas de **publicadas** após merge da PR e confirmação do deploy. Este documento identifica o escopo de revisão, não atesta comportamento real de todos os cenários.
+As três alterações deste hardening foram publicadas pela [PR #96](https://github.com/ofmrmatte/Inteligencia_ALC/pull/96) no commit `bee808a`, com deploy confirmado dos dois serviços. Este documento identifica o escopo de revisão, não atesta comportamento real de todos os cenários.
 
 ## Riscos residuais / decisões pendentes
 
 - **CSP:** o Inteligência ainda utiliza `script-src 'unsafe-inline'` para compatibilidade com a aplicação. O Atendimento não possui uma CSP completa. Planejar CSP com nonce e testes de renderização/integrações antes de torná-la restritiva, evitando quebrar autenticação ou Next.js.
 - **Privilégios Railway PostgreSQL:** conferir em cada banco, por DBA, quais roles de aplicação possuem `CONNECT`, `USAGE`, `SELECT`, `INSERT`, `UPDATE` e `DELETE`. A conexão server-side não substitui o princípio do menor privilégio.
 - **Escopo nas listagens:** revisar consultas que carregam milhares de linhas para filtrar após a leitura em memória (`apps/atendimento/app/api/[resource]/route.ts`, rota de `cases`). Paginação/escopo no SQL diminuirão superfície e uso de recursos.
+- **Revogação de sessões Supabase:** `getClaims()` valida o JWT, mas não detecta por si só a revogação remota de sessão no provedor antes da expiração; `getUser()` consulta o Auth Server. Grants internos do Atendimento cobrem o logout/troca realizados pelo painel central, não todas as revogações externas. Priorizar análise de `getUser()` em operações de maior sensibilidade (RH, administração, documentos), com testes de desempenho/indisponibilidade. Documentação do mantenedor recuperada via [Context7](referencias-context7.md).
 - **Migrações/segredos:** revisar rotação das chaves Supabase/Meta/SSO e grants; não executar rotações sem procedimento coordenado e janela de manutenção.
 - **Conector:** a permissão Chrome `scripting` e os hosts declarados permitem acesso a conteúdos sensíveis das páginas autorizadas. Distribuir ZIP somente por canal controlado, verificar hash/versão e nunca incluir domínio wildcard ou fontes arbitrárias.
 - **Fluxos externos:** teste sintético de WhatsApp/Meta, payload ou sessão Mercado Livre não substitui homologação com dispositivos reais.
@@ -54,6 +55,11 @@ As alterações só devem ser chamadas de **publicadas** após merge da PR e con
 3. Revogar sessões ou grants afetados e rotacionar chaves comprometidas na ordem correta; SSO requer alinhamento Inteligência/Atendimento.
 4. Se houver necessidade de rollback, considerar contratos de banco, extensão e frontend simultaneamente; confirmar integridade e destinatários antes de retomar envios.
 5. Documentar hora, impacto, medidas e validações sem expor PII ou credenciais.
+
+## Documentação complementar
+
+- [Referências oficiais recuperadas via Context7](referencias-context7.md)
+- [Inventário das APIs e dos limites de autorização](api-contratos-alc.md)
 
 ## Fontes técnicas oficiais
 
