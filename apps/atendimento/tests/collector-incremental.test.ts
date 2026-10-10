@@ -51,7 +51,7 @@ describe("deduplicação da extensão por lote", () => {
       { caseId: "10001", action: "full" }, { caseId: "10002", action: "skip" }, { caseId: "10003", action: "status" },
     ] });
     expect(mocks.query.mock.calls[0][0]).toContain("WHERE case_id = ANY($1::text[])");
-    expect(mocks.query.mock.calls[0][1]).toEqual(["10001", "10002", "10003"]);
+    expect(mocks.query.mock.calls[0][1]).toEqual([["10001", "10002", "10003"]]);
   });
   it("não ignora uma PNR de outra competência ou com envio diferente", async () => {
     mocks.query.mockResolvedValueOnce({ rows: [{ case_id: "10001", shipment_id: "90001", competence: "202609Q2", main_status: "NEW", sub_status: "WAITING_RECEIPT" }], rowCount: 1 });
@@ -93,8 +93,8 @@ describe("deduplicação da extensão por lote", () => {
       collectOnly: true, completed: true, records: [{ ...full, statusOnly: true }],
     });
     expect(response.status).toBe(200);
-    expect(mocks.upsert.mock.calls[0][6]).toBe(false);
-    expect(mocks.upsert.mock.calls[0][7]).toEqual(new Set(["10001"]));
+    expect(mocks.upsert.mock.calls[0][5]).toBe(false);
+    expect(mocks.upsert.mock.calls[0][6]).toEqual(new Set(["10001"]));
     expect(mocks.upsert.mock.calls[0][4]).toBe(false);
   });
 });
