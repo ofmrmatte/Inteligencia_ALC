@@ -112,7 +112,7 @@ export function Overview() {
     preparing: "Preparando coleta", fetching: "Buscando PNRs",
     details: "Consultando detalhes", buyers: "Consultando compradores",
     saving: "Salvando dados", collecting: "Coletando casos",
-    completed: "Coleta concluída", failed: "Coleta interrompida",
+    completed: displayRun?.errors ? "Coleta finalizada com pendências" : "Coleta concluída", failed: "Coleta interrompida",
   } as Record<string, string>)[displayRun?.phase || ""] || "Aguardando coletor";
   const syncStats = data?.source.syncStats || {};
   const syncStale =
@@ -231,6 +231,7 @@ export function Overview() {
               {displayRun?.total
                 ? `${displayRun.processed.toLocaleString("pt-BR")} de ${displayRun.total.toLocaleString("pt-BR")} PNRs processadas`
                 : "Consultando total de PNRs"}
+              {displayRun?.errors ? ` · ${displayRun.errors.toLocaleString("pt-BR")} ocorrência(s) para revisar` : ""}
               {displayRun?.mode === "automatic" ? " · Coleta automática" : ""}
               {displayRun?.message ? ` · ${displayRun.message}` : ""}
             </p>
