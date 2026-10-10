@@ -57,7 +57,7 @@ A extensão versionada neste repositório é **1.2.7**. A versão instalada em c
 
 ## Publicação e próximos passos
 
-Os serviços Railway utilizam a raiz compartilhada do monorepo, mas executam builds e comandos de início específicos. Atualmente existem dois Dockerfiles de serviço; a remoção planejada está isolada na PR #93 e depende da limpeza de `Dockerfile Path` em cada serviço da Railway. Veja o runbook antes de mudar o builder. A separação dos serviços e os filtros de arquivos estão descritos em [docs/monorepo.md](docs/monorepo.md).
+Os serviços Railway utilizam a raiz compartilhada do monorepo e builds/comandos de início específicos. Ambos utilizam **Railpack**, com os campos `Dockerfile Path` removidos. Os antigos Dockerfiles e a etapa Docker no CI foram eliminados na [PR #93](https://github.com/ofmrmatte/Inteligencia_ALC/pull/93). Veja o runbook antes de alterar o builder. A separação dos serviços e os filtros de arquivos estão descritos em [docs/monorepo.md](docs/monorepo.md).
 
 O botão ALC Atendimento no menu lateral abre uma nova aba com a sessão já autenticada do Inteligência, preservando o mesmo Supabase Auth, MFA e perfil. A transferência usa um ticket cifrado de uso único, válido por 60 segundos. O Atendimento não possui login ou cadastro próprios; entradas diretas são encaminhadas ao painel. A Administração permanece dentro do Atendimento, na mesma aba.
 
