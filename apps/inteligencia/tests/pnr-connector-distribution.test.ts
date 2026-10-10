@@ -30,7 +30,7 @@ describe("distribuição do Conector PNR", () => {
     expect(connectorStateFromHandshake({ ...ready, version: "1.1.8" }, { minimumSupportedVersion: "1.1.0", latestVersion: "1.2.0" })).toBe("outdated");
     expect(connectorStateFromHandshake({ ...ready, version: "invalid" })).toBe("unsupported");
     expect(connectorStateFromHandshake({ ...ready, version: "99999999999999999999.0.0" })).toBe("unsupported");
-    expect(LATEST_CONNECTOR_VERSION).toBe("1.2.6");
+    expect(LATEST_CONNECTOR_VERSION).toBe("1.2.7");
     expect(MINIMUM_SUPPORTED_CONNECTOR_VERSION).toBe("1.1.17");
   });
 
