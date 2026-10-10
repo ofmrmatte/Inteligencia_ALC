@@ -36,7 +36,7 @@ Referência: [monorepos no Railway](https://docs.railway.com/deployments/monorep
 
 ## Estratégia atual de builder
 
-Ambos os serviços continuam com Dockerfiles específicos (`Dockerfile.inteligencia` e `Dockerfile.atendimento`) que usam Node 22 via registro público AWS ECR. O CI constrói as duas imagens. O Railpack foi validado em builds isolados, mas o retorno para produção **não** foi aplicado: é obrigatório retirar `Dockerfile Path` das configurações dos dois serviços antes de mesclar a [PR #93](https://github.com/ofmrmatte/Inteligencia_ALC/pull/93), ainda em rascunho.
+Ambos os serviços **utilizam Railpack** em produção, com builds próprios (`npm run build:atendimento` e `npm run build`) e `Dockerfile Path` removido das configurações. A [PR #93](https://github.com/ofmrmatte/Inteligencia_ALC/pull/93) foi mesclada após os dois builds Railpack terem sido validados; ela removeu `Dockerfile.atendimento`, `Dockerfile.inteligencia`, `.dockerignore` e a etapa exclusiva de Docker no CI. Mantenha os comandos de pré-deploy e saúde dos serviços ao revisar o builder.
 
 Outros detalhes estão nos [runbooks](runbooks-plataforma-alc.md).
 
