@@ -14,7 +14,8 @@ import {
   GitCompareArrows,
 } from "lucide-react";
 import { KpiCard } from "@alc/ui/components";
-import { useData, when } from "./data";
+import { api, useData, when } from "./data";
+import type { CollectorRun } from "../lib/collector-progress";
 type OverviewData = {
   open: number;
   proof: number;
@@ -52,6 +53,8 @@ type OverviewData = {
 export function Overview() {
   const { data, error, refresh } = useData<OverviewData>("overview", 15_000);
   const [collecting, setCollecting] = useState(false);
+  const [run, setRun] = useState<CollectorRun | null>(null);
+  const [progressLoaded, setProgressLoaded] = useState(false);
   const [collectionNotice, setCollectionNotice] = useState("");
   const [collectionError, setCollectionError] = useState(false);
   const [now, setNow] = useState(() => Date.now());
@@ -59,6 +62,42 @@ export function Overview() {
     const timer = setInterval(() => setNow(Date.now()), 60_000);
     return () => clearInterval(timer);
   }, []);
+  useEffect(() => {
+    let mounted = true;
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    const read = async () => {
+      try {
+        const result = await api<{ run: CollectorRun | null }>("collector-progress");
+        if (mounted) setRun(result.run);
+      } catch {
+        // The normal app authorization flow handles expired sessions.
+      } finally {
+        if (mounted) setProgressLoaded(true);
+        if (mounted) timer = setTimeout(() => void read(), 2_500);
+      }
+    };
+    const onVisible = () => {
+      if (document.visibilityState === "visible") void read();
+    };
+    void read();
+    document.addEventListener("visibilitychange", onVisible);
+    window.addEventListener("focus", onVisible);
+    return () => {
+      mounted = false;
+      if (timer) clearTimeout(timer);
+      document.removeEventListener("visibilitychange", onVisible);
+      window.removeEventListener("focus", onVisible);
+    };
+  }, []);
+  const running = run?.status === "running";
+  const progressPercent = run?.status === "completed"
+    ? 100 : run?.total ? Math.min(100, Math.floor(run.processed / run.total * 100)) : null;
+  const progressPhase = ({
+    preparing: "Preparando coleta", fetching: "Buscando PNRs",
+    details: "Consultando detalhes", buyers: "Consultando compradores",
+    saving: "Salvando dados", collecting: "Coletando casos",
+    completed: "Coleta concluída", failed: "Coleta interrompida",
+  } as Record<string, string>)[run?.phase || ""] || "Aguardando coletor";
   const syncStats = data?.source.syncStats || {};
   const syncStale =
     data?.source.lastCompletedSync &&
@@ -71,6 +110,7 @@ export function Overview() {
           currency: "BRL",
         });
   async function collect() {
+    if (running || collecting) return;
     setCollecting(true);
     setCollectionNotice("");
     setCollectionError(false);
@@ -87,10 +127,10 @@ export function Overview() {
       }
       // No channel means both client and driver data in one collect-only pass.
       const result = await request<{ message: string }>("ATENDIMENTO_COLLECT");
-      setCollectionNotice(
-        result.message || "Coleta de dados concluída, sem disparos.",
-      );
+      setCollectionNotice(result.message || "Coleta iniciada.");
       await refresh();
+      const checkpoint = await api<{ run: CollectorRun | null }>("collector-progress");
+      setRun(checkpoint.run);
     } catch (cause) {
       setCollectionError(true);
       setCollectionNotice(
@@ -148,12 +188,34 @@ export function Overview() {
           <button
             className="primary"
             type="button"
-            disabled={collecting}
+            disabled={collecting || running || !progressLoaded}
             onClick={() => void collect()}
           >
-            <RefreshCw size={16} /> {collecting ? "Coletando dados…" : "Coletar geral"}
+            <RefreshCw size={16} /> {collecting || running ? "Coletando dados…" : "Coletar geral"}
           </button>
         </div>
+        {(running || (collecting && !run) || run?.status === "completed" || run?.status === "failed" || run?.status === "interrupted") && (
+          <div className="overview-collector-progress" aria-live="polite">
+            <div className="overview-collector-progress-text">
+              <span>{running || run?.status === "completed" ? progressPhase : run?.status === "failed" || run?.status === "interrupted" ? "Coleta interrompida" : "Iniciando coleta"}</span>
+              <strong>{progressPercent === null ? "Aguardando total" : `${progressPercent}%`}</strong>
+            </div>
+            <div className="overview-collector-progress-track"
+              role="progressbar" aria-label="Andamento da coleta"
+              aria-valuemin={0} aria-valuemax={100}
+              aria-valuenow={progressPercent ?? undefined}>
+              <div className={progressPercent === null ? "overview-collector-progress-bar indeterminate" : "overview-collector-progress-bar"}
+                style={progressPercent === null ? undefined : { width: `${progressPercent}%` }} />
+            </div>
+            <p className="muted">
+              {run?.total
+                ? `${run.processed.toLocaleString("pt-BR")} de ${run.total.toLocaleString("pt-BR")} PNRs processadas`
+                : "Consultando total de PNRs"}
+              {run?.mode === "automatic" ? " · Coleta automática" : ""}
+              {run?.message ? ` · ${run.message}` : ""}
+            </p>
+          </div>
+        )}
         <dl className="overview-collector-details">
           <div><dt>Competência</dt><dd>{data?.competence || "—"}</dd></div>
           <div><dt>Última sincronização</dt><dd>{when(data?.source.lastSync ?? undefined)}</dd></div>
