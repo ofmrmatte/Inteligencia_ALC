@@ -5,6 +5,7 @@ import {
   extractCaseCenterDetail,
   normalizeCaseCenterPage,
   normalizeCaseTimelineEvents,
+  partitionCollectorCases,
   periodDetails,
 } from "./case-center.js";
 import { readPackageBuyersInTab } from "./package-management.js";
@@ -87,18 +88,7 @@ async function collectAtendimento({ channel = null, collectOnly = false, runId =
             mainStatus: record.mainStatus, subStatus: record.subStatus,
           })),
         });
-        const decisions = lookup?.decisions;
-        if (!Array.isArray(decisions) || decisions.length !== records.length ||
-            new Set(decisions.map((item) => item?.caseId)).size !== records.length)
-          throw new Error("Consulta de deduplicação incompleta; coleta interrompida.");
-        const byId = new Map(decisions.map(({ caseId, action }) => [caseId, action]));
-        for (const record of records) {
-          const action = byId.get(record.caseId);
-          if (action === "full") fullRecords.push(record);
-          else if (action === "status") statusRecords.push({ ...record, statusOnly: true });
-          else if (action === "skip") skippedCaseIds.push(record.caseId);
-          else throw new Error("Resposta inválida do comparador de PNRs.");
-        }
+        ({ fullRecords, statusRecords, skippedCaseIds } = partitionCollectorCases(records, lookup?.decisions));
         newCases += fullRecords.length;
         changedStatuses += statusRecords.length;
         skippedCases += skippedCaseIds.length;
