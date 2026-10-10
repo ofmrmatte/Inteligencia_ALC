@@ -17,9 +17,13 @@ Na versão 1.2.4, falhas de carregamento ou redirecionamentos para login não fe
 
 O build local `npm run extension:build`, executado na raiz do monorepo, também gera `extensions/pnr-connector/dist` para instalação de desenvolvimento e o ZIP em `apps/inteligencia/public/downloads`. O build do painel gera o pacote automaticamente. O handshake prepara o contexto local do Case Center quando necessário e retorna a versão e disponibilidade, nunca cookies, tokens ou CSRF. A autenticação e as permissões de acesso são confirmadas durante as consultas reais.
 
-## Coleta com progresso na versão 1.2.5
+## Coleta com progresso desde a versão 1.2.5
 
 A extensão publica checkpoints por lote no Atendimento. A Visão Geral recupera o progresso após navegar para outra tela ou trocar de aba. Atualize a extensão em `chrome://extensions` para usar a coleta com progresso. O navegador e a sessão Mercado Livre precisam continuar ativos; fechar o navegador interrompe a coleta.
+
+## Coleta incremental na versão 1.2.6
+
+A extensão identifica as PNRs já cadastradas antes de consultar as timelines. PNRs idênticas são ignoradas; alterações no status são aplicadas sem substituir telefones, documentos ou histórico, e apenas PNRs novas (ou de outra competência) recebem o enriquecimento completo de detalhes e comprador. A contagem da sincronização inclui também os casos ignorados.
 
 ## Limites de segurança
 
