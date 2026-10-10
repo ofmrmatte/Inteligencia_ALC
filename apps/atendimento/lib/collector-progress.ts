@@ -63,7 +63,9 @@ export async function saveCollectorProgress(actor: string, input: CollectorProgr
   if (!current) return { accepted: false, run: null };
   const next: CollectorRun = { ...current, updatedAt: new Date().toISOString() };
   if (input.action === "progress" || input.action === "finish") {
-    if (input.processed > input.total) return { accepted: false, run: null };
+    if (input.processed > input.total || input.processed < current.processed ||
+        input.total < current.total || input.errors < current.errors)
+      return { accepted: false, run: null };
     next.processed = input.processed;
     next.total = input.total;
     next.errors = input.errors;
@@ -78,8 +80,11 @@ export async function saveCollectorProgress(actor: string, input: CollectorProgr
   const result = await db().query<{ value: CollectorRun }>(
     `UPDATE alc_atendimento.settings SET value=$2::jsonb,updated_by=$3,updated_at=now()
       WHERE key='collector_run' AND value->>'syncId'=$1 AND value->>'status'='running'
+        AND coalesce((value->>'processed')::integer,0) <= $4
+        AND coalesce((value->>'total')::integer,0) <= $5
+        AND coalesce((value->>'errors')::integer,0) <= $6
       RETURNING value`,
-    [input.syncId, next, actor],
+    [input.syncId, next, actor, next.processed, next.total, next.errors],
   );
   return { accepted: Boolean(result.rowCount), run: result.rows[0]?.value ?? null };
 }
