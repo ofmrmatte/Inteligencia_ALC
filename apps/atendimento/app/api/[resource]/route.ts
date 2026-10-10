@@ -61,6 +61,7 @@ import {
 } from "@/lib/assignment-engine";
 import { dispatchBatch, dispatchPreview } from "@/lib/dispatch-batches";
 import { mediaResponse } from "@/lib/media-response";
+import { collectorProgressInput, latestCollectorProgress, saveCollectorProgress } from "@/lib/collector-progress";
 import {
   loadTemplateContractReview,
   previewTemplateContractDraft,
@@ -298,6 +299,10 @@ export async function GET(
       { headers: { "Cache-Control": "private, no-store" } });
     }
     if (resource === "ai-models") return Response.json(await aiModelCatalog(profile, new URL(request.url).searchParams.get("provider")), { headers: { "Cache-Control": "private, no-store" } });
+    if (resource === "collector-progress") {
+      requireAdmin(profile);
+      return Response.json({ run: await latestCollectorProgress() }, { headers: { "Cache-Control": "private, no-store" } });
+    }
     if (resource === "collector")
       return Response.json({ collector: await setting("collector") });
     if (resource === "admin") {
@@ -521,6 +526,17 @@ export async function POST(
         completed: parsed.completed,
       });
       return Response.json(stats);
+    }
+    if (resource === "collector-progress") {
+      requireAdmin(profile);
+      assertTrustedOrigin(request, "Origem da coleta não autorizada.");
+      const input = collectorProgressInput.parse(body);
+      if (input.action === "start" && input.competence !== competence())
+        throw new HttpError(400, "Coleta limitada à competência vigente.");
+      const result = await saveCollectorProgress(profile.id, input);
+      if (!result.accepted)
+        throw new HttpError(409, "Já existe outra coleta em andamento ou esta coleta foi encerrada.");
+      return Response.json(result, { headers: { "Cache-Control": "private, no-store" } });
     }
     if (resource === "collector-state") {
       requireAdmin(profile);

@@ -40,28 +40,47 @@ export function currentAtendimentoCompetence(now = new Date()) {
   const parts = Object.fromEntries(new Intl.DateTimeFormat("en-CA", { timeZone: "America/Sao_Paulo", year: "numeric", month: "2-digit", day: "2-digit" }).formatToParts(now).map((p) => [p.type, p.value]));
   return `${parts.year}${parts.month}Q${Number(parts.day) <= 15 ? 1 : 2}`;
 }
-async function collectAtendimento({ channel = null, collectOnly = false } = {}) {
+async function collectAtendimento({ channel = null, collectOnly = false, runId = null } = {}) {
   if (atendimentoCollecting) return connectorError("INVALID_RESPONSE", "Já existe uma coleta em andamento.");
   atendimentoCollecting = true;
+  let activeTabId = null;
+  let syncId = null;
+  let processed = 0;
+  let total = 0;
+  let progressErrors = 0;
+  const checkpoint = async (phase) => {
+    if (!activeTabId || !syncId) return;
+    await persistInAtendimento(activeTabId, "collector-progress", {
+      action: "progress", syncId, phase, processed, total, errors: progressErrors,
+    });
+  };
   try {
     if (channel !== null && channel !== "client" && channel !== "driver")
       throw new Error("Tipo de coleta inválido.");
     const tab = await atendimentoTab();
     if (!tab?.id) throw new Error("Mantenha uma aba autenticada do ALC Atendimento aberta.");
     const competence = currentAtendimentoCompetence();
-    const syncId = crypto.randomUUID();
-    let page = 1, processed = 0, totalPages = 1, customerRead = 0, customerPending = 0;
+    activeTabId = tab.id;
+    syncId = runId || crypto.randomUUID();
+    await persistInAtendimento(tab.id, "collector-progress", {
+      action: "start", syncId, competence, mode: collectOnly ? "manual" : "automatic",
+    });
+    let page = 1, totalPages = 1, customerRead = 0, customerPending = 0;
     do {
+      await checkpoint("fetching");
       const result = await handle({ type: "FETCH_PAGE", payload: { competence, page, order: "desc" } });
       if (!result.ok) throw new Error(result.error.message);
       const records = result.data.records;
       totalPages = result.data.totalPages;
+      total = Math.max(result.data.totalElements, processed);
       if (totalPages > 500) throw new Error("Coleta excede 500 páginas; revisão necessária.");
       if (result.data.invalidCount) throw new Error("A fonte retornou registros inválidos. Coleta interrompida sem concluir a carga inicial.");
       if (records.length) {
+        await checkpoint("details");
         const details = await handle({ type: "FETCH_TIMELINES", payload: { caseIds: records.map((r) => r.caseId), concurrency: 2 } });
         if (!details.ok) throw new Error(details.error.message);
         const detailFailures = details.data.results.filter((item) => !item.ok && item.error.code !== "BATCH_PAUSED");
+        progressErrors += detailFailures.length;
         if (details.data.results.every((item) => !item.ok) || detailFailures.some((item) => ["MERCADO_LIVRE_SESSION_REQUIRED", "MERCADO_LIVRE_ACCESS_DENIED", "RATE_LIMITED", "INVALID_RESPONSE", "REQUEST_TIMEOUT"].includes(item.error.code))) throw new Error(detailFailures[0]?.error.message || "Coleta de detalhes interrompida; os casos permanecem pendentes.");
         if (details.ok) for (const item of details.data.results) {
           const record = records.find((r) => r.caseId === item.caseId);
@@ -77,6 +96,7 @@ async function collectAtendimento({ channel = null, collectOnly = false } = {}) 
           }
         }
         if (channel !== "driver") {
+          await checkpoint("buyers");
           const buyers = await handle({ type: "FETCH_PACKAGE_CUSTOMERS", payload: { shipmentIds: records.map((r) => r.shipmentId) } });
           if (!buyers.ok) throw new Error(buyers.error.message);
           const fatal = buyers.data.results.find((item) => !item.ok && ["MERCADO_LIVRE_SESSION_REQUIRED", "MERCADO_LIVRE_ACCESS_DENIED", "RATE_LIMITED", "INVALID_RESPONSE", "REQUEST_TIMEOUT"].includes(item.code));
@@ -88,16 +108,29 @@ async function collectAtendimento({ channel = null, collectOnly = false } = {}) 
           }
         }
       }
+      await checkpoint("saving");
       await persistInAtendimento(tab.id, "import", {
         syncId, competence, channel, collectOnly,
         completed: page >= Math.max(totalPages, 1), records,
       });
       processed += records.length;
+      total = Math.max(total, processed);
+      await checkpoint("collecting");
       page += 1;
     } while (page <= totalPages);
+    await persistInAtendimento(tab.id, "collector-progress", {
+      action: "finish", syncId, processed, total: Math.max(total, processed), errors: progressErrors,
+    });
     await chrome.storage.local.set({ atendimentoLastSync: new Date().toISOString(), atendimentoError: customerPending ? `${customerPending} envios sem contato completo do comprador.` : "" });
     return { ok: true, data: { message: `${processed} PNRs da competência ${competence} atualizadas${channel === "client" ? " (dados de clientes)" : channel === "driver" ? " (dados de motoristas)" : ""}. ${channel !== "driver" ? `${customerRead} compradores lidos; ${customerPending} contatos pendentes. ` : ""}${collectOnly ? "Nenhuma mensagem foi enviada ou enfileirada por esta coleta." : "Próxima coleta automática em 30 minutos, se ativada."}` } };
   } catch (error) {
+    if (activeTabId && syncId) {
+      try {
+        await persistInAtendimento(activeTabId, "collector-progress", {
+          action: "fail", syncId, message: String(error?.message || "Coleta interrompida.").slice(0, 350),
+        });
+      } catch { /* An inaccessible tab is reported as an interrupted run after the timeout. */ }
+    }
     await chrome.storage.local.set({ atendimentoError: error.message });
     return connectorError("INVALID_RESPONSE", error.message);
   } finally { atendimentoCollecting = false; }
@@ -511,8 +544,13 @@ async function handle(message) {
     await persistCollectorState(false);
     return { ok: true, data: { message: "Coleta automática pausada." } };
   }
-  if (message.type === "ATENDIMENTO_COLLECT")
-    return collectAtendimento({ channel: message.payload?.channel || null, collectOnly: true });
+  if (message.type === "ATENDIMENTO_COLLECT") {
+    if (atendimentoCollecting) return connectorError("INVALID_RESPONSE", "Já existe uma coleta em andamento.");
+    // Respond without tying the work to the lifetime of the current React page.
+    const runId = crypto.randomUUID();
+    void collectAtendimento({ channel: message.payload?.channel || null, collectOnly: true, runId });
+    return { ok: true, data: { message: "Coleta iniciada. O andamento aparece na Visão Geral.", syncId: runId } };
+  }
 
   // Explicit requests may create an inactive tab. PING confirms connection,
   // without mutating the Case Center selection or triggering any collection.

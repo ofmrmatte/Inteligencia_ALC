@@ -42,8 +42,10 @@ describe("coletas na Visão Geral", () => {
     expect(worker).toContain('if (message.type === "ATENDIMENTO_COLLECT")');
     expect(worker).toContain("channel: message.payload?.channel || null, collectOnly: true");
     expect(readFileSync(new URL("../components/overview.tsx", import.meta.url), "utf8"))
-      .toContain('request<{ message: string }>("ATENDIMENTO_COLLECT")');
+      .toContain('request<{ message: string; syncId: string }>("ATENDIMENTO_COLLECT")');
     expect(worker).toContain('channel !== "client" && channel !== "driver"');
     expect(worker).toContain("extensionId: chrome.runtime.id");
+    expect(worker).toContain('"collector-progress"');
+    expect(worker).toContain('action: "finish"');
   });
 });
