@@ -336,6 +336,7 @@ export async function upsertCases(
   actor: string | null = null,
   allowAutomaticOutreach = true,
   authoritativeCoreSnapshot = false,
+  statusOnlyCaseIds: ReadonlySet<string> = new Set(),
 ) {
   const client = await db().connect();
   const newlySeen: CaseRecord[] = [];
@@ -367,6 +368,10 @@ export async function upsertCases(
       const old = previousRow?.record as CaseRecord | undefined;
       if (old && old.shipmentId !== record.shipmentId)
         throw new Error("Vinculo PNR/envio divergente.");
+      // A status-only delta must never create a partial record.
+      const statusOnly = statusOnlyCaseIds.has(record.caseId);
+      if (statusOnly && !old)
+        throw new Error("PNR não encontrada para atualização apenas de status.");
       const sourceTime =
         (record as CaseRecord & { sourceAt?: string }).sourceAt || sourceAt;
       if (!Number.isFinite(Date.parse(sourceTime)))
@@ -404,7 +409,14 @@ export async function upsertCases(
               Number.isFinite(existingCapture) &&
               incomingCapture > existingCapture)),
       );
-      const merged = {
+      const merged = statusOnly
+        ? {
+            ...old!,
+            mainStatus: record.mainStatus,
+            subStatus: record.subStatus,
+            classification: classification(record.mainStatus, record.subStatus),
+          }
+        : {
         ...old,
         ...record,
         purchaseValue:

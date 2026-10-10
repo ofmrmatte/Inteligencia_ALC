@@ -5,6 +5,7 @@ import {
   extractCaseCenterDetail,
   normalizeCaseCenterPage,
   normalizeCaseTimelineEvents,
+  partitionCollectorCases,
   periodDetails,
 } from "./case-center.js";
 import { readPackageBuyersInTab } from "./package-management.js";
@@ -66,6 +67,7 @@ async function collectAtendimento({ channel = null, collectOnly = false, runId =
       action: "start", syncId, competence, mode: collectOnly ? "manual" : "automatic",
     });
     let page = 1, totalPages = 1, customerRead = 0, customerPending = 0;
+    let newCases = 0, changedStatuses = 0, skippedCases = 0;
     do {
       await checkpoint("fetching");
       const result = await handle({ type: "FETCH_PAGE", payload: { competence, page, order: "desc" } });
@@ -75,43 +77,63 @@ async function collectAtendimento({ channel = null, collectOnly = false, runId =
       total = Math.max(result.data.totalElements, processed);
       if (totalPages > 500) throw new Error("Coleta excede 500 páginas; revisão necessária.");
       if (result.data.invalidCount) throw new Error("A fonte retornou registros inválidos. Coleta interrompida sem concluir a carga inicial.");
+      let fullRecords = [], statusRecords = [], skippedCaseIds = [];
       if (records.length) {
-        await checkpoint("details");
-        const details = await handle({ type: "FETCH_TIMELINES", payload: { caseIds: records.map((r) => r.caseId), concurrency: 2 } });
-        if (!details.ok) throw new Error(details.error.message);
-        const detailFailures = details.data.results.filter((item) => !item.ok && item.error.code !== "BATCH_PAUSED");
-        progressErrors += detailFailures.length;
-        if (details.data.results.every((item) => !item.ok) || detailFailures.some((item) => ["MERCADO_LIVRE_SESSION_REQUIRED", "MERCADO_LIVRE_ACCESS_DENIED", "RATE_LIMITED", "INVALID_RESPONSE", "REQUEST_TIMEOUT"].includes(item.error.code))) throw new Error(detailFailures[0]?.error.message || "Coleta de detalhes interrompida; os casos permanecem pendentes.");
-        if (details.ok) for (const item of details.data.results) {
-          const record = records.find((r) => r.caseId === item.caseId);
-          if (record && item.ok) {
-            const detail = item.data.detail || {};
-            if (channel !== "client") Object.assign(record, {
-              driverId: detail.driverId || "", driverPhone: detail.driverPhone || "",
-            });
-            if (channel !== "driver") Object.assign(record, {
-              customerName: detail.buyerName || "", products: detail.products || [],
-              deliveryAt: detail.deliveryAt || "",
-            });
+        // Classify by case ID + verified shipment association before expensive
+        // timeline and buyer enrichment. Never guess or silently skip on API errors.
+        const lookup = await persistInAtendimento(tab.id, "collector-lookup", {
+          competence,
+          records: records.map((record) => ({
+            caseId: record.caseId, shipmentId: record.shipmentId,
+            mainStatus: record.mainStatus, subStatus: record.subStatus,
+          })),
+        });
+        ({ fullRecords, statusRecords, skippedCaseIds } = partitionCollectorCases(records, lookup?.decisions));
+        newCases += fullRecords.length;
+        changedStatuses += statusRecords.length;
+        skippedCases += skippedCaseIds.length;
+        if (fullRecords.length) {
+          await checkpoint("details");
+          const details = await handle({ type: "FETCH_TIMELINES", payload: { caseIds: fullRecords.map((r) => r.caseId), concurrency: 2 } });
+          if (!details.ok) throw new Error(details.error.message);
+          const detailFailures = details.data.results.filter((item) => !item.ok && item.error.code !== "BATCH_PAUSED");
+          progressErrors += detailFailures.length;
+          if (details.data.results.every((item) => !item.ok) ||
+              detailFailures.some((item) => ["MERCADO_LIVRE_SESSION_REQUIRED", "MERCADO_LIVRE_ACCESS_DENIED", "RATE_LIMITED", "INVALID_RESPONSE", "REQUEST_TIMEOUT"].includes(item.error.code)))
+            throw new Error(detailFailures[0]?.error.message || "Coleta de detalhes interrompida; os casos permanecem pendentes.");
+          for (const item of details.data.results) {
+            const record = fullRecords.find((r) => r.caseId === item.caseId);
+            if (record && item.ok) {
+              const detail = item.data.detail || {};
+              if (channel !== "client") Object.assign(record, {
+                driverId: detail.driverId || "", driverPhone: detail.driverPhone || "",
+              });
+              if (channel !== "driver") Object.assign(record, {
+                customerName: detail.buyerName || "", products: detail.products || [],
+                deliveryAt: detail.deliveryAt || "",
+              });
+            }
           }
-        }
-        if (channel !== "driver") {
-          await checkpoint("buyers");
-          const buyers = await handle({ type: "FETCH_PACKAGE_CUSTOMERS", payload: { shipmentIds: records.map((r) => r.shipmentId) } });
-          if (!buyers.ok) throw new Error(buyers.error.message);
-          const fatal = buyers.data.results.find((item) => !item.ok && ["MERCADO_LIVRE_SESSION_REQUIRED", "MERCADO_LIVRE_ACCESS_DENIED", "RATE_LIMITED", "INVALID_RESPONSE", "REQUEST_TIMEOUT"].includes(item.code));
-          if (fatal) throw new Error(fatal.message);
-          customerRead += buyers.data.results.filter((item) => item.ok).length;
-          customerPending += buyers.data.results.filter((item) => !item.ok).length;
-          for (const item of buyers.data.results) {
-            if (item.ok) for (const record of records.filter((r) => r.shipmentId === item.shipmentId)) record.packageBuyer = item.data;
+          if (channel !== "driver") {
+            await checkpoint("buyers");
+            const buyers = await handle({ type: "FETCH_PACKAGE_CUSTOMERS", payload: { shipmentIds: fullRecords.map((r) => r.shipmentId) } });
+            if (!buyers.ok) throw new Error(buyers.error.message);
+            const fatal = buyers.data.results.find((item) => !item.ok && ["MERCADO_LIVRE_SESSION_REQUIRED", "MERCADO_LIVRE_ACCESS_DENIED", "RATE_LIMITED", "INVALID_RESPONSE", "REQUEST_TIMEOUT"].includes(item.code));
+            if (fatal) throw new Error(fatal.message);
+            customerRead += buyers.data.results.filter((item) => item.ok).length;
+            customerPending += buyers.data.results.filter((item) => !item.ok).length;
+            for (const item of buyers.data.results) {
+              if (item.ok) for (const record of fullRecords.filter((r) => r.shipmentId === item.shipmentId)) record.packageBuyer = item.data;
+            }
           }
         }
       }
       await checkpoint("saving");
       await persistInAtendimento(tab.id, "import", {
         syncId, competence, channel, collectOnly,
-        completed: page >= Math.max(totalPages, 1), records,
+        completed: page >= Math.max(totalPages, 1),
+        records: [...fullRecords, ...statusRecords],
+        skippedCaseIds,
       });
       processed += records.length;
       total = Math.max(total, processed);
@@ -122,7 +144,7 @@ async function collectAtendimento({ channel = null, collectOnly = false, runId =
       action: "finish", syncId, processed, total: Math.max(total, processed), errors: progressErrors,
     });
     await chrome.storage.local.set({ atendimentoLastSync: new Date().toISOString(), atendimentoError: customerPending ? `${customerPending} envios sem contato completo do comprador.` : "" });
-    return { ok: true, data: { message: `${processed} PNRs da competência ${competence} atualizadas${channel === "client" ? " (dados de clientes)" : channel === "driver" ? " (dados de motoristas)" : ""}. ${channel !== "driver" ? `${customerRead} compradores lidos; ${customerPending} contatos pendentes. ` : ""}${collectOnly ? "Nenhuma mensagem foi enviada ou enfileirada por esta coleta." : "Próxima coleta automática em 30 minutos, se ativada."}` } };
+    return { ok: true, data: { message: `${processed} PNRs verificadas na competência ${competence}: ${newCases} novas, ${changedStatuses} com status atualizado e ${skippedCases} já cadastradas sem alteração (ignoradas)${channel === "client" ? " (dados de clientes)" : channel === "driver" ? " (dados de motoristas)" : ""}. ${channel !== "driver" ? `${customerRead} compradores lidos; ${customerPending} contatos pendentes. ` : ""}${collectOnly ? "Nenhuma mensagem foi enviada ou enfileirada por esta coleta." : "Próxima coleta automática em 30 minutos, se ativada."}` } };
   } catch (error) {
     if (activeTabId && syncId) {
       try {

@@ -73,6 +73,29 @@ export function normalizeCaseCenterPage(payload, requestedPage) {
   };
 }
 
+/**
+ * Server-classified PNRs. Only new cases need timeline/buyer enrichment;
+ * status deltas preserve all previously imported details in the API.
+ */
+export function partitionCollectorCases(records, decisions) {
+  if (!Array.isArray(records) || !Array.isArray(decisions) ||
+      records.length !== decisions.length ||
+      new Set(records.map((item) => item?.caseId)).size !== records.length ||
+      new Set(decisions.map((item) => item?.caseId)).size !== records.length) {
+    throw new Error("Consulta de deduplicação incompleta; coleta interrompida.");
+  }
+  const byId = new Map(decisions.map((item) => [item.caseId, item.action]));
+  const fullRecords = [], statusRecords = [], skippedCaseIds = [];
+  for (const record of records) {
+    const action = byId.get(record.caseId);
+    if (action === "full") fullRecords.push(record);
+    else if (action === "status") statusRecords.push({ ...record, statusOnly: true });
+    else if (action === "skip") skippedCaseIds.push(record.caseId);
+    else throw new Error("Resposta inválida do comparador de PNRs.");
+  }
+  return { fullRecords, statusRecords, skippedCaseIds };
+}
+
 export function periodDetails(competence) {
   const match = /^(20\d{2})(0[1-9]|1[0-2])Q([12])$/.exec(competence);
   if (!match) throw Object.assign(new Error("Competência inválida."), { code: "INVALID_RESPONSE" });

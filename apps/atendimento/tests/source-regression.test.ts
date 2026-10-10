@@ -236,6 +236,43 @@ afterEach(() => {
 });
 
 describe("source import regressions", () => {
+  it("atualiza apenas o status de PNR existente sem apagar contato, motorista, produtos ou histórico", async () => {
+    const initial = record({
+      mainStatus: "NEW", subStatus: "WAITING_RECEIPT",
+      customerName: "Compradora confirmada", customerPhone: "5511988880000",
+      customerVerified: true, customerDocument: "synthetic-document",
+      products: [{ title: "Produto já confirmado" }],
+      driverPhone: "5511999990000",
+    });
+    await upsertCases([initial], NOW.toISOString(), false, null, false);
+    const incoming = record({
+      caseId: initial.caseId, shipmentId: initial.shipmentId,
+      mainStatus: "CLOSED", subStatus: "RESOLVED", classification: "encerrada",
+      customerName: "", customerPhone: "", customerVerified: false,
+      customerDocument: undefined, products: [], driverPhone: "", driverId: "",
+    });
+    const stats = await upsertCases(
+      [incoming], NOW.toISOString(), false, null, false, false, new Set([incoming.caseId]),
+    );
+    expect(stats).toMatchObject({ updated: 1, classificationChanged: 1, new: 0 });
+    expect(persisted.get(initial.caseId)?.record).toMatchObject({
+      mainStatus: "CLOSED", subStatus: "RESOLVED", classification: "encerrada",
+      customerName: "Compradora confirmada", customerPhone: "5511988880000",
+      customerVerified: true, customerDocument: "synthetic-document",
+      driverPhone: "5511999990000", products: [{ title: "Produto já confirmado" }],
+    });
+    expect(queuedKeys.size).toBe(0);
+    expect(mocks.graph).not.toHaveBeenCalled();
+  });
+  it("não cria registro incompleto quando o statusOnly aponta para PNR inexistente", async () => {
+    const entry = record();
+    await expect(upsertCases(
+      [entry], NOW.toISOString(), false, null, false, false, new Set([entry.caseId]),
+    )).rejects.toThrow("PNR não encontrada");
+    expect(persisted.size).toBe(0);
+    expect(mocks.transactionQuery).toHaveBeenCalledWith("ROLLBACK");
+  });
+
   it("manual client/driver sync never queues outbound WhatsApp, even with automations on", async () => {
     const initial = record();
     expect(
