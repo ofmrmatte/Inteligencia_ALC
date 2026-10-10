@@ -16,7 +16,7 @@ import {
   type Channel,
 } from "@/lib/meta";
 import { syncCore, upsertCases, verifyCustomerContact } from "@/lib/source";
-import { combineSyncStats, type SyncStats } from "@/lib/sync-delta";
+import { combineSyncStats, emptySyncCounts, type SyncStats } from "@/lib/sync-delta";
 import { assertTrustedOrigin } from "@/lib/request-origin";
 import { operationalOverview, operationalSyncSummary } from "@/lib/operational-monitoring";
 import {
@@ -422,6 +422,44 @@ export async function POST(
     }
     if (resource === "dispatch-batch")
       return Response.json(await dispatchBatch(profile, body));
+    if (resource === "collector-lookup") {
+      requireAdmin(profile);
+      assertTrustedOrigin(request, "Origem da coleta não autorizada.");
+      const parsed = z.object({
+        competence: z.string().regex(/^20\\d{4}Q[12]$/),
+        records: z.array(z.object({
+          caseId: z.string().regex(/^\\d{1,30}$/),
+          shipmentId: z.string().min(1).max(120),
+          mainStatus: short,
+          subStatus: short,
+        }).strict()).min(1).max(50),
+      }).strict().parse(body);
+      if (parsed.competence !== competence())
+        throw new HttpError(400, "Consulta limitada à competência vigente.");
+      const ids = parsed.records.map(item => item.caseId);
+      if (new Set(ids).size !== ids.length)
+        throw new HttpError(400, "PNRs repetidas no mesmo lote.");
+      const existing = await db().query<{
+        case_id: string; competence: string; shipment_id: string | null;
+        main_status: string | null; sub_status: string | null;
+      }>(
+        `SELECT case_id,competence,record->>'shipmentId' AS shipment_id,
+                record->>'mainStatus' AS main_status,record->>'subStatus' AS sub_status
+           FROM alc_atendimento.cases WHERE case_id = ANY($1::text[])`,
+        [ids],
+      );
+      const byId = new Map(existing.rows.map(row => [row.case_id, row]));
+      const decisions = parsed.records.map(item => {
+        const stored = byId.get(item.caseId);
+        if (stored && stored.shipment_id !== item.shipmentId)
+          throw new HttpError(409, "Vínculo entre PNR e envio divergente. Coleta interrompida.");
+        const action = !stored || stored.competence !== parsed.competence
+          ? "full" : stored.main_status !== item.mainStatus || stored.sub_status !== item.subStatus
+            ? "status" : "skip";
+        return { caseId: item.caseId, action };
+      });
+      return Response.json({ decisions }, { headers: { "Cache-Control": "private, no-store" } });
+    }
     if (resource === "import") {
       requireAdmin(profile);
       const parsed = z
@@ -431,7 +469,8 @@ export async function POST(
           completed: z.boolean(),
           channel: z.enum(["client", "driver"]).nullable().optional(),
           collectOnly: z.boolean().optional(),
-          records: z.array(listRecord).max(300),
+          records: z.array(listRecord.extend({ statusOnly: z.boolean().optional() })).max(300),
+          skippedCaseIds: z.array(z.string().regex(/^\\d{1,30}$/)).max(300).default([]),
         })
         .parse(body);
       if (parsed.competence !== competence())
@@ -439,6 +478,12 @@ export async function POST(
           400,
           "Coleta automática limitada à competência vigente.",
         );
+      const importedIds = new Set(parsed.records.map(item => item.caseId));
+      const skippedIds = new Set(parsed.skippedCaseIds);
+      if (importedIds.size !== parsed.records.length || skippedIds.size !== parsed.skippedCaseIds.length ||
+          [...skippedIds].some(caseId => importedIds.has(caseId)))
+        throw new HttpError(400, "PNRs duplicadas ou conflitantes no lote.");
+      const statusOnlyIds = new Set(parsed.records.filter(item => item.statusOnly).map(item => item.caseId));
       const state = await setting<{
         syncId?: string;
         baseline: boolean;
@@ -492,7 +537,30 @@ export async function POST(
         profile.id,
         // Legacy extension requests omit collectOnly: default to no outbound messages.
         parsed.collectOnly === false,
+        false,
+        statusOnlyIds,
       );
+      if (parsed.skippedCaseIds.length) {
+        const skipped = await db().query<{ case_id: string; base_key: string; sigla: string }>(
+          "SELECT case_id,base_key,sigla FROM alc_atendimento.cases WHERE case_id=ANY($1::text[]) AND competence=$2",
+          [parsed.skippedCaseIds, parsed.competence],
+        );
+        if (skipped.rows.length !== parsed.skippedCaseIds.length)
+          throw new HttpError(409, "Uma PNR deixou de existir durante a deduplicação. Execute uma nova coleta.");
+        stats.processed += skipped.rows.length;
+        stats.found += skipped.rows.length;
+        stats.unchanged += skipped.rows.length;
+        for (const row of skipped.rows) {
+          let unit = stats.byUnit.find(item => item.base_key === row.base_key && item.sigla === row.sigla);
+          if (!unit) {
+            unit = { ...emptySyncCounts(), base_key: row.base_key, sigla: row.sigla };
+            stats.byUnit.push(unit);
+          }
+          unit.processed++;
+          unit.found++;
+          unit.unchanged++;
+        }
+      }
       const collectedAt = new Date().toISOString();
       const accumulatedStats = combineSyncStats(state?.syncId === parsed.syncId ? state.stats : undefined, stats);
       const channelSync = { ...(state?.channelSync || {}) };
