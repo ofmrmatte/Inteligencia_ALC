@@ -64,7 +64,6 @@ export function Overview() {
   }, []);
   useEffect(() => {
     let mounted = true;
-    let timer: ReturnType<typeof setTimeout> | null = null;
     const read = async () => {
       try {
         const result = await api<{ run: CollectorRun | null }>("collector-progress");
@@ -73,18 +72,19 @@ export function Overview() {
         // The normal app authorization flow handles expired sessions.
       } finally {
         if (mounted) setProgressLoaded(true);
-        if (mounted) timer = setTimeout(() => void read(), 2_500);
+
       }
     };
     const onVisible = () => {
       if (document.visibilityState === "visible") void read();
     };
     void read();
+    const timer = setInterval(() => void read(), 2_500);
     document.addEventListener("visibilitychange", onVisible);
     window.addEventListener("focus", onVisible);
     return () => {
       mounted = false;
-      if (timer) clearTimeout(timer);
+      clearInterval(timer);
       document.removeEventListener("visibilitychange", onVisible);
       window.removeEventListener("focus", onVisible);
     };
