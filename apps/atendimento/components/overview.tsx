@@ -55,6 +55,7 @@ export function Overview() {
   const [collecting, setCollecting] = useState(false);
   const [run, setRun] = useState<CollectorRun | null>(null);
   const [progressLoaded, setProgressLoaded] = useState(false);
+  const [pendingRunId, setPendingRunId] = useState<string | null>(null);
   const [collectionNotice, setCollectionNotice] = useState("");
   const [collectionError, setCollectionError] = useState(false);
   const [now, setNow] = useState(() => Date.now());
@@ -67,7 +68,10 @@ export function Overview() {
     const read = async () => {
       try {
         const result = await api<{ run: CollectorRun | null }>("collector-progress");
-        if (mounted) setRun(result.run);
+        if (mounted) {
+          setRun(result.run);
+          if (result.run?.syncId) setPendingRunId(current => current === result.run?.syncId ? null : current);
+        }
       } catch {
         // The normal app authorization flow handles expired sessions.
       } finally {
@@ -89,7 +93,7 @@ export function Overview() {
       window.removeEventListener("focus", onVisible);
     };
   }, []);
-  const running = run?.status === "running";
+  const running = run?.status === "running" || Boolean(pendingRunId);
   const progressPercent = run?.status === "completed"
     ? 100 : run?.total ? Math.min(100, Math.floor(run.processed / run.total * 100)) : null;
   const progressPhase = ({
@@ -110,7 +114,7 @@ export function Overview() {
           currency: "BRL",
         });
   async function collect() {
-    if (running || collecting) return;
+    if (running || collecting || !progressLoaded) return;
     setCollecting(true);
     setCollectionNotice("");
     setCollectionError(false);
@@ -126,11 +130,15 @@ export function Overview() {
         );
       }
       // No channel means both client and driver data in one collect-only pass.
-      const result = await request<{ message: string }>("ATENDIMENTO_COLLECT");
+      const result = await request<{ message: string; syncId: string }>("ATENDIMENTO_COLLECT");
+      setPendingRunId(result.syncId);
       setCollectionNotice(result.message || "Coleta iniciada.");
       await refresh();
       const checkpoint = await api<{ run: CollectorRun | null }>("collector-progress");
-      setRun(checkpoint.run);
+      if (checkpoint.run?.syncId === result.syncId) {
+        setRun(checkpoint.run);
+        setPendingRunId(null);
+      }
     } catch (cause) {
       setCollectionError(true);
       setCollectionNotice(
@@ -208,7 +216,7 @@ export function Overview() {
                 style={progressPercent === null ? undefined : { width: `${progressPercent}%` }} />
             </div>
             <p className="muted">
-              {run?.total
+              {run?.total && (!pendingRunId || pendingRunId === run.syncId)
                 ? `${run.processed.toLocaleString("pt-BR")} de ${run.total.toLocaleString("pt-BR")} PNRs processadas`
                 : "Consultando total de PNRs"}
               {run?.mode === "automatic" ? " · Coleta automática" : ""}
