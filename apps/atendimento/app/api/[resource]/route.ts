@@ -469,7 +469,7 @@ export async function POST(
           completed: z.boolean(),
           channel: z.enum(["client", "driver"]).nullable().optional(),
           collectOnly: z.boolean().optional(),
-          records: z.array(listRecord.extend({ statusOnly: z.boolean().optional() })).max(300),
+          records: z.array(listRecord.safeExtend({ statusOnly: z.boolean().optional() })).max(300),
           skippedCaseIds: z.array(z.string().regex(/^\d{1,30}$/)).max(300).default([]),
         })
         .parse(body);
