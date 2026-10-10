@@ -29,9 +29,9 @@ O Atendimento possui manifest, icones 192/512 e metadados Apple para instalacao 
 
 ## Dados e coleta
 
-O Atendimento lê o Core para reutilizar casos existentes. Seus dados e fila ficam exclusivamente no schema `alc_atendimento` do Aux, sem alterar tabelas do painel ou RH. A extensão 1.2.0 coleta a competência vigente de 30 em 30 minutos, ordenada do mais recente. Necessita de navegador, aba autenticada do Mercado Livre e aba autenticada do Atendimento no computador de teste.
+O Atendimento lê o Core para reutilizar casos existentes. Seus dados e fila ficam exclusivamente no schema `alc_atendimento` do Aux, sem alterar tabelas do painel ou RH. A extensão **1.2.7** coleta a competência vigente, mais recentes primeiro; o agendamento opcional é de 30 minutos e depende de o navegador, a extensão e a sessão autenticada permanecerem disponíveis. A Visão Geral possui **Coletar geral** com barra de progresso persistida em `collector_run`, sem disparos. A coleta classifica PNRs novas, status alterado e inalteradas. Registros auxiliares inválidos são contabilizados sem bloquear as demais PNRs válidas, e uma sincronização com pendências não é marcada como concluída sem erros. Necessita de navegador, aba autenticada do Mercado Livre e aba autenticada do Atendimento no computador de teste.
 
-A extensão também lê campos explicitamente identificados como comprador em uma única página package-management já aberta. Exige que o envio corresponda à PNR e confirmação humana antes de salvar o telefone/documento/endereço. Esse adaptador é conservador e precisa ser validado no layout real com acesso restabelecido. Não inventa endpoint privado, nem usa documento/telefone de recebedor como comprador.
+O conector consulta páginas individuais do `package-management` usando a sessão já autenticada no Mercado Livre e valida a correspondência exata do envio. Nome/telefone de comprador podem ser considerados verificados **somente se** a resposta passar no contrato estrito do backend; valores inválidos não verificam contato. Dados do recebedor não são tratados como dados do comprador. Revisões reais exigem sessão autorizada e extensão atualizada.
 
 ## Variáveis (somente nomes; configure no Railway)
 
@@ -48,6 +48,12 @@ IA opcional, apenas server-side: `OPENAI_API_KEY`, `GEMINI_API_KEY` ou `GOOGLE_A
 Configure `/webhooks/whatsapp/driver` e `/webhooks/whatsapp/client` na Meta com seus respectivos tokens de verificação e assine `messages`. App Secret é distinto do token de verificação. Sem App Secret o webhook POST responde 503 e a fila não envia. Disparos automáticos começam desativados e só podem ser ativados com os canais configurados. Confirme a entrega real dos eventos antes de ativar a operação.
 
 Modelos iniciais: `cliente_loss_v2` e `pnraberta`. Após a migração 007, um gestor deve comparar e salvar explicitamente o contrato em Ajustes > Contratos Meta. Idioma, categoria, texto completo, botões, parâmetros, revisão e remetente são conferidos antes da fila e novamente antes do envio. Sem contrato revisado ou com divergência, o disparo é bloqueado; não há modelo alternativo automático. Filas legadas sem evidência de contrato não são reenviadas. Dados insuficientes geram registro de bloqueio, sem envio. O catálogo real da Meta e o logout central permanecem pendentes de homologação externa.
+
+## Documentação atual
+
+- [Arquitetura da plataforma](../../docs/arquitetura-plataforma-alc.md)
+- [Controles e riscos de segurança](../../docs/seguranca-plataforma-alc.md)
+- [Runbooks de coleta, Ellie, WhatsApp e Railway](../../docs/runbooks-plataforma-alc.md)
 
 ## Verificação
 
