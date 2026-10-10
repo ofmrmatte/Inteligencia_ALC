@@ -43,6 +43,7 @@ Configure `apps/inteligencia/.env.local` e `apps/atendimento/.env.local` exclusi
 
 - Login e MFA acontecem no Inteligência; o Atendimento não tem cadastro/login independentes.
 - Se uma sessão válida recebe erro no Atendimento: conferir permissões da função, módulo, `access_<profileId>`, ticket de 60 segundos e grant revogável `sso_session_<session_id>`.
+- `auth.getClaims()` não detecta sessão revogada remotamente no Supabase antes do vencimento do JWT. Para investigação de revogação externa, revalidar com `auth.getUser()` no fluxo autorizado e inspecionar os grants de sessão do Aux. Consulte a [matriz Context7](referencias-context7.md). Não registrar tokens.
 - Inspecionar apenas a presença/validade de configurações, sem revelar chaves. `ATENDIMENTO_SSO_KEY` e `ATENDIMENTO_ENCRYPTION_KEY` devem formar um par compatível.
 - Se houver 403 em API do Inteligência depois de mudança de domínio: conferir `INTELIGENCIA_PUBLIC_URL` / `RAILWAY_PUBLIC_DOMAIN` e cabeçalho `Origin` HTTPS, não permitir domínios arbitrários.
 
@@ -60,6 +61,11 @@ Configure `apps/inteligencia/.env.local` e `apps/atendimento/.env.local` exclusi
 - RH: migration específica `apps/inteligencia/db/railway/hr/001_hr_initial_schema.sql`; usar fluxo administrativo previsto e `HR_DATABASE_URL`, sem executar SQL RH em Aux/Core.
 - Supabase migrations são distintas das migrations Railway; não trocar credenciais nem destinos por conveniência.
 - Validar backup e plano de rollback antes de qualquer alteração de schema.
+
+## Referências técnicas
+
+- [Matriz validada com Context7](referencias-context7.md)
+- [Inventário de APIs e contratos](api-contratos-alc.md)
 
 ## Publicação / rollback
 
