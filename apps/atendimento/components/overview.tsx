@@ -70,7 +70,9 @@ export function Overview() {
         const result = await api<{ run: CollectorRun | null }>("collector-progress");
         if (mounted) {
           setRun(result.run);
-          if (result.run?.syncId) setPendingRunId(current => current === result.run?.syncId ? null : current);
+          if (result.run?.syncId) setPendingRunId(current =>
+            current === result.run?.syncId || (current && result.run?.status === "running") ? null : current,
+          );
         }
       } catch {
         // The normal app authorization flow handles expired sessions.
@@ -93,6 +95,15 @@ export function Overview() {
       window.removeEventListener("focus", onVisible);
     };
   }, []);
+  useEffect(() => {
+    if (!pendingRunId) return;
+    const timeout = setTimeout(() => {
+      setPendingRunId(null);
+      setCollectionError(true);
+      setCollectionNotice("A extensão não confirmou o início da coleta. Verifique a versão do conector nos Ajustes.");
+    }, 20_000);
+    return () => clearTimeout(timeout);
+  }, [pendingRunId]);
   const displayRun = pendingRunId && run?.syncId !== pendingRunId ? null : run;
   const running = displayRun?.status === "running" || Boolean(pendingRunId);
   const progressPercent = displayRun?.status === "completed"
