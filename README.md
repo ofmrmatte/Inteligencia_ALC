@@ -47,6 +47,8 @@ O Atendimento tem os comandos separados `dev:atendimento`, `build:atendimento` e
 A documentação técnica atualizada e baseada no código está em:
 
 - [Arquitetura dos dois aplicativos, bancos, SSO, conector e Ellie](docs/arquitetura-plataforma-alc.md)
+- [Inventário das APIs e contratos de segurança](docs/api-contratos-alc.md)
+- [Referências Context7 e matriz de compatibilidade](docs/referencias-context7.md)
 - [Revisão de segurança, evidências, mitigação e riscos residuais](docs/seguranca-plataforma-alc.md)
 - [Runbooks: desenvolvimento, Railway, coleta, MFA, WhatsApp e incidentes](docs/runbooks-plataforma-alc.md)
 - [Layout de workspaces e filtros de deploy](docs/monorepo.md)
