@@ -29,8 +29,40 @@ describe("importação dos dados de clientes pela extensão", () => {
     expect((await call({ ...record, customerName: "Cliente fictício", customerPhone: packageBuyer.phone })).status).toBe(200);
     expect(mocks.upsert.mock.calls[0][0][0]).toMatchObject({ customerPhone: "", customerVerified: false }); vi.useRealTimers();
   });
+  it("continua importando PNR com comprador inválido sem validar contato, e sinaliza pendência", async () => {
+    const malformedBuyer = { ...packageBuyer, phone: "telefone-invalido" };
+    const response = await call({ ...record, packageBuyer: malformedBuyer });
+    expect(response.status).toBe(200);
+    const stats = await response.json();
+    expect(stats).toMatchObject({ processed: 1, errors: 1, buyerRejected: 1, caseRejected: 0, complete: false });
+    expect(stats.rejectedFields).toContain("packageBuyer.phone");
+    expect(mocks.upsert.mock.calls[0][0][0]).toMatchObject({
+      caseId: record.caseId, customerVerified: false, customerPhone: "",
+    });
+    expect(mocks.upsert.mock.calls[0][4]).toBe(false);
+    const update = mocks.query.mock.calls.find(([sql]) => String(sql).startsWith("INSERT INTO alc_atendimento.settings"));
+    expect(update?.[1]?.[0]).toMatchObject({ completed: false, importErrors: 1 });
+    vi.useRealTimers();
+  });
+  it("isola registro com campo essencial inválido, mantendo os demais e sem concluir a sincronização", async () => {
+    const response = await POST(new Request("https://atendimento.example/api/import", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        syncId: "22222222-2222-4222-8222-222222222222",
+        competence: "202610Q1", completed: true, channel: "client", collectOnly: true,
+        records: [record, { ...record, caseId: "invalid" }],
+      }),
+    }), { params: Promise.resolve({ resource: "import" }) });
+    expect(response.status).toBe(200);
+    const stats = await response.json();
+    expect(stats).toMatchObject({ processed: 2, errors: 1, buyerRejected: 0, caseRejected: 1, complete: false });
+    expect(stats.rejectedFields).toContain("caseId");
+    expect(mocks.upsert.mock.calls[0][0]).toHaveLength(1);
+    expect(mocks.upsert.mock.calls[0][4]).toBe(false);
+    vi.useRealTimers();
+  });
   it("recusa a mistura de comprador de outro envio antes de escrever no banco", async () => {
-    expect((await call({ ...record, packageBuyer: { ...packageBuyer, shipmentId: "10000000002", sourceUrl: "https://envios.adminml.com/logistics/package-management/package/10000000002" } })).status).toBe(400);
+    expect((await call({ ...record, packageBuyer: { ...packageBuyer, shipmentId: "10000000002", sourceUrl: "https://envios.adminml.com/logistics/package-management/package/10000000002" } })).status).toBe(409);
     expect(mocks.upsert).not.toHaveBeenCalled(); expect(mocks.query).not.toHaveBeenCalled(); vi.useRealTimers();
   });
 });
