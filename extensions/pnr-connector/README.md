@@ -37,3 +37,7 @@ A extensão identifica as PNRs já cadastradas antes de consultar as timelines. 
 A listagem do Case Center deixa de ser um pré-requisito manual. Ao receber uma solicitação autorizada dos painéis, a extensão reutiliza a aba do Case Center já existente ou abre uma aba auxiliar `active:false`, sem roubar o foco. Ela mantém essa aba durante o processamento e a remove após cinco minutos ociosos. A extensão nunca fecha ou navega abas que o usuário abriu/ativou.
 
 Essa aba é um detalhe técnico da integração MV3 para executar consultas no domínio Mercado Livre. O navegador deve permanecer aberto e a sessão do Mercado Livre válida; não é possível realizar coleta quando o computador estiver desligado. Sessões expiradas, respostas inválidas e erros de permissão continuam bloqueando a importação. A extensão não faz login automático nem coleta cookies. As consultas não geram disparos WhatsApp.
+
+## Importação resiliente (1.2.7)
+
+Um campo inválido do comprador não interrompe os outros registros do lote: o comprador fica não verificado e seus dados são preservados para revisão. Registros com informações-base inválidas são sinalizados como pendentes, sem concluir a sincronização. A tela mostra a quantidade de ocorrências, sem expor valores pessoais. Atualize a extensão para 1.2.7 e recarregue o Atendimento.
