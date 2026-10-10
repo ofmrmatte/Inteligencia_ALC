@@ -107,6 +107,8 @@ O desenvolvimento utiliza ferramentas de IA generativa como apoio à implementa�
 ## Documentação técnica da plataforma
 
 - [Arquitetura e limites entre serviços/bancos](../../docs/arquitetura-plataforma-alc.md)
+- [Contratos de APIs e autorização](../../docs/api-contratos-alc.md)
+- [Referências de bibliotecas verificadas com Context7](../../docs/referencias-context7.md)
 - [Hardening e riscos residuais](../../docs/seguranca-plataforma-alc.md)
 - [Runbooks de deploy, RH, SSO e incidentes](../../docs/runbooks-plataforma-alc.md)
 
