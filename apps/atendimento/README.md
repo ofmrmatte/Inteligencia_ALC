@@ -52,6 +52,8 @@ Modelos iniciais: `cliente_loss_v2` e `pnraberta`. Após a migração 007, um ge
 ## Documentação atual
 
 - [Arquitetura da plataforma](../../docs/arquitetura-plataforma-alc.md)
+- [Contratos de APIs e autorização](../../docs/api-contratos-alc.md)
+- [Referências de bibliotecas verificadas com Context7](../../docs/referencias-context7.md)
 - [Controles e riscos de segurança](../../docs/seguranca-plataforma-alc.md)
 - [Runbooks de coleta, Ellie, WhatsApp e Railway](../../docs/runbooks-plataforma-alc.md)
 
