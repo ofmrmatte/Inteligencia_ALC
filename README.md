@@ -42,9 +42,20 @@ Os comandos `prefatura:backfill`, `drivers:sync` e `test:watch` continuam dispon
 
 O Atendimento tem os comandos separados `dev:atendimento`, `build:atendimento` e `start:atendimento`. O pré-deploy aplica apenas seu schema dedicado no Aux.
 
+## Arquitetura, segurança e operação
+
+A documentação técnica atualizada e baseada no código está em:
+
+- [Arquitetura dos dois aplicativos, bancos, SSO, conector e Ellie](docs/arquitetura-plataforma-alc.md)
+- [Revisão de segurança, evidências, mitigação e riscos residuais](docs/seguranca-plataforma-alc.md)
+- [Runbooks: desenvolvimento, Railway, coleta, MFA, WhatsApp e incidentes](docs/runbooks-plataforma-alc.md)
+- [Layout de workspaces e filtros de deploy](docs/monorepo.md)
+
+A extensão versionada neste repositório é **1.2.7**. A versão instalada em cada navegador precisa ser conferida separadamente.
+
 ## Publicação e próximos passos
 
-O contrato do Railway permanece: raiz do repositório, `npm run build` e `npm start`, publicando apenas o painel. A separação dos serviços e os filtros de arquivos estão descritos em [docs/monorepo.md](docs/monorepo.md).
+Os serviços Railway utilizam a raiz compartilhada do monorepo, mas executam builds e comandos de início específicos. Atualmente existem dois Dockerfiles de serviço; a remoção planejada está isolada na PR #93 e depende da limpeza de `Dockerfile Path` em cada serviço da Railway. Veja o runbook antes de mudar o builder. A separação dos serviços e os filtros de arquivos estão descritos em [docs/monorepo.md](docs/monorepo.md).
 
 O botão ALC Atendimento no menu lateral abre uma nova aba com a sessão já autenticada do Inteligência, preservando o mesmo Supabase Auth, MFA e perfil. A transferência usa um ticket cifrado de uso único, válido por 60 segundos. O Atendimento não possui login ou cadastro próprios; entradas diretas são encaminhadas ao painel. A Administração permanece dentro do Atendimento, na mesma aba.
 
