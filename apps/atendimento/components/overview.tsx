@@ -93,15 +93,16 @@ export function Overview() {
       window.removeEventListener("focus", onVisible);
     };
   }, []);
-  const running = run?.status === "running" || Boolean(pendingRunId);
-  const progressPercent = run?.status === "completed"
-    ? 100 : run?.total ? Math.min(100, Math.floor(run.processed / run.total * 100)) : null;
+  const displayRun = pendingRunId && run?.syncId !== pendingRunId ? null : run;
+  const running = displayRun?.status === "running" || Boolean(pendingRunId);
+  const progressPercent = displayRun?.status === "completed"
+    ? 100 : displayRun?.total ? Math.min(100, Math.floor(displayRun.processed / displayRun.total * 100)) : null;
   const progressPhase = ({
     preparing: "Preparando coleta", fetching: "Buscando PNRs",
     details: "Consultando detalhes", buyers: "Consultando compradores",
     saving: "Salvando dados", collecting: "Coletando casos",
     completed: "Coleta concluída", failed: "Coleta interrompida",
-  } as Record<string, string>)[run?.phase || ""] || "Aguardando coletor";
+  } as Record<string, string>)[displayRun?.phase || ""] || "Aguardando coletor";
   const syncStats = data?.source.syncStats || {};
   const syncStale =
     data?.source.lastCompletedSync &&
@@ -202,10 +203,10 @@ export function Overview() {
             <RefreshCw size={16} /> {collecting || running ? "Coletando dados…" : "Coletar geral"}
           </button>
         </div>
-        {(running || (collecting && !run) || run?.status === "completed" || run?.status === "failed" || run?.status === "interrupted") && (
+        {(running || collecting || displayRun?.status === "completed" || displayRun?.status === "failed" || displayRun?.status === "interrupted") && (
           <div className="overview-collector-progress" aria-live="polite">
             <div className="overview-collector-progress-text">
-              <span>{running || run?.status === "completed" ? progressPhase : run?.status === "failed" || run?.status === "interrupted" ? "Coleta interrompida" : "Iniciando coleta"}</span>
+              <span>{displayRun?.status === "running" || displayRun?.status === "completed" ? progressPhase : displayRun?.status === "failed" || displayRun?.status === "interrupted" ? "Coleta interrompida" : "Iniciando coleta"}</span>
               <strong>{progressPercent === null ? "Aguardando total" : `${progressPercent}%`}</strong>
             </div>
             <div className="overview-collector-progress-track"
@@ -216,11 +217,11 @@ export function Overview() {
                 style={progressPercent === null ? undefined : { width: `${progressPercent}%` }} />
             </div>
             <p className="muted">
-              {run?.total && (!pendingRunId || pendingRunId === run.syncId)
-                ? `${run.processed.toLocaleString("pt-BR")} de ${run.total.toLocaleString("pt-BR")} PNRs processadas`
+              {displayRun?.total
+                ? `${displayRun.processed.toLocaleString("pt-BR")} de ${displayRun.total.toLocaleString("pt-BR")} PNRs processadas`
                 : "Consultando total de PNRs"}
-              {run?.mode === "automatic" ? " · Coleta automática" : ""}
-              {run?.message ? ` · ${run.message}` : ""}
+              {displayRun?.mode === "automatic" ? " · Coleta automática" : ""}
+              {displayRun?.message ? ` · ${displayRun.message}` : ""}
             </p>
           </div>
         )}
