@@ -6,7 +6,7 @@ O painel foi movido da raiz para `apps/inteligencia`, incluindo `app`, `componen
 
 A extensão saiu de `extension-pnr` para `extensions/pnr-connector`. O painel declara esse workspace como dependência local e importa seu `package.json` para obter a versão do conector. Os testes de integração usam o novo caminho da extensão.
 
-O build do conector produz o ZIP em ambas as aplicações. A URL de download permanece `/downloads/alc-pnr-connector-v<versão>.zip`. A versão atual é 1.2.0, incluindo o domínio do Atendimento e o agendamento com chrome.alarms.
+O build do conector produz o ZIP em ambas as aplicações. A URL de download permanece `/downloads/alc-pnr-connector-v<versão>.zip`. A versão atual é **1.2.7**. O conector inclui progresso persistido da coleta, deduplicação de PNRs por status e tratamento de itens inválidos; usa `chrome.alarms` para agendamento opcional.
 
 O Atendimento tem um workspace próprio em `apps/atendimento`, implementado com serviço e domínio próprios. O pacote `@alc/identity` compartilha perfil, permissões e cifragem de tickets de acesso entre as aplicações.
 
@@ -34,6 +34,12 @@ O serviço ALC-Atendimento possui domínio, processo e variáveis próprios. O p
 
 Referência: [monorepos no Railway](https://docs.railway.com/deployments/monorepo). Não foi introduzido `railway.json` ou `railway.toml`; os comandos existentes já são suficientes para o serviço atual.
 
+## Estratégia atual de builder
+
+Ambos os serviços continuam com Dockerfiles específicos (`Dockerfile.inteligencia` e `Dockerfile.atendimento`) que usam Node 22 via registro público AWS ECR. O CI constrói as duas imagens. O Railpack foi validado em builds isolados, mas o retorno para produção **não** foi aplicado: é obrigatório retirar `Dockerfile Path` das configurações dos dois serviços antes de mesclar a [PR #93](https://github.com/ofmrmatte/Inteligencia_ALC/pull/93), ainda em rascunho.
+
+Outros detalhes estão nos [runbooks](runbooks-plataforma-alc.md).
+
 ## Vercel legado
 
 A configuração específica do painel está em `apps/inteligencia/vercel.json`. Caso o painel volte a ser publicado no Vercel, configurar a Root Directory do projeto para `apps/inteligencia` e permitir acesso aos arquivos externos necessários ao workspace e ao build do conector. O `vercel.json` da raiz impede a publicação automática da branch desta reorganização e preserva o bloqueio da branch RH existente.
@@ -46,7 +52,7 @@ Para revisar a mudança, conferir renomes e diferenças com `git diff --find-ren
 
 ## Validação
 
-A organização inicial preservou os 323 testes do painel. A implementação e o ajuste de acesso exclusivo pelo Inteligência totalizam 337 testes em 40 arquivos, com typecheck e builds das duas aplicações aprovados. O lint do Atendimento passa sem erros ou warnings. O painel mantém os 4 erros e 3 warnings anteriores de lint. A auditoria de dependências de produção não apontou vulnerabilidades na publicação inicial.
+As contagens históricas de testes de reorganização não representam o estado atual. Use sempre os resultados de CI da PR/commit específico. O lint de dívida técnica continua advisory no workflow. CI inclui testes, typecheck, builds dos dois aplicativos e imagens, auditoria npm de dependências de produção e auditoria estática de performance.
 
 A atualização concorrente de RH/configurações foi incorporada antes da publicação, incluindo setores, organograma e política de escopo operacional. O script de build preexistente prepara uma cor em `reports-view-v2.tsx`; esse efeito local foi restaurado e não integra as alterações.
 

@@ -164,16 +164,31 @@ async function providerDecision(input: AgentAiInput, config: AgentAiConfig, apiK
       status: z.literal("completed"),
       output: z.array(z.object({
         type: z.string(),
+        status: z.string().optional(),
+        role: z.string().optional(),
         content: z.array(z.object({ type: z.string(), text: z.string().optional() }).passthrough()).optional(),
       }).passthrough()),
     }).safeParse(payload);
     if (!envelope.success) throw new AiFailure("invalid_response");
-    const textParts = envelope.data.output
-      .filter(item => item.type === "message")
-      .flatMap(item => item.content || [])
-      .filter(item => item.type === "output_text" && typeof item.text === "string");
-    if (textParts.length !== 1) throw new AiFailure("invalid_response");
-    content = textParts[0].text!;
+    // OpenAI may also return reasoning blocks. Never accept tool calls,
+    // multiple assistant messages, incomplete messages or a refusal mixed
+    // with a seemingly valid JSON text.
+    const output = envelope.data.output;
+    if (output.some(item => item.type !== "message" && item.type !== "reasoning"))
+      throw new AiFailure("invalid_response");
+    const messages = output.filter(item => item.type === "message");
+    if (messages.length !== 1) throw new AiFailure("invalid_response");
+    const message = messages[0];
+    if (message.status !== undefined && message.status !== "completed")
+      throw new AiFailure("invalid_response");
+    if (message.role !== undefined && message.role !== "assistant")
+      throw new AiFailure("invalid_response");
+    if (!message.content || message.content.length !== 1 ||
+        message.content[0].type !== "output_text" ||
+        typeof message.content[0].text !== "string" ||
+        !message.content[0].text.trim())
+      throw new AiFailure("invalid_response");
+    content = message.content[0].text;
   } else if (openai) {
     const envelope = z.object({
       choices: z.array(z.object({

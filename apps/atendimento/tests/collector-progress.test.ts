@@ -41,6 +41,23 @@ describe("checkpoints de coleta sem envios", () => {
     expect((await saveCollectorProgress(actor, { ...input, processed: 121 })).accepted).toBe(false);
     expect(mocks.query).toHaveBeenCalledTimes(3);
   });
+  it("impede regressões de contagem no banco mesmo com dois checkpoints concorrentes", async () => {
+    mocks.query.mockResolvedValueOnce({ rows: [{ value: run }] })
+      .mockResolvedValueOnce({ rowCount: 1, rows: [{ value: { ...run, processed: 70, total: 120, errors: 2 } }] })
+      .mockResolvedValueOnce({ rows: [{ value: { ...run, processed: 70, total: 120, errors: 2 } }] })
+      .mockResolvedValueOnce({ rows: [{ value: run }] })
+      .mockResolvedValueOnce({ rowCount: 0, rows: [] });
+    const progress = { action: "progress" as const, syncId, phase: "collecting" as const, total: 120 };
+    expect((await saveCollectorProgress(actor, { ...progress, processed: 70, errors: 2 })).accepted).toBe(true);
+    const sql = mocks.query.mock.calls[1][0] as string;
+    expect(sql).toContain("coalesce((value->>'processed')::integer,0) <= $4");
+    expect(sql).toContain("coalesce((value->>'errors')::integer,0) <= $6");
+    expect(mocks.query.mock.calls[1][1]).toEqual([
+      syncId, expect.objectContaining({ processed: 70, errors: 2 }), actor, 70, 120, 2,
+    ]);
+    expect((await saveCollectorProgress(actor, { ...progress, processed: 60, errors: 2 })).accepted).toBe(false);
+    expect((await saveCollectorProgress(actor, { ...progress, processed: 80, errors: 3 })).accepted).toBe(false);
+  });
   it("finaliza a execução com status completo e 100% do total", async () => {
     mocks.query.mockResolvedValueOnce({ rows: [{ value: run }] })
       .mockResolvedValueOnce({ rowCount: 1, rows: [{ value: { ...run, status: "completed", processed: 120 } }] });

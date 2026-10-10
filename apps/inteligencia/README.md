@@ -21,7 +21,7 @@ O projeto foi estruturado para substituir fluxos manuais e cruzamentos descentra
 - Conciliação de IDs e tratamento de duplicidades.
 - Histórico de importações e rastreabilidade dos dados.
 - Controle de acesso por perfil e escopo operacional.
-- Persistência de dados e arquivos no Supabase.
+- Auth/perfis/Storage no Supabase e persistência operacional em PostgreSQL da Railway (Core, Aux e RH).
 
 ## Regras de negócio relevantes
 
@@ -103,6 +103,12 @@ npm run build
 Este projeto envolve levantamento de requisitos, modelagem de regras de negócio, desenvolvimento web full stack, integração com banco de dados, autenticação, controle de acesso, processamento de arquivos, testes, debugging, deploy e evolução contínua de produto.
 
 O desenvolvimento utiliza ferramentas de IA generativa como apoio à implementação, revisão, refatoração e testes, mantendo a definição de requisitos, regras operacionais e validação funcional como parte do processo de engenharia do projeto.
+
+## Documentação técnica da plataforma
+
+- [Arquitetura e limites entre serviços/bancos](../../docs/arquitetura-plataforma-alc.md)
+- [Hardening e riscos residuais](../../docs/seguranca-plataforma-alc.md)
+- [Runbooks de deploy, RH, SSO e incidentes](../../docs/runbooks-plataforma-alc.md)
 
 ## Segurança
 

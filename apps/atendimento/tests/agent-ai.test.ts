@@ -71,6 +71,14 @@ describe("bounded optional providers", () => {
       { status: "incomplete", output: [{ type: "message", content: [{ type: "output_text", text: JSON.stringify(proposal) }] }] },
       { status: "completed", output: [{ type: "message", content: [{ type: "refusal", refusal: "Cannot comply" }] }] },
       { status: "completed", output: [{ type: "message", content: [{ type: "output_text", text: JSON.stringify(proposal) }, { type: "output_text", text: JSON.stringify(proposal) }] }] },
+      { status: "completed", output: [{ type: "message", status: "completed", content: [{ type: "output_text", text: JSON.stringify(proposal) }, { type: "refusal", refusal: "Cannot comply" }] }] },
+      { status: "completed", output: [
+        { type: "message", status: "completed", content: [{ type: "output_text", text: JSON.stringify(proposal) }] },
+        { type: "message", status: "completed", content: [{ type: "refusal", refusal: "Cannot comply" }] },
+      ] },
+      { status: "completed", output: [{ type: "message", status: "incomplete", content: [{ type: "output_text", text: JSON.stringify(proposal) }] }] },
+      { status: "completed", output: [{ type: "tool_call", name: "unexpected" }, { type: "message", content: [{ type: "output_text", text: JSON.stringify(proposal) }] }] },
+      { status: "completed", output: [{ type: "message", role: "tool", content: [{ type: "output_text", text: JSON.stringify(proposal) }] }] },
     ]) {
       const fetcher = vi.fn<typeof fetch>().mockResolvedValue(Response.json(response));
       expect(await proposeAgentDecision(input(), { config: { ...config, model: "gpt-6.1-sol" }, env, fetcher }))

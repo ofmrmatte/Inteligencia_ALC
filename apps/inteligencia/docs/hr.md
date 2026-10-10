@@ -1,3 +1,5 @@
+> **Registro histórico de revisão de RH.** Os bloqueios e estados de migração descritos abaixo pertencem à antiga branch de desenvolvimento e não comprovam o status atual de produção. Para instruções operacionais vigentes, veja [arquitetura](../../../docs/arquitetura-plataforma-alc.md), [segurança](../../../docs/seguranca-plataforma-alc.md) e [runbooks](../../../docs/runbooks-plataforma-alc.md). Não aplique SQL em produção baseado apenas neste histórico.
+
 # Recursos Humanos V1
 
 ## Estado e limites
