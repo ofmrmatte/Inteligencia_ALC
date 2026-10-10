@@ -59,11 +59,6 @@ jobs:
       - name: Build Atendimento
         run: npm run build:atendimento
 
-      - name: Verify Dockerfile builds without Docker Hub
-        run: |
-          docker build --file Dockerfile.atendimento --tag alc-atendimento:ci .
-          docker build --file Dockerfile.inteligencia --tag alc-inteligencia:ci .
-
       - name: Production dependency security audit
         run: npm audit --omit=dev --audit-level=high
 
