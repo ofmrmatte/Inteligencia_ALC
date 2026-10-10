@@ -68,6 +68,8 @@ async function collectAtendimento({ channel = null, collectOnly = false, runId =
     });
     let page = 1, totalPages = 1, customerRead = 0, customerPending = 0;
     let newCases = 0, changedStatuses = 0, skippedCases = 0;
+    let buyersRejected = 0, casesRejected = 0;
+    const rejectedFields = new Set();
     do {
       await checkpoint("fetching");
       const result = await handle({ type: "FETCH_PAGE", payload: { competence, page, order: "desc" } });
@@ -129,12 +131,16 @@ async function collectAtendimento({ channel = null, collectOnly = false, runId =
         }
       }
       await checkpoint("saving");
-      await persistInAtendimento(tab.id, "import", {
+      const imported = await persistInAtendimento(tab.id, "import", {
         syncId, competence, channel, collectOnly,
         completed: page >= Math.max(totalPages, 1),
         records: [...fullRecords, ...statusRecords],
         skippedCaseIds,
       });
+      buyersRejected += imported.buyerRejected || 0;
+      casesRejected += imported.caseRejected || 0;
+      progressErrors += imported.errors || 0;
+      for (const path of imported.rejectedFields || []) rejectedFields.add(path);
       processed += records.length;
       total = Math.max(total, processed);
       await checkpoint("collecting");
@@ -143,8 +149,11 @@ async function collectAtendimento({ channel = null, collectOnly = false, runId =
     await persistInAtendimento(tab.id, "collector-progress", {
       action: "finish", syncId, processed, total: Math.max(total, processed), errors: progressErrors,
     });
-    await chrome.storage.local.set({ atendimentoLastSync: new Date().toISOString(), atendimentoError: customerPending ? `${customerPending} envios sem contato completo do comprador.` : "" });
-    return { ok: true, data: { message: `${processed} PNRs verificadas na competência ${competence}: ${newCases} novas, ${changedStatuses} com status atualizado e ${skippedCases} já cadastradas sem alteração (ignoradas)${channel === "client" ? " (dados de clientes)" : channel === "driver" ? " (dados de motoristas)" : ""}. ${channel !== "driver" ? `${customerRead} compradores lidos; ${customerPending} contatos pendentes. ` : ""}${collectOnly ? "Nenhuma mensagem foi enviada ou enfileirada por esta coleta." : "Próxima coleta automática em 30 minutos, se ativada."}` } };
+    const importWarning = buyersRejected || casesRejected
+      ? `${casesRejected} PNRs com dados incompletos e ${buyersRejected} compradores rejeitados.${rejectedFields.size ? ` Campos: ${[...rejectedFields].slice(0, 8).join(", ")}.` : ""} Refaça a coleta após revisar a origem.`
+      : "";
+    await chrome.storage.local.set({ atendimentoLastSync: new Date().toISOString(), atendimentoError: importWarning || (customerPending ? `${customerPending} envios sem contato completo do comprador.` : "") });
+    return { ok: true, data: { message: `${processed} PNRs verificadas na competência ${competence}: ${newCases} novas, ${changedStatuses} com status atualizado e ${skippedCases} já cadastradas sem alteração (ignoradas)${channel === "client" ? " (dados de clientes)" : channel === "driver" ? " (dados de motoristas)" : ""}. ${channel !== "driver" ? `${customerRead} compradores lidos; ${customerPending} contatos pendentes. ` : ""}${importWarning ? ` Atenção: ${importWarning}` : ""}${collectOnly ? "Nenhuma mensagem foi enviada ou enfileirada por esta coleta." : "Próxima coleta automática em 30 minutos, se ativada."}` } };
   } catch (error) {
     if (activeTabId && syncId) {
       try {
