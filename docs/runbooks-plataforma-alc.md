@@ -25,7 +25,7 @@ Configure `apps/inteligencia/.env.local` e `apps/atendimento/.env.local` exclusi
 2. Confira build vs deploy vs HTTP logs separadamente, filtrando por timestamp e serviço.
 3. Cheque healthcheck do Atendimento em `GET /health` (status 200 somente se o schema do Aux responde). Considere que isso não testa Supabase, Mercado Livre ou Meta.
 4. `429` em `registry-1.docker.io` na etapa de build é problema de registro de imagem, não de compilação. Antes de alterar builder, verificar a disponibilidade do registro e reproduzir em serviço isolado.
-5. Na configuração revisada, os dois serviços de produção ainda usam `Dockerfile.atendimento` e `Dockerfile.inteligencia` com Node 22/ECR. A [PR #93](https://github.com/ofmrmatte/Inteligencia_ALC/pull/93) para retorno ao Railpack está **draft** e não pode ser mesclada sem remover primeiro o `Dockerfile Path` da configuração dos dois serviços.
+5. Os dois serviços de produção utilizam **Railpack**, sem configuração `Dockerfile Path`. A [PR #93](https://github.com/ofmrmatte/Inteligencia_ALC/pull/93) removeu os Dockerfiles e a etapa Docker do CI. Preserve o comando de build `npm run build:atendimento` no Atendimento e `npm run build` no Inteligência, além dos respectivos start/pre-deploy e healthchecks.
 6. Depois de mudar builder, acompanhar build de ambos, inicialização, erros HTTP 5xx e último commit efetivo. Manter rollback disponível.
 
 ## Diagnosticar coleta Mercado Livre
