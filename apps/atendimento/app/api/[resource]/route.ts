@@ -469,21 +469,61 @@ export async function POST(
           completed: z.boolean(),
           channel: z.enum(["client", "driver"]).nullable().optional(),
           collectOnly: z.boolean().optional(),
-          records: z.array(listRecord.safeExtend({ statusOnly: z.boolean().optional() })).max(300),
+          // Validate each row individually so one malformed source field cannot
+          // discard 29 otherwise valid PNRs from the same Case Center page.
+          records: z.array(z.unknown()).max(300),
           skippedCaseIds: z.array(z.string().regex(/^\d{1,30}$/)).max(300).default([]),
         })
         .parse(body);
+      const importedSchema = listRecord.safeExtend({ statusOnly: z.boolean().optional() });
+      const acceptedRows: z.infer<typeof importedSchema>[] = [];
+      let buyerRejected = 0;
+      let caseRejected = 0;
+      const rejectedFields = new Set<string>();
+      for (const input of parsed.records) {
+        // A buyer identity mismatch is never recoverable by removing the buyer.
+        // It could attach someone else's contact to this shipment.
+        if (input && typeof input === "object" && !Array.isArray(input) &&
+            "packageBuyer" in input && input.packageBuyer &&
+            typeof input.packageBuyer === "object" && !Array.isArray(input.packageBuyer) &&
+            "shipmentId" in input && "shipmentId" in input.packageBuyer &&
+            input.packageBuyer.shipmentId !== input.shipmentId)
+          throw new HttpError(409, "Comprador e envio divergentes. Coleta interrompida para revisão.");
+        const accepted = importedSchema.safeParse(input);
+        if (accepted.success) {
+          acceptedRows.push(accepted.data);
+          continue;
+        }
+        // Invalid complementary contact: import the case but never mark the
+        // buyer as verified; the existing verified contact remains untouched.
+        const buyerIssuesOnly = accepted.error.issues.every(issue => issue.path[0] === "packageBuyer");
+        if (buyerIssuesOnly && input && typeof input === "object" && !Array.isArray(input)) {
+          const withoutBuyer = importedSchema.safeParse({ ...input, packageBuyer: undefined });
+          if (withoutBuyer.success) {
+            buyerRejected++;
+            acceptedRows.push(withoutBuyer.data);
+            for (const issue of accepted.error.issues)
+              rejectedFields.add(issue.path.map(String).join("."));
+            continue;
+          }
+        }
+        // Quarantine malformed source rows, keeping the run incomplete and
+        // exposing only field paths, never personal values or raw payloads.
+        caseRejected++;
+        for (const issue of accepted.error.issues)
+          rejectedFields.add(issue.path.map(String).join(".") || "record");
+      }
       if (parsed.competence !== competence())
         throw new HttpError(
           400,
           "Coleta automática limitada à competência vigente.",
         );
-      const importedIds = new Set(parsed.records.map(item => item.caseId));
+      const importedIds = new Set(acceptedRows.map(item => item.caseId));
       const skippedIds = new Set(parsed.skippedCaseIds);
-      if (importedIds.size !== parsed.records.length || skippedIds.size !== parsed.skippedCaseIds.length ||
+      if (importedIds.size !== acceptedRows.length || skippedIds.size !== parsed.skippedCaseIds.length ||
           [...skippedIds].some(caseId => importedIds.has(caseId)))
         throw new HttpError(400, "PNRs duplicadas ou conflitantes no lote.");
-      const statusOnlyIds = new Set(parsed.records.filter(item => item.statusOnly).map(item => item.caseId));
+      const statusOnlyIds = new Set(acceptedRows.filter(item => item.statusOnly).map(item => item.caseId));
       const state = await setting<{
         syncId?: string;
         baseline: boolean;
@@ -492,12 +532,13 @@ export async function POST(
         enabled?: boolean;
         stats?: SyncStats;
         lastCompletedSync?: string;
+        importErrors?: number;
       }>("collector");
       const baseline =
         state?.syncId === parsed.syncId
           ? state.baseline
           : !state?.baselineComplete;
-      const records: CaseRecord[] = parsed.records.map((r) => ({
+      const records: CaseRecord[] = acceptedRows.map((r) => ({
         caseId: r.caseId,
         shipmentId: r.shipmentId,
         competence: parsed.competence,
@@ -561,7 +602,13 @@ export async function POST(
           unit.unchanged++;
         }
       }
+      stats.errors += buyerRejected + caseRejected;
+      stats.processed += caseRejected;
+      stats.found += caseRejected;
       const collectedAt = new Date().toISOString();
+      const previousImportErrors = state?.syncId === parsed.syncId ? (state.importErrors || 0) : 0;
+      const importErrors = previousImportErrors + buyerRejected + caseRejected;
+      const allPagesValid = parsed.completed && importErrors === 0;
       const accumulatedStats = combineSyncStats(state?.syncId === parsed.syncId ? state.stats : undefined, stats);
       const channelSync = { ...(state?.channelSync || {}) };
       if (parsed.channel) {
@@ -577,11 +624,12 @@ export async function POST(
             ...state,
             syncId: parsed.syncId,
             baseline,
-            baselineComplete: parsed.completed || state?.baselineComplete,
+            baselineComplete: allPagesValid || state?.baselineComplete,
             lastSync: collectedAt,
-            completed: parsed.completed,
+            completed: allPagesValid,
             stats: accumulatedStats,
-            lastCompletedSync: parsed.completed ? collectedAt : state?.lastCompletedSync,
+            lastCompletedSync: allPagesValid ? collectedAt : state?.lastCompletedSync,
+            importErrors,
             channelSync,
           },
           profile.id,
