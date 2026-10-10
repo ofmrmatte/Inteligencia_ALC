@@ -614,7 +614,7 @@ export async function POST(
       if (parsed.channel) {
         channelSync[parsed.channel] = {
           lastSync: collectedAt,
-          completed: parsed.completed,
+          completed: parsed.completed && importErrors === 0,
         };
       }
       await db().query(
@@ -639,9 +639,15 @@ export async function POST(
         ...stats,
         channel: parsed.channel || "all",
         collectOnly: parsed.collectOnly !== false,
-        completed: parsed.completed,
+        completed: allPagesValid,
+        buyerRejected, caseRejected,
+        rejectedFields: [...rejectedFields].slice(0, 8),
       });
-      return Response.json(stats);
+      return Response.json({
+        ...stats, buyerRejected, caseRejected,
+        rejectedFields: [...rejectedFields].slice(0, 8),
+        complete: allPagesValid,
+      });
     }
     if (resource === "collector-progress") {
       requireAdmin(profile);
