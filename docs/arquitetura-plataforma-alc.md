@@ -16,7 +16,7 @@ Os dois frontends Next.js 16 usam React 19 e TypeScript. O Node.js mínimo é 22
 
 ## Fronteiras entre bancos e autenticação
 
-- **Supabase**: autenticação, MFA, perfis e Storage privado quando configurado. Sessões devem ser verificadas por `auth.getClaims()`; `getSession()` fornece tokens, mas não serve por si só como decisão de autorização.
+- **Supabase**: autenticação, MFA, perfis e Storage privado quando configurado. `auth.getClaims()` verifica assinatura/expiração do token e `getSession()` recupera tokens, mas este último não serve sozinho para autorizar acesso. **Revogação remota no Auth Server não é imediatamente detectada por `getClaims()`; para esse requisito use `getUser()` conforme a política de risco/latência.** O Atendimento mantém grants próprios para revogação central. Consulte a [verificação Context7](referencias-context7.md).
 - **Postgres-Core (Railway)**: dados operacionais comuns e bases. O Inteligência mantém seus adaptadores e rotinas para fontes operacionais.
 - **Postgres-Aux (Railway)**: schema `alc_atendimento` (PNRs, conversas, mensagens, outbox, configurações, tickets de transferência, audit e progresso do coletor).
 - **Postgres-RH (Railway)**: apenas matriz, setores, colaboradores, ponto Secullum, jornada, ocorrências, contratos, remuneração segregada e documentos privados. Não é uma unidade/base.
@@ -61,6 +61,10 @@ Se uma PNR mantiver o mesmo status, mudanças em outros campos não são redetec
 - Deploy concluído não substitui homologação com sessão Mercado Livre e canais Meta reais.
 
 ## Referências de bibliotecas e operações
+
+- [Matriz das bibliotecas validada com Context7](referencias-context7.md)
+- [Inventário das APIs de ambos os aplicativos](api-contratos-alc.md)
+
 
 - [Next.js — documentação](https://nextjs.org/docs)
 - [Supabase — SSR e criação de cliente](https://supabase.com/docs/guides/auth/server-side/creating-a-client)
