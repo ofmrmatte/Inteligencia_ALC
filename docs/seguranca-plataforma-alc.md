@@ -17,7 +17,7 @@ Ativos: PNRs, dados operacionais, compradores/motoristas, conversas, arquivos pr
 | PNR/importação | `apps/atendimento/app/api/[resource]/route.ts`, `lib/source.ts` | Contrato Zod, vínculo caseId/shipmentId, preservação de contatos e quarentena de dados inválidos |
 | Ellie/IA | `apps/atendimento/lib/agent-ai.ts` | Saída estruturada limitada, sem recusa misturada, orçamento/timeout, fallback determinístico |
 | Privacidade de anexos/RH | `apps/atendimento/lib/media-*.ts`, `apps/inteligencia/lib/hr/**` | Limite de arquivo, quarentena, assinatura temporária, escopo por rota e nenhuma resposta pública |
-| Deploy e segredos | Dockerfiles, `.dockerignore`, Railway Settings | Variáveis privadas server-only; `NEXT_PUBLIC_*` estritamente públicas; não imprimir secrets em CI/logs |
+| Deploy e segredos | Railpack, Railway Settings e workflow de CI | Variáveis privadas server-only; `NEXT_PUBLIC_*` estritamente públicas; não imprimir secrets em CI/logs |
 
 ## Alterações de hardening propostas na revisão
 

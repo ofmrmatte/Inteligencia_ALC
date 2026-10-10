@@ -25,7 +25,7 @@ O Context7 recupera trechos de documentação e exemplos dos mantenedores. **Nã
 | Detectar sessão encerrada remotamente no provedor usando `auth.getUser()` | Não é uma verificação obrigatória para cada leitura atualmente | Há grant revogável interno para logout/troca central | **Risco residual:** `getClaims()` não detecta revogação remota imediata; decidir política de revalidação |
 | Restringir `service_role` ou chaves Supabase secret ao servidor e filtrar por usuário autorizado | `app/api/users/route.ts` e adaptadores administrativos | API administrativa e credenciais privadas | Exige revisão contínua; service role **ignora RLS** |
 | Isolar Core, Aux e RH com usuários/permissões mínimas | Módulos de banco próprios | Pool Aux separado, Core somente para consultas necessárias | Segregação lógica no código; **GRANTs reais não auditados** |
-| Configurar builder e Dockerfile Path explicitamente para cada serviço de monorepo | Dockerfile específico | Dockerfile específico | Publicado; PR #93 Railpack ainda **draft** |
+| Configurar builder explicitamente e remover caminhos obsoletos do Dockerfile | Railpack, sem Dockerfile Path | Railpack, sem Dockerfile Path | Publicado após a PR #93, com deploys Railpack validados |
 | Testar healthcheck e SHA real depois de cada deploy | Serviço Railway `Inteligencia_ALC` | Serviço Railway `ALC-Atendimento` | Procedimento operacional; CI por si só não confirma produção |
 
 ## Notas de segurança de integração
@@ -48,7 +48,7 @@ A proteção nativa das **Server Actions** compara `Origin`/host e oferece `serv
 
 ### 3. Railway: Railpack e Dockerfile não são intercambiáveis
 
-Railway suporta `RAILWAY_DOCKERFILE_PATH`, a configuração **Dockerfile Path** e configuração por código do builder. A documentação oficial registra que a presença/seleção de Dockerfile tem precedência na construção. **Antes de integrar a PR #93** para Railpack, conferir em **cada** serviço qual builder está realmente configurado, eliminar apontamentos para Dockerfiles descontinuados e provar o build isoladamente. Não presumir que declarar `"builder": "RAILPACK"` basta quando permanece um Dockerfile/Path aplicável.
+Railway suporta `RAILWAY_DOCKERFILE_PATH`, a configuração **Dockerfile Path** e configuração por código do builder. A documentação oficial registra que a presença/seleção de Dockerfile tem precedência na construção. A [PR #93](https://github.com/ofmrmatte/Inteligencia_ALC/pull/93) foi integrada após a remoção efetiva de `Dockerfile Path` e a confirmação de ambos os builds Railpack em produção. Em mudanças futuras de builder, conferir em **cada** serviço qual builder está configurado, remover referências obsoletas e provar o build isoladamente. Não presumir que declarar `"builder": "RAILPACK"` basta quando permanece um Dockerfile/Path aplicável.
 
 No monorepo, o contexto do build inclui a raiz com `package-lock.json`, `packages/**` e `extensions/pnr-connector/**`. Preservar os comandos corretos de cada processo e os filtros de deploy; após publicar, observar saúde dos dois serviços e os cinco componentes da Railway (dois apps, três bancos).
 
